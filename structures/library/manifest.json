@@ -1,0 +1,137 @@
+{
+  "c180": {
+    "converged": true,
+    "description": "C180 fullerene (180 atoms, from NCKU FullereneLib)",
+    "energy_eV": -1282.6441513188106,
+    "file": "c180.xyz",
+    "fmax_eV_A": 0.0006160929121669747,
+    "method": "sd+fire",
+    "n_atoms": 180
+  },
+  "c540": {
+    "converged": true,
+    "description": "C540 fullerene (540 atoms, from NCKU FullereneLib)",
+    "energy_eV": -3936.825335586108,
+    "file": "c540.xyz",
+    "fmax_eV_A": 0.0008067281913529028,
+    "method": "sd+fire",
+    "n_atoms": 540
+  },
+  "c60": {
+    "converged": true,
+    "description": "C60 Buckminsterfullerene",
+    "energy_eV": -403.81485122375693,
+    "file": "c60.xyz",
+    "fmax_eV_A": 0.0006908066065584611,
+    "method": "steepest_descent",
+    "n_atoms": 60
+  },
+  "c720": {
+    "converged": true,
+    "description": "C720 fullerene (720 atoms, from NCKU FullereneLib)",
+    "energy_eV": -5265.926394037958,
+    "file": "c720.xyz",
+    "fmax_eV_A": 0.0009752537345625359,
+    "method": "steepest_descent",
+    "n_atoms": 720
+  },
+  "cnt_10_0_5cells": {
+    "converged": true,
+    "description": "(10,0) zigzag CNT, 5 cells",
+    "energy_eV": -1415.960521238911,
+    "file": "cnt_10_0_5cells.xyz",
+    "fmax_eV_A": 0.0007244124143855269,
+    "method": "fire",
+    "n_atoms": 200
+  },
+  "cnt_5_5_10cells": {
+    "converged": true,
+    "description": "(5,5) armchair CNT, 10 cells",
+    "energy_eV": -1409.7619436343093,
+    "file": "cnt_5_5_10cells.xyz",
+    "fmax_eV_A": 0.0008456804430254031,
+    "method": "fire",
+    "n_atoms": 200
+  },
+  "cnt_5_5_5cells": {
+    "converged": true,
+    "description": "(5,5) armchair CNT, 5 cells",
+    "energy_eV": -682.3163548539359,
+    "file": "cnt_5_5_5cells.xyz",
+    "fmax_eV_A": 0.0009097756353279577,
+    "method": "sd+fire",
+    "n_atoms": 100
+  },
+  "cnt_6_2_1cells": {
+    "converged": true,
+    "description": "(6,2) chiral CNT, 1 cells",
+    "energy_eV": -715.4124027922745,
+    "file": "cnt_6_2_1cells.xyz",
+    "fmax_eV_A": 0.0009955258217545658,
+    "method": "fire",
+    "n_atoms": 104
+  },
+  "cnt_6_3_2cells": {
+    "converged": true,
+    "description": "(6,3) chiral CNT, 2 cells",
+    "energy_eV": -1177.9268142355338,
+    "file": "cnt_6_3_2cells.xyz",
+    "fmax_eV_A": 0.0009748638048702897,
+    "method": "steepest_descent",
+    "n_atoms": 168
+  },
+  "cnt_7_4_1cells": {
+    "converged": true,
+    "description": "(7,4) chiral CNT, 1 cells",
+    "energy_eV": -850.6105819151721,
+    "file": "cnt_7_4_1cells.xyz",
+    "fmax_eV_A": 0.0009990139379596813,
+    "method": "steepest_descent",
+    "n_atoms": 124
+  },
+  "cnt_8_4_2cells": {
+    "converged": true,
+    "description": "(8,4) chiral CNT, 2 cells",
+    "energy_eV": -1584.1836723744773,
+    "file": "cnt_8_4_2cells.xyz",
+    "fmax_eV_A": 0.0007453899261988733,
+    "method": "fire",
+    "n_atoms": 224
+  },
+  "cnt_9_3_1cells": {
+    "converged": true,
+    "description": "(9,3) chiral CNT, 1 cells",
+    "energy_eV": -1087.3501072819624,
+    "file": "cnt_9_3_1cells.xyz",
+    "fmax_eV_A": 0.0008815655088457798,
+    "method": "sd+fire",
+    "n_atoms": 156
+  },
+  "diamond_2x2x2": {
+    "converged": true,
+    "description": "2x2x2 diamond cubic",
+    "energy_eV": -356.08160100390444,
+    "file": "diamond_2x2x2.xyz",
+    "fmax_eV_A": 0.0009437970988048294,
+    "method": "steepest_descent",
+    "n_atoms": 64
+  },
+  "graphene_10x10": {
+    "converged": true,
+    "description": "10x10 graphene sheet",
+    "energy_eV": -1386.0180054111013,
+    "file": "graphene_10x10.xyz",
+    "fmax_eV_A": 0.0009340782647769585,
+    "method": "sd+fire",
+    "n_atoms": 200
+  },
+  "graphene_6x6": {
+    "converged": true,
+    "description": "6x6 graphene sheet",
+    "energy_eV": -476.4559512293931,
+    "file": "graphene_6x6.xyz",
+    "fmax_eV_A": 0.000866189085251786,
+    "method": "sd+fire",
+    "n_atoms": 72
+  }
+}

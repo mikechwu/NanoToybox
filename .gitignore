@@ -1,0 +1,86 @@
+# =============================================================================
+# NanoToybox .gitignore
+# =============================================================================
+
+# --- macOS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.TemporaryItems
+
+# --- Security (NEVER COMMIT) ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# --- Numba cache ---
+__numba_cache__/
+
+# --- Virtual environments ---
+env/
+venv/
+.venv/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# --- Claude Code ---
+.claude/
+.claudeprompt/
+
+# --- Generated data (reproducible via scripts) ---
+# ML training datasets — large NPY arrays, regenerate with:
+#   python3 scripts/generate_pilot_dataset.py
+#   python3 scripts/generate_training_dataset.py
+data/
+
+# ML model artifacts — regenerate with:
+#   python3 ml/train_pilot.py
+#   python3 ml/train_v2.py
+ml/models/
+
+# Test output artifacts — regenerate by running tests
+outputs/
+
+# --- Reports & audit artifacts (development history, not source) ---
+.reports/
+
+# --- Generated plots ---
+*.png
+
+# --- Archived structures (non-canonical) ---
+structures/archive/
+
+# =============================================================================
+# EXPLICITLY TRACKED (do NOT ignore these)
+# =============================================================================
+# structures/library/    — Canonical relaxed 0K structures (small XYZ files)
+# structures/library/manifest.json
+# sim/                   — All source code
+# tests/                 — All validation tests
+# scripts/               — All CLI tools and analysis scripts
+# ml/*.py                — ML source code (not model artifacts)
+# viewer/index.html      — Three.js viewer
+# docs/                  — Developer documentation

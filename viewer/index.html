@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NanoToybox Trajectory Viewer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #eee; font-family: 'Courier New', monospace; overflow: hidden; }
+#container { width: 100vw; height: 100vh; position: relative; }
+canvas { display: block; }
+
+#controls {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,0.85); padding: 10px 20px;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  font-size: 13px; z-index: 10;
+}
+#controls button {
+  background: #333; color: #eee; border: 1px solid #555;
+  padding: 5px 14px; cursor: pointer; font-family: inherit; font-size: 13px;
+  border-radius: 3px;
+}
+#controls button:hover { background: #555; }
+#controls button.active { background: #4a7; color: #fff; }
+#controls input[type=range] { width: 200px; accent-color: #4a7; }
+#controls label { color: #aaa; }
+#controls select {
+  background: #333; color: #eee; border: 1px solid #555;
+  padding: 4px 8px; font-family: inherit; font-size: 13px;
+}
+
+#info {
+  position: absolute; top: 10px; left: 10px;
+  background: rgba(0,0,0,0.7); padding: 10px 16px;
+  font-size: 12px; line-height: 1.6; border-radius: 4px; z-index: 10;
+}
+#drop-overlay {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(74,170,100,0.15); border: 3px dashed #4a7;
+  display: none; align-items: center; justify-content: center;
+  font-size: 24px; z-index: 20;
+}
+</style>
+</head>
+<body>
+<div id="container">
+  <div id="info">
+    <div>NanoToybox Trajectory Viewer</div>
+    <div id="status">Drop .xyz file or click Load</div>
+    <div id="frame-info"></div>
+    <div id="atom-info"></div>
+  </div>
+  <div id="drop-overlay">Drop .xyz file here</div>
+  <div id="controls">
+    <input type="file" id="file-input" accept=".xyz" style="display:none">
+    <button id="btn-load" onclick="document.getElementById('file-input').click()">Load .xyz</button>
+    <button id="btn-play">Play</button>
+    <button id="btn-prev">&#9664;</button>
+    <button id="btn-next">&#9654;</button>
+    <label>Frame:</label>
+    <input type="range" id="frame-slider" min="0" max="0" value="0">
+    <span id="frame-label">0/0</span>
+    <label>Speed:</label>
+    <select id="speed-select">
+      <option value="30">30 fps</option>
+      <option value="15" selected>15 fps</option>
+      <option value="5">5 fps</option>
+      <option value="1">1 fps</option>
+    </select>
+    <label>Style:</label>
+    <select id="style-select">
+      <option value="dark-carbon">Dark Carbon</option>
+      <option value="light">Light</option>
+      <option value="element">Element Colors</option>
+    </select>
+    <label><input type="checkbox" id="bonds-toggle" checked> Bonds</label>
+    <label>Bond cutoff:</label>
+    <input type="range" id="bond-cutoff" min="1.0" max="2.5" step="0.05" value="1.8">
+    <span id="cutoff-label">1.80 &#8491;</span>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// --- State ---
+let frames = [];
+let currentFrame = 0;
+let playing = false;
+let playInterval = null;
+let atomMeshes = [];
+let bondMeshes = [];
+let bondCutoff = 1.8;
+
+// --- Scene setup ---
+const container = document.getElementById('container');
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 0, 15);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+container.insertBefore(renderer.domElement, container.firstChild);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.1;
+
+// Lighting
+const ambient = new THREE.AmbientLight(0x404040, 2);
+scene.add(ambient);
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+dirLight.position.set(5, 10, 7);
+scene.add(dirLight);
+const hemiLight = new THREE.HemisphereLight(0x8888ff, 0x442200, 0.5);
+scene.add(hemiLight);
+
+// --- Color schemes ---
+const STYLES = {
+  'dark-carbon': { bg: 0x1a1a2e, atom: 0x44aa77, bond: 0x336655, emissive: 0x112211 },
+  'light':       { bg: 0xf0f0f0, atom: 0x333333, bond: 0x666666, emissive: 0x111111 },
+  'element':     { bg: 0x0a0a1a, atom: 0x909090, bond: 0x505050, emissive: 0x222222 },
+};
+let currentStyle = 'dark-carbon';
+
+function applyStyle(name) {
+  currentStyle = name;
+  const s = STYLES[name];
+  scene.background = new THREE.Color(s.bg);
+  atomMeshes.forEach(m => {
+    m.material.color.set(s.atom);
+    m.material.emissive.set(s.emissive);
+  });
+  bondMeshes.forEach(m => m.material.color.set(s.bond));
+}
+
+// --- XYZ Parser ---
+function parseXYZ(text) {
+  const lines = text.split('\n');
+  const parsed = [];
+  let i = 0;
+  while (i < lines.length) {
+    const nLine = lines[i].trim();
+    if (!nLine) { i++; continue; }
+    const nAtoms = parseInt(nLine);
+    if (isNaN(nAtoms) || nAtoms <= 0) { i++; continue; }
+    const comment = lines[i + 1] || '';
+    const atoms = [];
+    for (let a = 0; a < nAtoms; a++) {
+      const parts = (lines[i + 2 + a] || '').trim().split(/\s+/);
+      if (parts.length >= 4) {
+        atoms.push({
+          element: parts[0],
+          x: parseFloat(parts[1]),
+          y: parseFloat(parts[2]),
+          z: parseFloat(parts[3]),
+        });
+      }
+    }
+    if (atoms.length === nAtoms) {
+      parsed.push({ nAtoms, comment, atoms });
+    }
+    i += 2 + nAtoms;
+  }
+  return parsed;
+}
+
+// --- Build scene from frames ---
+const atomGeom = new THREE.SphereGeometry(0.3, 16, 12);
+const bondGeom = new THREE.CylinderGeometry(0.06, 0.06, 1, 6);
+
+function buildScene() {
+  // Clear old
+  atomMeshes.forEach(m => scene.remove(m));
+  bondMeshes.forEach(m => scene.remove(m));
+  atomMeshes = [];
+  bondMeshes = [];
+
+  if (frames.length === 0) return;
+  const frame = frames[currentFrame];
+  const s = STYLES[currentStyle];
+  const atomMat = new THREE.MeshPhongMaterial({ color: s.atom, emissive: s.emissive, shininess: 60 });
+
+  // Center of mass
+  let cx = 0, cy = 0, cz = 0;
+  frame.atoms.forEach(a => { cx += a.x; cy += a.y; cz += a.z; });
+  cx /= frame.nAtoms; cy /= frame.nAtoms; cz /= frame.nAtoms;
+
+  frame.atoms.forEach(a => {
+    const mesh = new THREE.Mesh(atomGeom, atomMat.clone());
+    mesh.position.set(a.x - cx, a.y - cy, a.z - cz);
+    scene.add(mesh);
+    atomMeshes.push(mesh);
+  });
+
+  updateBonds();
+  fitCamera();
+}
+
+function updatePositions() {
+  if (frames.length === 0 || atomMeshes.length === 0) return;
+  const frame = frames[currentFrame];
+  let cx = 0, cy = 0, cz = 0;
+  frame.atoms.forEach(a => { cx += a.x; cy += a.y; cz += a.z; });
+  cx /= frame.nAtoms; cy /= frame.nAtoms; cz /= frame.nAtoms;
+
+  frame.atoms.forEach((a, i) => {
+    if (atomMeshes[i]) {
+      atomMeshes[i].position.set(a.x - cx, a.y - cy, a.z - cz);
+    }
+  });
+  updateBonds();
+}
+
+function updateBonds() {
+  bondMeshes.forEach(m => scene.remove(m));
+  bondMeshes = [];
+  if (!document.getElementById('bonds-toggle').checked) return;
+
+  const s = STYLES[currentStyle];
+  const bondMat = new THREE.MeshPhongMaterial({ color: s.bond });
+  const n = atomMeshes.length;
+
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const pi = atomMeshes[i].position;
+      const pj = atomMeshes[j].position;
+      const dx = pj.x - pi.x, dy = pj.y - pi.y, dz = pj.z - pi.z;
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      if (dist < bondCutoff && dist > 0.5) {
+        const mid = new THREE.Vector3((pi.x+pj.x)/2, (pi.y+pj.y)/2, (pi.z+pj.z)/2);
+        const mesh = new THREE.Mesh(bondGeom, bondMat);
+        mesh.position.copy(mid);
+        mesh.scale.y = dist;
+        const dir = new THREE.Vector3(dx, dy, dz).normalize();
+        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
+        scene.add(mesh);
+        bondMeshes.push(mesh);
+      }
+    }
+  }
+}
+
+function fitCamera() {
+  if (atomMeshes.length === 0) return;
+  let maxR = 0;
+  atomMeshes.forEach(m => {
+    const r = m.position.length();
+    if (r > maxR) maxR = r;
+  });
+  camera.position.set(0, 0, maxR * 2.5 + 5);
+  controls.target.set(0, 0, 0);
+  controls.update();
+}
+
+// --- Playback ---
+function setFrame(f) {
+  currentFrame = Math.max(0, Math.min(f, frames.length - 1));
+  updatePositions();
+  document.getElementById('frame-slider').value = currentFrame;
+  document.getElementById('frame-label').textContent = `${currentFrame + 1}/${frames.length}`;
+  document.getElementById('frame-info').textContent = `Frame ${currentFrame + 1}: ${frames[currentFrame].atoms.length} atoms`;
+}
+
+function togglePlay() {
+  playing = !playing;
+  document.getElementById('btn-play').textContent = playing ? 'Pause' : 'Play';
+  document.getElementById('btn-play').classList.toggle('active', playing);
+  if (playing) {
+    const fps = parseInt(document.getElementById('speed-select').value);
+    playInterval = setInterval(() => {
+      if (currentFrame < frames.length - 1) {
+        setFrame(currentFrame + 1);
+      } else {
+        setFrame(0); // loop
+      }
+    }, 1000 / fps);
+  } else {
+    clearInterval(playInterval);
+  }
+}
+
+// --- File loading ---
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    frames = parseXYZ(e.target.result);
+    if (frames.length === 0) {
+      document.getElementById('status').textContent = 'Error: no valid frames found';
+      return;
+    }
+    document.getElementById('status').textContent = `Loaded: ${file.name} (${frames.length} frames, ${frames[0].nAtoms} atoms)`;
+    document.getElementById('frame-slider').max = frames.length - 1;
+    currentFrame = 0;
+    buildScene();
+    setFrame(0);
+    applyStyle(currentStyle);
+  };
+  reader.readAsText(file);
+}
+
+// --- Event handlers ---
+document.getElementById('file-input').addEventListener('change', (e) => {
+  if (e.target.files[0]) loadFile(e.target.files[0]);
+});
+
+document.getElementById('btn-play').addEventListener('click', togglePlay);
+document.getElementById('btn-prev').addEventListener('click', () => setFrame(currentFrame - 1));
+document.getElementById('btn-next').addEventListener('click', () => setFrame(currentFrame + 1));
+document.getElementById('frame-slider').addEventListener('input', (e) => setFrame(parseInt(e.target.value)));
+
+document.getElementById('speed-select').addEventListener('change', () => {
+  if (playing) { togglePlay(); togglePlay(); } // restart with new speed
+});
+
+document.getElementById('style-select').addEventListener('change', (e) => applyStyle(e.target.value));
+
+document.getElementById('bonds-toggle').addEventListener('change', updateBonds);
+
+document.getElementById('bond-cutoff').addEventListener('input', (e) => {
+  bondCutoff = parseFloat(e.target.value);
+  document.getElementById('cutoff-label').textContent = bondCutoff.toFixed(2) + ' \u212B';
+  updateBonds();
+});
+
+// Drag and drop
+const overlay = document.getElementById('drop-overlay');
+document.addEventListener('dragover', (e) => { e.preventDefault(); overlay.style.display = 'flex'; });
+document.addEventListener('dragleave', (e) => { if (e.target === overlay) overlay.style.display = 'none'; });
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  overlay.style.display = 'none';
+  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+
+// Keyboard
+document.addEventListener('keydown', (e) => {
+  if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+  if (e.key === 'ArrowLeft') setFrame(currentFrame - 1);
+  if (e.key === 'ArrowRight') setFrame(currentFrame + 1);
+});
+
+// Resize
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- Render loop ---
+applyStyle('dark-carbon');
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// --- Load example if available ---
+async function tryLoadExample() {
+  const paths = [
+    '../outputs/test4_c60/trajectory.xyz',
+    '../outputs/test3_graphene/trajectory.xyz',
+    '../outputs/test1_dimer/trajectory.xyz',
+  ];
+  for (const p of paths) {
+    try {
+      const resp = await fetch(p);
+      if (resp.ok) {
+        const text = await resp.text();
+        frames = parseXYZ(text);
+        if (frames.length > 0) {
+          document.getElementById('status').textContent = `Auto-loaded: ${p.split('/').pop()} (${frames.length} frames, ${frames[0].nAtoms} atoms)`;
+          document.getElementById('frame-slider').max = frames.length - 1;
+          buildScene();
+          setFrame(0);
+          applyStyle(currentStyle);
+          return;
+        }
+      }
+    } catch (e) { /* continue */ }
+  }
+}
+tryLoadExample();
+</script>
+</body>
+</html>
