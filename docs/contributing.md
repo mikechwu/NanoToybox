@@ -20,10 +20,15 @@ Build an **immersive, interactive, scientifically accurate browser-based playgro
 
 The long-term vision:
 - Real physics (Tersoff potential, velocity Verlet)
-- Real-time (>30 FPS for 60–300 atom scenes)
+- Real-time (>30 FPS for 60–300 atom scenes, up to ~2,100 atoms with optimized viewer)
 - Beautiful visualization (Three.js, perspective 3D)
 - Educational and accessible (not just for specialists)
 - Expandable to ML surrogates for larger systems later
+
+Measured limits (see [scaling-research.md](scaling-research.md)):
+- Numba Tersoff: 30 FPS up to ~2,100 atoms; C/Wasm target: ~10,000 atoms
+- Current viewer: 30 FPS up to ~250 atoms (O(N²) bond detection)
+- Optimized viewer (InstancedMesh + neighbor list): ~5,000–10,000 atoms
 
 ## Rules to Obey
 
@@ -98,10 +103,11 @@ The long-term vision:
 | Force calculation | `sim/potentials/tersoff.py`, `tersoff_fast.py` |
 | Running simulations | `sim/integrators/velocity_verlet.py`, `sim/atoms.py` |
 | Adding structures | `sim/structures/generate.py`, `scripts/library_cli.py` |
+| Collision simulations | `scripts/scaling_research.py`, `docs/scaling-research.md` |
 | ML pipeline | `ml/descriptors_v2.py`, `ml/train_v2.py` |
-| Browser viewer | `viewer/index.html` |
+| Browser viewer | `viewer/index.html`, `docs/viewer.md` |
 | Validation | `tests/test_01_dimer.py` through `test_08_data_loading.py` |
-| Performance | `sim/potentials/tersoff_fast.py`, `scripts/bottleneck_analysis.py` |
+| Performance & scaling | `scripts/scaling_research.py`, `docs/scaling-research.md` |
 
 ## Environment Setup
 

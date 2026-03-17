@@ -116,6 +116,21 @@ All structures in `structures/library/` must satisfy:
 - Energy monotonically decreased during minimization
 - Bond lengths in physically reasonable range (1.3–1.6 Å for carbon)
 
+**Critical:** The geometry generators produce coordinates far from equilibrium (Fmax 3–7 eV/Å). Never use generator output directly in MD simulations — always use library structures or relax first. Unrelaxed structures produce artifacts where self-relaxation dominates over applied physics. See [D9 in decisions.md](decisions.md) and [scaling-research.md](scaling-research.md) for details.
+
+## Collision Dynamics
+
+For multi-structure collision simulations, see [scaling-research.md](scaling-research.md) for the validated protocol. Key parameters:
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Collision velocity | 0.01 Å/fs (1,000 m/s) | Energetic but physical (~2,400 K thermal) |
+| Surface gap | 3.0 Å | Outside Tersoff range (2.1 Å), close enough for quick contact |
+| Timestep | 0.5 fs | Standard for Tersoff carbon NVE |
+| Aftermath duration | 200–300 fs | Sufficient for post-collision dynamics |
+
+The Tersoff potential has a hard cutoff at R + D = 2.1 Å. Atoms from different structures do not interact at all until they are within this distance. Collision is confirmed by monitoring the inter-structure minimum distance dropping below 2.1 Å.
+
 ## Legacy Code Reference
 
 The simulator physics was derived from the NCKU legacy codebase at `~/NCKU/carbon-sim/MPI/`:

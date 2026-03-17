@@ -25,7 +25,8 @@ NanoToybox/
 │   ├── plot_bonds.py             # Bond histogram plotting
 │   ├── plot_angles.py            # Angle distribution plotting
 │   ├── bottleneck_analysis.py    # Performance profiling
-│   ├── scaling_analysis.py       # N-scaling benchmarks
+│   ├── scaling_analysis.py       # N-scaling benchmarks (analytical vs ML)
+│   ├── scaling_research.py       # Real-time limit research (collisions, rendering, data)
 │   ├── product_scaling.py        # Website feasibility benchmarks
 │   └── generate_*.py             # Dataset generation scripts
 ├── structures/
@@ -59,6 +60,14 @@ Structure Generator → Atoms → Minimizer → Relaxed Atoms → Integrator →
        ↓                                       ↓                          ↓
    generate.py                          library_cli.py              output.py
    (geometry)                          (relax + save)           (XYZ + CSV)
+```
+
+### Collision Research Pipeline
+```
+Library Structures → Place + Gap → Assign Velocities → NVE Dynamics → Monitor → Trajectory
+        ↓                ↓               ↓                  ↓             ↓
+  structures/library/  place_for_    set_collision_     vv_step()    min_dist,
+  (relaxed 0K)         collision()   velocities()                   PE, KE, COM
 ```
 
 ### ML Pipeline (deferred)

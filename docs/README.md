@@ -13,6 +13,7 @@ Welcome to the NanoToybox project — a browser-based interactive carbon nanostr
 | [Testing & Validation](testing.md) | Test ladder, pass criteria, how to run |
 | [Viewer](viewer.md) | Three.js trajectory viewer, usage, integration |
 | [Project Decisions](decisions.md) | Key strategic decisions and their rationale |
+| [Scaling Research](scaling-research.md) | Real-time browser limits, collision benchmarks, bottleneck analysis |
 | [Contributing](contributing.md) | How to continue development, rules, workflow |
 
 ## Quick Start
@@ -43,6 +44,8 @@ Build an immersive, interactive, scientifically accurate browser-based playgroun
 - Analytical Tersoff simulator: validated (8 tests pass)
 - Structure library: 15 canonical relaxed structures (60–720 atoms)
 - Numba-accelerated force engine: 250–480x faster than pure Python
-- Three.js trajectory viewer: functional
+- Three.js trajectory viewer: functional (30/60 fps, stride 1–100, PBR rendering)
+- Scaling research: completed — real-time limit ~2,100 atoms (Numba), ~250 atoms (current viewer)
+- Collision simulations: 8 verified scenarios with relaxed structures (120–3,600 atoms)
 - ML surrogate: explored, deferred (analytical is faster for target system sizes)
 - **Next step: port Tersoff to C/Wasm and connect to viewer for browser deployment**

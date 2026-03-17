@@ -131,6 +131,17 @@ Line 1: atom count. Line 2: comment with metadata. Lines 3+: element x y z.
 }
 ```
 
+## Usage in Simulations
+
+Library structures are the **only validated starting point** for dynamics and collision simulations. The geometry generators produce unrelaxed coordinates with residual forces 3,000–5,000x larger than library structures:
+
+| Source | C60 Fmax (eV/Å) | C60 Energy (eV) |
+|--------|----------------:|----------------:|
+| `c60()` generator | 3.29 | -388.95 |
+| `structures/library/c60.xyz` | 0.0007 | -403.81 |
+
+For structures not in the library, relax with `simple_minimize()` or `minimize()` to Fmax < 10⁻³ eV/Å before use. See `scripts/scaling_research.py` for examples of loading library structures and relaxing larger ones on-the-fly.
+
 ## Adding New Structures
 
 To add a new structure type to the CLI:
