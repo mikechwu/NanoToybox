@@ -28,13 +28,13 @@ export class Renderer {
 
   _initScene() {
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(
-      50, window.innerWidth / window.innerHeight, 0.1, 2000
-    );
+    const w = this.container.clientWidth || window.innerWidth;
+    const h = this.container.clientHeight || window.innerHeight;
+    this.camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 2000);
     this.camera.position.set(0, 0, 15);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setSize(w, h);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
@@ -65,9 +65,11 @@ export class Renderer {
     this.viewHelper = new ViewHelper(this.camera, this.renderer.domElement);
 
     window.addEventListener('resize', () => {
-      this.camera.aspect = window.innerWidth / window.innerHeight;
+      const w = this.container.clientWidth || window.innerWidth;
+      const h = this.container.clientHeight || window.innerHeight;
+      this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
-      this.renderer.setSize(window.innerWidth, window.innerHeight);
+      this.renderer.setSize(w, h);
     });
   }
 

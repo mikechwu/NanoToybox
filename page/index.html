@@ -2,16 +2,25 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>NanoToybox — Interactive Carbon Playground</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body {
+html, body {
+  height: 100%;
   background: #181820; color: #e8e8e8;
   font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
   overflow: hidden;
 }
-#container { width: 100vw; height: 100vh; position: relative; }
+/* Use dvh (dynamic viewport height) for iOS Safari compatibility.
+   100vh on iOS includes the address bar area, pushing bottom UI off-screen.
+   dvh tracks the actual visible area. Fallback to 100vh for older browsers. */
+#container {
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  position: relative;
+}
 canvas { display: block; touch-action: none; }
 
 #info {
@@ -24,12 +33,12 @@ canvas { display: block; touch-action: none; }
 #info .title { font-size: 14px; font-weight: 600; letter-spacing: 0.5px; }
 #status { color: #888; font-size: 11px; }
 #fps {
-  position: absolute; bottom: 50px; left: 12px;
+  position: absolute; bottom: 56px; left: 12px;
   color: #666; font-size: 11px; z-index: 10;
   font-variant-numeric: tabular-nums;
 }
 #hint {
-  position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%);
+  position: absolute; bottom: 70px; left: 50%; transform: translateX(-50%);
   background: rgba(100,180,140,0.15); color: #8fd8b0;
   padding: 8px 20px; border-radius: 20px; font-size: 13px;
   z-index: 10; pointer-events: none;
@@ -41,10 +50,11 @@ canvas { display: block; touch-action: none; }
   position: absolute; bottom: 0; left: 0; right: 0;
   background: rgba(20,20,28,0.92); backdrop-filter: blur(8px);
   padding: 8px 16px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   font-size: 12px; z-index: 10;
   border-top: 1px solid rgba(255,255,255,0.08);
-  touch-action: auto; /* allow touch on buttons/selects on iPad */
+  touch-action: auto;
 }
 #controls button, #controls select {
   background: rgba(255,255,255,0.08); color: #ccc;
