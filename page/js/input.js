@@ -23,6 +23,7 @@ export class InputManager {
     this.touchCount = 0;
     this.isDragging = false;
     this.isCamera = false;
+    this.isRotating = false;  // 2-finger rotation on mobile
 
     this._bindEvents();
   }
@@ -31,7 +32,10 @@ export class InputManager {
     this.atomMeshes = meshes;
     this.isDragging = false;
     this.isCamera = false;
-    this.touchCount = 0;
+    if (this.isRotating) {
+      this.isRotating = false;
+      this.controls.enabled = true;
+    }
   }
 
   _screenToNDC(x, y) {
@@ -162,10 +166,11 @@ export class InputManager {
       this._handlers.touchstart = (e) => this._onTouchStart(e);
       this._handlers.touchmove = (e) => this._onTouchMove(e);
       this._handlers.touchend = (e) => this._onTouchEnd(e);
+      this._handlers.touchcancel = (e) => this._onTouchCancel(e);
       c.addEventListener('touchstart', this._handlers.touchstart, { passive: false });
       c.addEventListener('touchmove', this._handlers.touchmove, { passive: false });
       c.addEventListener('touchend', this._handlers.touchend, { passive: false });
-      c.addEventListener('touchcancel', this._handlers.touchend, { passive: false });
+      c.addEventListener('touchcancel', this._handlers.touchcancel, { passive: false });
     } else {
       this._handlers.pointerdown = (e) => this._onPointerDown(e);
       this._handlers.pointermove = (e) => this._onPointerMove(e);
@@ -179,9 +184,15 @@ export class InputManager {
     }
 
     this._handlers.blur = () => {
-      this.cb.onPointerUp?.();
+      if (this.isDragging || this.isRotating) {
+        this.cb.onPointerUp?.();
+      }
       this.isDragging = false;
       this.isCamera = false;
+      if (this.isRotating) {
+        this.isRotating = false;
+        this.controls.enabled = true;
+      }
     };
     window.addEventListener('blur', this._handlers.blur);
   }
@@ -192,7 +203,7 @@ export class InputManager {
       c.removeEventListener('touchstart', this._handlers.touchstart);
       c.removeEventListener('touchmove', this._handlers.touchmove);
       c.removeEventListener('touchend', this._handlers.touchend);
-      c.removeEventListener('touchcancel', this._handlers.touchend);
+      c.removeEventListener('touchcancel', this._handlers.touchcancel);
     } else {
       c.removeEventListener('pointerdown', this._handlers.pointerdown);
       c.removeEventListener('pointermove', this._handlers.pointermove);
@@ -262,15 +273,36 @@ export class InputManager {
   // --- Mobile events ---
 
   _onTouchStart(e) {
-    this.touchCount = e.touches.length;
+    if (e.touches.length >= 2) {
+      // Already rotating — ignore additional fingers
+      if (this.isRotating) return;
 
-    if (this.touchCount >= 2) {
-      // 2+ fingers → OrbitControls handles pinch/pan natively
-      // Cancel any active atom drag
+      // Cancel any active 1-finger drag first
       if (this.isDragging) {
         this.isDragging = false;
         this.cb.onPointerUp?.();
       }
+
+      // Raycast both fingers — if both hit different atoms, enter rotation
+      const t0 = e.touches[0], t1 = e.touches[1];
+      const atom0 = this._raycastAtom(t0.clientX, t0.clientY);
+      const atom1 = this._raycastAtom(t1.clientX, t1.clientY);
+
+      if (atom0 >= 0 && atom1 >= 0 && atom0 !== atom1) {
+        e.preventDefault();
+        this.controls.enabled = false;
+        this.isRotating = true;
+        const avgX = (t0.clientX + t1.clientX) / 2;
+        const avgY = (t0.clientY + t1.clientY) / 2;
+        try {
+          this.cb.onPointerDown?.(atom0, avgX, avgY, true);
+        } catch (err) {
+          this.isRotating = false;
+          this.controls.enabled = true;
+          throw err;
+        }
+      }
+      // Otherwise let OrbitControls handle pinch/pan (existing behavior)
       return;
     }
 
@@ -287,6 +319,14 @@ export class InputManager {
   }
 
   _onTouchMove(e) {
+    if (this.isRotating && e.touches.length >= 2) {
+      e.preventDefault();
+      const t0 = e.touches[0], t1 = e.touches[1];
+      const avgX = (t0.clientX + t1.clientX) / 2;
+      const avgY = (t0.clientY + t1.clientY) / 2;
+      this.cb.onPointerMove?.(avgX, avgY);
+      return;
+    }
     if (this.isDragging && e.touches.length === 1) {
       e.preventDefault();
       const touch = e.touches[0];
@@ -296,12 +336,32 @@ export class InputManager {
   }
 
   _onTouchEnd(e) {
+    if (this.isRotating && e.touches.length < 2) {
+      this.isRotating = false;
+      this.controls.enabled = true;
+      this.cb.onPointerUp?.();
+      return;
+    }
     if (e.touches.length === 0) {
       if (this.isDragging) {
         this.isDragging = false;
         this.cb.onPointerUp?.();
       }
-      this.touchCount = 0;
+    }
+  }
+
+  /**
+   * System-interrupted touch (incoming call, notification, gesture).
+   * Unconditionally reset all interaction state to prevent stuck controls.
+   */
+  _onTouchCancel(_e) {
+    if (this.isDragging || this.isRotating) {
+      this.cb.onPointerUp?.();
+    }
+    this.isDragging = false;
+    if (this.isRotating) {
+      this.isRotating = false;
+      this.controls.enabled = true;
     }
   }
 }

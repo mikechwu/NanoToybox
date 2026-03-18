@@ -57,6 +57,7 @@ The page loads relaxed carbon structures from a pre-computed library, then runs 
 | Gesture | Action |
 |---------|--------|
 | 1-finger drag on atom | Drag atom |
+| 2 fingers on 2 atoms | Rotate molecule |
 | 2-finger pinch | Zoom |
 | 2-finger drag | Pan camera |
 
