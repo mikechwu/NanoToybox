@@ -186,6 +186,46 @@ def c60() -> Atoms:
     return c60_fullerene()
 
 
+def orient_pca(atoms: Atoms) -> Atoms:
+    """
+    Rotate a structure so its principal axes align with coordinate axes.
+
+    Uses PCA on atom positions to find the directions of greatest and least
+    spatial extent.  After rotation:
+      - Y axis = largest variance  (widest spread)
+      - X axis = middle variance
+      - Z axis = smallest variance (thinnest direction)
+
+    This minimises Z-axis overlap, giving the best "top-down" viewing angle
+    in the interactive viewer.
+
+    The rotation is applied in-place and the structure is re-centered.
+    """
+    pos = atoms.positions.copy()
+    pos -= pos.mean(axis=0)
+
+    # Covariance matrix of atom positions
+    cov = np.cov(pos, rowvar=False)  # 3x3
+
+    # Eigendecomposition — eigenvalues = variance along each principal axis
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    # eigh returns in ascending order: eigvals[0] <= eigvals[1] <= eigvals[2]
+
+    # Build rotation matrix:
+    #   column 0 (X) = middle eigenvector  (eigvals[1])
+    #   column 1 (Y) = largest eigenvector (eigvals[2])
+    #   column 2 (Z) = smallest eigenvector(eigvals[0])
+    rot = np.column_stack([eigvecs[:, 1], eigvecs[:, 2], eigvecs[:, 0]])
+
+    # Ensure right-handed coordinate system
+    if np.linalg.det(rot) < 0:
+        rot[:, 2] = -rot[:, 2]
+
+    # Apply rotation: new_pos = pos @ rot  (each row is a position vector)
+    atoms.positions = pos @ rot
+    return atoms
+
+
 def diamond(nx: int = 2, ny: int = 2, nz: int = 2, a: float = 3.567) -> Atoms:
     """
     Diamond cubic carbon.

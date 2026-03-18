@@ -34,7 +34,7 @@ except ImportError:
 from sim.minimizer import simple_minimize, minimize as fire_minimize
 from sim.io.output import write_xyz
 from sim.structures.generate import (
-    graphene, cnt, cnt_armchair, cnt_zigzag, c60, diamond
+    graphene, cnt, cnt_armchair, cnt_zigzag, c60, diamond, orient_pca
 )
 
 LIBRARY_DIR = os.path.join(os.path.dirname(__file__), '..', 'structures', 'library')
@@ -134,6 +134,9 @@ def generate_and_save(name, atoms, description, f_tol=1e-3):
     print(f"\n{'='*60}")
     print(f"  {name}: {description} ({atoms.n_atoms} atoms)")
     print(f"{'='*60}")
+
+    orient_pca(atoms)
+    print(f"  Oriented via PCA (Y=widest, Z=thinnest)")
 
     e0, f0, _ = force_fn(atoms.positions)
     fmax0 = np.max(np.linalg.norm(f0, axis=1))
@@ -251,28 +254,84 @@ def cmd_list(args):
               f"{info['fmax_eV_A']:>10.2e} {info['method']:>15}")
 
 
+def _load_xyz_atoms(xyz_path):
+    """Read an XYZ file and return an Atoms object."""
+    from sim.atoms import Atoms as _Atoms
+    with open(xyz_path) as f:
+        lines = f.readlines()
+    n_atoms = int(lines[0].strip())
+    positions = []
+    for i in range(2, 2 + n_atoms):
+        parts = lines[i].strip().split()
+        positions.append([float(parts[1]), float(parts[2]), float(parts[3])])
+    atoms = _Atoms(np.array(positions))
+    atoms.positions -= atoms.positions.mean(axis=0)
+    return atoms
+
+
+# Large fullerenes that cannot be generated algorithmically — they are
+# imported once (from .mat files) and thereafter re-used from the existing
+# library XYZ.  rebuild-all backs them up, clears the directory, then
+# re-imports them with the standard orient + relax pipeline.
+_IMPORTED_STRUCTURES = {
+    'c180': 'C180 fullerene',
+    'c540': 'C540 fullerene',
+    'c720': 'C720 fullerene',
+}
+
+
 def cmd_rebuild_all(args):
     """Rebuild all standard library structures from scratch."""
+    # Back up imported structures that can't be regenerated
+    import tempfile
+    backed_up = {}
+    for name, desc in _IMPORTED_STRUCTURES.items():
+        xyz_path = os.path.join(LIBRARY_DIR, f'{name}.xyz')
+        if os.path.exists(xyz_path):
+            tmp = os.path.join(tempfile.gettempdir(), f'nanotoybox_{name}.xyz')
+            import shutil
+            shutil.copy2(xyz_path, tmp)
+            backed_up[name] = (tmp, desc)
+
     # Clear library
     if os.path.exists(LIBRARY_DIR):
         for f in os.listdir(LIBRARY_DIR):
             os.remove(os.path.join(LIBRARY_DIR, f))
 
+    # Structures that can be generated from scratch
     structures = [
+        # Fullerenes
         ('c60', c60(), 'C60 Buckminsterfullerene'),
+        # Armchair CNTs
         ('cnt_5_5_5cells', cnt_armchair(5, 5), '(5,5) armchair CNT, 5 cells'),
         ('cnt_5_5_10cells', cnt_armchair(5, 10), '(5,5) armchair CNT, 10 cells'),
+        # Zigzag CNTs
         ('cnt_10_0_5cells', cnt_zigzag(10, 5), '(10,0) zigzag CNT, 5 cells'),
+        # Chiral CNTs
+        ('cnt_6_2_1cells', cnt(6, 2, 1), '(6,2) chiral CNT, 1 cells'),
+        ('cnt_6_3_2cells', cnt(6, 3, 2), '(6,3) chiral CNT, 2 cells'),
+        ('cnt_7_4_1cells', cnt(7, 4, 1), '(7,4) chiral CNT, 1 cells'),
+        ('cnt_8_4_2cells', cnt(8, 4, 2), '(8,4) chiral CNT, 2 cells'),
+        ('cnt_9_3_1cells', cnt(9, 3, 1), '(9,3) chiral CNT, 1 cells'),
+        # Graphene
         ('graphene_6x6', graphene(6, 6), '6x6 graphene sheet'),
         ('graphene_10x10', graphene(10, 10), '10x10 graphene sheet'),
+        # Diamond
         ('diamond_2x2x2', diamond(2, 2, 2), '2x2x2 diamond cubic'),
     ]
 
     for name, atoms, desc in structures:
         generate_and_save(name, atoms, desc)
 
+    # Re-import backed-up structures
+    for name, (tmp_path, desc) in backed_up.items():
+        atoms = _load_xyz_atoms(tmp_path)
+        generate_and_save(name, atoms, desc)
+        os.remove(tmp_path)
+
+    total = len(structures) + len(backed_up)
     print(f"\n{'='*60}")
-    print(f"Library rebuilt: {len(structures)} structures")
+    print(f"Library rebuilt: {total} structures")
     cmd_list(args)
 
 
