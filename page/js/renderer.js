@@ -17,7 +17,6 @@ export class Renderer {
     this.bondMeshes = [];
     this._activeBonds = 0;
     this.highlightAtom = -1;
-    this._extraHighlights = [];  // additional highlighted atom indices (multi-touch)
     this.forceLine = null;
     this.currentTheme = 'dark';
 
@@ -127,8 +126,7 @@ export class Renderer {
   }
 
   loadStructure(atoms, bonds) {
-    // Dispose cloned highlight materials before clearing meshes
-    this.clearExtraHighlights();
+    // Dispose cloned highlight material before clearing meshes
     if (this.highlightAtom >= 0 && this.highlightAtom < this.atomMeshes.length) {
       const hm = this.atomMeshes[this.highlightAtom];
       if (hm.material !== this._atomMat) hm.material.dispose();
@@ -286,40 +284,6 @@ export class Renderer {
     }
   }
 
-  /**
-   * Highlight additional atoms beyond the primary (for multi-touch rotation).
-   * Skips the primary highlightAtom (already handled by setHighlight).
-   */
-  setExtraHighlights(indices) {
-    this.clearExtraHighlights();
-    for (const idx of indices) {
-      if (idx < 0 || idx >= this.atomMeshes.length) continue;
-      if (idx === this.highlightAtom) continue;  // already highlighted
-      const mesh = this.atomMeshes[idx];
-      if (mesh.material === this._atomMat) {
-        mesh.material = this._atomMat.clone();
-      }
-      mesh.material.emissive.set(0x335544);
-      mesh.material.emissiveIntensity = 1.0;
-      mesh.scale.setScalar(1.15);
-      this._extraHighlights.push(idx);
-    }
-  }
-
-  clearExtraHighlights() {
-    for (const idx of this._extraHighlights) {
-      if (idx < 0 || idx >= this.atomMeshes.length) continue;
-      if (idx === this.highlightAtom) continue;  // managed by setHighlight
-      const mesh = this.atomMeshes[idx];
-      if (mesh.material !== this._atomMat) {
-        mesh.material.dispose();
-        mesh.material = this._atomMat;
-      }
-      mesh.scale.setScalar(1.0);
-    }
-    this._extraHighlights = [];
-  }
-
   showForceLine(fromAtomIndex, toWorldX, toWorldY, toWorldZ) {
     if (fromAtomIndex < 0) return;
     const atomPos = this.atomMeshes[fromAtomIndex].position;
@@ -345,7 +309,8 @@ export class Renderer {
    * No event-driven flickering — purely a function of state.
    */
   updateFeedback(feedbackState) {
-    const { hoverAtom, activeAtom, isDragging, isRotating } = feedbackState;
+    const { hoverAtom, activeAtom, isDragging, isMoving, isRotating } = feedbackState;
+    const isActive = isDragging || isMoving || isRotating;
 
     // Determine which atom should be highlighted
     const targetAtom = activeAtom >= 0 ? activeAtom : hoverAtom;
@@ -355,25 +320,31 @@ export class Renderer {
       this.setHighlight(targetAtom);
     }
 
-    // Dragging gets stronger highlight
-    if (isDragging && activeAtom >= 0 && activeAtom < this.atomMeshes.length) {
+    // Active interaction gets stronger highlight with mode-specific color
+    if (isActive && activeAtom >= 0 && activeAtom < this.atomMeshes.length) {
       const mesh = this.atomMeshes[activeAtom];
-      // setHighlight already cloned the material for this atom
       if (mesh.material !== this._atomMat) {
-        mesh.material.emissive.set(0x446655);
+        if (isMoving) {
+          // Blue tint for Move mode
+          mesh.material.emissive.set(0x445566);
+          this.forceLine.material.color.set(0x66aaff);
+        } else {
+          // Green tint for Atom drag and Rotate
+          mesh.material.emissive.set(0x446655);
+          this.forceLine.material.color.set(0x66ffaa);
+        }
         mesh.material.emissiveIntensity = 1.2;
       }
       mesh.scale.setScalar(1.2);
     }
 
-    // Force line visibility tied to drag state
-    if (!isDragging) {
+    // Force line visibility tied to active interaction state
+    if (!isActive) {
       this.hideForceLine();
     }
   }
 
   clearFeedback() {
-    this.clearExtraHighlights();
     this.setHighlight(-1);
     this.hideForceLine();
   }
@@ -393,13 +364,10 @@ export class Renderer {
 
     if (this._atomMat) this._atomMat.color.set(t.atom);
     if (this._bondMat) this._bondMat.color.set(t.bond);
-    // Update cloned highlight materials (primary + extras)
-    const highlighted = [this.highlightAtom, ...this._extraHighlights];
-    for (const idx of highlighted) {
-      if (idx >= 0 && idx < this.atomMeshes.length) {
-        const m = this.atomMeshes[idx];
-        if (m.material !== this._atomMat) m.material.color.set(t.atom);
-      }
+    // Update cloned highlight material if active
+    if (this.highlightAtom >= 0 && this.highlightAtom < this.atomMeshes.length) {
+      const m = this.atomMeshes[this.highlightAtom];
+      if (m.material !== this._atomMat) m.material.color.set(t.atom);
     }
   }
 

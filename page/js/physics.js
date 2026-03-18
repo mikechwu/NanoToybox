@@ -319,6 +319,7 @@ export class PhysicsEngine {
     this.mass = 1.9944235e-26;
     this.dragAtom = -1;
     this.isRotateMode = false;
+    this.isTranslateMode = false;
     this.dragTarget = [0, 0, 0];
     this.keInitial = 0;
     this.neighborList = null;
@@ -350,6 +351,8 @@ export class PhysicsEngine {
     }
     this.vel.fill(0);
     this.dragAtom = -1;
+    this.isRotateMode = false;
+    this.isTranslateMode = false;
     this.bonds = bonds.map(b => [...b]);
     this.keInitial = 0.1;
     this.stepCount = 0;
@@ -422,12 +425,32 @@ export class PhysicsEngine {
     // ── Interaction forces: UX layer ──
     // Drag spring, rotation torque — user-driven forces.
 
-    // ─── User drag force (translation mode) — full 3D in camera plane ───
-    if (this.dragAtom >= 0 && !this.isRotateMode) {
+    // ─── User drag force (single atom) — full 3D in camera plane ───
+    if (this.dragAtom >= 0 && !this.isRotateMode && !this.isTranslateMode) {
       const ix = this.dragAtom * 3;
       this.force[ix]     += this.kDrag * (this.dragTarget[0] - this.pos[ix]);
       this.force[ix + 1] += this.kDrag * (this.dragTarget[1] - this.pos[ix + 1]);
       this.force[ix + 2] += this.kDrag * (this.dragTarget[2] - this.pos[ix + 2]);
+    }
+
+    // ─── User translate force (whole molecule) ───
+    // Uniform force on all atoms, normalized by n so total force is size-independent.
+    // Produces approximately rigid translation; internal vibrations are unaffected.
+    if (this.dragAtom >= 0 && this.isTranslateMode) {
+      const ix = this.dragAtom * 3;
+      const dx = this.dragTarget[0] - this.pos[ix];
+      const dy = this.dragTarget[1] - this.pos[ix + 1];
+      const dz = this.dragTarget[2] - this.pos[ix + 2];
+      const s = this.kDrag / this.n;
+      const fx = s * dx;
+      const fy = s * dy;
+      const fz = s * dz;
+      for (let i = 0; i < this.n; i++) {
+        const jx = i * 3;
+        this.force[jx]     += fx;
+        this.force[jx + 1] += fy;
+        this.force[jx + 2] += fz;
+      }
     }
 
     // ─── User rotation (spring force → torque → distributed tangential force) ───
@@ -601,9 +624,19 @@ export class PhysicsEngine {
 
   // ─── External interaction API ───
 
+  startTranslate(atomIndex) {
+    this.dragAtom = atomIndex;
+    this.isRotateMode = false;
+    this.isTranslateMode = true;
+    this.dragTarget[0] = this.pos[atomIndex * 3];
+    this.dragTarget[1] = this.pos[atomIndex * 3 + 1];
+    this.dragTarget[2] = this.pos[atomIndex * 3 + 2];
+  }
+
   startDrag(atomIndex) {
     this.dragAtom = atomIndex;
     this.isRotateMode = false;
+    this.isTranslateMode = false;
     this.dragTarget[0] = this.pos[atomIndex * 3];
     this.dragTarget[1] = this.pos[atomIndex * 3 + 1];
     this.dragTarget[2] = this.pos[atomIndex * 3 + 2];
@@ -616,6 +649,7 @@ export class PhysicsEngine {
   startRotateDrag(atomIndex) {
     this.dragAtom = atomIndex;
     this.isRotateMode = true;
+    this.isTranslateMode = false;
     this.dragTarget[0] = this.pos[atomIndex * 3];
     this.dragTarget[1] = this.pos[atomIndex * 3 + 1];
     this.dragTarget[2] = this.pos[atomIndex * 3 + 2];
@@ -630,6 +664,7 @@ export class PhysicsEngine {
   endDrag() {
     this.dragAtom = -1;
     this.isRotateMode = false;
+    this.isTranslateMode = false;
   }
 
   applyImpulse(atomIndex, vx, vy) {
@@ -669,6 +704,8 @@ export class PhysicsEngine {
     }
     this.vel.fill(0);
     this.dragAtom = -1;
+    this.isRotateMode = false;
+    this.isTranslateMode = false;
     this.stepCount = 0;
     this.keInitial = 0.1;
     this.computeForces();

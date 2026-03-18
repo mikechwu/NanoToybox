@@ -109,9 +109,9 @@ python3 -m http.server 8000
 |---|------|----------|
 | 1 | Page loads | C60 renders with atoms and bonds visible |
 | 2 | Switch structure | New structure loads, old one clears completely |
-| 3 | Left-drag on atom | Highlight appears, spring line shows, atom follows cursor |
+| 3 | Atom mode: left-drag on atom | Highlight (green), spring line shows, atom follows cursor |
 | 4 | Release drag | Atom retains momentum, structure vibrates naturally |
-| 5 | Ctrl+click on atom | Molecule rotates, spring line visible |
+| 5 | Ctrl+click on atom (any mode) | Molecule rotates, spring line visible |
 | 6 | Right-drag | Camera orbits around structure |
 | 7 | Scroll wheel | Camera zooms in/out |
 | 8 | Reset button | Structure returns to initial relaxed geometry |
@@ -123,3 +123,13 @@ python3 -m http.server 8000
 | 12 | Large structure (C720) | Loads without crash, interaction works at reduced FPS |
 | 13 | XYZ axes indicator | Visible in corner, rotates with camera |
 | 14 | Hint text | Fades on first atom interaction |
+| 15 | Move mode: drag atom | Entire molecule translates, blue highlight + force line |
+| 15a | Release in Move mode, damping=0 | Molecule coasts (approximately NVE) |
+| 15b | Release in Move mode, damping>0 | Motion decays visibly |
+| 16 | Rotate mode: 1-finger drag on atom (mobile) | Molecule rotates (torque) |
+| 17 | Switch mode during idle | No side effects, next interaction uses new mode |
+| 18 | Ctrl+click in Atom/Move mode | Rotates molecule (shortcut override) |
+| 19 | Move mode on C60 vs C720 | Both respond without being sluggish or explosive (subjective) |
+| 20 | Mobile: 2-finger gesture in any mode | Always camera pinch/pan |
+| 21 | Mobile: add 2nd finger during interaction | Active interaction cancelled, camera takes over |
+| 22 | Load new structure while in Move mode | Mode persists, new structure responds to Move |

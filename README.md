@@ -20,8 +20,8 @@ Or visit the live demo at [mikechwu.github.io/NanoToybox](https://mikechwu.githu
 ## Features
 
 - **Real-time Tersoff potential** — full analytical carbon force field running in optimized JavaScript
-- **Drag atoms** — left-click and pull; spring force in the camera plane
-- **Rotate molecules** — Ctrl+click; torque via inertia tensor, distributed to all atoms
+- **Three interaction modes** — Atom (drag single atom), Move (translate molecule), Rotate (spin molecule via torque)
+- **Ctrl+click shortcut** — rotates molecule in any mode (desktop)
 - **15 structure presets** — C60, C180, C540, C720, carbon nanotubes (armchair/zigzag/chiral), graphene, diamond
 - **3D rendering** — PBR materials, camera-relative lighting, XYZ orientation axes
 - **NVE dynamics by default** — energy-conserving; molecules vibrate indefinitely after interaction. Adjustable damping slider (0 to heavy)
@@ -43,12 +43,16 @@ The page loads relaxed carbon structures from a pre-computed library, then runs 
 
 ## Controls
 
+### Modes
+
+Select **Atom**, **Move**, or **Rotate** in the control bar to change interaction behavior.
+
 ### Desktop
 
 | Gesture | Action |
 |---------|--------|
-| Left-drag on atom | Drag atom |
-| Ctrl+click on atom | Rotate molecule |
+| Left-drag on atom | Interact (depends on mode) |
+| Ctrl+click on atom | Rotate molecule (shortcut, any mode) |
 | Right-drag | Orbit camera |
 | Scroll | Zoom |
 
@@ -56,9 +60,7 @@ The page loads relaxed carbon structures from a pre-computed library, then runs 
 
 | Gesture | Action |
 |---------|--------|
-| 1-finger drag on atom | Drag atom |
-| 2 fingers on 2 atoms | Rotate molecule (both highlighted) |
-| 3+ fingers on atoms | Select additional atoms (highlighted) |
+| 1-finger drag on atom | Interact (depends on mode) |
 | 2-finger pinch | Zoom |
 | 2-finger drag | Pan camera |
 

@@ -70,6 +70,18 @@ canvas { display: block; touch-action: none; }
 #controls label { color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; flex-shrink: 0; white-space: nowrap; }
 #controls span { color: #aaa; flex-shrink: 0; }
 .ctrl-sep { width: 1px; height: 22px; background: rgba(255,255,255,0.1); flex-shrink: 0; }
+.mode-btn {
+  padding: 8px 12px; cursor: pointer; font-size: 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05); color: #999;
+  border-radius: 0; min-height: 36px;
+  font-family: inherit; flex-shrink: 0;
+}
+.mode-btn:first-child { border-radius: 4px 0 0 4px; }
+.mode-btn:last-child { border-radius: 0 4px 4px 0; }
+.mode-btn + .mode-btn { border-left: none; }
+.mode-btn.active { background: rgba(100,180,140,0.2); color: #8fd8b0; }
+.mode-btn:hover:not(.active) { background: rgba(255,255,255,0.1); color: #ccc; }
 </style>
 </head>
 <body>
@@ -85,17 +97,18 @@ canvas { display: block; touch-action: none; }
     border-radius:10px; border:1px solid rgba(255,255,255,0.1); z-index:30;
     font-size:13px; line-height:2; max-width:420px; color:#ccc; touch-action:auto;">
     <div style="font-size:15px; font-weight:600; margin-bottom:8px; color:#eee;">Controls</div>
-    <div style="margin-bottom:12px; color:#8fd8b0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Desktop (Mouse)</div>
-    <div><b>Left-drag on atom</b> — drag atom (spring force)</div>
-    <div><b>Left-drag fast + release</b> — flick / push atom</div>
-    <div><b>Ctrl + click on atom</b> — rotate molecule</div>
+    <div style="margin-bottom:6px; color:#8fd8b0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Interaction Modes</div>
+    <div><b>Atom</b> — drag individual atom (spring force)</div>
+    <div><b>Move</b> — translate entire molecule</div>
+    <div><b>Rotate</b> — spin molecule (torque)</div>
+    <div style="margin-top:12px; margin-bottom:6px; color:#8fd8b0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Desktop</div>
+    <div><b>Left-drag on atom</b> — interact (depends on mode)</div>
+    <div><b>Left-drag fast + release</b> — flick / push atom (Atom mode)</div>
+    <div><b>Ctrl + click on atom</b> — rotate (shortcut, any mode)</div>
     <div><b>Right-drag</b> — orbit camera</div>
     <div><b>Scroll wheel</b> — zoom</div>
-    <div style="margin-top:12px; margin-bottom:12px; color:#8fd8b0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Mobile (Touch)</div>
-    <div><b>1-finger drag on atom</b> — drag atom</div>
-    <div><b>1-finger swipe on atom</b> — flick / push atom</div>
-    <div><b>2 fingers on 2 atoms</b> — rotate molecule (both highlighted)</div>
-    <div><b>3+ fingers on atoms</b> — select additional atoms (highlighted)</div>
+    <div style="margin-top:12px; margin-bottom:6px; color:#8fd8b0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Mobile</div>
+    <div><b>1-finger drag on atom</b> — interact (depends on mode)</div>
     <div><b>2-finger pinch</b> — zoom</div>
     <div><b>2-finger drag</b> — pan camera</div>
   </div>
@@ -105,8 +118,14 @@ canvas { display: block; touch-action: none; }
     <div class="ctrl-sep"></div>
     <button id="btn-reset">Reset</button>
     <button id="btn-reset-view">Reset View</button>
-    <button id="theme-toggle">Theme</button>
     <div class="ctrl-sep"></div>
+    <div id="interact-mode" style="display:inline-flex; gap:0;">
+      <button class="mode-btn active" data-mode="atom">Atom</button>
+      <button class="mode-btn" data-mode="move">Move</button>
+      <button class="mode-btn" data-mode="rotate">Rotate</button>
+    </div>
+    <div class="ctrl-sep"></div>
+    <button id="theme-toggle">Theme</button>
     <button id="btn-advanced">Advanced</button>
     <button id="btn-help-open">?</button>
   </div>

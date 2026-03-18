@@ -1,7 +1,7 @@
 /**
  * Interaction state machine.
  *
- * States: IDLE, HOVER, DRAG, FLICK, ROTATE, CAMERA
+ * States: IDLE, HOVER, DRAG, MOVE, FLICK, ROTATE, CAMERA
  *
  * Invariants:
  *   INV-1: Only one active interaction at a time
@@ -15,6 +15,7 @@ export const State = {
   IDLE: 'idle',
   HOVER: 'hover',
   DRAG: 'drag',
+  MOVE: 'move',
   FLICK: 'flick',
   ROTATE: 'rotate',
   CAMERA: 'camera',
@@ -37,7 +38,8 @@ export class StateMachine {
   getHoverAtom() { return this.state === State.HOVER ? this.selectedAtom : -1; }
 
   isInteracting() {
-    return this.state === State.DRAG || this.state === State.FLICK || this.state === State.ROTATE;
+    return this.state === State.DRAG || this.state === State.FLICK ||
+           this.state === State.MOVE || this.state === State.ROTATE;
   }
 
   isCameraActive() {
@@ -46,7 +48,7 @@ export class StateMachine {
 
   /**
    * State-driven feedback query — renderer reads this every frame.
-   * Returns { hover, selected, dragging } atom indices.
+   * Returns atom indices and active interaction type.
    * No event-based flicker — purely a function of current state.
    */
   getFeedbackState() {
@@ -54,6 +56,7 @@ export class StateMachine {
       hoverAtom: this.state === State.HOVER ? this.selectedAtom : -1,
       activeAtom: this.isInteracting() ? this.selectedAtom : -1,
       isDragging: this.state === State.DRAG,
+      isMoving: this.state === State.MOVE,
       isRotating: this.state === State.ROTATE,
     };
   }
@@ -83,7 +86,17 @@ export class StateMachine {
     return null;
   }
 
-  onPointerDown(atomIndex, screenX, screenY, isRotateModifier) {
+  /**
+   * Handle pointer down on an atom or empty space.
+   *
+   * @param {number} atomIndex - atom index or -1 if missed
+   * @param {number} screenX
+   * @param {number} screenY
+   * @param {string} interactionMode - 'atom' | 'move' | 'rotate'
+   *   'atom' maps to State.DRAG, 'move' to State.MOVE, 'rotate' to State.ROTATE.
+   *   Main.js resolves the mode from session state + Ctrl/Cmd override before calling.
+   */
+  onPointerDown(atomIndex, screenX, screenY, interactionMode) {
     // INV-1: reject if already interacting
     if (this.isInteracting()) return null;
 
@@ -94,12 +107,16 @@ export class StateMachine {
       this.dragStartPos = [screenX, screenY];
       this.lastPositions = [[screenX, screenY, performance.now()]];
 
-      if (isRotateModifier) {
+      if (interactionMode === 'rotate') {
         this.state = State.ROTATE;
         this.lastAngles = [];
         return { action: 'startRotate', atom: atomIndex };
       }
-
+      if (interactionMode === 'move') {
+        this.state = State.MOVE;
+        return { action: 'startMove', atom: atomIndex };
+      }
+      // 'atom' mode → DRAG state
       this.state = State.DRAG;
       return { action: 'startDrag', atom: atomIndex };
     }
@@ -114,6 +131,11 @@ export class StateMachine {
       this.lastPositions.push([screenX, screenY, performance.now()]);
       if (this.lastPositions.length > 5) this.lastPositions.shift();
       return { action: 'updateDrag', screenX, screenY };
+    }
+    if (this.state === State.MOVE) {
+      this.lastPositions.push([screenX, screenY, performance.now()]);
+      if (this.lastPositions.length > 5) this.lastPositions.shift();
+      return { action: 'updateMove', screenX, screenY };
     }
     if (this.state === State.ROTATE) {
       this.lastPositions.push([screenX, screenY, performance.now()]);
@@ -139,6 +161,13 @@ export class StateMachine {
       }
       // Normal release
       return { action: 'endDrag', atom: prev };
+    }
+
+    if (this.state === State.MOVE) {
+      const prev = this.selectedAtom;
+      this.selectedAtom = -1;
+      this.state = State.IDLE;
+      return { action: 'endMove', atom: prev };
     }
 
     if (this.state === State.ROTATE) {

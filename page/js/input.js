@@ -20,11 +20,8 @@ export class InputManager {
 
     this.raycaster = new THREE.Raycaster();
     this.isMobile = 'ontouchstart' in window;
-    this.touchCount = 0;
     this.isDragging = false;
     this.isCamera = false;
-    this.isRotating = false;  // 2-finger rotation on mobile
-    this._touchedAtoms = [];  // atom indices touched during rotation
 
     this._bindEvents();
   }
@@ -33,11 +30,6 @@ export class InputManager {
     this.atomMeshes = meshes;
     this.isDragging = false;
     this.isCamera = false;
-    if (this.isRotating) {
-      this.isRotating = false;
-      this.controls.enabled = true;
-    }
-    this._touchedAtoms = [];
   }
 
   _screenToNDC(x, y) {
@@ -186,16 +178,11 @@ export class InputManager {
     }
 
     this._handlers.blur = () => {
-      if (this.isDragging || this.isRotating) {
+      if (this.isDragging) {
         this.cb.onPointerUp?.();
       }
       this.isDragging = false;
       this.isCamera = false;
-      if (this.isRotating) {
-        this.isRotating = false;
-        this.controls.enabled = true;
-      }
-      this._touchedAtoms = [];
     };
     window.addEventListener('blur', this._handlers.blur);
   }
@@ -242,7 +229,7 @@ export class InputManager {
     }
 
     if (e.button === 0) {
-      // Left click → drag atom or do nothing (left not mapped in OrbitControls)
+      // Left click → interact with atom or do nothing
       const atomIdx = this._raycastAtom(e.clientX, e.clientY);
 
       if (atomIdx >= 0) {
@@ -250,8 +237,6 @@ export class InputManager {
         this.isCamera = false;
         this.cb.onPointerDown?.(atomIdx, e.clientX, e.clientY, false);
       }
-      // If no atom hit, do nothing — left-click on empty space is a no-op
-      // (right-click handles camera orbit)
     }
   }
 
@@ -274,44 +259,16 @@ export class InputManager {
   }
 
   // --- Mobile events ---
+  // Simple rule: 1 finger = interact with molecule, 2+ fingers = always camera.
+  // No multi-touch rotation — rotation is handled via the Rotate mode selector.
 
   _onTouchStart(e) {
     if (e.touches.length >= 2) {
-      // Already rotating — allow additional fingers to add atoms to selection
-      if (this.isRotating) {
-        this._addTouchedAtoms(e.touches);
-        return;
-      }
-
-      // Cancel any active 1-finger drag first
+      // 2+ fingers → cancel any active interaction, let OrbitControls handle camera
       if (this.isDragging) {
         this.isDragging = false;
         this.cb.onPointerUp?.();
       }
-
-      // Raycast both fingers — if both hit different atoms, enter rotation
-      const t0 = e.touches[0], t1 = e.touches[1];
-      const atom0 = this._raycastAtom(t0.clientX, t0.clientY);
-      const atom1 = this._raycastAtom(t1.clientX, t1.clientY);
-
-      if (atom0 >= 0 && atom1 >= 0 && atom0 !== atom1) {
-        e.preventDefault();
-        this.controls.enabled = false;
-        this.isRotating = true;
-        this._touchedAtoms = [atom0, atom1];
-        const avgX = (t0.clientX + t1.clientX) / 2;
-        const avgY = (t0.clientY + t1.clientY) / 2;
-        try {
-          this.cb.onPointerDown?.(atom0, avgX, avgY, true);
-          this.cb.onTouchAtoms?.(this._touchedAtoms);
-        } catch (err) {
-          this.isRotating = false;
-          this.controls.enabled = true;
-          this._touchedAtoms = [];
-          throw err;
-        }
-      }
-      // Otherwise let OrbitControls handle pinch/pan (existing behavior)
       return;
     }
 
@@ -324,36 +281,9 @@ export class InputManager {
       this.isDragging = true;
       this.cb.onPointerDown?.(atomIdx, touch.clientX, touch.clientY, false);
     }
-    // If no atom hit, 1-finger on empty does nothing (2-finger handles camera)
-  }
-
-  /**
-   * Raycast all current touches and add any new atom hits to the selection.
-   * Called when additional fingers land during an active rotation.
-   */
-  _addTouchedAtoms(touches) {
-    let changed = false;
-    for (let i = 0; i < touches.length; i++) {
-      const atom = this._raycastAtom(touches[i].clientX, touches[i].clientY);
-      if (atom >= 0 && !this._touchedAtoms.includes(atom)) {
-        this._touchedAtoms.push(atom);
-        changed = true;
-      }
-    }
-    if (changed) {
-      this.cb.onTouchAtoms?.(this._touchedAtoms);
-    }
   }
 
   _onTouchMove(e) {
-    if (this.isRotating && e.touches.length >= 2) {
-      e.preventDefault();
-      const t0 = e.touches[0], t1 = e.touches[1];
-      const avgX = (t0.clientX + t1.clientX) / 2;
-      const avgY = (t0.clientY + t1.clientY) / 2;
-      this.cb.onPointerMove?.(avgX, avgY);
-      return;
-    }
     if (this.isDragging && e.touches.length === 1) {
       e.preventDefault();
       const touch = e.touches[0];
@@ -363,18 +293,6 @@ export class InputManager {
   }
 
   _onTouchEnd(e) {
-    if (this.isRotating && e.touches.length < 2) {
-      this.isRotating = false;
-      this.controls.enabled = true;
-      this._touchedAtoms = [];
-      this.cb.onPointerUp?.();
-      return;
-    }
-    // Finger lifted during 3+ finger rotation — re-sync highlights
-    if (this.isRotating && e.touches.length >= 2) {
-      this._resyncTouchedAtoms(e.touches);
-      return;
-    }
     if (e.touches.length === 0) {
       if (this.isDragging) {
         this.isDragging = false;
@@ -384,34 +302,13 @@ export class InputManager {
   }
 
   /**
-   * Re-raycast surviving touches and update the touched atoms list.
-   * Keeps the primary rotation atom (index 0) even if its finger moved.
-   */
-  _resyncTouchedAtoms(touches) {
-    const primary = this._touchedAtoms[0];
-    const surviving = new Set();
-    if (primary >= 0) surviving.add(primary);
-    for (let i = 0; i < touches.length; i++) {
-      const atom = this._raycastAtom(touches[i].clientX, touches[i].clientY);
-      if (atom >= 0) surviving.add(atom);
-    }
-    this._touchedAtoms = [...surviving];
-    this.cb.onTouchAtoms?.(this._touchedAtoms);
-  }
-
-  /**
    * System-interrupted touch (incoming call, notification, gesture).
-   * Unconditionally reset all interaction state to prevent stuck controls.
+   * Unconditionally reset all interaction state.
    */
   _onTouchCancel(_e) {
-    if (this.isDragging || this.isRotating) {
+    if (this.isDragging) {
       this.cb.onPointerUp?.();
     }
     this.isDragging = false;
-    if (this.isRotating) {
-      this.isRotating = false;
-      this.controls.enabled = true;
-    }
-    this._touchedAtoms = [];
   }
 }

@@ -24,6 +24,7 @@ const session = {
   structureFile: null,
   theme: 'dark',
   isLoading: false,
+  interactionMode: 'atom',  // 'atom' | 'move' | 'rotate'
 };
 
 // --- Initialization ---
@@ -87,6 +88,21 @@ async function init() {
   // Reset camera view button
   document.getElementById('btn-reset-view').addEventListener('click', () => {
     renderer.resetView();
+  });
+
+  // Interaction mode buttons
+  const modeButtons = document.querySelectorAll('.mode-btn');
+  modeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      session.interactionMode = btn.dataset.mode;
+      modeButtons.forEach(b => {
+        b.classList.remove('active');
+        b.style.color = '';
+        b.style.background = '';
+      });
+      btn.classList.add('active');
+      applyUITheme(session.theme);
+    });
   });
 
   // Advanced settings panel
@@ -185,8 +201,7 @@ async function loadSelected(filename) {
 function cleanupCurrentSession() {
   handleCommand(stateMachine.forceIdle());
   renderer.clearFeedback();
-  // Reset input state before structure swap to prevent stale touch
-  // atoms from being applied to the new structure's meshes
+  // Reset input state before structure swap to prevent stale state
   if (inputManager) inputManager.updateAtomMeshes(renderer.atomMeshes);
 }
 
@@ -223,7 +238,9 @@ function createInputManager() {
         if (cmd) handleCommand(cmd);
       },
       onPointerDown: (atomIdx, sx, sy, isRotate) => {
-        const cmd = stateMachine.onPointerDown(atomIdx, sx, sy, isRotate);
+        // Ctrl+click overrides session mode to rotate
+        const mode = isRotate ? 'rotate' : session.interactionMode;
+        const cmd = stateMachine.onPointerDown(atomIdx, sx, sy, mode);
         if (cmd) handleCommand(cmd, sx, sy);
       },
       onPointerMove: (sx, sy) => {
@@ -233,9 +250,6 @@ function createInputManager() {
       onPointerUp: () => {
         const cmd = stateMachine.onPointerUp();
         if (cmd) handleCommand(cmd);
-      },
-      onTouchAtoms: (atomIndices) => {
-        renderer.setExtraHighlights(atomIndices);
       },
     }
   );
@@ -325,11 +339,40 @@ function handleCommand(cmd, screenX, screenY) {
       break;
     }
 
+    case 'startMove': {
+      fadeHint();
+      const ai = cmd.atom;
+      physics.startTranslate(ai);
+      renderer.setHighlight(ai);
+      updateStatus('Moving molecule');
+      if (screenX !== undefined) {
+        const target = screenToPhysics(ai, screenX, screenY);
+        renderer.showForceLine(ai, target[0], target[1], target[2]);
+      }
+      break;
+    }
+
+    case 'updateMove': {
+      if (stateMachine.getSelectedAtom() < 0) break;
+      const atomIdx = stateMachine.getSelectedAtom();
+      const target = screenToPhysics(atomIdx, cmd.screenX, cmd.screenY);
+      physics.updateDrag(target[0], target[1], target[2]);
+      renderer.showForceLine(atomIdx, target[0], target[1], target[2]);
+      break;
+    }
+
+    case 'endMove':
+      physics.endDrag();
+      renderer.clearFeedback();
+      if (session.atoms) updateStatus(`${session.atoms.length} atoms · ${physics.getBonds().length} bonds`);
+      break;
+
     case 'startRotate': {
       fadeHint();
       const ai = cmd.atom;
       physics.startRotateDrag(ai);
       renderer.setHighlight(ai);
+      updateStatus('Rotating molecule');
       if (screenX !== undefined) {
         const target = screenToPhysics(ai, screenX, screenY);
         renderer.showForceLine(ai, target[0], target[1], target[2]);
@@ -350,6 +393,7 @@ function handleCommand(cmd, screenX, screenY) {
       // Release — angular momentum persists, Tersoff handles dissipation
       physics.endDrag();
       renderer.clearFeedback();
+      if (session.atoms) updateStatus(`${session.atoms.length} atoms · ${physics.getBonds().length} bonds`);
       break;
 
     case 'cancelInteraction':
@@ -393,7 +437,7 @@ function applyUITheme(name) {
   const bar = document.getElementById('controls');
   bar.style.background = t.uiBg;
   bar.style.borderTopColor = t.uiBorder;
-  bar.querySelectorAll('button').forEach(b => {
+  bar.querySelectorAll('button:not(.mode-btn)').forEach(b => {
     b.style.color = t.uiText;
     b.style.background = t.uiBtn;
     b.style.borderColor = t.uiBorder;
@@ -405,6 +449,17 @@ function applyUITheme(name) {
   });
   bar.querySelectorAll('label, span').forEach(el => {
     el.style.color = t.uiMuted;
+  });
+  // Mode buttons: clear inline overrides so CSS classes apply cleanly
+  bar.querySelectorAll('.mode-btn').forEach(b => {
+    b.style.borderColor = t.uiBorder;
+    if (b.classList.contains('active')) {
+      b.style.color = '';
+      b.style.background = '';
+    } else {
+      b.style.color = t.uiMuted;
+      b.style.background = t.uiBtn;
+    }
   });
 
   const info = document.getElementById('info');

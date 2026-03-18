@@ -26,8 +26,7 @@ python3 -m http.server 8000
 | Feature | Details |
 |---------|---------|
 | Structures | 15 presets loaded from library (C60, CNTs, graphene, diamond, fullerenes) |
-| Drag | Left-click atom, spring force in camera plane (3D) |
-| Rotate | Ctrl+click atom, torque distributed to all atoms via inertia tensor |
+| Interact modes | Atom (drag single atom), Move (translate molecule), Rotate (torque) — segmented control in control bar |
 | Camera | Right-drag = orbit, scroll = zoom (OrbitControls, always active) |
 | Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame |
 | Rendering | MeshStandardMaterial (PBR), camera-relative 4-light rig, axis triad |
@@ -36,20 +35,28 @@ python3 -m http.server 8000
 | FPS | Real frame computation time displayed (not vsync rate) |
 | Reset | Reset structure (reload atoms) and Reset View (restore camera) buttons |
 
+### Interaction Modes
+
+The control bar has a three-way mode selector: **Atom** | **Move** | **Rotate**. The mode determines what happens when the user drags an atom. Mode persists across structure loads.
+
+| Mode | Physics behavior |
+|------|-----------------|
+| Atom (default) | Spring force on single atom (camera plane) |
+| Move | Uniform force on all atoms, normalized by n (whole-molecule translation). Blue highlight/force line distinguishes from Atom mode. Force line originates from picked atom (v1 limitation — a COM-origin line would be a stronger cue) |
+| Rotate | Torque via diagonal inertia tensor, distributed as tangential forces |
+
 ### Interaction Model
 
 | Gesture (Desktop) | Action |
 |--------------------|--------|
-| Left-drag on atom | Drag atom with spring force (camera plane) |
-| Ctrl+click on atom | Rotate molecule (torque via inertia tensor) |
+| Left-drag on atom | Interact (depends on mode: Atom/Move/Rotate) |
+| Ctrl+click on atom | Rotate molecule (shortcut, any mode) |
 | Right-drag | Orbit camera |
 | Scroll wheel | Zoom |
 
 | Gesture (Mobile) | Action |
 |-------------------|--------|
-| 1-finger drag on atom | Drag atom |
-| 2 fingers on 2 atoms | Rotate molecule (both atoms highlighted) |
-| 3+ fingers on atoms | Select additional atoms (highlighted, rotation continues) |
+| 1-finger drag on atom | Interact (depends on mode: Atom/Move/Rotate) |
 | 2-finger pinch | Zoom |
 | 2-finger drag | Pan camera |
 
@@ -61,8 +68,9 @@ The page runs a full analytical Tersoff (1988) potential in JavaScript:
 - Neighbor list rebuilt every 10 steps
 - Velocity Verlet integration with proper eV/Å → Å/fs² unit conversion
 - **NVE by default** — no artificial damping; energy injected by user persists as thermal vibration. User-adjustable damping available (0 = NVE, up to 0.5 = heavy viscous drag, cubic slider scale)
-- Drag: spring force `F = K_DRAG × (target - atom)` in camera-perpendicular plane
-- Rotation: spring force → torque → angular acceleration via diagonal inertia tensor → distributed tangential forces on all atoms. Inertia-normalized so `K_ROTATE` feels consistent across molecule sizes
+- Drag (Atom mode): spring force `F = K_DRAG × (target - atom)` on the selected atom, in camera-perpendicular plane
+- Translation (Move mode): uniform force `F_i = (K_DRAG / n) × (target - picked_atom)` applied to every atom. Total external force is `K_DRAG × displacement`, independent of atom count. Actual cursor tracking varies across structures due to differences in mass, geometry, damping, and internal dynamics — the normalization prevents any structure from being dramatically sluggish or explosive, but does not guarantee identical response
+- Rotation (Rotate mode): spring force → torque → angular acceleration via diagonal inertia tensor → distributed tangential forces on all atoms. Inertia-normalized so `K_ROTATE` feels consistent across molecule sizes
 - Safety guards: per-atom velocity hard cap and total KE cap (only trigger on extreme inputs)
 
 ### Architecture
@@ -72,7 +80,7 @@ page/index.html
   └── js/main.js (entry point, frame loop)
         ├── loader.js       → fetch manifest.json + XYZ → atoms + bonds
         ├── physics.js      → Tersoff forces, Verlet integration, drag/rotate
-        ├── state-machine.js → interaction states (idle/hover/drag/rotate)
+        ├── state-machine.js → interaction states (idle/hover/drag/move/rotate)
         ├── input.js        → mouse/touch → raycasting → state machine events
         ├── renderer.js     → Three.js scene, materials, lighting, axis triad
         ├── fps-monitor.js  → frame time measurement
@@ -86,16 +94,19 @@ Each page module has defined ownership boundaries:
 | Module | Owns | Receives | Provides |
 |--------|------|----------|----------|
 | `config.js` | All tuning constants, thresholds, defaults | — | `CONFIG` object imported by all modules |
-| `physics.js` | Atom positions, velocities, forces, Tersoff computation | Drag/rotate targets, damping setting from main.js | Positions, bonds, KE via getter methods |
+| `physics.js` | Atom positions, velocities, forces, Tersoff computation | Drag/move/rotate targets, damping setting from main.js | Positions, bonds, KE via getter methods |
 | `renderer.js` | Three.js scene, meshes, lighting, axis triad | Positions from physics, theme from main.js | Canvas element, atom mesh array for raycasting |
 | `input.js` | Event handling, raycasting, screen-to-world projection | Mesh array + camera from renderer | Atom index + screen coords via callbacks |
-| `state-machine.js` | Interaction state transitions (IDLE→DRAG→IDLE etc.) | Pointer events from input.js | Commands dispatched to main.js |
+| `state-machine.js` | Interaction state transitions (IDLE→DRAG/MOVE/ROTATE→IDLE etc.) | Pointer events + resolved mode from main.js | Commands dispatched to main.js |
 | `loader.js` | XYZ parsing, manifest fetching, bond topology | Library path from config | `{ atoms, bonds }` data |
 | `main.js` | App lifecycle, session state, command dispatch, UI wiring | Everything above | Orchestration (no direct exports) |
 | `fps-monitor.js` | Frame time measurement | begin/end calls from main.js | FPS display text |
 | `themes.js` | Color/lighting definitions | — | `THEMES` object |
 
-**Key rule:** modules import from `config.js` for shared constants. They do NOT import from each other's internals. Data flows through `main.js` orchestration.
+**Key rules:**
+- Modules import from `config.js` for shared constants. They do NOT import from each other's internals. Data flows through `main.js` orchestration.
+- **Interaction mode coordination:** main.js resolves gesture intent into a mode string (`'atom'` | `'move'` | `'rotate'`) before passing it to the state machine. input.js reports raw gestures (atom index + isRotate boolean). The state machine maps mode → state (e.g., `'atom'` → `DRAG`). The core engineering dependency chain for adding new modes is main.js + state-machine.js + physics.js. Depending on the mode, input.js (new gesture metadata), renderer.js (visual feedback), index.html (UI controls, help panel), and docs (viewer.md, testing.md, README.md) may also need updates.
+- **Known v1 limitation:** In Move mode, the force line still originates from the picked atom rather than the center of mass, so the visual cue partly reads as "drag this atom." The blue color and immediate whole-molecule motion mitigate this, but a COM-origin force line or bounding indicator would be a stronger signal.
 
 ### Technology
 
