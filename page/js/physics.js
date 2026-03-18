@@ -57,12 +57,13 @@ const ACC_FACTOR = 1.602176634e-29 / 1.9944235e-26;
  *
  * @param {Float64Array} pos - atom positions [x0,y0,z0, x1,y1,z1, ...]
  * @param {Float64Array} force - output forces (accumulated, not zeroed here)
- * @param {Array[]} nl - neighbor list (nl[i] = [j, k, ...])
+ * @param {Int32Array[]} nl - neighbor list arrays (nl[i][0..nlc[i]-1] = neighbors)
+ * @param {Int32Array} nlc - neighbor counts (nlc[i] = number of neighbors of i)
  * @param {number} n - number of atoms
  * @param {Float64Array} distBuf - pre-allocated distance cache [n*n]
  * @param {Float64Array} rhatBuf - pre-allocated unit vector cache [n*n*3]
  */
-function computeTersoffForces(pos, force, nl, n, distBuf, rhatBuf) {
+function computeTersoffForces(pos, force, nl, nlc, n, distBuf, rhatBuf) {
   const p = pos;
   const f = force;
   const dist = distBuf;
@@ -73,7 +74,8 @@ function computeTersoffForces(pos, force, nl, n, distBuf, rhatBuf) {
   for (let i = 0; i < n; i++) {
     const ix = i * 3;
     const ni = nl[i];
-    for (let qi = 0; qi < ni.length; qi++) {
+    const niLen = nlc[i];
+    for (let qi = 0; qi < niLen; qi++) {
       const j = ni[qi];
       if (j <= i) continue;
       const jx = j * 3;
@@ -104,7 +106,8 @@ function computeTersoffForces(pos, force, nl, n, distBuf, rhatBuf) {
   // ─── Main force loop ───
   for (let i = 0; i < n; i++) {
     const ni = nl[i];
-    for (let qi = 0; qi < ni.length; qi++) {
+    const niLen = nlc[i];
+    for (let qi = 0; qi < niLen; qi++) {
       const j = ni[qi];
       if (j <= i) continue;
 
@@ -134,7 +137,7 @@ function computeTersoffForces(pos, force, nl, n, distBuf, rhatBuf) {
 
       // ─── Compute zeta_ij ───
       let zeta_ij = 0.0;
-      for (let qk = 0; qk < ni.length; qk++) {
+      for (let qk = 0; qk < niLen; qk++) {
         const k = ni[qk];
         if (k === j) continue;
         const kik = i * n + k;
@@ -160,8 +163,9 @@ function computeTersoffForces(pos, force, nl, n, distBuf, rhatBuf) {
       const r3ji = kji * 3;
       const rh_ji0 = rhat[r3ji], rh_ji1 = rhat[r3ji + 1], rh_ji2 = rhat[r3ji + 2];
       const nj = nl[j];
+      const njLen = nlc[j];
 
-      for (let qk = 0; qk < nj.length; qk++) {
+      for (let qk = 0; qk < njLen; qk++) {
         const k = nj[qk];
         if (k === i) continue;
         const kjk = j * n + k;
@@ -206,7 +210,7 @@ function computeTersoffForces(pos, force, nl, n, distBuf, rhatBuf) {
                      Math.pow(1.0 + Math.pow(bz_ij, T_N), INV_2N - 1.0);
         const dEdz = 0.5 * fc_ij * fA_ij * dbij;
 
-        for (let qk = 0; qk < ni.length; qk++) {
+        for (let qk = 0; qk < niLen; qk++) {
           const k = ni[qk];
           if (k === j) continue;
           const kik = i * n + k;
@@ -258,7 +262,7 @@ function computeTersoffForces(pos, force, nl, n, distBuf, rhatBuf) {
                      Math.pow(1.0 + Math.pow(bz_ji, T_N), INV_2N - 1.0);
         const dEdz = 0.5 * fc_ij * fA_ij * dbji;
 
-        for (let qk = 0; qk < nj.length; qk++) {
+        for (let qk = 0; qk < njLen; qk++) {
           const k = nj[qk];
           if (k === i) continue;
           const kjk = j * n + k;
@@ -328,6 +332,8 @@ export class PhysicsEngine {
     this._dist = null;   // Float64Array[n*n] — distance cache
     this._rhat = null;   // Float64Array[n*n*3] — unit vector cache
     this._maxN = 0;
+    this._nlArrays = null;  // Reusable neighbor list sub-arrays
+    this._nlCounts = null;  // Int32Array tracking used length of each sub-array
   }
 
   init(atoms, bonds) {
@@ -349,20 +355,26 @@ export class PhysicsEngine {
     this.stepCount = 0;
     this.neighborList = null;
 
-    // Allocate cache buffers
-    if (this.n > this._maxN) {
+    // Allocate cache buffers — right-size when switching to a smaller structure
+    if (this.n !== this._maxN) {
       this._maxN = this.n;
       this._dist = new Float64Array(this.n * this.n);
       this._rhat = new Float64Array(this.n * this.n * 3);
+      // Pre-allocate neighbor list arrays (one Int32Array per atom, initial capacity 8)
+      this._nlArrays = new Array(this.n);
+      this._nlCounts = new Int32Array(this.n);
+      for (let i = 0; i < this.n; i++) this._nlArrays[i] = new Int32Array(8);
     }
 
     this.computeForces();
   }
 
   buildNeighborList() {
-    const nl = new Array(this.n);
-    for (let i = 0; i < this.n; i++) nl[i] = [];
+    const counts = this._nlCounts;
+    const arrays = this._nlArrays;
+    counts.fill(0);
     const p = this.pos;
+    const cutoff2 = (R_MAX + 0.5) * (R_MAX + 0.5);
 
     for (let i = 0; i < this.n; i++) {
       const ix = i * 3;
@@ -372,14 +384,25 @@ export class PhysicsEngine {
         const dy = p[jx + 1] - p[ix + 1];
         const dz = p[jx + 2] - p[ix + 2];
         const d2 = dx * dx + dy * dy + dz * dz;
-        // Use R_MAX + margin for neighbor list (rebuild less often)
-        if (d2 < (R_MAX + 0.5) * (R_MAX + 0.5)) {
-          nl[i].push(j);
-          nl[j].push(i);
+        if (d2 < cutoff2) {
+          // Grow array if needed (doubling strategy)
+          if (counts[i] >= arrays[i].length) {
+            const old = arrays[i];
+            arrays[i] = new Int32Array(old.length * 2);
+            arrays[i].set(old);
+          }
+          arrays[i][counts[i]++] = j;
+          if (counts[j] >= arrays[j].length) {
+            const old = arrays[j];
+            arrays[j] = new Int32Array(old.length * 2);
+            arrays[j].set(old);
+          }
+          arrays[j][counts[j]++] = i;
         }
       }
     }
-    this.neighborList = nl;
+    this.neighborList = arrays;
+    this._nlCounts = counts;
   }
 
   computeForces() {
@@ -393,7 +416,7 @@ export class PhysicsEngine {
     // ── Tersoff kernel: pure science, no UX dependencies ──
     // This call can be replaced with a Wasm implementation.
     computeTersoffForces(
-      this.pos, this.force, this.neighborList, this.n, this._dist, this._rhat
+      this.pos, this.force, this.neighborList, this._nlCounts, this.n, this._dist, this._rhat
     );
 
     // ── Interaction forces: UX layer ──
@@ -542,7 +565,7 @@ export class PhysicsEngine {
   }
 
   updateBondList() {
-    this.bonds = [];
+    let count = 0;
     for (let i = 0; i < this.n; i++) {
       const ix = i * 3;
       for (let j = i + 1; j < this.n; j++) {
@@ -551,9 +574,20 @@ export class PhysicsEngine {
         const dy = this.pos[jx+1] - this.pos[ix+1];
         const dz = this.pos[jx+2] - this.pos[ix+2];
         const d = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        if (d < CONFIG.bonds.cutoff && d > CONFIG.bonds.minDist) this.bonds.push([i, j, d]);
+        if (d < CONFIG.bonds.cutoff && d > CONFIG.bonds.minDist) {
+          // Reuse existing bond entry or push a new one
+          if (count < this.bonds.length) {
+            this.bonds[count][0] = i;
+            this.bonds[count][1] = j;
+            this.bonds[count][2] = d;
+          } else {
+            this.bonds.push([i, j, d]);
+          }
+          count++;
+        }
       }
     }
+    this.bonds.length = count;
   }
 
   step() {

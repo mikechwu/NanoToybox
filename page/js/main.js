@@ -94,21 +94,24 @@ async function init() {
   document.getElementById('btn-advanced').addEventListener('click', () => {
     advPanel.style.display = advPanel.style.display === 'none' ? 'block' : 'none';
   });
-  // Close panel when clicking outside
+  // Help panel
+  const helpPanel = document.getElementById('help');
+  document.getElementById('btn-help-open').addEventListener('click', () => {
+    helpPanel.style.display = 'block';
+  });
+
+  // Close panels when clicking outside
   document.addEventListener('pointerdown', (e) => {
     if (advPanel.style.display !== 'none' &&
         !advPanel.contains(e.target) &&
         e.target.id !== 'btn-advanced') {
       advPanel.style.display = 'none';
     }
-  });
-
-  // Help panel buttons
-  document.getElementById('btn-help-open').addEventListener('click', () => {
-    document.getElementById('help').style.display = 'block';
-  });
-  document.getElementById('btn-help-close').addEventListener('click', () => {
-    document.getElementById('help').style.display = 'none';
+    if (helpPanel.style.display !== 'none' &&
+        !helpPanel.contains(e.target) &&
+        e.target.id !== 'btn-help-open') {
+      helpPanel.style.display = 'none';
+    }
   });
 
   // Slider helper — binds both 'input' (desktop) and 'change' (iOS Safari)
@@ -242,10 +245,13 @@ function createInputManager() {
  * The atom mesh lives in render space (centered by comOffset).
  * The result is in physics space (uncentered, matching physics.pos).
  */
+// Pre-allocated vector reused across calls (avoid per-frame allocation)
+const _atomRenderPos = new THREE.Vector3();
+
 function screenToPhysics(atomIdx, sx, sy) {
   // Get atom's render-space position (from the mesh, which is what the user sees)
   const meshPos = renderer.atomMeshes[atomIdx].position;
-  const atomRenderPos = new THREE.Vector3(meshPos.x, meshPos.y, meshPos.z);
+  const atomRenderPos = _atomRenderPos.set(meshPos.x, meshPos.y, meshPos.z);
 
   // Project screen point onto camera-perpendicular plane through atom (render space)
   const [wx, wy, wz] = inputManager.screenToWorldOnAtomPlane(sx, sy, atomRenderPos);

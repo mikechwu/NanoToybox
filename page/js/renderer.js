@@ -15,10 +15,14 @@ export class Renderer {
     this.container = container;
     this.atomMeshes = [];
     this.bondMeshes = [];
-    this.bonds = [];
+    this._activeBonds = 0;
     this.highlightAtom = -1;
     this.forceLine = null;
     this.currentTheme = 'dark';
+
+    // Pre-allocated vectors reused every frame (avoid GC pressure)
+    this._bondUp = new THREE.Vector3(0, 1, 0);
+    this._bondDir = new THREE.Vector3();
 
     this._initScene();
     this._initLighting();
@@ -122,32 +126,33 @@ export class Renderer {
   }
 
   loadStructure(atoms, bonds) {
-    // Reset highlight index BEFORE replacing meshes to avoid stale index
+    // Dispose cloned highlight material before clearing meshes
+    if (this.highlightAtom >= 0 && this.highlightAtom < this.atomMeshes.length) {
+      const hm = this.atomMeshes[this.highlightAtom];
+      if (hm.material !== this._atomMat) hm.material.dispose();
+    }
     this.highlightAtom = -1;
 
-    // Dispose old GPU resources to prevent memory leaks
-    if (this.atomMeshes.length > 0) {
-      this.atomMeshes[0].geometry.dispose(); // shared geometry
-    }
-    this.atomMeshes.forEach(m => {
-      this.scene.remove(m);
-      m.material.dispose();
-    });
-    if (this.bondMeshes.length > 0) {
-      this.bondMeshes[0].geometry.dispose(); // shared geometry
-    }
-    this.bondMeshes.forEach(m => {
-      this.scene.remove(m);
-      m.material.dispose();
-    });
+    // Dispose old GPU resources
+    if (this._atomGeom) this._atomGeom.dispose();
+    if (this._atomMat) this._atomMat.dispose();
+    if (this._bondGeom) this._bondGeom.dispose();
+    if (this._bondMat) this._bondMat.dispose();
+    this.atomMeshes.forEach(m => this.scene.remove(m));
+    this.bondMeshes.forEach(m => this.scene.remove(m));
     this.atomMeshes = [];
     this.bondMeshes = [];
-    this.bonds = bonds;
+    this._activeBonds = 0;
 
     const t = THEMES[this.currentTheme];
-    const atomGeom = new THREE.SphereGeometry(
+    this._atomGeom = new THREE.SphereGeometry(
       CONFIG.atoms.radius, CONFIG.atoms.segments[0], CONFIG.atoms.segments[1]
     );
+    this._atomMat = new THREE.MeshStandardMaterial({
+      color: t.atom,
+      roughness: CONFIG.material.roughness,
+      metalness: CONFIG.material.metalness,
+    });
 
     // Center of mass
     let cx = 0, cy = 0, cz = 0;
@@ -156,33 +161,29 @@ export class Renderer {
     this.comOffset = [cx, cy, cz];
 
     atoms.forEach(a => {
-      const mat = new THREE.MeshStandardMaterial({
-        color: t.atom,
-        roughness: CONFIG.material.roughness,
-        metalness: CONFIG.material.metalness,
-      });
-      const mesh = new THREE.Mesh(atomGeom, mat);
+      const mesh = new THREE.Mesh(this._atomGeom, this._atomMat);
       mesh.position.set(a.x - cx, a.y - cy, a.z - cz);
       this.scene.add(mesh);
       this.atomMeshes.push(mesh);
     });
 
-    // Pre-allocate bond meshes
-    const bondGeom = new THREE.CylinderGeometry(
+    // Pre-allocate bond meshes — shared geometry and material
+    this._bondGeom = new THREE.CylinderGeometry(
       CONFIG.bondMesh.radius, CONFIG.bondMesh.radius, 1, CONFIG.bondMesh.segments
     );
+    this._bondMat = new THREE.MeshStandardMaterial({
+      color: t.bond,
+      roughness: CONFIG.material.roughness,
+      metalness: CONFIG.material.metalness,
+    });
     bonds.forEach(() => {
-      const mat = new THREE.MeshStandardMaterial({
-        color: t.bond,
-        roughness: CONFIG.material.roughness,
-        metalness: CONFIG.material.metalness,
-      });
-      const mesh = new THREE.Mesh(bondGeom, mat);
+      const mesh = new THREE.Mesh(this._bondGeom, this._bondMat);
       this.scene.add(mesh);
       this.bondMeshes.push(mesh);
     });
+    this._activeBonds = bonds.length;
 
-    this._updateBondTransforms();
+    this._updateBondTransforms(bonds);
     this._fitCamera();
 
     // Force immediate matrix update so raycasting works before next render frame.
@@ -199,41 +200,37 @@ export class Renderer {
       this.atomMeshes[i].position.set(x - cx, y - cy, z - cz);
     }
 
-    // Sync bond topology (bonds may have changed)
-    const currentBonds = physics.getBonds();
-    if (currentBonds.length !== this.bonds.length) {
-      this._syncBonds(currentBonds);
-    }
-    this._updateBondTransforms();
+    const bonds = physics.getBonds();
+    this._syncBondPool(bonds.length);
+    this._updateBondTransforms(bonds);
   }
 
-  _syncBonds(newBonds) {
-    // Remove excess bond meshes and dispose their materials
-    while (this.bondMeshes.length > newBonds.length) {
-      const mesh = this.bondMeshes.pop();
-      this.scene.remove(mesh);
-      mesh.material.dispose();
-    }
-    // Add new bond meshes if needed
-    const t = THEMES[this.currentTheme];
-    const bondGeom = new THREE.CylinderGeometry(
-      CONFIG.bondMesh.radius, CONFIG.bondMesh.radius, 1, CONFIG.bondMesh.segments
-    );
-    while (this.bondMeshes.length < newBonds.length) {
-      const mat = new THREE.MeshStandardMaterial({
-        color: t.bond, roughness: CONFIG.material.roughness, metalness: CONFIG.material.metalness,
-      });
-      const mesh = new THREE.Mesh(bondGeom, mat);
+  /**
+   * Ensure the bond mesh pool has at least `needed` meshes.
+   * Excess meshes are hidden (not removed from the scene) to avoid
+   * Three.js internal array rebuilds that cause frame drops.
+   */
+  _syncBondPool(needed) {
+    // Grow pool if needed
+    while (this.bondMeshes.length < needed) {
+      const mesh = new THREE.Mesh(this._bondGeom, this._bondMat);
+      mesh.visible = false;
       this.scene.add(mesh);
       this.bondMeshes.push(mesh);
     }
-    this.bonds = newBonds;
+    // Hide any meshes beyond the active count (handled in _updateBondTransforms)
+    this._activeBonds = needed;
   }
 
-  _updateBondTransforms() {
-    const up = new THREE.Vector3(0, 1, 0);
-    for (let b = 0; b < this.bonds.length; b++) {
-      const [i, j] = this.bonds[b];
+  /**
+   * Position, orient, and show/hide bond meshes to match the current bond list.
+   * Bonds beyond _activeBonds are hidden. Bonds stretched beyond the visibility
+   * cutoff are also hidden.
+   */
+  _updateBondTransforms(bonds) {
+    // Update active bonds
+    for (let b = 0; b < this._activeBonds; b++) {
+      const [i, j] = bonds[b];
       if (i >= this.atomMeshes.length || j >= this.atomMeshes.length) continue;
       const pi = this.atomMeshes[i].position;
       const pj = this.atomMeshes[j].position;
@@ -253,17 +250,23 @@ export class Renderer {
         (pi.z + pj.z) / 2
       );
       mesh.scale.y = dist;
-      const dir = new THREE.Vector3(dx, dy, dz).normalize();
-      mesh.quaternion.setFromUnitVectors(up, dir);
+      this._bondDir.set(dx, dy, dz).normalize();
+      mesh.quaternion.setFromUnitVectors(this._bondUp, this._bondDir);
+    }
+    // Hide pooled meshes beyond active count
+    for (let b = this._activeBonds; b < this.bondMeshes.length; b++) {
+      this.bondMeshes[b].visible = false;
     }
   }
 
   setHighlight(atomIndex) {
-    // Clear previous
+    // Clear previous — restore shared material
     if (this.highlightAtom >= 0 && this.highlightAtom < this.atomMeshes.length) {
       const prev = this.atomMeshes[this.highlightAtom];
-      prev.material.emissiveIntensity = 0;
-      prev.material.emissive.set(0x000000);
+      if (prev.material !== this._atomMat) {
+        prev.material.dispose();
+        prev.material = this._atomMat;
+      }
       prev.scale.setScalar(1.0);
     }
 
@@ -271,6 +274,10 @@ export class Renderer {
 
     if (atomIndex >= 0 && atomIndex < this.atomMeshes.length) {
       const mesh = this.atomMeshes[atomIndex];
+      // Clone material for the highlighted atom so emissive doesn't affect all atoms
+      if (mesh.material === this._atomMat) {
+        mesh.material = this._atomMat.clone();
+      }
       mesh.material.emissive.set(0x335544);
       mesh.material.emissiveIntensity = 1.0;
       mesh.scale.setScalar(1.15);
@@ -315,8 +322,11 @@ export class Renderer {
     // Dragging gets stronger highlight
     if (isDragging && activeAtom >= 0 && activeAtom < this.atomMeshes.length) {
       const mesh = this.atomMeshes[activeAtom];
-      mesh.material.emissive.set(0x446655);
-      mesh.material.emissiveIntensity = 1.2;
+      // setHighlight already cloned the material for this atom
+      if (mesh.material !== this._atomMat) {
+        mesh.material.emissive.set(0x446655);
+        mesh.material.emissiveIntensity = 1.2;
+      }
       mesh.scale.setScalar(1.2);
     }
 
@@ -344,8 +354,13 @@ export class Renderer {
     this.rimLight.color.set(t.rimColor);
     this.rimLight.intensity = t.rimIntensity;
 
-    this.atomMeshes.forEach(m => m.material.color.set(t.atom));
-    this.bondMeshes.forEach(m => m.material.color.set(t.bond));
+    if (this._atomMat) this._atomMat.color.set(t.atom);
+    if (this._bondMat) this._bondMat.color.set(t.bond);
+    // Update cloned highlight material if active
+    if (this.highlightAtom >= 0 && this.highlightAtom < this.atomMeshes.length) {
+      const m = this.atomMeshes[this.highlightAtom];
+      if (m.material !== this._atomMat) m.material.color.set(t.atom);
+    }
   }
 
   _fitCamera() {
