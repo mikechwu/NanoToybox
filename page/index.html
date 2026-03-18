@@ -57,14 +57,14 @@ canvas { display: block; touch-action: none; }
   border-top: 1px solid rgba(255,255,255,0.08);
   touch-action: auto;
 }
-#controls button, #controls select {
+#controls button:not(.mode-btn), #controls select {
   background: rgba(255,255,255,0.08); color: #ccc;
   border: 1px solid rgba(255,255,255,0.12);
   padding: 8px 14px; cursor: pointer; font-family: inherit; font-size: 13px;
   border-radius: 4px; min-height: 36px;
   flex-shrink: 0; white-space: nowrap;
 }
-#controls button:hover, #controls select:hover {
+#controls button:not(.mode-btn):hover, #controls select:hover {
   background: rgba(255,255,255,0.15); color: #fff;
 }
 #controls label { color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; flex-shrink: 0; white-space: nowrap; }
@@ -76,6 +76,7 @@ canvas { display: block; touch-action: none; }
   background: rgba(255,255,255,0.05); color: #999;
   border-radius: 0; min-height: 36px;
   font-family: inherit; flex-shrink: 0;
+  touch-action: manipulation;
 }
 .mode-btn:first-child { border-radius: 4px 0 0 4px; }
 .mode-btn:last-child { border-radius: 0 4px 4px 0; }
