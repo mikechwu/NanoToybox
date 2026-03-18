@@ -27,50 +27,58 @@ export class Renderer {
 
   _initScene() {
     this.scene = new THREE.Scene();
-    const w = this.container.clientWidth || window.innerWidth;
-    const h = this.container.clientHeight || window.innerHeight;
-    this.camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 2000);
+    this.camera = new THREE.PerspectiveCamera(50, 1, 0.1, 2000);
     this.camera.position.set(0, 0, 15);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setSize(w, h);
+    // setPixelRatio MUST be called before setSize for correct internal resolution
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.autoClear = false; // needed for axis triad overlay
     this.container.appendChild(this.renderer.domElement);
 
+    // Apply correct size after canvas is in the DOM (so container has layout dimensions)
+    this._syncSize();
+
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    // Left-button is NOT mapped — it's handled by InputManager for atom interaction.
-    // Right-button = orbit, middle = dolly, scroll = zoom — all handled by OrbitControls.
-    // OrbitControls stays enabled=true always so it can process right-click and scroll.
     this.controls.mouseButtons = {
       MIDDLE: THREE.MOUSE.DOLLY,
       RIGHT: THREE.MOUSE.ROTATE,
     };
     this.controls.touches = {
-      ONE: null, // disabled — handled by InputManager
+      ONE: null,
       TWO: THREE.TOUCH.DOLLY_PAN,
     };
-    this.controls.enabled = true; // always on — left-button excluded via mouseButtons
+    this.controls.enabled = true;
 
-    // Save default camera state for reset
     this._defaultCamPos = new THREE.Vector3(0, 0, 15);
     this._defaultCamTarget = new THREE.Vector3(0, 0, 0);
 
-    // Axis orientation triad — professional FEM/MD postprocessor style
-    // Rendered in a separate mini-viewport, synced to main camera rotation
     this._initAxisTriad();
 
-    window.addEventListener('resize', () => {
-      const w = this.container.clientWidth || window.innerWidth;
-      const h = this.container.clientHeight || window.innerHeight;
-      this.camera.aspect = w / h;
-      this.camera.updateProjectionMatrix();
-      this.renderer.setSize(w, h);
-    });
+    // Resize handling — use visualViewport on mobile for accurate sizing
+    const resizeHandler = () => this._syncSize();
+    window.addEventListener('resize', resizeHandler);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', resizeHandler);
+    }
+    // Deferred resize to catch iPad Safari layout settling after load
+    setTimeout(resizeHandler, 100);
+  }
+
+  /**
+   * Sync renderer and camera to the actual visible container size.
+   * Handles iOS Safari's dvh/vh differences and safe area insets.
+   */
+  _syncSize() {
+    const w = this.container.clientWidth || window.innerWidth;
+    const h = this.container.clientHeight || window.innerHeight;
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(w, h);
   }
 
   _initLighting() {
@@ -425,8 +433,8 @@ export class Renderer {
     // Ambient light for the axis scene
     this._axisScene.add(new THREE.AmbientLight(0xffffff, 2.0));
 
-    // Mini-viewport size (CSS pixels)
-    this._axisSize = 120;
+    // Mini-viewport size scales with screen — smaller on tablets
+    this._axisSize = Math.min(100, Math.floor(window.innerWidth * 0.08));
   }
 
   render() {
@@ -442,13 +450,15 @@ export class Renderer {
     this._axisCamera.position.set(0, 0, 4).applyQuaternion(this._axisCamera.quaternion);
     this._axisCamera.lookAt(0, 0, 0);
 
-    // Render in bottom-left corner via scissor test
-    const px = window.devicePixelRatio || 1;
-    const size = this._axisSize * px;
-    const canvasH = this.renderer.domElement.height;
-    // Position: bottom-left, above the controls bar (~50px from bottom)
-    const offsetX = 8 * px;
-    const offsetY = 52 * px;
+    // Render axis triad in bottom-left corner via scissor test.
+    // All values in CSS pixels — Three.js handles pixel ratio internally
+    // when setPixelRatio() has been called before setSize().
+    const size = this._axisSize;
+    const offsetX = 6;
+    const offsetY = 50; // above controls bar
+
+    const w = this.container.clientWidth || window.innerWidth;
+    const h = this.container.clientHeight || window.innerHeight;
 
     this.renderer.setViewport(offsetX, offsetY, size, size);
     this.renderer.setScissor(offsetX, offsetY, size, size);
@@ -457,7 +467,7 @@ export class Renderer {
     this.renderer.render(this._axisScene, this._axisCamera);
     this.renderer.setScissorTest(false);
     // Restore full viewport
-    this.renderer.setViewport(0, 0, this.renderer.domElement.width, this.renderer.domElement.height);
+    this.renderer.setViewport(0, 0, w, h);
   }
 
   getCanvas() {
