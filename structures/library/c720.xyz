@@ -1,5 +1,5 @@
 720
-frame=0  C720 fullerene (720 atoms, from NCKU FullereneLib) | 720 atoms | PE=-5265.926394 eV | Fmax=9.75e-04 eV/A | method=steepest_descent
+frame=0  C720 fullerene | 720 atoms | PE=-5265.926394 eV | Fmax=9.75e-04 eV/A | method=steepest_descent
 C 7.51173909 -0.96417075 -11.41074193
 C 6.26499719 -1.39339096 -12.09831191
 C 5.53273077 -0.17209990 -12.52677732

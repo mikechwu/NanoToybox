@@ -1,5 +1,5 @@
 540
-frame=0  C540 fullerene (540 atoms, from NCKU FullereneLib) | 540 atoms | PE=-3936.825336 eV | Fmax=8.07e-04 eV/A | method=sd+fire
+frame=0  C540 fullerene | 540 atoms | PE=-3936.825336 eV | Fmax=8.07e-04 eV/A | method=sd+fire
 C 1.26485575 4.00329495 -10.99915938
 C 0.39086107 2.87288961 -11.41058587
 C -1.02329135 3.30466654 -11.25343462

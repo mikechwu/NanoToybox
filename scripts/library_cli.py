@@ -182,16 +182,13 @@ def cmd_diamond(args):
 
 
 def cmd_fullerene(args):
-    """Import a fullerene from NCKU FullereneLib .mat files."""
+    """Import a fullerene from .mat coordinate files."""
     import scipy.io
     name = args.name.upper()  # e.g., C180
-    mat_path = os.path.expanduser(f'~/NCKU/FullereneLib/{name}.mat')
+    mat_path = args.path if hasattr(args, 'path') and args.path else f'{name}.mat'
 
     if not os.path.exists(mat_path):
         print(f"Error: {mat_path} not found")
-        available = [f.replace('.mat', '') for f in os.listdir(os.path.expanduser('~/NCKU/FullereneLib/'))
-                     if f.endswith('.mat')]
-        print(f"Available: {', '.join(sorted(available))}")
         return
 
     mat = scipy.io.loadmat(mat_path)
@@ -213,7 +210,7 @@ def cmd_fullerene(args):
     atoms.positions -= atoms.positions.mean(axis=0)
 
     lib_name = name.lower()
-    desc = f'{name} fullerene ({atoms.n_atoms} atoms, from NCKU FullereneLib)'
+    desc = f'{name} fullerene'
     generate_and_save(lib_name, atoms, desc)
 
 
@@ -313,7 +310,7 @@ Examples:
     p_dia.add_argument('ny', type=int)
     p_dia.add_argument('nz', type=int)
 
-    p_full = sub.add_parser('fullerene', help='Import fullerene from NCKU FullereneLib')
+    p_full = sub.add_parser('fullerene', help='Import fullerene from .mat coordinate file')
     p_full.add_argument('name', help='Fullerene name (e.g., C180, C540, C720)')
 
     p_imp = sub.add_parser('import-xyz', help='Import and relax any .xyz file')

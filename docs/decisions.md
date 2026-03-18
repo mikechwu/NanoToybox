@@ -4,11 +4,13 @@ Key strategic and technical decisions made during development, with rationale.
 
 ## D1: Analytical Tersoff for First Website (not ML)
 
-**Decision:** Use the analytical Tersoff potential compiled to WebAssembly for the first website version. Defer ML surrogates.
+**Decision:** Use the analytical Tersoff potential for the first website version. Defer ML surrogates.
 
-**Rationale:** Scaling benchmarks showed analytical Tersoff handles all target scenes (60–300 atoms) at >200 FPS in estimated Wasm. ML provided no speed advantage — descriptor computation has the same O(N·neighbors²) complexity as the analytical force. ML only becomes worthwhile for >1000 atoms with a GNN that avoids explicit descriptors.
+**Rationale:** Scaling benchmarks showed analytical Tersoff handles all target scenes (60–300 atoms) at interactive frame rates. The JavaScript implementation achieves sufficient performance for the target range without requiring Wasm. ML provided no speed advantage — descriptor computation has the same O(N·neighbors²) complexity as the analytical force. ML only becomes worthwhile for >1000 atoms with a GNN that avoids explicit descriptors.
 
-**Evidence:** dev_report_simdev9, dev_report_simdev10
+**Update:** The interactive page (`page/`) now runs the full Tersoff potential in optimized JavaScript. Wasm remains an option for scaling to >300 atoms.
+
+**Evidence:** dev_report_simdev9, dev_report_simdev10, page/js/physics.js
 
 ## D2: Python Reference + Numba Acceleration
 
@@ -22,7 +24,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Decision:** Use velocity Verlet for all MD. Explicit Euler is explicitly forbidden.
 
-**Rationale:** Velocity Verlet is symplectic (no energy drift), time-reversible, and second-order accurate. Euler is non-symplectic and causes catastrophic energy growth within hundreds of steps. The legacy code also uses velocity Verlet.
+**Rationale:** Velocity Verlet is symplectic (no energy drift), time-reversible, and second-order accurate. Euler is non-symplectic and causes catastrophic energy growth within hundreds of steps.
 
 ## D4: Per-Atom Force Residual as ML Target
 
@@ -34,7 +36,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 ## D5: Cosine Cutoff (not Legacy Exponential)
 
-**Decision:** Use standard Tersoff cosine cutoff, not the legacy code's exponential variant.
+**Decision:** Use the standard Tersoff cosine cutoff, not the exponential variant found in some implementations.
 
 **Rationale:** Both are smooth and produce similar equilibrium structures. The cosine form is standard in literature and easier to verify. The difference is documented as a known caveat.
 
@@ -46,9 +48,9 @@ Key strategic and technical decisions made during development, with rationale.
 
 ## D7: CNT Generation via Graphene Rolling
 
-**Decision:** Port the NCKU MATLAB CNT generator, which uses the chiral vector rotation + cylindrical rolling method.
+**Decision:** Use the chiral vector rotation + cylindrical rolling method for CNT generation.
 
-**Rationale:** This is the standard algorithm for generating CNT coordinates from first principles. It supports any chirality (n,m) — armchair, zigzag, and chiral — from a single code path. The MATLAB code was validated in published research.
+**Rationale:** This is the standard algorithm for generating CNT coordinates from first principles. It supports any chirality (n,m) — armchair, zigzag, and chiral — from a single code path.
 
 ## D8: No Periodic Boundaries
 

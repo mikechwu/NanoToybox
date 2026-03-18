@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>NanoToybox — Interactive Carbon Playground</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #181820; color: #e8e8e8;
+  font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+  overflow: hidden; touch-action: none;
+}
+#container { width: 100vw; height: 100vh; position: relative; }
+canvas { display: block; }
+
+#info {
+  position: absolute; top: 12px; left: 12px;
+  background: rgba(20,20,28,0.92); backdrop-filter: blur(8px);
+  padding: 10px 16px; font-size: 12px; line-height: 1.7;
+  border-radius: 6px; z-index: 10;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+#info .title { font-size: 14px; font-weight: 600; letter-spacing: 0.5px; }
+#status { color: #888; font-size: 11px; }
+#fps {
+  position: absolute; bottom: 50px; left: 12px;
+  color: #666; font-size: 11px; z-index: 10;
+  font-variant-numeric: tabular-nums;
+}
+#hint {
+  position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%);
+  background: rgba(100,180,140,0.15); color: #8fd8b0;
+  padding: 8px 20px; border-radius: 20px; font-size: 13px;
+  z-index: 10; pointer-events: none;
+  opacity: 1; transition: opacity 1.5s ease-out;
+}
+#hint.fade { opacity: 0; }
+
+#controls {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: rgba(20,20,28,0.92); backdrop-filter: blur(8px);
+  padding: 8px 16px;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 12px; z-index: 10;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+#controls button, #controls select {
+  background: rgba(255,255,255,0.08); color: #ccc;
+  border: 1px solid rgba(255,255,255,0.12);
+  padding: 5px 12px; cursor: pointer; font-family: inherit; font-size: 12px;
+  border-radius: 4px;
+}
+#controls button:hover, #controls select:hover {
+  background: rgba(255,255,255,0.15); color: #fff;
+}
+#controls label { color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
+#controls span { color: #aaa; }
+.ctrl-sep { width: 1px; height: 22px; background: rgba(255,255,255,0.1); }
+</style>
+</head>
+<body>
+<div id="container">
+  <div id="info">
+    <div class="title">NanoToybox</div>
+    <div id="status">Loading structures...</div>
+  </div>
+  <div id="fps"></div>
+  <div id="hint">Click or tap an atom to interact</div>
+  <div id="help" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    background:rgba(20,20,28,0.95); backdrop-filter:blur(12px); padding:24px 32px;
+    border-radius:10px; border:1px solid rgba(255,255,255,0.1); z-index:30;
+    font-size:13px; line-height:2; max-width:420px; color:#ccc;">
+    <div style="font-size:15px; font-weight:600; margin-bottom:8px; color:#eee;">Controls</div>
+    <div style="margin-bottom:12px; color:#8fd8b0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Desktop (Mouse)</div>
+    <div><b>Left-drag on atom</b> — drag atom (spring force)</div>
+    <div><b>Left-drag fast + release</b> — flick / push atom</div>
+    <div><b>Ctrl + click on atom</b> — rotate molecule</div>
+    <div><b>Right-drag</b> — orbit camera</div>
+    <div><b>Scroll wheel</b> — zoom</div>
+    <div style="margin-top:12px; margin-bottom:12px; color:#8fd8b0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Mobile (Touch)</div>
+    <div><b>1-finger drag on atom</b> — drag atom</div>
+    <div><b>1-finger swipe on atom</b> — flick / push atom</div>
+    <div><b>2-finger pinch</b> — zoom</div>
+    <div><b>2-finger drag</b> — pan camera</div>
+    <div style="margin-top:16px; text-align:right;">
+      <button onclick="document.getElementById('help').style.display='none'"
+        style="background:rgba(255,255,255,0.1); color:#ccc; border:1px solid rgba(255,255,255,0.15);
+        padding:6px 18px; border-radius:4px; cursor:pointer; font-size:12px;">Close</button>
+    </div>
+  </div>
+  <div id="controls">
+    <label>Structure</label>
+    <select id="structure-select"></select>
+    <div class="ctrl-sep"></div>
+    <button id="btn-reset">Reset</button>
+    <button id="btn-reset-view">Reset View</button>
+    <button id="theme-toggle">Theme</button>
+    <div class="ctrl-sep"></div>
+    <button id="btn-advanced">Advanced</button>
+    <button onclick="document.getElementById('help').style.display='block'">?</button>
+  </div>
+
+  <!-- Advanced settings panel -->
+  <div id="advanced-panel" style="display:none; position:absolute; bottom:44px; right:12px;
+    background:rgba(20,20,28,0.95); backdrop-filter:blur(12px);
+    padding:16px 20px; border-radius:8px; z-index:15;
+    border:1px solid rgba(255,255,255,0.08); width:260px; font-size:12px;">
+    <div style="font-weight:600; font-size:13px; margin-bottom:12px; color:#eee;">Interaction Settings</div>
+
+    <div style="margin-bottom:10px;">
+      <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+        <label style="color:#888; font-size:11px; text-transform:uppercase; letter-spacing:0.3px;">Drag Strength</label>
+        <span id="drag-val" style="color:#8fd8b0; font-size:11px; font-variant-numeric:tabular-nums;">2.0</span>
+      </div>
+      <input type="range" id="drag-strength" min="0.5" max="10" step="0.5" value="2.0"
+        style="width:100%; accent-color:#6ab89a;">
+    </div>
+
+    <div style="margin-bottom:4px;">
+      <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+        <label style="color:#888; font-size:11px; text-transform:uppercase; letter-spacing:0.3px;">Rotate Strength</label>
+        <span id="rotate-val" style="color:#8fd8b0; font-size:11px; font-variant-numeric:tabular-nums;">5.0</span>
+      </div>
+      <input type="range" id="rotate-strength" min="1" max="20" step="1" value="5"
+        style="width:100%; accent-color:#6ab89a;">
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

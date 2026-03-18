@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NanoToybox — Atom Selection Debug</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #181820; color: #eee; font-family: monospace; overflow: hidden; }
+#container { width: 100vw; height: 100vh; }
+#log {
+  position: absolute; top: 10px; right: 10px; width: 450px; max-height: 80vh;
+  background: rgba(0,0,0,0.85); padding: 10px; font-size: 11px; line-height: 1.5;
+  overflow-y: auto; z-index: 10; border-radius: 6px; color: #aaa;
+}
+#log .hit { color: #4f8; }
+#log .miss { color: #f84; }
+#log .info { color: #8af; }
+#info {
+  position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.85);
+  padding: 10px; font-size: 13px; z-index: 10; border-radius: 6px;
+}
+</style>
+</head>
+<body>
+<div id="container"></div>
+<div id="info">
+  <div>Atom Selection Debug Test</div>
+  <div>3 atoms: <span style="color:#f44">RED</span>=0 at (0,0,0), <span style="color:#4f4">GREEN</span>=1 at (2,0,0), <span style="color:#44f">BLUE</span>=2 at (0,2,0)</div>
+  <div>Click an atom — log shows which index was selected</div>
+  <div id="status"></div>
+</div>
+<div id="log"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const logEl = document.getElementById('log');
+function log(msg, cls = '') {
+  const div = document.createElement('div');
+  div.className = cls;
+  div.textContent = msg;
+  logEl.prepend(div);
+  // Keep last 100 entries
+  while (logEl.children.length > 100) logEl.lastChild.remove();
+}
+
+// ─── Scene ───
+const container = document.getElementById('container');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x181820);
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 0, 10);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+container.appendChild(renderer.domElement);
+
+// Lighting (camera-relative)
+scene.add(new THREE.AmbientLight(0x8090b0, 1.2));
+const key = new THREE.DirectionalLight(0xffffff, 3.0);
+key.position.set(1, 0.7, 0.6);
+camera.add(key);
+const fill = new THREE.DirectionalLight(0x8098c0, 1.5);
+fill.position.set(-1, 0.2, 0.4);
+camera.add(fill);
+scene.add(camera);
+
+// OrbitControls — right-click only (matching the page)
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.mouseButtons = { MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+controls.touches = { ONE: null, TWO: THREE.TOUCH.DOLLY_PAN };
+controls.enabled = false;
+
+// ─── Create 3 atoms at known positions ───
+const atomGeom = new THREE.SphereGeometry(0.5, 24, 16); // larger for easy clicking
+const atomPositions = [
+  new THREE.Vector3(0, 0, 0),   // atom 0: RED, center
+  new THREE.Vector3(3, 0, 0),   // atom 1: GREEN, right
+  new THREE.Vector3(0, 3, 0),   // atom 2: BLUE, up
+];
+const atomColors = [0xff4444, 0x44ff44, 0x4444ff];
+const atomNames = ['RED(0)', 'GREEN(1)', 'BLUE(2)'];
+
+const atomMeshes = [];
+atomPositions.forEach((pos, i) => {
+  const mat = new THREE.MeshStandardMaterial({ color: atomColors[i], roughness: 0.7, metalness: 0 });
+  const mesh = new THREE.Mesh(atomGeom, mat);
+  mesh.position.copy(pos);
+  scene.add(mesh);
+  atomMeshes.push(mesh);
+});
+
+// Force matrix update
+scene.updateMatrixWorld(true);
+
+log('Scene created: 3 atoms at (0,0,0), (3,0,0), (0,3,0)', 'info');
+log(`Camera at (${camera.position.x}, ${camera.position.y}, ${camera.position.z})`, 'info');
+log(`Camera matrixWorldInverse determinant: ${camera.matrixWorldInverse.determinant().toFixed(6)}`, 'info');
+
+// ─── Raycaster test ───
+const raycaster = new THREE.Raycaster();
+
+function testRaycast(screenX, screenY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const ndcX = ((screenX - rect.left) / rect.width) * 2 - 1;
+  const ndcY = -((screenY - rect.top) / rect.height) * 2 + 1;
+
+  log(`── Click at screen (${screenX.toFixed(0)}, ${screenY.toFixed(0)}) → NDC (${ndcX.toFixed(3)}, ${ndcY.toFixed(3)})`, 'info');
+
+  // Log where each atom projects to in NDC
+  for (let i = 0; i < atomMeshes.length; i++) {
+    const mesh = atomMeshes[i];
+    const sp = mesh.position.clone().project(camera);
+    const dx = sp.x - ndcX;
+    const dy = sp.y - ndcY;
+    const dist2D = Math.sqrt(dx * dx + dy * dy);
+    log(`  ${atomNames[i]}: meshPos=(${mesh.position.x.toFixed(2)},${mesh.position.y.toFixed(2)},${mesh.position.z.toFixed(2)}) → NDC(${sp.x.toFixed(3)},${sp.y.toFixed(3)},${sp.z.toFixed(3)}) dist2D=${dist2D.toFixed(3)}`);
+  }
+
+  // 3D raycast
+  camera.updateMatrixWorld(true);
+  raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+  const hits = raycaster.intersectObjects(atomMeshes, false);
+
+  if (hits.length === 0) {
+    log('  Raycast: NO HITS', 'miss');
+  } else {
+    for (const hit of hits) {
+      const idx = atomMeshes.indexOf(hit.object);
+      log(`  Raycast hit: ${atomNames[idx] || '???'} idx=${idx} dist=${hit.distance.toFixed(3)} point=(${hit.point.x.toFixed(2)},${hit.point.y.toFixed(2)},${hit.point.z.toFixed(2)})`, 'hit');
+    }
+  }
+
+  // Screen-space proximity
+  let bestIdx = -1;
+  let bestDist = Infinity;
+  for (let i = 0; i < atomMeshes.length; i++) {
+    const sp = atomMeshes[i].position.clone().project(camera);
+    if (sp.z < 0 || sp.z > 1) continue;
+    const d = Math.sqrt((sp.x - ndcX) ** 2 + (sp.y - ndcY) ** 2);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = i;
+    }
+  }
+  log(`  Screen-space nearest: ${atomNames[bestIdx] || 'none'} idx=${bestIdx} dist=${bestDist.toFixed(3)}`, bestIdx >= 0 ? 'hit' : 'miss');
+
+  // Highlight the raycast winner
+  const winner = hits.length > 0 ? atomMeshes.indexOf(hits[0].object) : bestIdx;
+  atomMeshes.forEach((m, i) => {
+    m.scale.setScalar(i === winner ? 1.4 : 1.0);
+  });
+  document.getElementById('status').textContent = winner >= 0
+    ? `Selected: ${atomNames[winner]} (idx=${winner})`
+    : 'No selection';
+
+  return winner;
+}
+
+// ─── Event handling ───
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (e.button === 0) {
+    testRaycast(e.clientX, e.clientY);
+  }
+});
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ─── Render loop ───
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+log('Ready — click on the colored atoms', 'info');
+</script>
+</body>
+</html>

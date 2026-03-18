@@ -1,7 +1,7 @@
 {
   "c180": {
     "converged": true,
-    "description": "C180 fullerene (180 atoms, from NCKU FullereneLib)",
+    "description": "C180 fullerene",
     "energy_eV": -1282.6441513188106,
     "file": "c180.xyz",
     "fmax_eV_A": 0.0006160929121669747,
@@ -10,7 +10,7 @@
   },
   "c540": {
     "converged": true,
-    "description": "C540 fullerene (540 atoms, from NCKU FullereneLib)",
+    "description": "C540 fullerene",
     "energy_eV": -3936.825335586108,
     "file": "c540.xyz",
     "fmax_eV_A": 0.0008067281913529028,
@@ -28,7 +28,7 @@
   },
   "c720": {
     "converged": true,
-    "description": "C720 fullerene (720 atoms, from NCKU FullereneLib)",
+    "description": "C720 fullerene",
     "energy_eV": -5265.926394037958,
     "file": "c720.xyz",
     "fmax_eV_A": 0.0009752537345625359,

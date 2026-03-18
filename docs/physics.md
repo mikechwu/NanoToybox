@@ -131,15 +131,18 @@ For multi-structure collision simulations, see [scaling-research.md](scaling-res
 
 The Tersoff potential has a hard cutoff at R + D = 2.1 Å. Atoms from different structures do not interact at all until they are within this distance. Collision is confirmed by monitoring the inter-structure minimum distance dropping below 2.1 Å.
 
-## Legacy Code Reference
+## Implementation Notes
 
-The simulator physics was derived from the NCKU legacy codebase at `~/NCKU/carbon-sim/MPI/`:
-- `TersoffC.h` — Force calculation (confirmed production code)
-- `TFC.h` / `TFCSA.h` — Integration loop
-- `MDcarbonSA.cpp` — Main entry point
+The simulator uses the standard cosine cutoff transition (not the exponential variant found in some implementations). Both are smooth and produce similar equilibrium structures.
 
-The legacy code uses an **exponential** cutoff transition; our implementation uses the standard **cosine** form. Both are smooth and produce similar equilibrium structures.
+### Three implementations
 
-CNT geometry generation was ported from `~/NCKU/Generate_CNT/` (MATLAB) — using the graphene-sheet-rolling algorithm with chiral vector rotation.
+| Implementation | Location | Use |
+|---------------|----------|-----|
+| Pure Python | `sim/potentials/tersoff.py` | Reference, validation, force decomposition |
+| Numba JIT | `sim/potentials/tersoff_fast.py` | Server-side relaxation, library building |
+| JavaScript | `page/js/physics.js` | Browser interactive page (real-time) |
 
-Fullerene coordinates (C60, C180, C540, C720) imported from `~/NCKU/FullereneLib/` (.mat files).
+All three use identical Tersoff (1988) carbon parameters and produce consistent results.
+
+CNT geometry is generated via the graphene-sheet-rolling algorithm with chiral vector rotation (`sim/structures/generate.py`). Fullerene coordinates (C60, C180, C540, C720) are stored as relaxed structures in the library.

@@ -1,5 +1,5 @@
 180
-frame=0  C180 fullerene (180 atoms, from NCKU FullereneLib) | 180 atoms | PE=-1282.644151 eV | Fmax=6.16e-04 eV/A | method=sd+fire
+frame=0  C180 fullerene | 180 atoms | PE=-1282.644151 eV | Fmax=6.16e-04 eV/A | method=sd+fire
 C 6.51951862 0.65326329 -0.45887361
 C 6.51586190 -0.80849749 -0.17697120
 C 6.22270079 -1.52184284 -1.45032140

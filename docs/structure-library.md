@@ -9,9 +9,9 @@ The canonical structure library lives at `structures/library/`. Every XYZ file i
 | Name | Atoms | Type | Description |
 |------|-------|------|-------------|
 | c60 | 60 | Fullerene | Buckminsterfullerene (truncated icosahedron) |
-| c180 | 180 | Fullerene | From NCKU FullereneLib |
-| c540 | 540 | Fullerene | From NCKU FullereneLib |
-| c720 | 720 | Fullerene | From NCKU FullereneLib |
+| c180 | 180 | Fullerene | Fullerene |
+| c540 | 540 | Fullerene | Fullerene |
+| c720 | 720 | Fullerene | Fullerene |
 | cnt_5_5_5cells | 100 | Armchair CNT | (5,5) armchair, 5 unit cells |
 | cnt_5_5_10cells | 200 | Armchair CNT | (5,5) armchair, 10 unit cells |
 | cnt_10_0_5cells | 200 | Zigzag CNT | (10,0) zigzag, 5 unit cells |
@@ -40,7 +40,6 @@ python3 scripts/library_cli.py graphene 6 6
 python3 scripts/library_cli.py diamond 2 2 2
 
 # Import from external sources
-python3 scripts/library_cli.py fullerene C180            # From ~/NCKU/FullereneLib/
 python3 scripts/library_cli.py import-xyz path/to/file.xyz --name my_structure
 
 # Manage library
@@ -71,7 +70,7 @@ Without Numba: same rebuild takes ~10 minutes. Numba is auto-detected.
 
 ### CNT Generation (`sim/structures/generate.py`)
 
-Ported from `~/NCKU/Generate_CNT/` MATLAB code. Uses the graphene-sheet-rolling algorithm:
+Uses the graphene-sheet-rolling algorithm:
 
 1. Build flat hexagonal graphene lattice (lattice constant a = 2.4612 Å)
 2. Rotate sheet so chiral vector C = n·a₁ + m·a₂ aligns with x-axis
@@ -93,9 +92,9 @@ a2 = [a/2, a√3/2, 0]
 ```
 Two atoms per unit cell. C-C bond length = 1.421 Å.
 
-### Fullerene Import
+### Fullerenes
 
-C60 is generated algorithmically (truncated icosahedron). C180, C540, C720 are imported from `~/NCKU/FullereneLib/*.mat` (MATLAB files, require scipy).
+C60 is generated algorithmically (truncated icosahedron). C180, C540, C720 coordinates are stored as pre-relaxed structures in the library.
 
 ### Diamond
 

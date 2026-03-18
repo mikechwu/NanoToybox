@@ -11,7 +11,7 @@ Welcome to the NanoToybox project — a browser-based interactive carbon nanostr
 | [Structure Library](structure-library.md) | Canonical structures, generation pipeline, CLI usage |
 | [ML Surrogate](ml-surrogate.md) | Force decomposition, training pipeline, lessons learned |
 | [Testing & Validation](testing.md) | Test ladder, pass criteria, how to run |
-| [Viewer](viewer.md) | Three.js trajectory viewer, usage, integration |
+| [Viewer](viewer.md) | Trajectory viewer and interactive page |
 | [Project Decisions](decisions.md) | Key strategic decisions and their rationale |
 | [Scaling Research](scaling-research.md) | Real-time browser limits, collision benchmarks, bottleneck analysis |
 | [Contributing](contributing.md) | How to continue development, rules, workflow |
@@ -19,6 +19,10 @@ Welcome to the NanoToybox project — a browser-based interactive carbon nanostr
 ## Quick Start
 
 ```bash
+# Launch the interactive page (requires serving from repo root)
+python3 -m http.server 8000
+# Open http://localhost:8000/page/
+
 # Run all validation tests (requires numpy, matplotlib)
 python3 tests/test_01_dimer.py
 python3 tests/test_02_angular.py
@@ -30,22 +34,20 @@ python3 scripts/library_cli.py cnt 5 5 --cells 5
 
 # List the structure library
 python3 scripts/library_cli.py list
-
-# Open the trajectory viewer
-open viewer/index.html
 ```
 
 ## Project Goal
 
-Build an immersive, interactive, scientifically accurate browser-based playground for carbon nanostructures (C60, graphene, CNTs, diamond). Users can explore, rotate, and watch real molecular dynamics simulations in real-time.
+Build an immersive, interactive, scientifically accurate browser-based playground for carbon nanostructures (C60, graphene, CNTs, diamond). Users can explore, drag, rotate, and interact with real molecular dynamics simulations in real-time.
 
 ## Current Status
 
-- Analytical Tersoff simulator: validated (8 tests pass)
+- **Interactive page: live** (`page/index.html`) — real-time Tersoff simulation in the browser with drag, rotate, structure presets, dark/light themes, and advanced settings
+- Analytical Tersoff simulator: validated (8 tests pass) in Python, ported to JavaScript for browser
 - Structure library: 15 canonical relaxed structures (60–720 atoms)
-- Numba-accelerated force engine: 250–480x faster than pure Python
-- Three.js trajectory viewer: functional (30/60 fps, stride 1–100, PBR rendering)
-- Scaling research: completed — real-time limit ~2,100 atoms (Numba), ~250 atoms (current viewer)
+- Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)
+- Three.js trajectory viewer: functional at `viewer/index.html` (pre-computed trajectory playback)
+- Scaling research: completed — real-time limit ~2,100 atoms (Numba), ~250 atoms (unoptimized viewer)
 - Collision simulations: 8 verified scenarios with relaxed structures (120–3,600 atoms)
 - ML surrogate: explored, deferred (analytical is faster for target system sizes)
-- **Next step: port Tersoff to C/Wasm and connect to viewer for browser deployment**
+- **Next steps**: optimize for larger structures (InstancedMesh, C/Wasm for >300 atoms)

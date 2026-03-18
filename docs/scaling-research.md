@@ -176,8 +176,11 @@ python3 scripts/scaling_research.py
 #   outputs/scaling_research/results.json          — machine-readable data
 #   outputs/scaling_research/collision_*.xyz        — viewable trajectories
 
-# View a collision trajectory
+# View a collision trajectory in the trajectory viewer
 open viewer/index.html
 # Then drag-drop any collision_*.xyz file
 # Use Stride=20 at 30 fps for long trajectories
+
+# Or interact with structures in real-time
+# Open http://localhost:8000/page/ (requires python3 -m http.server 8000)
 ```

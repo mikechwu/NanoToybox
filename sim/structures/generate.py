@@ -1,7 +1,6 @@
 """
 Carbon nanostructure geometry generators.
 
-Ported from ~/NCKU/Generate_CNT/ MATLAB code.
 Uses the graphene-sheet-rolling method for CNTs.
 
 Supports:
@@ -57,7 +56,7 @@ def cnt(n: int, m: int, n_cells: int = 1) -> Atoms:
     """
     Generate a carbon nanotube with chiral indices (n, m).
 
-    Algorithm (from NCKU Generate_CNT):
+    Algorithm (graphene-sheet-rolling method):
     1. Build flat graphene sheet large enough for one unit cell
     2. Rotate so chiral vector aligns with x-axis
     3. Extract atoms within one translational period

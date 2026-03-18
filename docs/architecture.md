@@ -31,10 +31,21 @@ NanoToybox/
 │   └── generate_*.py             # Dataset generation scripts
 ├── structures/
 │   └── library/                  # 15 canonical relaxed 0K structures (XYZ + manifest.json)
+├── page/                         # Interactive carbon playground (real-time simulation)
+│   ├── index.html                # HTML shell, UI controls, advanced settings panel
+│   └── js/
+│       ├── main.js               # Entry point, frame loop, command dispatch
+│       ├── physics.js            # Tersoff force engine (full analytical, optimized JS)
+│       ├── renderer.js           # Three.js scene, PBR materials, ViewHelper axes
+│       ├── input.js              # Mouse/touch input, raycasting, camera-plane projection
+│       ├── state-machine.js      # Interaction states (idle/hover/drag/rotate/camera)
+│       ├── loader.js             # Structure library loader + bond topology
+│       ├── fps-monitor.js        # Frame time measurement + degradation tiers
+│       └── themes.js             # Dark/light theme definitions
+├── viewer/
+│   └── index.html                # Three.js pre-computed trajectory viewer
 ├── data/                         # ML training/test datasets (NPY + metadata)
 ├── ml/                           # ML surrogate code (deferred — see ml-surrogate.md)
-├── viewer/
-│   └── index.html                # Three.js interactive trajectory viewer
 ├── outputs/                      # Test output artifacts (energy CSVs, trajectories, plots)
 ├── .reports/                     # Research proposals + dev reports (history)
 └── docs/                         # This documentation
@@ -93,5 +104,5 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 | numpy | Yes | Core numerics |
 | numba | Recommended | 250-480x speedup for force evaluation |
 | matplotlib | Optional | Plot generation |
-| scipy | Optional | .mat file loading (FullereneLib import) |
+| scipy | Optional | .mat file loading (optional fullerene import) |
 | scikit-learn | Optional | ML pilot training |
