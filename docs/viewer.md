@@ -42,7 +42,7 @@ The control bar has a three-way mode selector: **Atom** | **Move** | **Rotate**.
 | Mode | Physics behavior |
 |------|-----------------|
 | Atom (default) | Spring force on single atom (camera plane) |
-| Move | Uniform force on all atoms, normalized by n (whole-molecule translation). Blue highlight/force line distinguishes from Atom mode. Force line originates from picked atom (v1 limitation — a COM-origin line would be a stronger cue) |
+| Move | Uniform force on connected component, normalized by component size. Blue highlight/force line. Detached fragments are unaffected. Force line originates from picked atom (v1 limitation) |
 | Rotate | Torque via diagonal inertia tensor, distributed as tangential forces |
 
 ### Interaction Model
@@ -69,8 +69,8 @@ The page runs a full analytical Tersoff (1988) potential in JavaScript:
 - Velocity Verlet integration with proper eV/Å → Å/fs² unit conversion
 - **NVE by default** — no artificial damping; energy injected by user persists as thermal vibration. User-adjustable damping available (0 = NVE, up to 0.5 = heavy viscous drag, cubic slider scale)
 - Drag (Atom mode): spring force `F = K_DRAG × (target - atom)` on the selected atom, in camera-perpendicular plane
-- Translation (Move mode): uniform force `F_i = (K_DRAG / n) × (target - picked_atom)` applied to every atom. Total external force is `K_DRAG × displacement`, independent of atom count. Actual cursor tracking varies across structures due to differences in mass, geometry, damping, and internal dynamics — the normalization prevents any structure from being dramatically sluggish or explosive, but does not guarantee identical response
-- Rotation (Rotate mode): spring force → torque → angular acceleration via diagonal inertia tensor → distributed tangential forces on all atoms. Inertia-normalized so `K_ROTATE` feels consistent across molecule sizes
+- Translation (Move mode): uniform force applied to all atoms in the picked atom's **connected component** (patch), normalized by component size. Total force is `K_DRAG × displacement`, independent of patch size. Detached fragments are not affected. Components are recomputed from the bond graph via Union-Find after each bond refresh (~every 5 frames)
+- Rotation (Rotate mode): spring force → torque → angular acceleration via diagonal inertia tensor → distributed tangential forces, scoped to the picked atom's **connected component**. COM and inertia are computed over the component only. Inertia-normalized so `K_ROTATE` feels consistent across patch sizes
 - Safety guards: per-atom velocity hard cap and total KE cap (only trigger on extreme inputs)
 
 ### Architecture

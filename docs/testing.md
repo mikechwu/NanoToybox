@@ -133,3 +133,11 @@ python3 -m http.server 8000
 | 20 | Mobile: 2-finger gesture in any mode | Always camera pinch/pan |
 | 21 | Mobile: add 2nd finger during interaction | Active interaction cancelled, camera takes over |
 | 22 | Load new structure while in Move mode | Mode persists, new structure responds to Move |
+| 23 | Move mode: drag atom on intact C60 | Entire molecule translates (all atoms in one component) |
+| 24 | Atom mode: pull atom until bond breaks, then Move mode on main fragment | Only the connected fragment translates, detached atoms stay |
+| 25 | Rotate mode on intact structure | Molecule rotates normally |
+| 26 | Rotate mode after fragmenting structure | Only the picked fragment rotates |
+| 27 | Reset after fragmentation, Move mode | Full molecule translates again (components reset with bonds) |
+| 28 | Atom mode: push two fragments close until bonds form, then Move mode | Merged fragment moves as one patch |
+| 29 | Move mode: vigorous drag causing bonds to break mid-interaction | Detached atoms stop following after next bond refresh (~0.08s). Expected behavior |
+| 30 | Move/Rotate near bond cutoff distance | Patch scope may change as bonds flicker. Expected behavior with cutoff-only detection (no hysteresis) |

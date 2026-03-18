@@ -320,10 +320,13 @@ export class PhysicsEngine {
     this.dragAtom = -1;
     this.isRotateMode = false;
     this.isTranslateMode = false;
+    this.activeComponent = -1;
     this.dragTarget = [0, 0, 0];
     this.keInitial = 0;
     this.neighborList = null;
     this.bonds = [];
+    this.componentId = null;   // Int32Array[n] — component index per atom
+    this.components = [];      // [{ atoms: number[], size: number }]
     this.stepCount = 0;
     this.kDrag = CONFIG.physics.kDragDefault;
     this.kRotate = CONFIG.physics.kRotateDefault;
@@ -353,6 +356,7 @@ export class PhysicsEngine {
     this.dragAtom = -1;
     this.isRotateMode = false;
     this.isTranslateMode = false;
+    this.activeComponent = -1;
     this.bonds = bonds.map(b => [...b]);
     this.keInitial = 0.1;
     this.stepCount = 0;
@@ -370,6 +374,7 @@ export class PhysicsEngine {
     }
 
     this.computeForces();
+    this.rebuildComponents();
   }
 
   buildNeighborList() {
@@ -433,56 +438,54 @@ export class PhysicsEngine {
       this.force[ix + 2] += this.kDrag * (this.dragTarget[2] - this.pos[ix + 2]);
     }
 
-    // ─── User translate force (whole molecule) ───
-    // Uniform force on all atoms, normalized by n so total force is size-independent.
-    // Produces approximately rigid translation; internal vibrations are unaffected.
+    // ─── User translate force (connected component) ───
+    // Uniform force on all atoms in the picked atom's connected patch,
+    // normalized by component size so total force is size-independent.
     if (this.dragAtom >= 0 && this.isTranslateMode) {
       const ix = this.dragAtom * 3;
       const dx = this.dragTarget[0] - this.pos[ix];
       const dy = this.dragTarget[1] - this.pos[ix + 1];
       const dz = this.dragTarget[2] - this.pos[ix + 2];
-      const s = this.kDrag / this.n;
-      const fx = s * dx;
-      const fy = s * dy;
-      const fz = s * dz;
-      for (let i = 0; i < this.n; i++) {
-        const jx = i * 3;
-        this.force[jx]     += fx;
-        this.force[jx + 1] += fy;
-        this.force[jx + 2] += fz;
+      const comp = this.activeComponent >= 0 ? this.components[this.activeComponent] : null;
+      const atoms = comp ? comp.atoms : [this.dragAtom];
+      const s = this.kDrag / atoms.length;
+      const fx = s * dx, fy = s * dy, fz = s * dz;
+      for (let k = 0; k < atoms.length; k++) {
+        const jx = atoms[k] * 3;
+        this.force[jx] += fx; this.force[jx + 1] += fy; this.force[jx + 2] += fz;
       }
     }
 
     // ─── User rotation (spring force → torque → distributed tangential force) ───
     //
-    // Same visual as drag: spring line from atom to cursor.
-    // The spring force F at the selected atom produces torque τ = r_a × F.
-    // Angular acceleration α = I⁻¹·τ is distributed as tangential f_i = α × r_i.
+    // Forces are scoped to the connected component containing the picked atom.
+    // COM, inertia, and tangential forces are computed over that component only.
     //
     // INERTIA NORMALIZATION: The spring force is scaled by (I_actual / I_ref)
-    // so that K_ROTATE produces the same angular response regardless of molecule
-    // size. Without this, C720 (100× the inertia of C60) would need 100× the
-    // cursor displacement to achieve the same rotation speed.
-    //
-    // I_ref = 750 Å² ≈ C60 inertia (60 atoms × 3.55² × 2/3)
+    // so that K_ROTATE produces the same angular response regardless of patch
+    // size. I_ref = 750 Å² ≈ C60 inertia (60 atoms × 3.55² × 2/3)
     //
     if (this.dragAtom >= 0 && this.isRotateMode) {
       const pos = this.pos;
       const force = this.force;
       const aix = this.dragAtom * 3;
+      const comp = this.activeComponent >= 0 ? this.components[this.activeComponent] : null;
+      const atoms = comp ? comp.atoms : [this.dragAtom];
+      const count = atoms.length;
 
-      // COM
+      // COM over component
       let cx = 0, cy = 0, cz = 0;
-      for (let i = 0; i < this.n; i++) {
-        cx += pos[i * 3]; cy += pos[i * 3 + 1]; cz += pos[i * 3 + 2];
+      for (let k = 0; k < count; k++) {
+        const i3 = atoms[k] * 3;
+        cx += pos[i3]; cy += pos[i3 + 1]; cz += pos[i3 + 2];
       }
-      cx /= this.n; cy /= this.n; cz /= this.n;
+      cx /= count; cy /= count; cz /= count;
 
-      // Diagonal moments of inertia (in units of mass × Å²; mass = 1 for uniform)
+      // Diagonal moments of inertia over component
       let Ixx = 0, Iyy = 0, Izz = 0;
-      for (let i = 0; i < this.n; i++) {
-        const ix = i * 3;
-        const rx = pos[ix] - cx, ry = pos[ix + 1] - cy, rz = pos[ix + 2] - cz;
+      for (let k = 0; k < count; k++) {
+        const i3 = atoms[k] * 3;
+        const rx = pos[i3] - cx, ry = pos[i3 + 1] - cy, rz = pos[i3 + 2] - cz;
         Ixx += ry * ry + rz * rz;
         Iyy += rx * rx + rz * rz;
         Izz += rx * rx + ry * ry;
@@ -516,14 +519,13 @@ export class PhysicsEngine {
       const ay = Iyy > 0.01 ? ty / Iyy : 0;
       const az = Izz > 0.01 ? tz / Izz : 0;
 
-      // Tangential force on each atom: f_i = α × r_i
-      // Σ f_i = α × Σ r_i = 0 (r_i relative to COM) → no net translation ✓
-      for (let i = 0; i < this.n; i++) {
-        const ix = i * 3;
-        const rx = pos[ix] - cx, ry = pos[ix + 1] - cy, rz = pos[ix + 2] - cz;
-        force[ix]     += ay * rz - az * ry;
-        force[ix + 1] += az * rx - ax * rz;
-        force[ix + 2] += ax * ry - ay * rx;
+      // Tangential force on component atoms: f_i = α × r_i
+      for (let k = 0; k < count; k++) {
+        const i3 = atoms[k] * 3;
+        const rx = pos[i3] - cx, ry = pos[i3 + 1] - cy, rz = pos[i3 + 2] - cz;
+        force[i3]     += ay * rz - az * ry;
+        force[i3 + 1] += az * rx - ax * rz;
+        force[i3 + 2] += ax * ry - ay * rx;
       }
     }
   }
@@ -613,13 +615,63 @@ export class PhysicsEngine {
     this.bonds.length = count;
   }
 
+  /**
+   * Recompute connected components from the current bond graph using Union-Find.
+   * Called after each bond list rebuild so Move/Rotate forces are scoped to the
+   * picked atom's connected patch, not all atoms.
+   */
+  rebuildComponents() {
+    const n = this.n;
+    const parent = new Int32Array(n);
+    for (let i = 0; i < n; i++) parent[i] = i;
+
+    function find(x) {
+      while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+      return x;
+    }
+
+    // Union over current bond list
+    for (let b = 0; b < this.bonds.length; b++) {
+      const ra = find(this.bonds[b][0]), rb = find(this.bonds[b][1]);
+      if (ra !== rb) parent[ra] = rb;
+    }
+
+    // Group atoms by root
+    const rootToComp = new Map();
+    let compCount = 0;
+    if (!this.componentId || this.componentId.length !== n) {
+      this.componentId = new Int32Array(n);
+    }
+    this.components = [];
+
+    for (let i = 0; i < n; i++) {
+      const root = find(i);
+      if (!rootToComp.has(root)) {
+        rootToComp.set(root, compCount++);
+        this.components.push({ atoms: [], size: 0 });
+      }
+      const cid = rootToComp.get(root);
+      this.componentId[i] = cid;
+      this.components[cid].atoms.push(i);
+      this.components[cid].size++;
+    }
+
+    // Re-resolve active component if interaction is in progress
+    if (this.dragAtom >= 0 && (this.isTranslateMode || this.isRotateMode)) {
+      this.activeComponent = this.componentId[this.dragAtom];
+    }
+  }
+
   step() {
     for (let s = 0; s < STEPS_PER_FRAME; s++) {
       this.integrate(DT);
       this.stepCount++;
     }
     this.applyEnergyControl();
-    if (this.stepCount % 20 === 0) this.updateBondList();
+    if (this.stepCount % 20 === 0) {
+      this.updateBondList();
+      this.rebuildComponents();
+    }
   }
 
   // ─── External interaction API ───
@@ -628,6 +680,8 @@ export class PhysicsEngine {
     this.dragAtom = atomIndex;
     this.isRotateMode = false;
     this.isTranslateMode = true;
+    this.activeComponent = (this.componentId && atomIndex < this.n)
+      ? this.componentId[atomIndex] : -1;
     this.dragTarget[0] = this.pos[atomIndex * 3];
     this.dragTarget[1] = this.pos[atomIndex * 3 + 1];
     this.dragTarget[2] = this.pos[atomIndex * 3 + 2];
@@ -650,6 +704,8 @@ export class PhysicsEngine {
     this.dragAtom = atomIndex;
     this.isRotateMode = true;
     this.isTranslateMode = false;
+    this.activeComponent = (this.componentId && atomIndex < this.n)
+      ? this.componentId[atomIndex] : -1;
     this.dragTarget[0] = this.pos[atomIndex * 3];
     this.dragTarget[1] = this.pos[atomIndex * 3 + 1];
     this.dragTarget[2] = this.pos[atomIndex * 3 + 2];
@@ -665,6 +721,7 @@ export class PhysicsEngine {
     this.dragAtom = -1;
     this.isRotateMode = false;
     this.isTranslateMode = false;
+    this.activeComponent = -1;
   }
 
   applyImpulse(atomIndex, vx, vy) {
@@ -676,6 +733,7 @@ export class PhysicsEngine {
 
 
 
+  /** Returns whole-system COM (all atoms), not component-specific. */
   getCOM() {
     let cx = 0, cy = 0, cz = 0;
     for (let i = 0; i < this.n; i++) {
@@ -706,9 +764,12 @@ export class PhysicsEngine {
     this.dragAtom = -1;
     this.isRotateMode = false;
     this.isTranslateMode = false;
+    this.activeComponent = -1;
     this.stepCount = 0;
     this.keInitial = 0.1;
     this.computeForces();
+    this.updateBondList();
+    this.rebuildComponents();
   }
 
   // ─── User-adjustable parameters ───
