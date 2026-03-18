@@ -23,6 +23,8 @@ jobs:
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       # No build step needed — the page is pure static HTML + ES modules.
       # Three.js is loaded from CDN via importmap.
