@@ -30,7 +30,7 @@ python3 -m http.server 8000
 | Rotate | Ctrl+click atom, torque distributed to all atoms via inertia tensor |
 | Camera | Right-drag = orbit, scroll = zoom (OrbitControls, always active) |
 | Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame |
-| Rendering | MeshStandardMaterial (PBR), camera-relative 4-light rig, ViewHelper axes |
+| Rendering | MeshStandardMaterial (PBR), camera-relative 4-light rig, axis triad |
 | Themes | Dark (default) / Light |
 | Advanced | Adjustable drag strength, rotation strength sliders |
 | FPS | Real frame computation time displayed (not vsync rate) |
@@ -70,7 +70,7 @@ page/index.html
         ├── physics.js      → Tersoff forces, Verlet integration, drag/rotate
         ├── state-machine.js → interaction states (idle/hover/drag/rotate)
         ├── input.js        → mouse/touch → raycasting → state machine events
-        ├── renderer.js     → Three.js scene, materials, lighting, ViewHelper
+        ├── renderer.js     → Three.js scene, materials, lighting, axis triad
         ├── fps-monitor.js  → frame time measurement
         └── themes.js       → dark/light definitions
 ```
@@ -83,7 +83,7 @@ Each page module has defined ownership boundaries:
 |--------|------|----------|----------|
 | `config.js` | All tuning constants, thresholds, defaults | — | `CONFIG` object imported by all modules |
 | `physics.js` | Atom positions, velocities, forces, Tersoff computation | Drag/rotate targets from main.js | Positions, bonds, KE via getter methods |
-| `renderer.js` | Three.js scene, meshes, lighting, ViewHelper | Positions from physics, theme from main.js | Canvas element, atom mesh array for raycasting |
+| `renderer.js` | Three.js scene, meshes, lighting, axis triad | Positions from physics, theme from main.js | Canvas element, atom mesh array for raycasting |
 | `input.js` | Event handling, raycasting, screen-to-world projection | Mesh array + camera from renderer | Atom index + screen coords via callbacks |
 | `state-machine.js` | Interaction state transitions (IDLE→DRAG→IDLE etc.) | Pointer events from input.js | Commands dispatched to main.js |
 | `loader.js` | XYZ parsing, manifest fetching, bond topology | Library path from config | `{ atoms, bonds }` data |
@@ -97,7 +97,7 @@ Each page module has defined ownership boundaries:
 
 - Three.js v0.170 (CDN, ES modules via importmap)
 - OrbitControls for camera (right-click orbit, scroll zoom)
-- ViewHelper for XYZ axis orientation indicator
+- Custom axis triad (ArrowHelper + sprites, scissor-test viewport)
 - MeshStandardMaterial with roughness 0.7, metalness 0 (PBR)
 - Camera-relative 4-light rig (key/fill/rim/ambient)
 - No build step, no npm — single HTML + JS modules

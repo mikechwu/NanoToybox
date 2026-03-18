@@ -60,7 +60,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - Interactive page with drag/rotate/structure presets (`page/index.html`)
 - Camera-plane force projection (forces align with user's visual perspective)
 - Inertia-normalized rotation (consistent feel across molecule sizes)
-- ViewHelper axis indicator, dark/light themes, advanced settings panel
+- 3D axis triad indicator, dark/light themes, advanced settings panel
 
 ## Next Steps (Priority Order)
 

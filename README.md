@@ -38,7 +38,7 @@ The page loads relaxed carbon structures from a pre-computed library, then runs 
 | Rendering | Three.js v0.170, MeshStandardMaterial (PBR) |
 | Interaction | Raycasting + camera-plane projection |
 | Rotation | Torque via diagonal inertia tensor, inertia-normalized |
-| UI | Vanilla JS, glassmorphic panels, ViewHelper axes |
+| UI | Vanilla JS, glassmorphic panels, axis triad |
 
 ## Controls
 

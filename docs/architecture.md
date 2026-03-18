@@ -37,7 +37,7 @@ NanoToybox/
 │       ├── config.js             # Centralized page configuration (single source of truth)
 │       ├── main.js               # Entry point, session state, lifecycle, command dispatch
 │       ├── physics.js            # Tersoff force engine + interaction forces
-│       ├── renderer.js           # Three.js scene, PBR materials, ViewHelper axes
+│       ├── renderer.js           # Three.js scene, PBR materials, axis triad
 │       ├── input.js              # Mouse/touch input, raycasting, camera-plane projection
 │       ├── state-machine.js      # Interaction states (idle/hover/drag/rotate/camera)
 │       ├── loader.js             # Structure library loader + bond topology

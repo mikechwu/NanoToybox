@@ -7,7 +7,6 @@
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
 import { THEMES } from './themes.js';
 import { CONFIG } from './config.js';
 
@@ -38,7 +37,7 @@ export class Renderer {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
-    this.renderer.autoClear = false; // needed for ViewHelper overlay
+    this.renderer.autoClear = false; // needed for axis triad overlay
     this.container.appendChild(this.renderer.domElement);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -61,8 +60,9 @@ export class Renderer {
     this._defaultCamPos = new THREE.Vector3(0, 0, 15);
     this._defaultCamTarget = new THREE.Vector3(0, 0, 0);
 
-    // Axis orientation indicator
-    this.viewHelper = new ViewHelper(this.camera, this.renderer.domElement);
+    // Axis orientation triad — professional FEM/MD postprocessor style
+    // Rendered in a separate mini-viewport, synced to main camera rotation
+    this._initAxisTriad();
 
     window.addEventListener('resize', () => {
       const w = this.container.clientWidth || window.innerWidth;
@@ -367,15 +367,97 @@ export class Renderer {
     this.controls.update();
   }
 
+  /**
+   * Create a professional axis triad indicator (ParaView/OVITO style).
+   * Uses 3D ArrowHelpers with X/Y/Z labels in a separate orthographic
+   * scene, rendered via scissor test in a corner mini-viewport.
+   */
+  _initAxisTriad() {
+    this._axisScene = new THREE.Scene();
+    this._axisCamera = new THREE.OrthographicCamera(-1.8, 1.8, 1.8, -1.8, 0.1, 10);
+    this._axisCamera.position.set(0, 0, 4);
+    this._axisCamera.lookAt(0, 0, 0);
+
+    const len = 1.0;
+    const headLen = 0.22;
+    const headW = 0.10;
+
+    // 3D arrows — standard convention: X=red, Y=green, Z=blue
+    const axX = new THREE.ArrowHelper(
+      new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0),
+      len, 0xe05050, headLen, headW
+    );
+    const axY = new THREE.ArrowHelper(
+      new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0),
+      len, 0x50c050, headLen, headW
+    );
+    const axZ = new THREE.ArrowHelper(
+      new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0),
+      len, 0x5080e0, headLen, headW
+    );
+    this._axisScene.add(axX, axY, axZ);
+
+    // Text labels at arrow tips using sprites (no font loading needed)
+    const makeLabel = (text, color, pos) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64; canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      ctx.font = 'bold 48px -apple-system, Helvetica, Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = color;
+      ctx.fillText(text, 32, 32);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.minFilter = THREE.LinearFilter;
+      const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
+      const sprite = new THREE.Sprite(mat);
+      sprite.position.copy(pos);
+      sprite.scale.set(0.35, 0.35, 1);
+      return sprite;
+    };
+
+    this._axisScene.add(
+      makeLabel('X', '#e05050', new THREE.Vector3(1.35, 0, 0)),
+      makeLabel('Y', '#50c050', new THREE.Vector3(0, 1.35, 0)),
+      makeLabel('Z', '#5080e0', new THREE.Vector3(0, 0, 1.35))
+    );
+
+    // Ambient light for the axis scene
+    this._axisScene.add(new THREE.AmbientLight(0xffffff, 2.0));
+
+    // Mini-viewport size (CSS pixels)
+    this._axisSize = 120;
+  }
+
   render() {
     this.controls.update();
 
-    // Must clear manually because autoClear is off (needed for ViewHelper overlay)
+    // Must clear manually because autoClear is off (needed for axis overlay)
     this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
 
-    // Render the axis orientation helper on top without clearing the main scene
-    this.viewHelper.render(this.renderer);
+    // ── Axis triad overlay ──
+    // Sync axis camera rotation with main camera (rotation only, no translation)
+    this._axisCamera.quaternion.copy(this.camera.quaternion);
+    this._axisCamera.position.set(0, 0, 4).applyQuaternion(this._axisCamera.quaternion);
+    this._axisCamera.lookAt(0, 0, 0);
+
+    // Render in bottom-left corner via scissor test
+    const px = window.devicePixelRatio || 1;
+    const size = this._axisSize * px;
+    const canvasH = this.renderer.domElement.height;
+    // Position: bottom-left, above the controls bar (~50px from bottom)
+    const offsetX = 8 * px;
+    const offsetY = 52 * px;
+
+    this.renderer.setViewport(offsetX, offsetY, size, size);
+    this.renderer.setScissor(offsetX, offsetY, size, size);
+    this.renderer.setScissorTest(true);
+    this.renderer.clear(false, true, false); // clear depth only
+    this.renderer.render(this._axisScene, this._axisCamera);
+    this.renderer.setScissorTest(false);
+    // Restore full viewport
+    this.renderer.setViewport(0, 0, this.renderer.domElement.width, this.renderer.domElement.height);
   }
 
   getCanvas() {
