@@ -111,32 +111,34 @@ async function init() {
     document.getElementById('help').style.display = 'none';
   });
 
+  // Slider helper — binds both 'input' (desktop) and 'change' (iOS Safari)
+  function bindSlider(id, handler) {
+    const el = document.getElementById(id);
+    el.addEventListener('input', handler);
+    el.addEventListener('change', handler); // iOS Safari fallback
+    return el;
+  }
+
   // Drag strength slider
-  const dragSlider = document.getElementById('drag-strength');
   const dragVal = document.getElementById('drag-val');
-  dragSlider.addEventListener('input', () => {
-    const v = parseFloat(dragSlider.value);
+  bindSlider('drag-strength', (e) => {
+    const v = parseFloat(e.target.value);
     physics.setDragStrength(v);
     dragVal.textContent = v.toFixed(1);
   });
 
   // Rotate strength slider
-  const rotSlider = document.getElementById('rotate-strength');
   const rotVal = document.getElementById('rotate-val');
-  rotSlider.addEventListener('input', () => {
-    const v = parseFloat(rotSlider.value);
+  bindSlider('rotate-strength', (e) => {
+    const v = parseFloat(e.target.value);
     physics.setRotateStrength(v);
     rotVal.textContent = v.toFixed(0);
   });
 
-  // Damping slider — cubic log scale for perceptually linear control
-  // Slider 0 → damping 0 (NVE, no energy drain)
-  // Slider 50 → damping 0.0625 (mild friction)
-  // Slider 100 → damping 0.5 (heavy drag)
-  const dampSlider = document.getElementById('damping-slider');
+  // Damping slider — cubic scale for perceptually linear control
   const dampVal = document.getElementById('damping-val');
-  dampSlider.addEventListener('input', () => {
-    const t = parseFloat(dampSlider.value) / 100; // 0..1
+  bindSlider('damping-slider', (e) => {
+    const t = parseFloat(e.target.value) / 100; // 0..1
     const damping = t === 0 ? 0 : 0.5 * t * t * t; // cubic: 0 at 0, 0.5 at 1
     physics.setDamping(damping);
     if (damping === 0) {
