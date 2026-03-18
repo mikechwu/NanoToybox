@@ -61,7 +61,7 @@ export class Renderer {
     this._defaultCamPos = new THREE.Vector3(0, 0, 15);
     this._defaultCamTarget = new THREE.Vector3(0, 0, 0);
 
-    // Axis orientation indicator (bottom-right corner)
+    // Axis orientation indicator
     this.viewHelper = new ViewHelper(this.camera, this.renderer.domElement);
 
     window.addEventListener('resize', () => {
