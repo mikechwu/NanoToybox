@@ -24,6 +24,7 @@ export class InputManager {
     this.isDragging = false;
     this.isCamera = false;
     this.isRotating = false;  // 2-finger rotation on mobile
+    this._touchedAtoms = [];  // atom indices touched during rotation
 
     this._bindEvents();
   }
@@ -36,6 +37,7 @@ export class InputManager {
       this.isRotating = false;
       this.controls.enabled = true;
     }
+    this._touchedAtoms = [];
   }
 
   _screenToNDC(x, y) {
@@ -193,6 +195,7 @@ export class InputManager {
         this.isRotating = false;
         this.controls.enabled = true;
       }
+      this._touchedAtoms = [];
     };
     window.addEventListener('blur', this._handlers.blur);
   }
@@ -274,8 +277,11 @@ export class InputManager {
 
   _onTouchStart(e) {
     if (e.touches.length >= 2) {
-      // Already rotating — ignore additional fingers
-      if (this.isRotating) return;
+      // Already rotating — allow additional fingers to add atoms to selection
+      if (this.isRotating) {
+        this._addTouchedAtoms(e.touches);
+        return;
+      }
 
       // Cancel any active 1-finger drag first
       if (this.isDragging) {
@@ -292,13 +298,16 @@ export class InputManager {
         e.preventDefault();
         this.controls.enabled = false;
         this.isRotating = true;
+        this._touchedAtoms = [atom0, atom1];
         const avgX = (t0.clientX + t1.clientX) / 2;
         const avgY = (t0.clientY + t1.clientY) / 2;
         try {
           this.cb.onPointerDown?.(atom0, avgX, avgY, true);
+          this.cb.onTouchAtoms?.(this._touchedAtoms);
         } catch (err) {
           this.isRotating = false;
           this.controls.enabled = true;
+          this._touchedAtoms = [];
           throw err;
         }
       }
@@ -316,6 +325,24 @@ export class InputManager {
       this.cb.onPointerDown?.(atomIdx, touch.clientX, touch.clientY, false);
     }
     // If no atom hit, 1-finger on empty does nothing (2-finger handles camera)
+  }
+
+  /**
+   * Raycast all current touches and add any new atom hits to the selection.
+   * Called when additional fingers land during an active rotation.
+   */
+  _addTouchedAtoms(touches) {
+    let changed = false;
+    for (let i = 0; i < touches.length; i++) {
+      const atom = this._raycastAtom(touches[i].clientX, touches[i].clientY);
+      if (atom >= 0 && !this._touchedAtoms.includes(atom)) {
+        this._touchedAtoms.push(atom);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.cb.onTouchAtoms?.(this._touchedAtoms);
+    }
   }
 
   _onTouchMove(e) {
@@ -339,7 +366,13 @@ export class InputManager {
     if (this.isRotating && e.touches.length < 2) {
       this.isRotating = false;
       this.controls.enabled = true;
+      this._touchedAtoms = [];
       this.cb.onPointerUp?.();
+      return;
+    }
+    // Finger lifted during 3+ finger rotation — re-sync highlights
+    if (this.isRotating && e.touches.length >= 2) {
+      this._resyncTouchedAtoms(e.touches);
       return;
     }
     if (e.touches.length === 0) {
@@ -348,6 +381,22 @@ export class InputManager {
         this.cb.onPointerUp?.();
       }
     }
+  }
+
+  /**
+   * Re-raycast surviving touches and update the touched atoms list.
+   * Keeps the primary rotation atom (index 0) even if its finger moved.
+   */
+  _resyncTouchedAtoms(touches) {
+    const primary = this._touchedAtoms[0];
+    const surviving = new Set();
+    if (primary >= 0) surviving.add(primary);
+    for (let i = 0; i < touches.length; i++) {
+      const atom = this._raycastAtom(touches[i].clientX, touches[i].clientY);
+      if (atom >= 0) surviving.add(atom);
+    }
+    this._touchedAtoms = [...surviving];
+    this.cb.onTouchAtoms?.(this._touchedAtoms);
   }
 
   /**
@@ -363,5 +412,6 @@ export class InputManager {
       this.isRotating = false;
       this.controls.enabled = true;
     }
+    this._touchedAtoms = [];
   }
 }

@@ -17,6 +17,7 @@ export class Renderer {
     this.bondMeshes = [];
     this._activeBonds = 0;
     this.highlightAtom = -1;
+    this._extraHighlights = [];  // additional highlighted atom indices (multi-touch)
     this.forceLine = null;
     this.currentTheme = 'dark';
 
@@ -126,7 +127,8 @@ export class Renderer {
   }
 
   loadStructure(atoms, bonds) {
-    // Dispose cloned highlight material before clearing meshes
+    // Dispose cloned highlight materials before clearing meshes
+    this.clearExtraHighlights();
     if (this.highlightAtom >= 0 && this.highlightAtom < this.atomMeshes.length) {
       const hm = this.atomMeshes[this.highlightAtom];
       if (hm.material !== this._atomMat) hm.material.dispose();
@@ -284,6 +286,40 @@ export class Renderer {
     }
   }
 
+  /**
+   * Highlight additional atoms beyond the primary (for multi-touch rotation).
+   * Skips the primary highlightAtom (already handled by setHighlight).
+   */
+  setExtraHighlights(indices) {
+    this.clearExtraHighlights();
+    for (const idx of indices) {
+      if (idx < 0 || idx >= this.atomMeshes.length) continue;
+      if (idx === this.highlightAtom) continue;  // already highlighted
+      const mesh = this.atomMeshes[idx];
+      if (mesh.material === this._atomMat) {
+        mesh.material = this._atomMat.clone();
+      }
+      mesh.material.emissive.set(0x335544);
+      mesh.material.emissiveIntensity = 1.0;
+      mesh.scale.setScalar(1.15);
+      this._extraHighlights.push(idx);
+    }
+  }
+
+  clearExtraHighlights() {
+    for (const idx of this._extraHighlights) {
+      if (idx < 0 || idx >= this.atomMeshes.length) continue;
+      if (idx === this.highlightAtom) continue;  // managed by setHighlight
+      const mesh = this.atomMeshes[idx];
+      if (mesh.material !== this._atomMat) {
+        mesh.material.dispose();
+        mesh.material = this._atomMat;
+      }
+      mesh.scale.setScalar(1.0);
+    }
+    this._extraHighlights = [];
+  }
+
   showForceLine(fromAtomIndex, toWorldX, toWorldY, toWorldZ) {
     if (fromAtomIndex < 0) return;
     const atomPos = this.atomMeshes[fromAtomIndex].position;
@@ -337,6 +373,7 @@ export class Renderer {
   }
 
   clearFeedback() {
+    this.clearExtraHighlights();
     this.setHighlight(-1);
     this.hideForceLine();
   }
@@ -356,10 +393,13 @@ export class Renderer {
 
     if (this._atomMat) this._atomMat.color.set(t.atom);
     if (this._bondMat) this._bondMat.color.set(t.bond);
-    // Update cloned highlight material if active
-    if (this.highlightAtom >= 0 && this.highlightAtom < this.atomMeshes.length) {
-      const m = this.atomMeshes[this.highlightAtom];
-      if (m.material !== this._atomMat) m.material.color.set(t.atom);
+    // Update cloned highlight materials (primary + extras)
+    const highlighted = [this.highlightAtom, ...this._extraHighlights];
+    for (const idx of highlighted) {
+      if (idx >= 0 && idx < this.atomMeshes.length) {
+        const m = this.atomMeshes[idx];
+        if (m.material !== this._atomMat) m.material.color.set(t.atom);
+      }
     }
   }
 

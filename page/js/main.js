@@ -185,6 +185,9 @@ async function loadSelected(filename) {
 function cleanupCurrentSession() {
   handleCommand(stateMachine.forceIdle());
   renderer.clearFeedback();
+  // Reset input state before structure swap to prevent stale touch
+  // atoms from being applied to the new structure's meshes
+  if (inputManager) inputManager.updateAtomMeshes(renderer.atomMeshes);
 }
 
 function initPhysicsSession(atoms, bonds) {
@@ -230,6 +233,9 @@ function createInputManager() {
       onPointerUp: () => {
         const cmd = stateMachine.onPointerUp();
         if (cmd) handleCommand(cmd);
+      },
+      onTouchAtoms: (atomIndices) => {
+        renderer.setExtraHighlights(atomIndices);
       },
     }
   );

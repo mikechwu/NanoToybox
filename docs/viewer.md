@@ -48,7 +48,8 @@ python3 -m http.server 8000
 | Gesture (Mobile) | Action |
 |-------------------|--------|
 | 1-finger drag on atom | Drag atom |
-| 2 fingers on 2 atoms | Rotate molecule (torque via inertia tensor) |
+| 2 fingers on 2 atoms | Rotate molecule (both atoms highlighted) |
+| 3+ fingers on atoms | Select additional atoms (highlighted, rotation continues) |
 | 2-finger pinch | Zoom |
 | 2-finger drag | Pan camera |
 
