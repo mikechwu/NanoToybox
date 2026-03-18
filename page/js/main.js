@@ -129,6 +129,25 @@ async function init() {
     rotVal.textContent = v.toFixed(0);
   });
 
+  // Damping slider — cubic log scale for perceptually linear control
+  // Slider 0 → damping 0 (NVE, no energy drain)
+  // Slider 50 → damping 0.0625 (mild friction)
+  // Slider 100 → damping 0.5 (heavy drag)
+  const dampSlider = document.getElementById('damping-slider');
+  const dampVal = document.getElementById('damping-val');
+  dampSlider.addEventListener('input', () => {
+    const t = parseFloat(dampSlider.value) / 100; // 0..1
+    const damping = t === 0 ? 0 : 0.5 * t * t * t; // cubic: 0 at 0, 0.5 at 1
+    physics.setDamping(damping);
+    if (damping === 0) {
+      dampVal.textContent = 'None';
+    } else if (damping < 0.001) {
+      dampVal.textContent = damping.toExponential(0);
+    } else {
+      dampVal.textContent = damping.toFixed(3);
+    }
+  });
+
   // Start frame loop
   requestAnimationFrame(frameLoop);
 }

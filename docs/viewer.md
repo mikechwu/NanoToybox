@@ -32,7 +32,7 @@ python3 -m http.server 8000
 | Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame |
 | Rendering | MeshStandardMaterial (PBR), camera-relative 4-light rig, axis triad |
 | Themes | Dark (default) / Light |
-| Advanced | Adjustable drag strength, rotation strength sliders |
+| Advanced | Adjustable drag strength, rotation strength, and damping (0 = NVE to 0.5 = heavy) |
 | FPS | Real frame computation time displayed (not vsync rate) |
 | Reset | Reset structure (reload atoms) and Reset View (restore camera) buttons |
 
@@ -58,8 +58,10 @@ The page runs a full analytical Tersoff (1988) potential in JavaScript:
 - Optimized with flat `Float64Array` caches (no Map overhead)
 - Neighbor list rebuilt every 10 steps
 - Velocity Verlet integration with proper eV/Å → Å/fs² unit conversion
+- **NVE by default** — no artificial damping; energy injected by user persists as thermal vibration. User-adjustable damping available (0 = NVE, up to 0.5 = heavy viscous drag, cubic slider scale)
 - Drag: spring force `F = K_DRAG × (target - atom)` in camera-perpendicular plane
-- Rotation: spring force → torque → angular acceleration via diagonal inertia tensor → distributed tangential forces on all atoms. Inertia-normalized so `K_ROTATE` feels consistent across molecule sizes.
+- Rotation: spring force → torque → angular acceleration via diagonal inertia tensor → distributed tangential forces on all atoms. Inertia-normalized so `K_ROTATE` feels consistent across molecule sizes
+- Safety guards: per-atom velocity hard cap and total KE cap (only trigger on extreme inputs)
 
 ### Architecture
 
@@ -82,7 +84,7 @@ Each page module has defined ownership boundaries:
 | Module | Owns | Receives | Provides |
 |--------|------|----------|----------|
 | `config.js` | All tuning constants, thresholds, defaults | — | `CONFIG` object imported by all modules |
-| `physics.js` | Atom positions, velocities, forces, Tersoff computation | Drag/rotate targets from main.js | Positions, bonds, KE via getter methods |
+| `physics.js` | Atom positions, velocities, forces, Tersoff computation | Drag/rotate targets, damping setting from main.js | Positions, bonds, KE via getter methods |
 | `renderer.js` | Three.js scene, meshes, lighting, axis triad | Positions from physics, theme from main.js | Canvas element, atom mesh array for raycasting |
 | `input.js` | Event handling, raycasting, screen-to-world projection | Mesh array + camera from renderer | Atom index + screen coords via callbacks |
 | `state-machine.js` | Interaction state transitions (IDLE→DRAG→IDLE etc.) | Pointer events from input.js | Commands dispatched to main.js |

@@ -38,7 +38,7 @@ export const CONFIG = {
     kRotateDefault: 5.0,    // eV/Å² — rotation spring constant
     vHardMax: 0.15,         // Å/fs — per-atom velocity cap
     keCapMult: 500.0,       // KE cap multiplier
-    mildDamping: 0.001,     // per-frame velocity damping
+    dampingDefault: 0.0,     // per-frame velocity damping (0 = NVE, no energy drain)
     fMax: 50.0,             // eV/Å — max force per atom
     iRef: 750.0,            // Å² — reference inertia (C60)
   },

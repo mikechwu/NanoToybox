@@ -37,7 +37,6 @@ const INV_2N = -1.0 / (2.0 * T_N);
 const F_MAX = CONFIG.physics.fMax;
 const V_HARD_MAX = CONFIG.physics.vHardMax;
 const KE_CAP_MULT = CONFIG.physics.keCapMult;
-const MILD_DAMPING = CONFIG.physics.mildDamping;
 
 // ─── Integration ───
 const DT = CONFIG.physics.dt;
@@ -323,6 +322,7 @@ export class PhysicsEngine {
     this.stepCount = 0;
     this.kDrag = CONFIG.physics.kDragDefault;
     this.kRotate = CONFIG.physics.kRotateDefault;
+    this.damping = CONFIG.physics.dampingDefault;
 
     // Pre-allocated cache buffers (resized in init)
     this._dist = null;   // Float64Array[n*n] — distance cache
@@ -518,8 +518,10 @@ export class PhysicsEngine {
   }
 
   applyEnergyControl() {
-    const factor = 1.0 - MILD_DAMPING;
-    for (let i = 0; i < this.n * 3; i++) this.vel[i] *= factor;
+    if (this.damping > 0) {
+      const factor = 1.0 - this.damping;
+      for (let i = 0; i < this.n * 3; i++) this.vel[i] *= factor;
+    }
 
     for (let i = 0; i < this.n; i++) {
       const ix = i * 3;
@@ -644,4 +646,6 @@ export class PhysicsEngine {
   getDragStrength() { return this.kDrag; }
   setRotateStrength(val) { this.kRotate = val; }
   getRotateStrength() { return this.kRotate; }
+  setDamping(val) { this.damping = val; }
+  getDamping() { return this.damping; }
 }

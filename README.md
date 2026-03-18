@@ -24,6 +24,7 @@ Or visit the live demo at [mikechwu.github.io/NanoToybox](https://mikechwu.githu
 - **Rotate molecules** — Ctrl+click; torque via inertia tensor, distributed to all atoms
 - **15 structure presets** — C60, C180, C540, C720, carbon nanotubes (armchair/zigzag/chiral), graphene, diamond
 - **3D rendering** — PBR materials, camera-relative lighting, XYZ orientation axes
+- **NVE dynamics by default** — energy-conserving; molecules vibrate indefinitely after interaction. Adjustable damping slider (0 to heavy)
 - **Dark/Light themes** — full UI adaptation
 - **Works on desktop and mobile** — mouse and touch interaction
 - **No build step** — pure ES modules loaded via importmap from CDN

@@ -117,7 +117,9 @@ python3 -m http.server 8000
 | 8 | Reset button | Structure returns to initial relaxed geometry |
 | 9 | Reset View button | Camera returns to default front view |
 | 10 | Theme toggle | Dark/light switch — all UI elements adapt |
-| 11 | Advanced panel | Sliders adjust drag/rotation strength in real-time |
+| 11 | Advanced panel | Sliders adjust drag strength, rotation strength, and damping in real-time |
+| 11a | Damping at 0 | After drag/rotate, molecule vibrates indefinitely (NVE) |
+| 11b | Damping raised | Vibration decays visibly; at max, motion stops almost instantly |
 | 12 | Large structure (C720) | Loads without crash, interaction works at reduced FPS |
 | 13 | XYZ axes indicator | Visible in corner, rotates with camera |
 | 14 | Hint text | Fades on first atom interaction |
