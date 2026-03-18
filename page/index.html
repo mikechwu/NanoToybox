@@ -9,10 +9,10 @@
 body {
   background: #181820; color: #e8e8e8;
   font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
-  overflow: hidden; touch-action: none;
+  overflow: hidden;
 }
 #container { width: 100vw; height: 100vh; position: relative; }
-canvas { display: block; }
+canvas { display: block; touch-action: none; }
 
 #info {
   position: absolute; top: 12px; left: 12px;
@@ -44,12 +44,13 @@ canvas { display: block; }
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   font-size: 12px; z-index: 10;
   border-top: 1px solid rgba(255,255,255,0.08);
+  touch-action: auto; /* allow touch on buttons/selects on iPad */
 }
 #controls button, #controls select {
   background: rgba(255,255,255,0.08); color: #ccc;
   border: 1px solid rgba(255,255,255,0.12);
-  padding: 5px 12px; cursor: pointer; font-family: inherit; font-size: 12px;
-  border-radius: 4px;
+  padding: 8px 14px; cursor: pointer; font-family: inherit; font-size: 13px;
+  border-radius: 4px; min-height: 36px;
 }
 #controls button:hover, #controls select:hover {
   background: rgba(255,255,255,0.15); color: #fff;
@@ -70,7 +71,7 @@ canvas { display: block; }
   <div id="help" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
     background:rgba(20,20,28,0.95); backdrop-filter:blur(12px); padding:24px 32px;
     border-radius:10px; border:1px solid rgba(255,255,255,0.1); z-index:30;
-    font-size:13px; line-height:2; max-width:420px; color:#ccc;">
+    font-size:13px; line-height:2; max-width:420px; color:#ccc; touch-action:auto;">
     <div style="font-size:15px; font-weight:600; margin-bottom:8px; color:#eee;">Controls</div>
     <div style="margin-bottom:12px; color:#8fd8b0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Desktop (Mouse)</div>
     <div><b>Left-drag on atom</b> — drag atom (spring force)</div>
@@ -104,7 +105,7 @@ canvas { display: block; }
   <!-- Advanced settings panel -->
   <div id="advanced-panel" style="display:none; position:absolute; bottom:44px; right:12px;
     background:rgba(20,20,28,0.95); backdrop-filter:blur(12px);
-    padding:16px 20px; border-radius:8px; z-index:15;
+    padding:16px 20px; border-radius:8px; z-index:15; touch-action:auto;
     border:1px solid rgba(255,255,255,0.08); width:260px; font-size:12px;">
     <div style="font-weight:600; font-size:13px; margin-bottom:12px; color:#eee;">Interaction Settings</div>
 
