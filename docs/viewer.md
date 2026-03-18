@@ -75,6 +75,24 @@ page/index.html
         └── themes.js       → dark/light definitions
 ```
 
+### Module Contracts
+
+Each page module has defined ownership boundaries:
+
+| Module | Owns | Receives | Provides |
+|--------|------|----------|----------|
+| `config.js` | All tuning constants, thresholds, defaults | — | `CONFIG` object imported by all modules |
+| `physics.js` | Atom positions, velocities, forces, Tersoff computation | Drag/rotate targets from main.js | Positions, bonds, KE via getter methods |
+| `renderer.js` | Three.js scene, meshes, lighting, ViewHelper | Positions from physics, theme from main.js | Canvas element, atom mesh array for raycasting |
+| `input.js` | Event handling, raycasting, screen-to-world projection | Mesh array + camera from renderer | Atom index + screen coords via callbacks |
+| `state-machine.js` | Interaction state transitions (IDLE→DRAG→IDLE etc.) | Pointer events from input.js | Commands dispatched to main.js |
+| `loader.js` | XYZ parsing, manifest fetching, bond topology | Library path from config | `{ atoms, bonds }` data |
+| `main.js` | App lifecycle, session state, command dispatch, UI wiring | Everything above | Orchestration (no direct exports) |
+| `fps-monitor.js` | Frame time measurement | begin/end calls from main.js | FPS display text |
+| `themes.js` | Color/lighting definitions | — | `THEMES` object |
+
+**Key rule:** modules import from `config.js` for shared constants. They do NOT import from each other's internals. Data flows through `main.js` orchestration.
+
 ### Technology
 
 - Three.js v0.170 (CDN, ES modules via importmap)

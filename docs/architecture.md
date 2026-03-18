@@ -34,8 +34,9 @@ NanoToybox/
 ├── page/                         # Interactive carbon playground (real-time simulation)
 │   ├── index.html                # HTML shell, UI controls, advanced settings panel
 │   └── js/
-│       ├── main.js               # Entry point, frame loop, command dispatch
-│       ├── physics.js            # Tersoff force engine (full analytical, optimized JS)
+│       ├── config.js             # Centralized page configuration (single source of truth)
+│       ├── main.js               # Entry point, session state, lifecycle, command dispatch
+│       ├── physics.js            # Tersoff force engine + interaction forces
 │       ├── renderer.js           # Three.js scene, PBR materials, ViewHelper axes
 │       ├── input.js              # Mouse/touch input, raycasting, camera-plane projection
 │       ├── state-machine.js      # Interaction states (idle/hover/drag/rotate/camera)
@@ -96,6 +97,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 3. **No periodic boundaries** — all structures are finite/free-standing (simplifies force calculation)
 4. **XYZ format throughout** — human-readable, viewer-compatible, ASE-compatible
 5. **Analytical first, ML later** — ML explored and deferred; analytical is faster for <1000 atoms
+6. **Centralized page config** — all tuning constants, thresholds, and defaults in `page/js/config.js`; no scattered magic numbers
 
 ## External Dependencies
 

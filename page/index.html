@@ -84,7 +84,7 @@ canvas { display: block; }
     <div><b>2-finger pinch</b> — zoom</div>
     <div><b>2-finger drag</b> — pan camera</div>
     <div style="margin-top:16px; text-align:right;">
-      <button onclick="document.getElementById('help').style.display='none'"
+      <button id="btn-help-close"
         style="background:rgba(255,255,255,0.1); color:#ccc; border:1px solid rgba(255,255,255,0.15);
         padding:6px 18px; border-radius:4px; cursor:pointer; font-size:12px;">Close</button>
     </div>
@@ -98,7 +98,7 @@ canvas { display: block; }
     <button id="theme-toggle">Theme</button>
     <div class="ctrl-sep"></div>
     <button id="btn-advanced">Advanced</button>
-    <button onclick="document.getElementById('help').style.display='block'">?</button>
+    <button id="btn-help-open">?</button>
   </div>
 
   <!-- Advanced settings panel -->

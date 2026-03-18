@@ -10,6 +10,7 @@
  * 3. Inlined cutoff/force functions (avoids function call overhead)
  * 4. Neighbor list rebuilt every 10 steps (not every step)
  */
+import { CONFIG } from './config.js';
 
 // ─── Tersoff parameters for carbon (1988) ───
 const LAMBDA1 = 3.4879;
@@ -33,20 +34,278 @@ const HALF_PI_OVER_D = Math.PI / (2 * D_CUT);
 const INV_2N = -1.0 / (2.0 * T_N);
 
 // ─── Interaction parameters ───
-// User-adjustable spring constants (set via setDragStrength / setRotateStrength)
-let K_DRAG = 2.0;             // Drag spring — soft so Tersoff bonds resist before breaking
-let K_ROTATE = 5.0;           // Rotation spring — stronger for responsive spinning
-const F_MAX = 50.0;
-const V_HARD_MAX = 0.15;      // Increased: allows more energetic interaction
-const KE_CAP_MULT = 500.0;    // Rotation of C60 can inject ~200 eV
-const MILD_DAMPING = 0.001;
+const F_MAX = CONFIG.physics.fMax;
+const V_HARD_MAX = CONFIG.physics.vHardMax;
+const KE_CAP_MULT = CONFIG.physics.keCapMult;
+const MILD_DAMPING = CONFIG.physics.mildDamping;
 
 // ─── Integration ───
-const DT = 0.5;
-const STEPS_PER_FRAME = 4;
+const DT = CONFIG.physics.dt;
+const STEPS_PER_FRAME = CONFIG.physics.stepsPerFrame;
 
 // ─── Unit conversion ───
 const ACC_FACTOR = 1.602176634e-29 / 1.9944235e-26;
+
+/**
+ * Standalone Tersoff force kernel — pure science, no UX dependencies.
+ *
+ * This function computes Tersoff (1988) interatomic forces for carbon.
+ * It reads positions and writes forces. It does not know about drag,
+ * rotation, clamping, or energy control.
+ *
+ * Extracted as a standalone function so it can be replaced with a
+ * Wasm implementation without touching the interaction/runtime layer.
+ *
+ * @param {Float64Array} pos - atom positions [x0,y0,z0, x1,y1,z1, ...]
+ * @param {Float64Array} force - output forces (accumulated, not zeroed here)
+ * @param {Array[]} nl - neighbor list (nl[i] = [j, k, ...])
+ * @param {number} n - number of atoms
+ * @param {Float64Array} distBuf - pre-allocated distance cache [n*n]
+ * @param {Float64Array} rhatBuf - pre-allocated unit vector cache [n*n*3]
+ */
+function computeTersoffForces(pos, force, nl, n, distBuf, rhatBuf) {
+  const p = pos;
+  const f = force;
+  const dist = distBuf;
+  const rhat = rhatBuf;
+
+  // ─── Precompute distances and unit vectors into flat arrays ───
+  dist.fill(0);
+  for (let i = 0; i < n; i++) {
+    const ix = i * 3;
+    const ni = nl[i];
+    for (let qi = 0; qi < ni.length; qi++) {
+      const j = ni[qi];
+      if (j <= i) continue;
+      const jx = j * 3;
+      const dx = p[jx] - p[ix];
+      const dy = p[jx + 1] - p[ix + 1];
+      const dz = p[jx + 2] - p[ix + 2];
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+      const kij = i * n + j;
+      const kji = j * n + i;
+      dist[kij] = d;
+      dist[kji] = d;
+
+      if (d > 1e-10) {
+        const inv = 1.0 / d;
+        const r3ij = kij * 3;
+        const r3ji = kji * 3;
+        rhat[r3ij] = dx * inv;
+        rhat[r3ij + 1] = dy * inv;
+        rhat[r3ij + 2] = dz * inv;
+        rhat[r3ji] = -dx * inv;
+        rhat[r3ji + 1] = -dy * inv;
+        rhat[r3ji + 2] = -dz * inv;
+      }
+    }
+  }
+
+  // ─── Main force loop ───
+  for (let i = 0; i < n; i++) {
+    const ni = nl[i];
+    for (let qi = 0; qi < ni.length; qi++) {
+      const j = ni[qi];
+      if (j <= i) continue;
+
+      const kij = i * n + j;
+      const r_ij = dist[kij];
+      if (r_ij >= R_MAX || r_ij < 1e-10) continue;
+
+      const r3ij = kij * 3;
+      const rh_ij0 = rhat[r3ij], rh_ij1 = rhat[r3ij + 1], rh_ij2 = rhat[r3ij + 2];
+
+      // Inline cutoff
+      let fc_ij, dfc_ij;
+      if (r_ij < R_CUT - D_CUT) { fc_ij = 1.0; dfc_ij = 0.0; }
+      else if (r_ij > R_MAX) { fc_ij = 0.0; dfc_ij = 0.0; }
+      else {
+        const arg = HALF_PI_OVER_D * (r_ij - R_CUT);
+        fc_ij = 0.5 - 0.5 * Math.sin(arg);
+        dfc_ij = -0.5 * Math.cos(arg) * HALF_PI_OVER_D;
+      }
+
+      const expL1 = Math.exp(-LAMBDA1 * r_ij);
+      const expL2 = Math.exp(-LAMBDA2 * r_ij);
+      const fR_ij = T_A * expL1;
+      const dfR_ij = -LAMBDA1 * fR_ij;
+      const fA_ij = -T_B * expL2;
+      const dfA_ij = LAMBDA2 * T_B * expL2;
+
+      // ─── Compute zeta_ij ───
+      let zeta_ij = 0.0;
+      for (let qk = 0; qk < ni.length; qk++) {
+        const k = ni[qk];
+        if (k === j) continue;
+        const kik = i * n + k;
+        const r_ik = dist[kik];
+        if (r_ik === 0 || r_ik >= R_MAX) continue;
+
+        let fc_ik;
+        if (r_ik < R_CUT - D_CUT) fc_ik = 1.0;
+        else if (r_ik > R_MAX) fc_ik = 0.0;
+        else fc_ik = 0.5 - 0.5 * Math.sin(HALF_PI_OVER_D * (r_ik - R_CUT));
+
+        const r3ik = kik * 3;
+        let cosT = rh_ij0 * rhat[r3ik] + rh_ij1 * rhat[r3ik + 1] + rh_ij2 * rhat[r3ik + 2];
+        if (cosT > 1) cosT = 1; else if (cosT < -1) cosT = -1;
+
+        const hmc = T_H - cosT;
+        zeta_ij += fc_ik * (1.0 + C2_D2 - C2 / (D2 + hmc * hmc));
+      }
+
+      // ─── Compute zeta_ji ───
+      let zeta_ji = 0.0;
+      const kji = j * n + i;
+      const r3ji = kji * 3;
+      const rh_ji0 = rhat[r3ji], rh_ji1 = rhat[r3ji + 1], rh_ji2 = rhat[r3ji + 2];
+      const nj = nl[j];
+
+      for (let qk = 0; qk < nj.length; qk++) {
+        const k = nj[qk];
+        if (k === i) continue;
+        const kjk = j * n + k;
+        const r_jk = dist[kjk];
+        if (r_jk === 0 || r_jk >= R_MAX) continue;
+
+        let fc_jk;
+        if (r_jk < R_CUT - D_CUT) fc_jk = 1.0;
+        else if (r_jk > R_MAX) fc_jk = 0.0;
+        else fc_jk = 0.5 - 0.5 * Math.sin(HALF_PI_OVER_D * (r_jk - R_CUT));
+
+        const r3jk = kjk * 3;
+        let cosT = rh_ji0 * rhat[r3jk] + rh_ji1 * rhat[r3jk + 1] + rh_ji2 * rhat[r3jk + 2];
+        if (cosT > 1) cosT = 1; else if (cosT < -1) cosT = -1;
+
+        const hmc = T_H - cosT;
+        zeta_ji += fc_jk * (1.0 + C2_D2 - C2 / (D2 + hmc * hmc));
+      }
+
+      // ─── Bond orders ───
+      const bz_ij = BETA * zeta_ij;
+      const bij = bz_ij > 0 ? Math.pow(1.0 + Math.pow(bz_ij, T_N), INV_2N) : 1.0;
+      const bz_ji = BETA * zeta_ji;
+      const bji = bz_ji > 0 ? Math.pow(1.0 + Math.pow(bz_ji, T_N), INV_2N) : 1.0;
+
+      // ─── Pair forces ───
+      const pf_ij = 0.5 * (dfc_ij * (fR_ij + bij * fA_ij) + fc_ij * (dfR_ij + bij * dfA_ij));
+      const pf_ji = 0.5 * (dfc_ij * (fR_ij + bji * fA_ij) + fc_ij * (dfR_ij + bji * dfA_ij));
+      const pf = pf_ij + pf_ji;
+
+      const ix = i * 3, jx = j * 3;
+      f[ix]     += pf * rh_ij0;
+      f[ix + 1] += pf * rh_ij1;
+      f[ix + 2] += pf * rh_ij2;
+      f[jx]     -= pf * rh_ij0;
+      f[jx + 1] -= pf * rh_ij1;
+      f[jx + 2] -= pf * rh_ij2;
+
+      // ─── 3-body forces from zeta_ij ───
+      if (bz_ij > 0 && zeta_ij > 0) {
+        const dbij = -0.5 * BETA * Math.pow(bz_ij, T_N - 1) *
+                     Math.pow(1.0 + Math.pow(bz_ij, T_N), INV_2N - 1.0);
+        const dEdz = 0.5 * fc_ij * fA_ij * dbij;
+
+        for (let qk = 0; qk < ni.length; qk++) {
+          const k = ni[qk];
+          if (k === j) continue;
+          const kik = i * n + k;
+          const r_ik = dist[kik];
+          if (r_ik === 0 || r_ik >= R_MAX) continue;
+
+          const r3ik = kik * 3;
+          const rk0 = rhat[r3ik], rk1 = rhat[r3ik + 1], rk2 = rhat[r3ik + 2];
+
+          let fc_ik, dfc_ik;
+          if (r_ik < R_CUT - D_CUT) { fc_ik = 1.0; dfc_ik = 0.0; }
+          else {
+            const arg = HALF_PI_OVER_D * (r_ik - R_CUT);
+            fc_ik = 0.5 - 0.5 * Math.sin(arg);
+            dfc_ik = -0.5 * Math.cos(arg) * HALF_PI_OVER_D;
+          }
+
+          let cosT = rh_ij0 * rk0 + rh_ij1 * rk1 + rh_ij2 * rk2;
+          if (cosT > 1) cosT = 1; else if (cosT < -1) cosT = -1;
+
+          const hmc = T_H - cosT;
+          const denom = D2 + hmc * hmc;
+          const g_val = 1.0 + C2_D2 - C2 / denom;
+          const dg_val = -2.0 * C2 * hmc / (denom * denom);
+
+          const kx = k * 3;
+          const inv_rij = 1.0 / r_ij;
+          const inv_rik = 1.0 / r_ik;
+
+          for (let d = 0; d < 3; d++) {
+            const rij_d = d === 0 ? rh_ij0 : d === 1 ? rh_ij1 : rh_ij2;
+            const rik_d = d === 0 ? rk0 : d === 1 ? rk1 : rk2;
+
+            const dcos_drj = (rik_d - cosT * rij_d) * inv_rij;
+            const dcos_drk = (rij_d - cosT * rik_d) * inv_rik;
+            const dcos_dri = -(dcos_drj + dcos_drk);
+
+            const dz_dri = dfc_ik * (-rik_d) * g_val + fc_ik * dg_val * dcos_dri;
+            f[ix + d] -= dEdz * dz_dri;
+            f[jx + d] -= dEdz * fc_ik * dg_val * dcos_drj;
+            f[kx + d] -= dEdz * (dfc_ik * rik_d * g_val + fc_ik * dg_val * dcos_drk);
+          }
+        }
+      }
+
+      // ─── 3-body forces from zeta_ji ───
+      if (bz_ji > 0 && zeta_ji > 0) {
+        const dbji = -0.5 * BETA * Math.pow(bz_ji, T_N - 1) *
+                     Math.pow(1.0 + Math.pow(bz_ji, T_N), INV_2N - 1.0);
+        const dEdz = 0.5 * fc_ij * fA_ij * dbji;
+
+        for (let qk = 0; qk < nj.length; qk++) {
+          const k = nj[qk];
+          if (k === i) continue;
+          const kjk = j * n + k;
+          const r_jk = dist[kjk];
+          if (r_jk === 0 || r_jk >= R_MAX) continue;
+
+          const r3jk = kjk * 3;
+          const rk0 = rhat[r3jk], rk1 = rhat[r3jk + 1], rk2 = rhat[r3jk + 2];
+
+          let fc_jk, dfc_jk;
+          if (r_jk < R_CUT - D_CUT) { fc_jk = 1.0; dfc_jk = 0.0; }
+          else {
+            const arg = HALF_PI_OVER_D * (r_jk - R_CUT);
+            fc_jk = 0.5 - 0.5 * Math.sin(arg);
+            dfc_jk = -0.5 * Math.cos(arg) * HALF_PI_OVER_D;
+          }
+
+          let cosT = rh_ji0 * rk0 + rh_ji1 * rk1 + rh_ji2 * rk2;
+          if (cosT > 1) cosT = 1; else if (cosT < -1) cosT = -1;
+
+          const hmc = T_H - cosT;
+          const denom = D2 + hmc * hmc;
+          const g_val = 1.0 + C2_D2 - C2 / denom;
+          const dg_val = -2.0 * C2 * hmc / (denom * denom);
+
+          const kx = k * 3;
+          const inv_rji = 1.0 / r_ij;
+          const inv_rjk = 1.0 / r_jk;
+
+          for (let d = 0; d < 3; d++) {
+            const rji_d = d === 0 ? rh_ji0 : d === 1 ? rh_ji1 : rh_ji2;
+            const rjk_d = d === 0 ? rk0 : d === 1 ? rk1 : rk2;
+
+            const dcos_dri = (rjk_d - cosT * rji_d) * inv_rji;
+            const dcos_drk = (rji_d - cosT * rjk_d) * inv_rjk;
+            const dcos_drj = -(dcos_dri + dcos_drk);
+
+            f[jx + d] -= dEdz * (dfc_jk * (-rjk_d) * g_val + fc_jk * dg_val * dcos_drj);
+            f[ix + d] -= dEdz * fc_jk * dg_val * dcos_dri;
+            f[kx + d] -= dEdz * (dfc_jk * rjk_d * g_val + fc_jk * dg_val * dcos_drk);
+          }
+        }
+      }
+    }
+  }
+}
 
 export class PhysicsEngine {
   constructor() {
@@ -62,6 +321,8 @@ export class PhysicsEngine {
     this.neighborList = null;
     this.bonds = [];
     this.stepCount = 0;
+    this.kDrag = CONFIG.physics.kDragDefault;
+    this.kRotate = CONFIG.physics.kRotateDefault;
 
     // Pre-allocated cache buffers (resized in init)
     this._dist = null;   // Float64Array[n*n] — distance cache
@@ -129,257 +390,21 @@ export class PhysicsEngine {
     }
     if (!this.neighborList || this.n === 0) return;
 
-    const p = this.pos;
-    const f = this.force;
-    const nl = this.neighborList;
-    const n = this.n;
-    const dist = this._dist;
-    const rhat = this._rhat;
+    // ── Tersoff kernel: pure science, no UX dependencies ──
+    // This call can be replaced with a Wasm implementation.
+    computeTersoffForces(
+      this.pos, this.force, this.neighborList, this.n, this._dist, this._rhat
+    );
 
-    // ─── Precompute distances and unit vectors into flat arrays ───
-    dist.fill(0);
-    for (let i = 0; i < n; i++) {
-      const ix = i * 3;
-      const ni = nl[i];
-      for (let qi = 0; qi < ni.length; qi++) {
-        const j = ni[qi];
-        if (j <= i) continue;
-        const jx = j * 3;
-        const dx = p[jx] - p[ix];
-        const dy = p[jx + 1] - p[ix + 1];
-        const dz = p[jx + 2] - p[ix + 2];
-        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-        const kij = i * n + j;
-        const kji = j * n + i;
-        dist[kij] = d;
-        dist[kji] = d;
-
-        if (d > 1e-10) {
-          const inv = 1.0 / d;
-          const r3ij = kij * 3;
-          const r3ji = kji * 3;
-          rhat[r3ij] = dx * inv;
-          rhat[r3ij + 1] = dy * inv;
-          rhat[r3ij + 2] = dz * inv;
-          rhat[r3ji] = -dx * inv;
-          rhat[r3ji + 1] = -dy * inv;
-          rhat[r3ji + 2] = -dz * inv;
-        }
-      }
-    }
-
-    // ─── Main force loop ───
-    for (let i = 0; i < n; i++) {
-      const ni = nl[i];
-      for (let qi = 0; qi < ni.length; qi++) {
-        const j = ni[qi];
-        if (j <= i) continue;
-
-        const kij = i * n + j;
-        const r_ij = dist[kij];
-        if (r_ij >= R_MAX || r_ij < 1e-10) continue;
-
-        const r3ij = kij * 3;
-        const rh_ij0 = rhat[r3ij], rh_ij1 = rhat[r3ij + 1], rh_ij2 = rhat[r3ij + 2];
-
-        // Inline cutoff
-        let fc_ij, dfc_ij;
-        if (r_ij < R_CUT - D_CUT) { fc_ij = 1.0; dfc_ij = 0.0; }
-        else if (r_ij > R_MAX) { fc_ij = 0.0; dfc_ij = 0.0; }
-        else {
-          const arg = HALF_PI_OVER_D * (r_ij - R_CUT);
-          fc_ij = 0.5 - 0.5 * Math.sin(arg);
-          dfc_ij = -0.5 * Math.cos(arg) * HALF_PI_OVER_D;
-        }
-
-        const expL1 = Math.exp(-LAMBDA1 * r_ij);
-        const expL2 = Math.exp(-LAMBDA2 * r_ij);
-        const fR_ij = T_A * expL1;
-        const dfR_ij = -LAMBDA1 * fR_ij;
-        const fA_ij = -T_B * expL2;
-        const dfA_ij = LAMBDA2 * T_B * expL2;
-
-        // ─── Compute zeta_ij ───
-        let zeta_ij = 0.0;
-        for (let qk = 0; qk < ni.length; qk++) {
-          const k = ni[qk];
-          if (k === j) continue;
-          const kik = i * n + k;
-          const r_ik = dist[kik];
-          if (r_ik === 0 || r_ik >= R_MAX) continue;
-
-          let fc_ik;
-          if (r_ik < R_CUT - D_CUT) fc_ik = 1.0;
-          else if (r_ik > R_MAX) fc_ik = 0.0;
-          else fc_ik = 0.5 - 0.5 * Math.sin(HALF_PI_OVER_D * (r_ik - R_CUT));
-
-          const r3ik = kik * 3;
-          let cosT = rh_ij0 * rhat[r3ik] + rh_ij1 * rhat[r3ik + 1] + rh_ij2 * rhat[r3ik + 2];
-          if (cosT > 1) cosT = 1; else if (cosT < -1) cosT = -1;
-
-          const hmc = T_H - cosT;
-          zeta_ij += fc_ik * (1.0 + C2_D2 - C2 / (D2 + hmc * hmc));
-        }
-
-        // ─── Compute zeta_ji ───
-        let zeta_ji = 0.0;
-        const kji = j * n + i;
-        const r3ji = kji * 3;
-        const rh_ji0 = rhat[r3ji], rh_ji1 = rhat[r3ji + 1], rh_ji2 = rhat[r3ji + 2];
-        const nj = nl[j];
-
-        for (let qk = 0; qk < nj.length; qk++) {
-          const k = nj[qk];
-          if (k === i) continue;
-          const kjk = j * n + k;
-          const r_jk = dist[kjk];
-          if (r_jk === 0 || r_jk >= R_MAX) continue;
-
-          let fc_jk;
-          if (r_jk < R_CUT - D_CUT) fc_jk = 1.0;
-          else if (r_jk > R_MAX) fc_jk = 0.0;
-          else fc_jk = 0.5 - 0.5 * Math.sin(HALF_PI_OVER_D * (r_jk - R_CUT));
-
-          const r3jk = kjk * 3;
-          let cosT = rh_ji0 * rhat[r3jk] + rh_ji1 * rhat[r3jk + 1] + rh_ji2 * rhat[r3jk + 2];
-          if (cosT > 1) cosT = 1; else if (cosT < -1) cosT = -1;
-
-          const hmc = T_H - cosT;
-          zeta_ji += fc_jk * (1.0 + C2_D2 - C2 / (D2 + hmc * hmc));
-        }
-
-        // ─── Bond orders ───
-        const bz_ij = BETA * zeta_ij;
-        const bij = bz_ij > 0 ? Math.pow(1.0 + Math.pow(bz_ij, T_N), INV_2N) : 1.0;
-        const bz_ji = BETA * zeta_ji;
-        const bji = bz_ji > 0 ? Math.pow(1.0 + Math.pow(bz_ji, T_N), INV_2N) : 1.0;
-
-        // ─── Pair forces ───
-        const pf_ij = 0.5 * (dfc_ij * (fR_ij + bij * fA_ij) + fc_ij * (dfR_ij + bij * dfA_ij));
-        const pf_ji = 0.5 * (dfc_ij * (fR_ij + bji * fA_ij) + fc_ij * (dfR_ij + bji * dfA_ij));
-        const pf = pf_ij + pf_ji;
-
-        const ix = i * 3, jx = j * 3;
-        f[ix]     += pf * rh_ij0;
-        f[ix + 1] += pf * rh_ij1;
-        f[ix + 2] += pf * rh_ij2;
-        f[jx]     -= pf * rh_ij0;
-        f[jx + 1] -= pf * rh_ij1;
-        f[jx + 2] -= pf * rh_ij2;
-
-        // ─── 3-body forces from zeta_ij ───
-        if (bz_ij > 0 && zeta_ij > 0) {
-          const dbij = -0.5 * BETA * Math.pow(bz_ij, T_N - 1) *
-                       Math.pow(1.0 + Math.pow(bz_ij, T_N), INV_2N - 1.0);
-          const dEdz = 0.5 * fc_ij * fA_ij * dbij;
-
-          for (let qk = 0; qk < ni.length; qk++) {
-            const k = ni[qk];
-            if (k === j) continue;
-            const kik = i * n + k;
-            const r_ik = dist[kik];
-            if (r_ik === 0 || r_ik >= R_MAX) continue;
-
-            const r3ik = kik * 3;
-            const rk0 = rhat[r3ik], rk1 = rhat[r3ik + 1], rk2 = rhat[r3ik + 2];
-
-            let fc_ik, dfc_ik;
-            if (r_ik < R_CUT - D_CUT) { fc_ik = 1.0; dfc_ik = 0.0; }
-            else {
-              const arg = HALF_PI_OVER_D * (r_ik - R_CUT);
-              fc_ik = 0.5 - 0.5 * Math.sin(arg);
-              dfc_ik = -0.5 * Math.cos(arg) * HALF_PI_OVER_D;
-            }
-
-            let cosT = rh_ij0 * rk0 + rh_ij1 * rk1 + rh_ij2 * rk2;
-            if (cosT > 1) cosT = 1; else if (cosT < -1) cosT = -1;
-
-            const hmc = T_H - cosT;
-            const denom = D2 + hmc * hmc;
-            const g_val = 1.0 + C2_D2 - C2 / denom;
-            const dg_val = -2.0 * C2 * hmc / (denom * denom);
-
-            const kx = k * 3;
-            const inv_rij = 1.0 / r_ij;
-            const inv_rik = 1.0 / r_ik;
-
-            // Unrolled d=0,1,2 loop
-            for (let d = 0; d < 3; d++) {
-              const rij_d = d === 0 ? rh_ij0 : d === 1 ? rh_ij1 : rh_ij2;
-              const rik_d = d === 0 ? rk0 : d === 1 ? rk1 : rk2;
-
-              const dcos_drj = (rik_d - cosT * rij_d) * inv_rij;
-              const dcos_drk = (rij_d - cosT * rik_d) * inv_rik;
-              const dcos_dri = -(dcos_drj + dcos_drk);
-
-              const dz_dri = dfc_ik * (-rik_d) * g_val + fc_ik * dg_val * dcos_dri;
-              f[ix + d] -= dEdz * dz_dri;
-              f[jx + d] -= dEdz * fc_ik * dg_val * dcos_drj;
-              f[kx + d] -= dEdz * (dfc_ik * rik_d * g_val + fc_ik * dg_val * dcos_drk);
-            }
-          }
-        }
-
-        // ─── 3-body forces from zeta_ji ───
-        if (bz_ji > 0 && zeta_ji > 0) {
-          const dbji = -0.5 * BETA * Math.pow(bz_ji, T_N - 1) *
-                       Math.pow(1.0 + Math.pow(bz_ji, T_N), INV_2N - 1.0);
-          const dEdz = 0.5 * fc_ij * fA_ij * dbji;
-
-          for (let qk = 0; qk < nj.length; qk++) {
-            const k = nj[qk];
-            if (k === i) continue;
-            const kjk = j * n + k;
-            const r_jk = dist[kjk];
-            if (r_jk === 0 || r_jk >= R_MAX) continue;
-
-            const r3jk = kjk * 3;
-            const rk0 = rhat[r3jk], rk1 = rhat[r3jk + 1], rk2 = rhat[r3jk + 2];
-
-            let fc_jk, dfc_jk;
-            if (r_jk < R_CUT - D_CUT) { fc_jk = 1.0; dfc_jk = 0.0; }
-            else {
-              const arg = HALF_PI_OVER_D * (r_jk - R_CUT);
-              fc_jk = 0.5 - 0.5 * Math.sin(arg);
-              dfc_jk = -0.5 * Math.cos(arg) * HALF_PI_OVER_D;
-            }
-
-            let cosT = rh_ji0 * rk0 + rh_ji1 * rk1 + rh_ji2 * rk2;
-            if (cosT > 1) cosT = 1; else if (cosT < -1) cosT = -1;
-
-            const hmc = T_H - cosT;
-            const denom = D2 + hmc * hmc;
-            const g_val = 1.0 + C2_D2 - C2 / denom;
-            const dg_val = -2.0 * C2 * hmc / (denom * denom);
-
-            const kx = k * 3;
-            const inv_rji = 1.0 / r_ij;
-            const inv_rjk = 1.0 / r_jk;
-
-            for (let d = 0; d < 3; d++) {
-              const rji_d = d === 0 ? rh_ji0 : d === 1 ? rh_ji1 : rh_ji2;
-              const rjk_d = d === 0 ? rk0 : d === 1 ? rk1 : rk2;
-
-              const dcos_dri = (rjk_d - cosT * rji_d) * inv_rji;
-              const dcos_drk = (rji_d - cosT * rjk_d) * inv_rjk;
-              const dcos_drj = -(dcos_dri + dcos_drk);
-
-              f[jx + d] -= dEdz * (dfc_jk * (-rjk_d) * g_val + fc_jk * dg_val * dcos_drj);
-              f[ix + d] -= dEdz * fc_jk * dg_val * dcos_dri;
-              f[kx + d] -= dEdz * (dfc_jk * rjk_d * g_val + fc_jk * dg_val * dcos_drk);
-            }
-          }
-        }
-      }
-    }
+    // ── Interaction forces: UX layer ──
+    // Drag spring, rotation torque — user-driven forces.
 
     // ─── User drag force (translation mode) — full 3D in camera plane ───
     if (this.dragAtom >= 0 && !this.isRotateMode) {
       const ix = this.dragAtom * 3;
-      this.force[ix]     += K_DRAG * (this.dragTarget[0] - this.pos[ix]);
-      this.force[ix + 1] += K_DRAG * (this.dragTarget[1] - this.pos[ix + 1]);
-      this.force[ix + 2] += K_DRAG * (this.dragTarget[2] - this.pos[ix + 2]);
+      this.force[ix]     += this.kDrag * (this.dragTarget[0] - this.pos[ix]);
+      this.force[ix + 1] += this.kDrag * (this.dragTarget[1] - this.pos[ix + 1]);
+      this.force[ix + 2] += this.kDrag * (this.dragTarget[2] - this.pos[ix + 2]);
     }
 
     // ─── User rotation (spring force → torque → distributed tangential force) ───
@@ -396,12 +421,14 @@ export class PhysicsEngine {
     // I_ref = 750 Å² ≈ C60 inertia (60 atoms × 3.55² × 2/3)
     //
     if (this.dragAtom >= 0 && this.isRotateMode) {
+      const pos = this.pos;
+      const force = this.force;
       const aix = this.dragAtom * 3;
 
       // COM
       let cx = 0, cy = 0, cz = 0;
       for (let i = 0; i < this.n; i++) {
-        cx += p[i * 3]; cy += p[i * 3 + 1]; cz += p[i * 3 + 2];
+        cx += pos[i * 3]; cy += pos[i * 3 + 1]; cz += pos[i * 3 + 2];
       }
       cx /= this.n; cy /= this.n; cz /= this.n;
 
@@ -409,7 +436,7 @@ export class PhysicsEngine {
       let Ixx = 0, Iyy = 0, Izz = 0;
       for (let i = 0; i < this.n; i++) {
         const ix = i * 3;
-        const rx = p[ix] - cx, ry = p[ix + 1] - cy, rz = p[ix + 2] - cz;
+        const rx = pos[ix] - cx, ry = pos[ix + 1] - cy, rz = pos[ix + 2] - cz;
         Ixx += ry * ry + rz * rz;
         Iyy += rx * rx + rz * rz;
         Izz += rx * rx + ry * ry;
@@ -417,22 +444,21 @@ export class PhysicsEngine {
 
       // Average scalar inertia for normalization
       const I_avg = (Ixx + Iyy + Izz) / 3;
-      const I_REF = 750.0; // ≈ C60 inertia
+      const I_REF = CONFIG.physics.iRef;
       const inertiaScale = I_avg > 0.1 ? I_avg / I_REF : 1.0;
 
-      // Spring force scaled by inertia ratio so K_ROTATE feels the same
-      // for any molecule size
-      const dx = this.dragTarget[0] - p[aix];
-      const dy = this.dragTarget[1] - p[aix + 1];
-      const dz = this.dragTarget[2] - p[aix + 2];
-      const Fx = K_ROTATE * inertiaScale * dx;
-      const Fy = K_ROTATE * inertiaScale * dy;
-      const Fz = K_ROTATE * inertiaScale * dz;
+      // Spring force scaled by inertia ratio
+      const dx = this.dragTarget[0] - pos[aix];
+      const dy = this.dragTarget[1] - pos[aix + 1];
+      const dz = this.dragTarget[2] - pos[aix + 2];
+      const Fx = this.kRotate * inertiaScale * dx;
+      const Fy = this.kRotate * inertiaScale * dy;
+      const Fz = this.kRotate * inertiaScale * dz;
 
       // r_a = selected atom position relative to COM
-      const rax = p[aix] - cx;
-      const ray = p[aix + 1] - cy;
-      const raz = p[aix + 2] - cz;
+      const rax = pos[aix] - cx;
+      const ray = pos[aix + 1] - cy;
+      const raz = pos[aix + 2] - cz;
 
       // Torque: τ = r_a × F
       const tx = ray * Fz - raz * Fy;
@@ -448,10 +474,10 @@ export class PhysicsEngine {
       // Σ f_i = α × Σ r_i = 0 (r_i relative to COM) → no net translation ✓
       for (let i = 0; i < this.n; i++) {
         const ix = i * 3;
-        const rx = p[ix] - cx, ry = p[ix + 1] - cy, rz = p[ix + 2] - cz;
-        f[ix]     += ay * rz - az * ry;
-        f[ix + 1] += az * rx - ax * rz;
-        f[ix + 2] += ax * ry - ay * rx;
+        const rx = pos[ix] - cx, ry = pos[ix + 1] - cy, rz = pos[ix + 2] - cz;
+        force[ix]     += ay * rz - az * ry;
+        force[ix + 1] += az * rx - ax * rz;
+        force[ix + 2] += ax * ry - ay * rx;
       }
     }
   }
@@ -523,7 +549,7 @@ export class PhysicsEngine {
         const dy = this.pos[jx+1] - this.pos[ix+1];
         const dz = this.pos[jx+2] - this.pos[ix+2];
         const d = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        if (d < 1.8 && d > 0.5) this.bonds.push([i, j, d]);
+        if (d < CONFIG.bonds.cutoff && d > CONFIG.bonds.minDist) this.bonds.push([i, j, d]);
       }
     }
   }
@@ -614,8 +640,8 @@ export class PhysicsEngine {
 
   // ─── User-adjustable parameters ───
 
-  setDragStrength(val) { K_DRAG = val; }
-  getDragStrength() { return K_DRAG; }
-  setRotateStrength(val) { K_ROTATE = val; }
-  getRotateStrength() { return K_ROTATE; }
+  setDragStrength(val) { this.kDrag = val; }
+  getDragStrength() { return this.kDrag; }
+  setRotateStrength(val) { this.kRotate = val; }
+  getRotateStrength() { return this.kRotate; }
 }

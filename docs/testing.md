@@ -92,3 +92,32 @@ Each test writes results to `outputs/testN_*/`:
 - After modifying structure generators
 - Before generating ML training data
 - Before claiming any validation result
+
+## Frontend Smoke Test
+
+Manual verification checklist for the interactive page (`page/index.html`). Run after any changes to `page/` code.
+
+### Setup
+```bash
+python3 -m http.server 8000
+# Open http://localhost:8000/page/
+```
+
+### Checklist
+
+| # | Test | Expected |
+|---|------|----------|
+| 1 | Page loads | C60 renders with atoms and bonds visible |
+| 2 | Switch structure | New structure loads, old one clears completely |
+| 3 | Left-drag on atom | Highlight appears, spring line shows, atom follows cursor |
+| 4 | Release drag | Atom retains momentum, structure vibrates naturally |
+| 5 | Ctrl+click on atom | Molecule rotates, spring line visible |
+| 6 | Right-drag | Camera orbits around structure |
+| 7 | Scroll wheel | Camera zooms in/out |
+| 8 | Reset button | Structure returns to initial relaxed geometry |
+| 9 | Reset View button | Camera returns to default front view |
+| 10 | Theme toggle | Dark/light switch — all UI elements adapt |
+| 11 | Advanced panel | Sliders adjust drag/rotation strength in real-time |
+| 12 | Large structure (C720) | Loads without crash, interaction works at reduced FPS |
+| 13 | XYZ axes indicator | Visible in corner, rotates with camera |
+| 14 | Hint text | Fades on first atom interaction |

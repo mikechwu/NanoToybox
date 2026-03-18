@@ -6,6 +6,9 @@
  * Mobile:  1-finger = interact, 2-finger = camera (pinch/pan)
  */
 import * as THREE from 'three';
+import { CONFIG } from './config.js';
+
+const DEBUG_INPUT = CONFIG.debug.input;
 
 export class InputManager {
   constructor(canvas, camera, controls, atomMeshes, callbacks) {
@@ -41,7 +44,7 @@ export class InputManager {
 
   _raycastAtom(screenX, screenY) {
     if (!this.atomMeshes || this.atomMeshes.length === 0) {
-      console.log('[raycast] no meshes');
+      if (DEBUG_INPUT) console.log('[raycast] no meshes');
       return -1;
     }
 
@@ -54,20 +57,22 @@ export class InputManager {
     this.raycaster.setFromCamera(ndc, this.camera);
     const allHits = this.raycaster.intersectObjects(this.atomMeshes, false);
 
-    console.log(`[raycast] screen=(${screenX.toFixed(0)},${screenY.toFixed(0)}) ndc=(${ndc.x.toFixed(3)},${ndc.y.toFixed(3)}) meshes=${this.atomMeshes.length} hits=${allHits.length}`);
+    if (DEBUG_INPUT) {
+      console.log(`[raycast] screen=(${screenX.toFixed(0)},${screenY.toFixed(0)}) ndc=(${ndc.x.toFixed(3)},${ndc.y.toFixed(3)}) meshes=${this.atomMeshes.length} hits=${allHits.length}`);
 
-    // Log nearest 3 atoms by screen distance for debugging
-    const screenDists = [];
-    for (let i = 0; i < Math.min(this.atomMeshes.length, 200); i++) {
-      const sp = this.atomMeshes[i].position.clone().project(this.camera);
-      const d = Math.sqrt((sp.x - ndc.x) ** 2 + (sp.y - ndc.y) ** 2);
-      screenDists.push({ i, d, sp });
-    }
-    screenDists.sort((a, b) => a.d - b.d);
-    for (let k = 0; k < Math.min(3, screenDists.length); k++) {
-      const { i, d, sp } = screenDists[k];
-      const pos = this.atomMeshes[i].position;
-      console.log(`  [nearest ${k}] idx=${i} screenDist=${d.toFixed(4)} ndc=(${sp.x.toFixed(3)},${sp.y.toFixed(3)}) meshPos=(${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)})`);
+      // Log nearest 3 atoms by screen distance for debugging
+      const screenDists = [];
+      for (let i = 0; i < Math.min(this.atomMeshes.length, 200); i++) {
+        const sp = this.atomMeshes[i].position.clone().project(this.camera);
+        const d = Math.sqrt((sp.x - ndc.x) ** 2 + (sp.y - ndc.y) ** 2);
+        screenDists.push({ i, d, sp });
+      }
+      screenDists.sort((a, b) => a.d - b.d);
+      for (let k = 0; k < Math.min(3, screenDists.length); k++) {
+        const { i, d, sp } = screenDists[k];
+        const pos = this.atomMeshes[i].position;
+        console.log(`  [nearest ${k}] idx=${i} screenDist=${d.toFixed(4)} ndc=(${sp.x.toFixed(3)},${sp.y.toFixed(3)}) meshPos=(${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)})`);
+      }
     }
 
     if (allHits.length > 0) {
@@ -79,21 +84,22 @@ export class InputManager {
         if (idx < 0) continue;
         const sp = hit.object.position.clone().project(this.camera);
         const sd = (sp.x - ndc.x) ** 2 + (sp.y - ndc.y) ** 2;
-        console.log(`  [hit] idx=${idx} screenDist=${Math.sqrt(sd).toFixed(4)} rayDist=${hit.distance.toFixed(3)}`);
+        if (DEBUG_INPUT) console.log(`  [hit] idx=${idx} screenDist=${Math.sqrt(sd).toFixed(4)} rayDist=${hit.distance.toFixed(3)}`);
         if (sd < bestScreenDist) {
           bestScreenDist = sd;
           bestIdx = idx;
         }
       }
       if (bestIdx >= 0) {
-        console.log(`  → selected idx=${bestIdx} (from raycast)`);
+        if (DEBUG_INPUT) console.log(`  → selected idx=${bestIdx} (from raycast)`);
         return bestIdx;
       }
     }
 
     // Fallback: screen-space proximity
-    // 0.12 NDC ≈ 6% of screen width — generous enough for atom picking
-    const hitExpansion = this.isMobile ? 0.20 : 0.12;
+    const hitExpansion = this.isMobile
+      ? CONFIG.picker.mobileExpansion
+      : CONFIG.picker.desktopExpansion;
     let closest = -1;
     let closestDist = Infinity;
     for (let i = 0; i < this.atomMeshes.length; i++) {
@@ -105,7 +111,7 @@ export class InputManager {
         closest = i;
       }
     }
-    console.log(`  → selected idx=${closest} (from fallback, dist=${closestDist.toFixed(4)})`);
+    if (DEBUG_INPUT) console.log(`  → selected idx=${closest} (from fallback, dist=${closestDist.toFixed(4)})`);
     return closest;
   }
 

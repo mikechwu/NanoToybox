@@ -2,8 +2,9 @@
  * Structure loader — fetches manifest and XYZ files from the library.
  * Builds bond topology via distance cutoff.
  */
+import { CONFIG } from './config.js';
 
-const LIBRARY_PATH = '../structures/library';
+const LIBRARY_PATH = CONFIG.libraryPath;
 
 export async function loadManifest() {
   const resp = await fetch(`${LIBRARY_PATH}/manifest.json`);
@@ -16,7 +17,7 @@ export async function loadStructure(filename) {
   if (!resp.ok) throw new Error(`Failed to load ${filename}: ${resp.status}`);
   const text = await resp.text();
   const atoms = parseXYZ(text);
-  const bonds = buildBondTopology(atoms, 1.8);
+  const bonds = buildBondTopology(atoms, CONFIG.bonds.cutoff);
   return { atoms, bonds };
 }
 
@@ -55,7 +56,7 @@ export function buildBondTopology(atoms, cutoff) {
       const dy = atoms[j].y - atoms[i].y;
       const dz = atoms[j].z - atoms[i].z;
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist < cutoff && dist > 0.5) {
+      if (dist < cutoff && dist > CONFIG.bonds.minDist) {
         bonds.push([i, j, dist]);
       }
     }

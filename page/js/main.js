@@ -12,11 +12,19 @@ import { InputManager } from './input.js';
 import { Renderer } from './renderer.js';
 import { FPSMonitor } from './fps-monitor.js';
 import { THEMES } from './themes.js';
+import { CONFIG } from './config.js';
+
+const DEBUG_LOAD = CONFIG.debug.load;
 
 // --- Globals ---
 let renderer, physics, stateMachine, inputManager, fpsMonitor;
-let currentAtoms = null;
-let currentTheme = 'dark';
+
+const session = {
+  atoms: null,
+  structureFile: null,
+  theme: 'dark',
+  isLoading: false,
+};
 
 // --- Initialization ---
 async function init() {
@@ -26,7 +34,7 @@ async function init() {
   stateMachine = new StateMachine();
   fpsMonitor = new FPSMonitor(document.getElementById('fps'));
 
-  renderer.applyTheme(currentTheme);
+  renderer.applyTheme(session.theme);
 
   // Load manifest and populate structure selector
   try {
@@ -62,15 +70,15 @@ async function init() {
 
   // Theme toggle
   document.getElementById('theme-toggle').addEventListener('click', () => {
-    currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
-    renderer.applyTheme(currentTheme);
-    applyUITheme(currentTheme);
+    session.theme = session.theme === 'dark' ? 'light' : 'dark';
+    renderer.applyTheme(session.theme);
+    applyUITheme(session.theme);
   });
 
   // Reset structure button
   document.getElementById('btn-reset').addEventListener('click', () => {
-    if (currentAtoms) {
-      physics.reset(currentAtoms);
+    if (session.atoms) {
+      physics.reset(session.atoms);
       stateMachine.forceIdle();
       renderer.clearFeedback();
     }
@@ -93,6 +101,14 @@ async function init() {
         e.target.id !== 'btn-advanced') {
       advPanel.style.display = 'none';
     }
+  });
+
+  // Help panel buttons
+  document.getElementById('btn-help-open').addEventListener('click', () => {
+    document.getElementById('help').style.display = 'block';
+  });
+  document.getElementById('btn-help-close').addEventListener('click', () => {
+    document.getElementById('help').style.display = 'none';
   });
 
   // Drag strength slider
@@ -118,39 +134,52 @@ async function init() {
 }
 
 async function loadSelected(filename) {
-  document.getElementById('status').textContent = 'Loading...';
-  console.log(`[load] Loading ${filename}...`);
+  session.isLoading = true;
+  session.structureFile = filename;
+  updateStatus('Loading...');
+
   try {
     const { atoms, bonds } = await loadStructure(filename);
-    console.log(`[load] Parsed: ${atoms.length} atoms, ${bonds.length} bonds`);
-    if (atoms.length > 0) {
+    if (DEBUG_LOAD) console.log(`[load] Parsed: ${atoms.length} atoms, ${bonds.length} bonds`);
+    if (DEBUG_LOAD && atoms.length > 0) {
       console.log(`[load] First atom: (${atoms[0].x.toFixed(3)}, ${atoms[0].y.toFixed(3)}, ${atoms[0].z.toFixed(3)})`);
     }
-    currentAtoms = atoms;
-
-    // Clean up any in-progress interaction BEFORE replacing structures
-    handleCommand(stateMachine.forceIdle());
-    renderer.clearFeedback();
-
-    physics.init(atoms, bonds);
-    console.log(`[load] Physics initialized: n=${physics.n}`);
-
-    renderer.loadStructure(atoms, bonds);
-    console.log(`[load] Renderer loaded: ${renderer.atomMeshes.length} atom meshes, ${renderer.bondMeshes.length} bond meshes`);
-
-    if (!inputManager) {
-      // First load — create InputManager once (event listeners bind once)
-      createInputManager();
-    }
-    // Update the mesh reference to the new structure's meshes
-    inputManager.updateAtomMeshes(renderer.atomMeshes);
-
-    document.getElementById('status').textContent =
-      `${atoms.length} atoms · ${bonds.length} bonds`;
+    session.atoms = atoms;
+    cleanupCurrentSession();
+    initPhysicsSession(atoms, bonds);
+    initRendererSession(atoms, bonds);
+    syncInputManager();
+    updateStatus(`${atoms.length} atoms · ${bonds.length} bonds`);
   } catch (e) {
-    document.getElementById('status').textContent = `Error: ${e.message}`;
+    updateStatus(`Error: ${e.message}`);
     console.error(e);
   }
+
+  session.isLoading = false;
+}
+
+function cleanupCurrentSession() {
+  handleCommand(stateMachine.forceIdle());
+  renderer.clearFeedback();
+}
+
+function initPhysicsSession(atoms, bonds) {
+  physics.init(atoms, bonds);
+  if (DEBUG_LOAD) console.log(`[load] Physics initialized: n=${physics.n}`);
+}
+
+function initRendererSession(atoms, bonds) {
+  renderer.loadStructure(atoms, bonds);
+  if (DEBUG_LOAD) console.log(`[load] Renderer loaded: ${renderer.atomMeshes.length} atom meshes, ${renderer.bondMeshes.length} bond meshes`);
+}
+
+function syncInputManager() {
+  if (!inputManager) createInputManager();
+  inputManager.updateAtomMeshes(renderer.atomMeshes);
+}
+
+function updateStatus(text) {
+  document.getElementById('status').textContent = text;
 }
 
 function createInputManager() {

@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
 import { THEMES } from './themes.js';
+import { CONFIG } from './config.js';
 
 export class Renderer {
   constructor(container) {
@@ -134,7 +135,9 @@ export class Renderer {
     this.bonds = bonds;
 
     const t = THEMES[this.currentTheme];
-    const atomGeom = new THREE.SphereGeometry(0.35, 24, 16);
+    const atomGeom = new THREE.SphereGeometry(
+      CONFIG.atoms.radius, CONFIG.atoms.segments[0], CONFIG.atoms.segments[1]
+    );
 
     // Center of mass
     let cx = 0, cy = 0, cz = 0;
@@ -145,8 +148,8 @@ export class Renderer {
     atoms.forEach(a => {
       const mat = new THREE.MeshStandardMaterial({
         color: t.atom,
-        roughness: 0.7,
-        metalness: 0.0,
+        roughness: CONFIG.material.roughness,
+        metalness: CONFIG.material.metalness,
       });
       const mesh = new THREE.Mesh(atomGeom, mat);
       mesh.position.set(a.x - cx, a.y - cy, a.z - cz);
@@ -155,12 +158,14 @@ export class Renderer {
     });
 
     // Pre-allocate bond meshes
-    const bondGeom = new THREE.CylinderGeometry(0.07, 0.07, 1, 12);
+    const bondGeom = new THREE.CylinderGeometry(
+      CONFIG.bondMesh.radius, CONFIG.bondMesh.radius, 1, CONFIG.bondMesh.segments
+    );
     bonds.forEach(() => {
       const mat = new THREE.MeshStandardMaterial({
         color: t.bond,
-        roughness: 0.7,
-        metalness: 0.0,
+        roughness: CONFIG.material.roughness,
+        metalness: CONFIG.material.metalness,
       });
       const mesh = new THREE.Mesh(bondGeom, mat);
       this.scene.add(mesh);
@@ -201,10 +206,12 @@ export class Renderer {
     }
     // Add new bond meshes if needed
     const t = THEMES[this.currentTheme];
-    const bondGeom = new THREE.CylinderGeometry(0.07, 0.07, 1, 12);
+    const bondGeom = new THREE.CylinderGeometry(
+      CONFIG.bondMesh.radius, CONFIG.bondMesh.radius, 1, CONFIG.bondMesh.segments
+    );
     while (this.bondMeshes.length < newBonds.length) {
       const mat = new THREE.MeshStandardMaterial({
-        color: t.bond, roughness: 0.7, metalness: 0.0,
+        color: t.bond, roughness: CONFIG.material.roughness, metalness: CONFIG.material.metalness,
       });
       const mesh = new THREE.Mesh(bondGeom, mat);
       this.scene.add(mesh);
@@ -225,7 +232,7 @@ export class Renderer {
 
       const mesh = this.bondMeshes[b];
       // Hide bonds that have stretched beyond physical range
-      if (dist > 2.0) {
+      if (dist > CONFIG.bonds.visibilityCutoff) {
         mesh.visible = false;
         continue;
       }
