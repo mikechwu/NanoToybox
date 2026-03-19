@@ -77,6 +77,8 @@ const scheduler = {
   renderCount: 0,
   lastRenderCountTs: 0,
   hasRenderSample: false,
+  // Status display throttle
+  lastStatusUpdateTs: 0,
   // Recovery blend for maxSpeed transition
   recoveringStartMax: 0,
   recoveringBlendRemaining: 0,
@@ -1321,36 +1323,39 @@ function frameLoop(timestamp) {
     const tickEnd = performance.now();
     scheduler.prof.otherMs += alpha * (Math.max(0, (tickEnd - tickStart) - (substepsThisFrame * scheduler.prof.physStepMs) - scheduler.prof.updatePosMs - (shouldRender ? scheduler.prof.renderMs : 0)) - scheduler.prof.otherMs);
 
-    // Update status display
-    const pb = session.playback;
-    const isIdle = pb.paused || session.placement.active || physics.n === 0;
-    const displaySpeed = isIdle ? 0 : pb.effectiveSpeed;
-    const mdRate = displaySpeed * CONFIG.playback.baseStepsPerSecond * CONFIG.physics.dt / 1000;
-    const fps = Math.round(1000 / scheduler.prof.rafIntervalMs);
-    const detail = `${scheduler.prof.rafIntervalMs.toFixed(1)} ms · ${fps} fps`;
+    // Update status display — throttled to statusUpdateHz (default 5 Hz)
+    const statusIntervalMs = 1000 / CONFIG.playback.statusUpdateHz;
+    const statusNow = performance.now();
+    if (wasForced || (statusNow - scheduler.lastStatusUpdateTs) >= statusIntervalMs) {
+      scheduler.lastStatusUpdateTs = statusNow;
+      const pb = session.playback;
+      const isIdle = pb.paused || session.placement.active || physics.n === 0;
+      const displaySpeed = isIdle ? 0 : pb.effectiveSpeed;
+      const mdRate = displaySpeed * CONFIG.playback.baseStepsPerSecond * CONFIG.physics.dt / 1000;
+      const fps = Math.round(1000 / scheduler.prof.rafIntervalMs);
+      const detail = `${scheduler.prof.rafIntervalMs.toFixed(1)} ms · ${fps} fps`;
 
-    // Mobile: compact by default, detail on tap (via _fpsExpanded flag)
-    // Layout-driven: use viewport width as the stable layout constraint
-    const isCompact = window.innerWidth < 768;
-    const showDetail = !isCompact || _fpsExpanded;
+      const isCompact = window.innerWidth < 768;
+      const showDetail = !isCompact || _fpsExpanded;
 
-    let statusText;
-    if (pb.paused) {
-      statusText = showDetail ? `Paused · ${detail}` : 'Paused · 0 ps/s';
-    } else if (session.placement.active) {
-      statusText = showDetail ? `Placing... · ${detail}` : 'Placing...';
-    } else if (!scheduler.warmUpComplete) {
-      statusText = 'Estimating...';
-    } else if (scheduler.mode === 'overloaded' || pb.maxSpeed < CONFIG.playback.minSpeed) {
-      statusText = showDetail
-        ? `Hardware-limited · Sim ${displaySpeed.toFixed(1)}x · ${mdRate.toFixed(2)} ps/s · ${detail}`
-        : `Hardware-limited · Sim ${displaySpeed.toFixed(1)}x · ${mdRate.toFixed(2)} ps/s`;
-    } else {
-      statusText = showDetail
-        ? `Sim ${displaySpeed.toFixed(1)}x · ${mdRate.toFixed(2)} ps/s · ${detail}`
-        : `Sim ${displaySpeed.toFixed(1)}x · ${mdRate.toFixed(2)} ps/s`;
+      let statusText;
+      if (pb.paused) {
+        statusText = showDetail ? `Paused · ${detail}` : 'Paused · 0 ps/s';
+      } else if (session.placement.active) {
+        statusText = showDetail ? `Placing... · ${detail}` : 'Placing...';
+      } else if (!scheduler.warmUpComplete) {
+        statusText = 'Estimating...';
+      } else if (scheduler.mode === 'overloaded' || pb.maxSpeed < CONFIG.playback.minSpeed) {
+        statusText = showDetail
+          ? `Hardware-limited · Sim ${displaySpeed.toFixed(1)}x · ${mdRate.toFixed(2)} ps/s · ${detail}`
+          : `Hardware-limited · Sim ${displaySpeed.toFixed(1)}x · ${mdRate.toFixed(2)} ps/s`;
+      } else {
+        statusText = showDetail
+          ? `Sim ${displaySpeed.toFixed(1)}x · ${mdRate.toFixed(2)} ps/s · ${detail}`
+          : `Sim ${displaySpeed.toFixed(1)}x · ${mdRate.toFixed(2)} ps/s`;
+      }
+      fpsMonitor.displayEl.textContent = statusText;
     }
-    fpsMonitor.displayEl.textContent = statusText;
 
   } catch (e) {
     console.error('[frameLoop] ERROR:', e);

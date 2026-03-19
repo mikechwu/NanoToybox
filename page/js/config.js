@@ -62,6 +62,7 @@ export const CONFIG = {
     overloadEntryTicks: 10,   // consecutive capped ticks to enter overloaded
     overloadExitTicks: 5,     // overloadCount threshold to enter recovering
     partialResetStepsCap: 15, // totalStepsProfiled cap after partial reset
+    statusUpdateHz: 5,        // status text refresh rate (Hz) — no need to update faster than human can read
   },
 
   debug: {
