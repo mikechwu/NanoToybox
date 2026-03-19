@@ -331,6 +331,7 @@ export class PhysicsEngine {
     this.kDrag = CONFIG.physics.kDragDefault;
     this.kRotate = CONFIG.physics.kRotateDefault;
     this.damping = CONFIG.physics.dampingDefault;
+    this._dampingFactor = this.damping > 0 ? Math.pow(1 - this.damping, 1 / STEPS_PER_FRAME) : 1.0;
 
     // Pre-allocated cache buffers (resized in init)
     this._dist = null;   // Float64Array[n*n] — distance cache
@@ -565,30 +566,6 @@ export class PhysicsEngine {
     }
   }
 
-  applyEnergyControl() {
-    if (this.damping > 0) {
-      const factor = 1.0 - this.damping;
-      for (let i = 0; i < this.n * 3; i++) this.vel[i] *= factor;
-    }
-
-    for (let i = 0; i < this.n; i++) {
-      const ix = i * 3;
-      const vMag = Math.sqrt(this.vel[ix]**2 + this.vel[ix+1]**2 + this.vel[ix+2]**2);
-      if (vMag > V_HARD_MAX) {
-        const s = V_HARD_MAX / vMag;
-        this.vel[ix] *= s; this.vel[ix+1] *= s; this.vel[ix+2] *= s;
-      }
-    }
-
-    const ke = this.getKineticEnergy();
-    // KE cap scales with atom count: ~5 eV per atom allows energetic rotation
-    const keCap = Math.max(KE_CAP_MULT * this.keInitial, this.n * 5.0);
-    if (ke > keCap) {
-      const s = Math.sqrt(keCap / ke);
-      for (let i = 0; i < this.n * 3; i++) this.vel[i] *= s;
-    }
-  }
-
   updateBondList() {
     let count = 0;
     for (let i = 0; i < this.n; i++) {
@@ -662,16 +639,48 @@ export class PhysicsEngine {
     }
   }
 
-  step() {
-    for (let s = 0; s < STEPS_PER_FRAME; s++) {
-      this.integrate(DT);
-      this.stepCount++;
+  /**
+   * Run one fixed-size integration step with per-step damping.
+   * Called by the accumulator in main.js (speed-controlled) or by step() (legacy).
+   */
+  stepOnce() {
+    this.integrate(DT);
+    this.stepCount++;
+    // Per-step damping: precomputed factor from legacy damping parameter
+    if (this._dampingFactor < 1.0) {
+      for (let i = 0; i < this.n * 3; i++) this.vel[i] *= this._dampingFactor;
     }
-    this.applyEnergyControl();
     if (this.stepCount % 20 === 0) {
       this.updateBondList();
       this.rebuildComponents();
     }
+  }
+
+  /**
+   * Per-batch safety controls: velocity cap + KE cap.
+   * Called once per RAF tick after all substeps complete.
+   */
+  applySafetyControls() {
+    for (let i = 0; i < this.n; i++) {
+      const ix = i * 3;
+      const vMag = Math.sqrt(this.vel[ix]**2 + this.vel[ix+1]**2 + this.vel[ix+2]**2);
+      if (vMag > V_HARD_MAX) {
+        const s = V_HARD_MAX / vMag;
+        this.vel[ix] *= s; this.vel[ix+1] *= s; this.vel[ix+2] *= s;
+      }
+    }
+    const ke = this.getKineticEnergy();
+    const keCap = Math.max(KE_CAP_MULT * this.keInitial, this.n * 5.0);
+    if (ke > keCap) {
+      const s = Math.sqrt(keCap / ke);
+      for (let i = 0; i < this.n * 3; i++) this.vel[i] *= s;
+    }
+  }
+
+  /** Legacy wrapper: runs stepsPerFrame substeps + safety controls. */
+  step() {
+    for (let s = 0; s < STEPS_PER_FRAME; s++) this.stepOnce();
+    this.applySafetyControls();
   }
 
   // ─── External interaction API ───
@@ -870,6 +879,9 @@ export class PhysicsEngine {
   getDragStrength() { return this.kDrag; }
   setRotateStrength(val) { this.kRotate = val; }
   getRotateStrength() { return this.kRotate; }
-  setDamping(val) { this.damping = val; }
+  setDamping(val) {
+    this.damping = val;
+    this._dampingFactor = val > 0 ? Math.pow(1 - val, 1 / STEPS_PER_FRAME) : 1.0;
+  }
   getDamping() { return this.damping; }
 }

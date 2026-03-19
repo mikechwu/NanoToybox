@@ -24,6 +24,13 @@ const session = {
   theme: 'dark',
   isLoading: false,
   interactionMode: 'atom',  // 'atom' | 'move' | 'rotate'
+  playback: {
+    selectedSpeed: CONFIG.playback.defaultSpeed,
+    speedMode: 'fixed',      // 'fixed' | 'max'
+    effectiveSpeed: 1.0,
+    maxSpeed: 1.0,
+    paused: false,
+  },
   scene: {
     molecules: [],
     nextId: 1,
@@ -42,6 +49,48 @@ const session = {
     lastStructureFile: null,
     lastStructureName: null,
   },
+};
+
+// --- Scheduler (accumulator, profiler, render skip) ---
+const stepWallMs = 1000 / CONFIG.playback.baseStepsPerSecond;
+
+const scheduler = {
+  simBudgetMs: 0,
+  lastFrameTs: 0,
+  overloadCount: 0,
+  mode: 'normal',            // 'normal' | 'overloaded' | 'recovering'
+  totalStepsProfiled: 0,
+  forceRenderThisTick: false,
+  // Warm-up
+  stableTicks: 0,
+  prevPhysStepMs: 1,
+  prevRenderMs: 1,
+  warmUpComplete: false,
+  // Max speed update cadence
+  lastMaxSpeedUpdateTs: 0,
+  // Render skip state
+  skipPressure: 0,
+  comfortTicks: 0,
+  renderSkipLevel: 1,
+  renderSkipCounter: 0,
+  // Actual render measurement
+  renderCount: 0,
+  lastRenderCountTs: 0,
+  hasRenderSample: false,
+  // Recovery blend for maxSpeed transition
+  recoveringStartMax: 0,
+  recoveringBlendRemaining: 0,
+  // Profiler EMAs
+  prof: {
+    physStepMs: 1,
+    updatePosMs: 0.1,
+    renderMs: 1,
+    otherMs: 0.1,
+    rafIntervalMs: 16.67,
+    actualRendersPerSec: 60,
+  },
+  // Display smoothing
+  effectiveSpeedWindow: [],
 };
 
 // --- Initialization ---
@@ -201,6 +250,59 @@ async function init() {
     else dampVal.textContent = damping.toFixed(3);
   });
 
+  // Pause button
+  const pauseBtn = document.getElementById('btn-pause');
+  if (pauseBtn) {
+    pauseBtn.addEventListener('click', () => {
+      session.playback.paused = !session.playback.paused;
+      pauseBtn.textContent = session.playback.paused ? 'Resume' : 'Pause';
+      if (!session.playback.paused) {
+        // Resume: prevent catch-up burst
+        scheduler.lastFrameTs = performance.now();
+        scheduler.simBudgetMs = 0;
+      }
+      scheduler.forceRenderThisTick = true;
+    });
+  }
+
+  // Speed buttons
+  document.querySelectorAll('.speed-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const val = btn.dataset.speed;
+      if (val === 'max') {
+        session.playback.speedMode = 'max';
+      } else {
+        session.playback.speedMode = 'fixed';
+        session.playback.selectedSpeed = parseFloat(val);
+      }
+      document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      scheduler.forceRenderThisTick = true;
+      updateSpeedControls();
+    });
+  });
+
+  // Initial speed button state
+  updateSpeedControls();
+
+  // Mobile: tap FPS area to expand diagnostics for 5s
+  const fpsEl = document.getElementById('fps');
+  if (fpsEl) {
+    fpsEl.addEventListener('click', () => {
+      _fpsExpanded = true;
+      clearTimeout(_fpsExpandTimer);
+      _fpsExpandTimer = setTimeout(() => { _fpsExpanded = false; }, 5000);
+    });
+  }
+
+  // Tab visibility: prevent catch-up burst
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      scheduler.lastFrameTs = performance.now();
+      scheduler.simBudgetMs = 0;
+    }
+  });
+
   requestAnimationFrame(frameLoop);
 }
 
@@ -249,6 +351,7 @@ function clearPlayground() {
   session.scene.totalAtoms = 0;
   syncInputManager();
   renderer.resetToEmpty();
+  fullSchedulerReset();
   updateSceneStatus();
 }
 
@@ -337,6 +440,7 @@ async function startPlacement(filename, name) {
 
     // Register placement listeners
     registerPlacementListeners();
+    scheduler.forceRenderThisTick = true;
 
   } catch (e) {
     _placementLoading = false;
@@ -356,6 +460,7 @@ function exitPlacementMode(commit) {
 
   unregisterPlacementListeners();
   session.placement.isDraggingPreview = false;
+  scheduler.forceRenderThisTick = true;
 
   // Capture data before clearing state — commitMolecule may throw
   const shouldCommit = commit && session.placement.previewAtoms;
@@ -456,6 +561,8 @@ function commitMolecule(filename, name, atoms, bonds, offset) {
   session.scene.molecules.push(mol);
   session.scene.totalAtoms += result.atomCount;
   syncInputManager();
+  // Partial profiler reset: scene cost changed
+  partialProfilerReset();
 
   if (isFirstMolecule) {
     renderer.fitCamera();
@@ -933,23 +1040,321 @@ function handleCommand(cmd, screenX, screenY) {
   }
 }
 
-// --- Frame Loop ---
-function frameLoop(timestamp) {
-  fpsMonitor.begin();
-  try {
-    // Physics pauses during placement
-    if (!session.placement.active && physics.n > 0) {
-      physics.step();
+// --- Profiler reset helpers ---
+function fullSchedulerReset() {
+  scheduler.simBudgetMs = 0;
+  scheduler.overloadCount = 0;
+  scheduler.mode = 'normal';
+  scheduler.totalStepsProfiled = 0;
+  scheduler.forceRenderThisTick = false;
+  scheduler.stableTicks = 0;
+  scheduler.prevPhysStepMs = 1;
+  scheduler.prevRenderMs = 1;
+  scheduler.warmUpComplete = false;
+  scheduler.lastMaxSpeedUpdateTs = 0;
+  scheduler.skipPressure = 0;
+  scheduler.comfortTicks = 0;
+  scheduler.renderSkipLevel = 1;
+  scheduler.renderSkipCounter = 0;
+  scheduler.renderCount = 0;
+  scheduler.lastRenderCountTs = performance.now();
+  scheduler.hasRenderSample = false;
+  scheduler.effectiveSpeedWindow = [];
+  // Reset profiler EMAs to neutral defaults
+  scheduler.prof.physStepMs = 1;
+  scheduler.prof.updatePosMs = 0.1;
+  scheduler.prof.renderMs = 1;
+  scheduler.prof.otherMs = 0.1;
+  scheduler.prof.rafIntervalMs = 16.67;
+  scheduler.prof.actualRendersPerSec = 60;
+  // Reset recovery blend state
+  scheduler.recoveringStartMax = 0;
+  scheduler.recoveringBlendRemaining = 0;
+  updateSpeedControls();
+}
+
+function partialProfilerReset() {
+  // Reduce EMA magnitudes so fresh samples dominate faster via the normal
+  // alpha blending. This biases estimates low temporarily — maxSpeed may
+  // briefly overstate until new samples arrive. Acceptable because warm-up
+  // re-entry (below) caps target speed at 1.0 during that window.
+  scheduler.prof.physStepMs *= 0.5;
+  scheduler.prof.renderMs *= 0.5;
+  scheduler.prof.updatePosMs *= 0.5;
+  scheduler.prof.otherMs *= 0.5;
+  // Re-enter warm-up with a fresh stability window
+  scheduler.warmUpComplete = false;
+  scheduler.stableTicks = 0;
+  // Reset comparison baselines to post-reset values so stability compares against new state
+  scheduler.prevPhysStepMs = scheduler.prof.physStepMs;
+  scheduler.prevRenderMs = scheduler.prof.renderMs;
+  scheduler.hasRenderSample = false;
+  // Reset render-cadence state so maxSpeed doesn't use stale render-rate history
+  scheduler.prof.actualRendersPerSec *= 0.5; // down-weight like other profiler fields
+  scheduler.renderCount = 0;
+  scheduler.lastRenderCountTs = performance.now();
+  // Force re-warm by capping the step count below the exit threshold
+  scheduler.totalStepsProfiled = Math.min(scheduler.totalStepsProfiled, CONFIG.playback.partialResetStepsCap);
+  scheduler.lastMaxSpeedUpdateTs = 0;
+  updateSpeedControls();
+}
+
+// --- Mobile status tap-to-expand ---
+let _fpsExpanded = false;
+let _fpsExpandTimer = null;
+
+// --- Speed button state sync ---
+function updateSpeedControls() {
+  const max = session.playback.maxSpeed;
+  const warm = scheduler.warmUpComplete;
+  document.querySelectorAll('.speed-btn').forEach(btn => {
+    const val = btn.dataset.speed;
+    if (val === 'max') {
+      btn.style.opacity = '';
+      btn.disabled = false;
+    } else if (!warm) {
+      btn.style.opacity = '0.4';
+      btn.disabled = true;
+    } else {
+      const spd = parseFloat(val);
+      btn.style.opacity = spd > max ? '0.4' : '';
+      btn.disabled = spd > max;
     }
+  });
+}
+
+// --- Frame Loop (accumulator-driven) ---
+function frameLoop(timestamp) {
+  const alpha = CONFIG.playback.profilerAlpha;
+  const tickStart = performance.now();
+
+  // RAF interval
+  const frameDtMs = scheduler.lastFrameTs > 0
+    ? Math.min(timestamp - scheduler.lastFrameTs, CONFIG.playback.gapThreshold)
+    : 16.67;
+  scheduler.lastFrameTs = timestamp;
+  scheduler.prof.rafIntervalMs += alpha * (frameDtMs - scheduler.prof.rafIntervalMs);
+
+  try {
+    let substepsThisFrame = 0;
+
+    // Physics: accumulator-driven stepping
+    const shouldStep = !session.playback.paused && !session.placement.active && physics.n > 0;
+    if (shouldStep) {
+      // Compute target speed
+      const pb = session.playback;
+      let targetSpeed = pb.speedMode === 'max' ? pb.maxSpeed : Math.min(pb.selectedSpeed, pb.maxSpeed);
+
+      // Warm-up: adaptive — 30 steps OR 10 stable ticks
+      if (!scheduler.warmUpComplete) {
+        const physDelta = Math.abs(scheduler.prof.physStepMs - scheduler.prevPhysStepMs);
+        const physStable = scheduler.prevPhysStepMs > 0 && physDelta / scheduler.prevPhysStepMs < CONFIG.playback.stabilityThreshold;
+        // Include renderMs stability only when we've seen a real render sample
+        const renderDelta = Math.abs(scheduler.prof.renderMs - scheduler.prevRenderMs);
+        const renderStable = !scheduler.hasRenderSample || // no valid sample yet — suspend
+          (scheduler.prevRenderMs > 0 && renderDelta / scheduler.prevRenderMs < CONFIG.playback.stabilityThreshold);
+        scheduler.prevPhysStepMs = scheduler.prof.physStepMs;
+        scheduler.prevRenderMs = scheduler.prof.renderMs;
+        if (physStable && renderStable) scheduler.stableTicks++; else scheduler.stableTicks = 0;
+        if (scheduler.totalStepsProfiled >= CONFIG.playback.warmUpSteps || scheduler.stableTicks >= CONFIG.playback.warmUpStableTicks) {
+          scheduler.warmUpComplete = true;
+          updateSpeedControls();
+        } else {
+          targetSpeed = Math.min(targetSpeed, 1.0);
+        }
+      }
+
+      // Accumulate
+      scheduler.simBudgetMs += frameDtMs * targetSpeed;
+
+      // Budget cap based on overload mode
+      const hardCap = CONFIG.playback.maxSubstepsPerTick * stepWallMs;
+      if (scheduler.mode === 'overloaded') {
+        scheduler.simBudgetMs = Math.min(scheduler.simBudgetMs, hardCap);
+      } else {
+        scheduler.simBudgetMs = Math.min(scheduler.simBudgetMs, hardCap * 1.5);
+      }
+
+      // Run substeps
+      const physStart = performance.now();
+      while (scheduler.simBudgetMs >= stepWallMs && substepsThisFrame < CONFIG.playback.maxSubstepsPerTick) {
+        physics.stepOnce();
+        scheduler.simBudgetMs -= stepWallMs;
+        substepsThisFrame++;
+      }
+      const physEnd = performance.now();
+
+      if (substepsThisFrame > 0) {
+        physics.applySafetyControls();
+        const msPerStep = (physEnd - physStart) / substepsThisFrame;
+        scheduler.prof.physStepMs += alpha * (msPerStep - scheduler.prof.physStepMs);
+        scheduler.totalStepsProfiled += substepsThisFrame;
+      }
+
+      // Overloaded in overloaded mode: discard residual budget
+      if (scheduler.mode === 'overloaded') {
+        scheduler.simBudgetMs = Math.min(scheduler.simBudgetMs, 0);
+      }
+
+      // Overload FSM
+      if (substepsThisFrame >= CONFIG.playback.maxSubstepsPerTick) {
+        scheduler.overloadCount = Math.min(scheduler.overloadCount + 1, 30);
+      } else {
+        scheduler.overloadCount = Math.max(0, scheduler.overloadCount - 1);
+      }
+      if (scheduler.mode === 'normal' && scheduler.overloadCount >= CONFIG.playback.overloadEntryTicks) {
+        scheduler.mode = 'overloaded';
+        scheduler.simBudgetMs = 0;
+      }
+      if (scheduler.mode === 'overloaded' && scheduler.overloadCount < CONFIG.playback.overloadExitTicks) {
+        scheduler.mode = 'recovering';
+        scheduler.recoveringStartMax = pb.maxSpeed; // capture for blend
+        scheduler.recoveringBlendRemaining = 2;     // two update windows
+      }
+      if (scheduler.mode === 'recovering') {
+        if (scheduler.overloadCount === 0) scheduler.mode = 'normal';
+        if (scheduler.overloadCount >= CONFIG.playback.overloadEntryTicks) scheduler.mode = 'overloaded';
+      }
+
+      // Effective speed
+      if (frameDtMs > 0) {
+        const instantSpeed = (substepsThisFrame * 1000 / frameDtMs) / CONFIG.playback.baseStepsPerSecond;
+        scheduler.effectiveSpeedWindow.push({ speed: instantSpeed, dt: frameDtMs });
+        if (scheduler.effectiveSpeedWindow.length > 10) scheduler.effectiveSpeedWindow.shift();
+        // Time-weighted average: longer frames carry more weight
+        let wSum = 0, wTotal = 0;
+        for (const s of scheduler.effectiveSpeedWindow) { wSum += s.speed * s.dt; wTotal += s.dt; }
+        pb.effectiveSpeed = wTotal > 0 ? wSum / wTotal : 0;
+      }
+
+      // Max speed estimation — mode-specific source and cadence
+      const now = performance.now();
+      const maxUpdateInterval = scheduler.mode === 'overloaded'
+        ? CONFIG.playback.maxSpeedUpdateOverloadMs
+        : CONFIG.playback.maxSpeedUpdateNormalMs;
+      if (scheduler.warmUpComplete && (now - scheduler.lastMaxSpeedUpdateTs) > maxUpdateInterval) {
+        scheduler.lastMaxSpeedUpdateTs = now;
+        let rawMax;
+        if (scheduler.mode === 'overloaded') {
+          // In overloaded mode: derive from achieved throughput, not budget estimator
+          rawMax = Math.min(pb.effectiveSpeed, CONFIG.playback.maxSpeedCap);
+        } else {
+          // Normal/recovering: use budget-based estimator
+          const budgetPerSec = 1000 * CONFIG.playback.budgetSafety;
+          const renderBudget = scheduler.prof.actualRendersPerSec * scheduler.prof.renderMs;
+          const updateBudget = (1000 / scheduler.prof.rafIntervalMs) * scheduler.prof.updatePosMs;
+          const otherBudget = (1000 / scheduler.prof.rafIntervalMs) * scheduler.prof.otherMs;
+          const physicsBudget = budgetPerSec - renderBudget - updateBudget - otherBudget;
+          const safePhysMs = Math.max(scheduler.prof.physStepMs, 0.001);
+          const maxSteps = Math.max(0, physicsBudget) / safePhysMs;
+          rawMax = Math.min(maxSteps / CONFIG.playback.baseStepsPerSecond, CONFIG.playback.maxSpeedCap);
+        }
+        // Recovering: explicit two-window blend from overloaded max to estimator max
+        if (scheduler.mode === 'recovering' && scheduler.recoveringBlendRemaining > 0) {
+          const stepIndex = 3 - scheduler.recoveringBlendRemaining; // 1, then 2
+          const t = stepIndex / 2; // 0.5, then 1.0
+          pb.maxSpeed = scheduler.recoveringStartMax + t * (rawMax - scheduler.recoveringStartMax);
+          scheduler.recoveringBlendRemaining--;
+        } else {
+          pb.maxSpeed += alpha * (rawMax - pb.maxSpeed);
+        }
+        updateSpeedControls();
+      }
+    }
+
+    // Update positions + feedback (every tick)
+    const updateStart = performance.now();
     if (renderer.atomMeshes.length > 0 && physics.n > 0) {
       renderer.updatePositions(physics);
     }
     renderer.updateFeedback(stateMachine.getFeedbackState());
-    renderer.render();
+    const updateEnd = performance.now();
+    scheduler.prof.updatePosMs += alpha * ((updateEnd - updateStart) - scheduler.prof.updatePosMs);
+
+    // Render decision: budget-driven with hysteresis
+    const usedMs = (substepsThisFrame * scheduler.prof.physStepMs) + scheduler.prof.updatePosMs + scheduler.prof.otherMs;
+    const canRender = (scheduler.prof.rafIntervalMs - usedMs) >= scheduler.prof.renderMs * 0.8;
+
+    if (canRender) {
+      scheduler.skipPressure = 0;
+      scheduler.comfortTicks++;
+      if (scheduler.comfortTicks > 10 && scheduler.renderSkipLevel > 1) {
+        scheduler.renderSkipLevel--;
+        scheduler.comfortTicks = 0;
+      }
+    } else {
+      scheduler.comfortTicks = 0;
+      scheduler.skipPressure++;
+      if (scheduler.skipPressure > 5 && scheduler.renderSkipLevel < 4) {
+        scheduler.renderSkipLevel++;
+        scheduler.skipPressure = 0;
+      }
+    }
+
+    scheduler.renderSkipCounter++;
+    const wasForced = scheduler.forceRenderThisTick;
+    scheduler.forceRenderThisTick = false; // always consumed
+    const shouldRender = wasForced || scheduler.renderSkipCounter >= scheduler.renderSkipLevel;
+
+    if (shouldRender) {
+      scheduler.renderSkipCounter = 0;
+      const renderStart = performance.now();
+      renderer.render();
+      const renderEnd = performance.now();
+      // Exclude forced renders from both renderMs EMA and cadence counter
+      // so render-budget estimation (actualRendersPerSec * renderMs) stays coherent
+      if (!wasForced) {
+        scheduler.prof.renderMs += alpha * ((renderEnd - renderStart) - scheduler.prof.renderMs);
+        scheduler.hasRenderSample = true;
+        scheduler.renderCount++;
+      }
+      // Update actual render rate every ~1s from real counter
+      const renderElapsed = performance.now() - scheduler.lastRenderCountTs;
+      if (renderElapsed > 1000) {
+        scheduler.prof.actualRendersPerSec = scheduler.renderCount * 1000 / renderElapsed;
+        scheduler.renderCount = 0;
+        scheduler.lastRenderCountTs = performance.now();
+      }
+    }
+
+    // Other overhead
+    const tickEnd = performance.now();
+    scheduler.prof.otherMs += alpha * (Math.max(0, (tickEnd - tickStart) - (substepsThisFrame * scheduler.prof.physStepMs) - scheduler.prof.updatePosMs - (shouldRender ? scheduler.prof.renderMs : 0)) - scheduler.prof.otherMs);
+
+    // Update status display
+    const pb = session.playback;
+    const isIdle = pb.paused || session.placement.active || physics.n === 0;
+    const displaySpeed = isIdle ? 0 : pb.effectiveSpeed;
+    const mdRate = displaySpeed * CONFIG.playback.baseStepsPerSecond * CONFIG.physics.dt / 1000;
+    const fps = Math.round(1000 / scheduler.prof.rafIntervalMs);
+    const detail = `${scheduler.prof.rafIntervalMs.toFixed(1)} ms · ${fps} fps`;
+
+    // Mobile: compact by default, detail on tap (via _fpsExpanded flag)
+    // Layout-driven: use viewport width as the stable layout constraint
+    const isCompact = window.innerWidth < 768;
+    const showDetail = !isCompact || _fpsExpanded;
+
+    let statusText;
+    if (pb.paused) {
+      statusText = showDetail ? `Paused · ${detail}` : 'Paused · 0 ps/s';
+    } else if (session.placement.active) {
+      statusText = showDetail ? `Placing... · ${detail}` : 'Placing...';
+    } else if (!scheduler.warmUpComplete) {
+      statusText = 'Estimating...';
+    } else if (scheduler.mode === 'overloaded' || pb.maxSpeed < CONFIG.playback.minSpeed) {
+      statusText = showDetail
+        ? `Hardware-limited · Sim ${displaySpeed.toFixed(1)}x · ${mdRate.toFixed(2)} ps/s · ${detail}`
+        : `Hardware-limited · Sim ${displaySpeed.toFixed(1)}x · ${mdRate.toFixed(2)} ps/s`;
+    } else {
+      statusText = showDetail
+        ? `Sim ${displaySpeed.toFixed(1)}x · ${mdRate.toFixed(2)} ps/s · ${detail}`
+        : `Sim ${displaySpeed.toFixed(1)}x · ${mdRate.toFixed(2)} ps/s`;
+    }
+    fpsMonitor.displayEl.textContent = statusText;
+
   } catch (e) {
     console.error('[frameLoop] ERROR:', e);
   }
-  fpsMonitor.end();
   requestAnimationFrame(frameLoop);
 }
 

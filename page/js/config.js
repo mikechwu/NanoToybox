@@ -39,9 +39,29 @@ export const CONFIG = {
     kRotateDefault: 5.0,    // eV/Å² — rotation spring constant
     vHardMax: 0.15,         // Å/fs — per-atom velocity cap
     keCapMult: 500.0,       // KE cap multiplier
-    dampingDefault: 0.0,     // per-frame velocity damping (0 = NVE, no energy drain)
+    dampingDefault: 0.0,     // velocity reduction factor per legacy batch (4 steps). Applied per-step internally as (1-d)^(1/4).
     fMax: 50.0,             // eV/Å — max force per atom
     iRef: 750.0,            // Å² — reference inertia (C60)
+  },
+
+  playback: {
+    baseStepsPerSecond: 240,  // canonical 1x = 240 steps/sec (independent of display refresh)
+    minSpeed: 0.5,
+    defaultSpeed: 1.0,
+    maxSpeedCap: 16.0,
+    maxSubstepsPerTick: 64,
+    profilerAlpha: 0.15,      // EMA smoothing for profiler
+    budgetSafety: 0.85,       // fraction of wall time available for work
+    gapThreshold: 250,        // ms — clamp frameDt above this
+    // Scheduler heuristics (tunable)
+    warmUpSteps: 30,          // profiled steps before trusting maxSpeed
+    warmUpStableTicks: 10,    // consecutive stable ticks to exit warm-up early
+    stabilityThreshold: 0.1,  // relative change threshold for stability check
+    maxSpeedUpdateNormalMs: 500,   // maxSpeed update cadence in normal/recovering mode
+    maxSpeedUpdateOverloadMs: 1000, // maxSpeed update cadence in overloaded mode
+    overloadEntryTicks: 10,   // consecutive capped ticks to enter overloaded
+    overloadExitTicks: 5,     // overloadCount threshold to enter recovering
+    partialResetStepsCap: 15, // totalStepsProfiled cap after partial reset
   },
 
   debug: {

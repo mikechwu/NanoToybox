@@ -32,8 +32,10 @@ python3 -m http.server 8000
 | Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame, component-aware forces |
 | Rendering | MeshStandardMaterial (PBR), camera-relative 4-light rig, axis triad |
 | Themes | Dark (default) / Light |
-| Advanced | Adjustable drag strength, rotation strength, and damping (0 = NVE to 0.5 = heavy) |
-| FPS | Real frame computation time displayed (not vsync rate) |
+| Advanced | Adjustable drag strength, rotation strength, damping, and speed |
+| Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
+| Pause | Primary control — freezes physics, camera/UI remain active |
+| Status | Sim speed (Nx), MD rate (ps/s), hardware-limited indicator. Tap to expand on mobile |
 | Scene controls | Add Molecule, Add Another, Clear playground, Reset View |
 
 ### Interaction Modes
@@ -45,6 +47,20 @@ The control bar has a three-way mode selector: **Atom** | **Move** | **Rotate**.
 | Atom (default) | Spring force on single atom (camera plane) |
 | Move | Uniform force on connected component, normalized by component size. Blue highlight/force line. Detached fragments are unaffected. Force line originates from picked atom (v1 limitation) |
 | Rotate | Torque via diagonal inertia tensor, distributed as tangential forces |
+
+### Speed & Pause
+
+**Pause** is a primary control in the main control bar. Physics freezes; camera, UI, and input remain active. Resume resets the accumulator to prevent catch-up burst.
+
+**Speed** is in the Advanced panel: `0.5x | 1x | 2x | 4x | Max`. Canonical 1x = 240 steps/sec, independent of display refresh rate (fixes the old monitor-dependent behavior). Speed buttons above the current `maxSpeed` are disabled. **Max** is always enabled — it tracks the live maximum sustainable speed.
+
+**Selected vs effective speed**: the user selects a target speed. The scheduler delivers the actual speed the hardware can sustain. Status shows both: `Sim 2.0x · 0.24 ps/s`. When hardware-limited: `Hardware-limited · Sim 1.6x · 0.19 ps/s`.
+
+**Warm-up**: after scene changes or clear, the profiler needs ~30 steps to estimate costs. During warm-up, speed is capped at 1x, fixed buttons are disabled, and status shows `Estimating...`.
+
+**MD rate**: displayed alongside relative speed. `mdRate = effectiveSpeed × 240 × 0.5fs / 1000 = ps/s`. Gives users a physically meaningful throughput metric.
+
+**Overload**: if the scene is too heavy, the scheduler enters an overloaded mode that caps the accumulator and reports the true sustainable speed. Recovery blends back to the normal estimator over ~1s.
 
 ### Interaction Model
 

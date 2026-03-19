@@ -34,8 +34,12 @@ canvas { display: block; touch-action: none; }
 #status { color: #888; font-size: 11px; }
 #fps {
   position: absolute; top: 12px; right: 12px;
-  color: #666; font-size: 11px; z-index: 10;
+  color: #aab0c0; font-size: 13px; z-index: 10;
   font-variant-numeric: tabular-nums;
+  background: rgba(20,20,28,0.75); backdrop-filter: blur(6px);
+  padding: 6px 12px; border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.06);
+  line-height: 1.4; cursor: pointer;
 }
 #hint {
   position: absolute; bottom: 70px; left: 50%; transform: translateX(-50%);
@@ -83,6 +87,19 @@ canvas { display: block; touch-action: none; }
 .mode-btn + .mode-btn { border-left: none; }
 .mode-btn.active { background: rgba(100,180,140,0.2); color: #8fd8b0; }
 .mode-btn:hover:not(.active) { background: rgba(255,255,255,0.1); color: #ccc; }
+.speed-btn {
+  padding: 4px 8px; font-size: 11px; cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05); color: #999;
+  font-family: inherit; border-radius: 0;
+  touch-action: manipulation;
+}
+.speed-btn:first-child { border-radius: 4px 0 0 4px; }
+.speed-btn:last-child { border-radius: 0 4px 4px 0; }
+.speed-btn + .speed-btn { border-left: none; }
+.speed-btn.active { background: rgba(100,180,140,0.2); color: #8fd8b0; }
+.speed-btn:hover:not(.active):not(:disabled) { background: rgba(255,255,255,0.1); color: #ccc; }
+.speed-btn:disabled { opacity: 0.4; cursor: default; }
 .drawer-item {
   padding: 8px 10px; cursor: pointer; color: #ccc; border-radius: 4px;
   margin-bottom: 2px; touch-action: manipulation;
@@ -127,6 +144,7 @@ canvas { display: block; touch-action: none; }
     <button id="btn-add-another" style="display:none;">Add Another</button>
     <button id="btn-clear">Clear</button>
     <button id="btn-reset-view">Reset View</button>
+    <button id="btn-pause">Pause</button>
     <div class="ctrl-sep"></div>
     <div id="interact-mode" style="display:inline-flex; gap:0;">
       <button class="mode-btn active" data-mode="atom">Atom</button>
@@ -163,7 +181,18 @@ canvas { display: block; touch-action: none; }
     background:rgba(20,20,28,0.95); backdrop-filter:blur(12px);
     padding:16px 20px; border-radius:8px; z-index:15; touch-action:auto;
     border:1px solid rgba(255,255,255,0.08); width:260px; font-size:12px;">
-    <div style="font-weight:600; font-size:13px; margin-bottom:12px; color:#eee;">Interaction Settings</div>
+    <div style="font-weight:600; font-size:13px; margin-bottom:12px; color:#eee;">Settings</div>
+
+    <div style="margin-bottom:12px;">
+      <label style="color:#888; font-size:11px; text-transform:uppercase; letter-spacing:0.3px;">Speed</label>
+      <div style="display:inline-flex; gap:0; margin-left:8px;">
+        <button class="speed-btn" data-speed="0.5">0.5x</button>
+        <button class="speed-btn active" data-speed="1">1x</button>
+        <button class="speed-btn" data-speed="2">2x</button>
+        <button class="speed-btn" data-speed="4">4x</button>
+        <button class="speed-btn" data-speed="max">Max</button>
+      </div>
+    </div>
 
     <div style="margin-bottom:10px;">
       <div style="display:flex; justify-content:space-between; margin-bottom:4px;">

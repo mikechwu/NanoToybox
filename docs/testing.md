@@ -162,6 +162,22 @@ python3 -m http.server 8000
 | 49 | Clear during pending preview load | Click Add Molecule, select structure, then Clear before preview appears — no preview appears after Clear |
 | 50 | Escape during pending preview load (desktop) | Press Escape while structure is loading — load is cancelled, no preview appears |
 | 51 | Preview drag on elongated structure (e.g., CNT) near bond region | Drag starts predictably; nearby atom is preferred when visually intended (CONFIG.picker.previewAtomPreference threshold) |
+| 52 | Speed 0.5x | Motion visibly slower |
+| 53 | Speed 2x | Visibly faster, stable |
+| 54 | Max mode on C720 | Tracks live max |
+| 55 | Pause | Physics freezes, camera works |
+| 56 | Resume | No catch-up burst |
+| 57 | Tab switch/return | No burst |
+| 58 | Speed change mid-interaction | No position jump |
+| 59 | maxSpeed < 0.5x heavy scene | Fixed buttons disabled, Max still works |
+| 60 | Add molecule while at 4x speed | Warm-up re-entered, speed caps at 1x briefly, buttons update |
+| 61 | Clear heavy scene, add small molecule | No stale overload state, speed adapts to new workload |
+| 62 | Sustained overload → scene lightens | maxSpeed recovers smoothly over ~1s |
+| 63 | Warm-up: fixed speed buttons | Disabled/dimmed during warm-up, Max still enabled |
+| 64 | Warm-up: Estimating status | Shows "Estimating..." after clear + add or molecule append |
+| 65 | Pause/resume visual update | Screen updates immediately on toggle (forced render) |
+| 66 | Placement enter/exit visual update | Screen updates immediately (forced render) |
+| 67 | Mobile: tap status area | Diagnostics (ms/fps) expand for ~5s, then collapse |
 
 **Transaction rollback verification:**
 
