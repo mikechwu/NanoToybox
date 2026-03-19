@@ -25,15 +25,16 @@ python3 -m http.server 8000
 
 | Feature | Details |
 |---------|---------|
-| Structures | 15 presets loaded from library (C60, CNTs, graphene, diamond, fullerenes) |
-| Interact modes | Atom (drag single atom), Move (translate molecule), Rotate (torque) — segmented control in control bar |
+| Multi-molecule | Add multiple structures to the scene via Add Molecule + placement mode |
+| Placement mode | Tangent placement near target molecule, translucent preview, drag to adjust, Place/Cancel |
+| Interact modes | Atom (drag single atom), Move (translate connected component), Rotate (torque on component) |
 | Camera | Right-drag = orbit, scroll = zoom (OrbitControls, always active) |
-| Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame |
+| Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame, component-aware forces |
 | Rendering | MeshStandardMaterial (PBR), camera-relative 4-light rig, axis triad |
 | Themes | Dark (default) / Light |
 | Advanced | Adjustable drag strength, rotation strength, and damping (0 = NVE to 0.5 = heavy) |
 | FPS | Real frame computation time displayed (not vsync rate) |
-| Reset | Reset structure (reload atoms) and Reset View (restore camera) buttons |
+| Scene controls | Add Molecule, Add Another, Clear playground, Reset View |
 
 ### Interaction Modes
 

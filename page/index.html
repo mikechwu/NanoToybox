@@ -83,6 +83,11 @@ canvas { display: block; touch-action: none; }
 .mode-btn + .mode-btn { border-left: none; }
 .mode-btn.active { background: rgba(100,180,140,0.2); color: #8fd8b0; }
 .mode-btn:hover:not(.active) { background: rgba(255,255,255,0.1); color: #ccc; }
+.drawer-item {
+  padding: 8px 10px; cursor: pointer; color: #ccc; border-radius: 4px;
+  margin-bottom: 2px; touch-action: manipulation;
+}
+.drawer-item:hover { background: rgba(255,255,255,0.1); color: #fff; }
 </style>
 </head>
 <body>
@@ -112,12 +117,15 @@ canvas { display: block; touch-action: none; }
     <div><b>1-finger drag on atom</b> — interact (depends on mode)</div>
     <div><b>2-finger pinch</b> — zoom</div>
     <div><b>2-finger drag</b> — pan camera</div>
+    <div style="margin-top:12px; margin-bottom:6px; color:#8fd8b0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Playground</div>
+    <div><b>Add Molecule</b> — place a new molecule in the scene</div>
+    <div><b>Clear</b> — remove all molecules</div>
+    <div>New molecules appear next to the molecule nearest the center of your view. Drag to adjust position before placing. Any visible part of the preview can be dragged.</div>
   </div>
   <div id="controls">
-    <label>Structure</label>
-    <select id="structure-select"></select>
-    <div class="ctrl-sep"></div>
-    <button id="btn-reset">Reset</button>
+    <button id="btn-add-molecule">Add Molecule</button>
+    <button id="btn-add-another" style="display:none;">Add Another</button>
+    <button id="btn-clear">Clear</button>
     <button id="btn-reset-view">Reset View</button>
     <div class="ctrl-sep"></div>
     <div id="interact-mode" style="display:inline-flex; gap:0;">
@@ -129,6 +137,25 @@ canvas { display: block; touch-action: none; }
     <button id="theme-toggle">Theme</button>
     <button id="btn-advanced">Advanced</button>
     <button id="btn-help-open">?</button>
+  </div>
+  <!-- Structure drawer (opened by Add Molecule) -->
+  <div id="structure-drawer" style="display:none; position:absolute; bottom:50px; left:12px;
+    background:rgba(20,20,28,0.95); backdrop-filter:blur(12px);
+    padding:12px 16px; border-radius:8px; z-index:20; touch-action:auto;
+    border:1px solid rgba(255,255,255,0.08); width:280px; max-height:300px; overflow-y:auto; font-size:12px;">
+    <div style="font-weight:600; font-size:13px; margin-bottom:8px; color:#eee;">Choose Structure</div>
+    <div id="structure-list"></div>
+  </div>
+  <!-- Placement mode bar -->
+  <div id="placement-bar" style="display:none; position:absolute; bottom:50px; left:50%; transform:translateX(-50%);
+    background:rgba(20,20,28,0.95); backdrop-filter:blur(12px);
+    padding:8px 16px; border-radius:8px; z-index:20; touch-action:auto;
+    border:1px solid rgba(100,180,140,0.3); font-size:13px;
+    align-items:center; gap:12px;">
+    <button id="btn-place" style="background:rgba(100,180,140,0.3); color:#8fd8b0; border:1px solid rgba(100,180,140,0.4);
+      padding:8px 20px; border-radius:4px; cursor:pointer; font-size:13px; font-weight:600;">Place</button>
+    <button id="btn-cancel-place" style="background:rgba(255,255,255,0.08); color:#ccc; border:1px solid rgba(255,255,255,0.12);
+      padding:8px 16px; border-radius:4px; cursor:pointer; font-size:13px;">Cancel</button>
   </div>
 
   <!-- Advanced settings panel -->

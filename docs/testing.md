@@ -141,3 +141,31 @@ python3 -m http.server 8000
 | 28 | Atom mode: push two fragments close until bonds form, then Move mode | Merged fragment moves as one patch |
 | 29 | Move mode: vigorous drag causing bonds to break mid-interaction | Detached atoms stop following after next bond refresh (~0.08s). Expected behavior |
 | 30 | Move/Rotate near bond cutoff distance | Patch scope may change as bonds flicker. Expected behavior with cutoff-only detection (no hysteresis) |
+| 31 | Add Molecule to empty scene | Preview appears centered in current viewport, Place creates real molecule |
+| 32 | Add second molecule | Preview appears tangent to existing molecule, adjacent in current view |
+| 33 | Drag preview, then Place | Preview becomes real atoms, simulation resumes |
+| 34 | Cancel during placement | Preview removed, scene unchanged |
+| 35 | Move mode: drag molecule A into molecule B | Collision occurs, Tersoff forces engage |
+| 36 | Move mode on molecule A in 2-molecule scene | Only A's component translates (component-aware) |
+| 37 | Clear playground | All molecules removed, scene empty |
+| 38 | Camera during placement | Right-drag orbits, scroll zooms. Preview reprojects after camera gesture |
+| 39 | Esc during placement (desktop) | Placement cancelled |
+| 40 | Add molecule with rotated camera | Preview tangent direction adapts to camera orientation |
+| 41 | Start preview drag, add 2nd finger for camera | Preview drag cancels cleanly, camera takes over, no state leaks |
+| 42 | Clear playground, then orbit camera | Camera orbits around origin (0,0,0), not stale scene center |
+| 43 | Clear playground, then Add Molecule | Preview appears centered in viewport at molecule-appropriate depth |
+| 44 | Clear + Add + Atom drag | First molecule after Clear responds to all interaction modes correctly |
+| 45 | Switch structure during placement | Click different molecule in drawer while preview is active — old preview replaced cleanly, new preview appears |
+| 46 | Add Another during placement | Add Another while preview active — old preview replaced, new preview of same structure appears |
+| 47 | Rapid structure switching in drawer | Click two different structures quickly — only the last-clicked preview appears, first is discarded |
+| 48 | Stale load failure during switching | If first structure fails to load after second was selected, error does not corrupt the active preview |
+| 49 | Clear during pending preview load | Click Add Molecule, select structure, then Clear before preview appears — no preview appears after Clear |
+| 50 | Escape during pending preview load (desktop) | Press Escape while structure is loading — load is cancelled, no preview appears |
+| 51 | Preview drag on elongated structure (e.g., CNT) near bond region | Drag starts predictably; nearby atom is preferred when visually intended (CONFIG.picker.previewAtomPreference threshold) |
+
+**Transaction rollback verification:**
+
+- **Automated physics tests:** open `page/test-rollback.html` in a browser (requires serving from repo root). Tests physics append/rollback/clear/invariants/components directly against the real `PhysicsEngine` class. Does NOT test the full `commitMolecule` orchestration path (renderer + session state coordination).
+- **Manual commit-path testing:** set `CONFIG.debug.failAfterPhysicsAppend = true` or `CONFIG.debug.failRendererAppend = true` in config.js, then place a molecule via the UI. Verify: placement fails gracefully, no orphan meshes, physics atom count restored, scene molecule list unchanged. Set `CONFIG.debug.assertions = true` to enable post-append invariant checks inside the rollback-protected block.
+- **Coverage summary:** physics-level transaction safety is automated; full commit-path rollback (physics + renderer + session) requires manual flag toggling and UI interaction. Both complement manual smoke tests for interaction flow.
+- **Future milestone — full integration test harness:** automate commitMolecule transaction path (physics + renderer + session coordination), preview hit-preference threshold tests (atom-vs-bond within/outside CONFIG.picker.previewAtomPreference), and remove CDN dependency from test page. Tracked as a separate infrastructure investment.

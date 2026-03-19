@@ -772,6 +772,98 @@ export class PhysicsEngine {
     this.rebuildComponents();
   }
 
+  /**
+   * Append a molecule to the existing simulation without resetting state.
+   * Preserves existing atom positions, velocities, and forces.
+   * @param {Array} atoms - [{x,y,z}] local atom positions
+   * @param {Array} bonds - [[i,j,d]] local bond indices
+   * @param {number[]} offset - [ox,oy,oz] world-space translation for new atoms
+   * @returns {{ atomOffset: number, atomCount: number }}
+   */
+  appendMolecule(atoms, bonds, offset) {
+    const oldN = this.n;
+    const addN = atoms.length;
+    const newN = oldN + addN;
+
+    // Allocate ALL new buffers before mutating any state.
+    // If any allocation throws (OOM), this.* is unchanged.
+    const newPos = new Float64Array(newN * 3);
+    const newVel = new Float64Array(newN * 3);
+    const newForce = new Float64Array(newN * 3);
+    const newDist = new Float64Array(newN * newN);
+    const newRhat = new Float64Array(newN * newN * 3);
+    const newNlArrays = new Array(newN);
+    const newNlCounts = new Int32Array(newN);
+    for (let i = 0; i < newN; i++) newNlArrays[i] = new Int32Array(8);
+
+    // --- Past this point, no allocation can throw. Commit state. ---
+    if (oldN > 0) {
+      newPos.set(this.pos);
+      newVel.set(this.vel);
+    }
+
+    // Append new atoms with offset
+    const ox = offset[0], oy = offset[1], oz = offset[2];
+    for (let i = 0; i < addN; i++) {
+      const ix = (oldN + i) * 3;
+      newPos[ix] = atoms[i].x + ox;
+      newPos[ix + 1] = atoms[i].y + oy;
+      newPos[ix + 2] = atoms[i].z + oz;
+    }
+
+    this.pos = newPos;
+    this.vel = newVel;
+    this.force = newForce;
+    this.n = newN;
+
+    // Append bonds with index offset
+    for (let b = 0; b < bonds.length; b++) {
+      this.bonds.push([bonds[b][0] + oldN, bonds[b][1] + oldN, bonds[b][2]]);
+    }
+
+    this._maxN = newN;
+    this._dist = newDist;
+    this._rhat = newRhat;
+    this._nlArrays = newNlArrays;
+    this._nlCounts = newNlCounts;
+
+    // Rebuild derived state. These are pure computations on the committed
+    // typed arrays and cannot throw in practice. If they did, the atom
+    // positions/velocities are already correct — only forces/bonds/components
+    // would be stale, which self-corrects on the next physics.step().
+    this.neighborList = null;
+    this.computeForces();
+    this.updateBondList();
+    this.rebuildComponents();
+
+    return { atomOffset: oldN, atomCount: addN };
+  }
+
+  /**
+   * Clear all atoms from the simulation. Resets to empty state.
+   */
+  clearScene() {
+    this.n = 0;
+    this.pos = new Float64Array(0);
+    this.vel = new Float64Array(0);
+    this.force = new Float64Array(0);
+    this.bonds = [];
+    this.dragAtom = -1;
+    this.isRotateMode = false;
+    this.isTranslateMode = false;
+    this.activeComponent = -1;
+    this.keInitial = 0;
+    this.neighborList = null;
+    this.stepCount = 0;
+    this._maxN = 0;
+    this._dist = null;
+    this._rhat = null;
+    this._nlArrays = null;
+    this._nlCounts = null;
+    this.componentId = null;
+    this.components = [];
+  }
+
   // ─── User-adjustable parameters ───
 
   setDragStrength(val) { this.kDrag = val; }

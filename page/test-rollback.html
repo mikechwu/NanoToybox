@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NanoToybox — Physics Transaction Dev Test</title>
+<style>
+body { font-family: monospace; background: #1a1a2e; color: #e8e8e8; padding: 20px; }
+.pass { color: #50c050; }
+.fail { color: #e05050; }
+.info { color: #8090b0; }
+pre { margin: 4px 0; }
+</style>
+</head>
+<body>
+<h2>Physics Transaction Dev Test</h2>
+<p class="info">Tests physics append/rollback/clear operations directly against PhysicsEngine.<br>
+Requires serving from repo root (python3 -m http.server). Uses the same CDN importmap as the main app.<br>
+Does NOT test the full commitMolecule path (renderer + session). Use CONFIG.debug flags for that.</p>
+<div id="results"></div>
+
+<!-- Same importmap as the main app -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import { PhysicsEngine } from './js/physics.js';
+import { CONFIG } from './js/config.js';
+
+const results = document.getElementById('results');
+function log(msg, cls = 'info') {
+  results.innerHTML += `<pre class="${cls}">${msg}</pre>`;
+}
+let passed = 0, failed = 0;
+function assert(condition, msg) {
+  if (condition) { log(`  PASS: ${msg}`, 'pass'); passed++; }
+  else { log(`  FAIL: ${msg}`, 'fail'); failed++; }
+}
+
+function makeAtoms(n) {
+  const atoms = [];
+  for (let i = 0; i < n; i++) atoms.push({ x: i * 1.42, y: 0, z: 0 });
+  return atoms;
+}
+function makeBonds(atoms) {
+  const bonds = [];
+  for (let i = 0; i < atoms.length - 1; i++) bonds.push([i, i+1, 1.42]);
+  return bonds;
+}
+
+// --- Test 1: appendMolecule uses new arrays (allocate-before-commit) ---
+log('Test 1: appendMolecule allocates new arrays before committing state');
+{
+  const p = new PhysicsEngine();
+  const a1 = makeAtoms(5), b1 = makeBonds(a1);
+  p.init(a1, b1);
+  const posRef = p.pos;
+  const velRef = p.vel;
+
+  const a2 = makeAtoms(3), b2 = makeBonds(a2);
+  p.appendMolecule(a2, b2, [5, 0, 0]);
+
+  assert(p.pos !== posRef, 'pos is a new Float64Array (not mutated in place)');
+  assert(p.vel !== velRef, 'vel is a new Float64Array');
+  assert(p.n === 8, `n === 8 after appending 3 to 5`);
+  assert(p.pos.length === 24, `pos.length === 24 (8 * 3)`);
+}
+
+// --- Test 2: Physics rollback restores pre-append state ---
+log('\nTest 2: Physics state can be rolled back after successful append');
+{
+  const p = new PhysicsEngine();
+  const a1 = makeAtoms(10), b1 = makeBonds(a1);
+  p.init(a1, b1);
+  const n0 = p.n;
+  const posLen0 = p.pos.length;
+  const bondLen0 = p.bonds.length;
+
+  // Append succeeds
+  const a2 = makeAtoms(5), b2 = makeBonds(a2);
+  p.appendMolecule(a2, b2, [10, 0, 0]);
+  assert(p.n === 15, 'n === 15 after append');
+
+  // Simulate rollback (same code as commitMolecule catch block)
+  p.n = n0;
+  p.pos = p.pos.slice(0, n0 * 3);
+  p.vel = p.vel.slice(0, n0 * 3);
+  p.force = new Float64Array(n0 * 3);
+  p.bonds.length = p.bonds.length - b2.length;
+  p.neighborList = null;
+  p.computeForces();
+  p.updateBondList();
+  p.rebuildComponents();
+
+  assert(p.n === n0, `n restored: ${p.n} === ${n0}`);
+  assert(p.pos.length === posLen0, `pos.length restored: ${p.pos.length}`);
+  assert(p.vel.length === posLen0, `vel.length restored`);
+  assert(p.force.length === posLen0, `force.length restored`);
+  assert(p.bonds.length === bondLen0, `bonds.length restored: ${p.bonds.length}`);
+
+  // Verify physics still works after rollback
+  p.step();
+  assert(p.n === n0, 'n still correct after step()');
+  assert(!isNaN(p.pos[0]), 'no NaN in positions after step()');
+}
+
+// --- Test 3: clearScene fully resets ---
+log('\nTest 3: clearScene resets to empty state');
+{
+  const p = new PhysicsEngine();
+  const a = makeAtoms(20), b = makeBonds(a);
+  p.init(a, b);
+  assert(p.n === 20, 'n === 20 before clear');
+  p.clearScene();
+
+  assert(p.n === 0, 'n === 0 after clear');
+  assert(p.pos.length === 0, 'pos empty');
+  assert(p.vel.length === 0, 'vel empty');
+  assert(p.force.length === 0, 'force empty');
+  assert(p.bonds.length === 0, 'bonds empty');
+  assert(p.components.length === 0, 'components empty');
+  assert(p.dragAtom === -1, 'dragAtom reset');
+  assert(p.activeComponent === -1, 'activeComponent reset');
+}
+
+// --- Test 4: Post-append invariant checks ---
+log('\nTest 4: Post-append invariants hold (array sizes, bond indices)');
+{
+  const p = new PhysicsEngine();
+  const a1 = makeAtoms(10), b1 = makeBonds(a1);
+  p.init(a1, b1);
+
+  const a2 = makeAtoms(5), b2 = makeBonds(a2);
+  p.appendMolecule(a2, b2, [10, 0, 0]);
+
+  assert(p.pos.length === p.n * 3, `pos.length === n * 3`);
+  assert(p.vel.length === p.n * 3, `vel.length === n * 3`);
+  assert(p.force.length === p.n * 3, `force.length === n * 3`);
+  assert(!p.componentId || p.componentId.length === p.n, `componentId.length === n`);
+
+  let allBondsValid = true;
+  for (const [i, j] of p.bonds) {
+    if (i >= p.n || j >= p.n) { allBondsValid = false; break; }
+  }
+  assert(allBondsValid, `all bond indices < n (${p.n})`);
+}
+
+// --- Test 5: Append preserves existing atom positions ---
+log('\nTest 5: Existing atom positions preserved after append');
+{
+  const p = new PhysicsEngine();
+  const a1 = makeAtoms(5), b1 = makeBonds(a1);
+  p.init(a1, b1);
+  const origX0 = p.pos[0], origX3 = p.pos[3];
+
+  const a2 = makeAtoms(3), b2 = makeBonds(a2);
+  p.appendMolecule(a2, b2, [10, 0, 0]);
+
+  assert(p.pos[0] === origX0, `atom 0 x preserved: ${p.pos[0]}`);
+  assert(p.pos[3] === origX3, `atom 1 x preserved: ${p.pos[3]}`);
+  assert(p.pos[15] === 10, `new atom 0 x offset applied: ${p.pos[15]}`);
+}
+
+// --- Test 6: Component-aware after append ---
+log('\nTest 6: Connected components correct after multi-append');
+{
+  const p = new PhysicsEngine();
+  const a1 = makeAtoms(5), b1 = makeBonds(a1);
+  p.init(a1, b1);
+  assert(p.components.length === 1, 'one component after init');
+
+  // Append a separate molecule (no bonds between old and new)
+  const a2 = makeAtoms(3), b2 = makeBonds(a2);
+  p.appendMolecule(a2, b2, [20, 0, 0]); // far away, no inter-molecule bonds
+
+  assert(p.components.length >= 2, `at least 2 components after separate append: ${p.components.length}`);
+  assert(p.componentId[0] !== p.componentId[5], 'atom 0 and atom 5 in different components');
+}
+
+// --- Summary ---
+log(`\n${'='.repeat(40)}`);
+log(`Results: ${passed} passed, ${failed} failed`, failed > 0 ? 'fail' : 'pass');
+</script>
+</body>
+</html>

@@ -19,6 +19,7 @@ export class Renderer {
     this.highlightAtom = -1;
     this.forceLine = null;
     this.currentTheme = 'dark';
+    this._previewGroup = null;  // THREE.Group for placement preview
 
     // Pre-allocated vectors reused every frame (avoid GC pressure)
     this._bondUp = new THREE.Vector3(0, 1, 0);
@@ -154,15 +155,10 @@ export class Renderer {
       metalness: CONFIG.material.metalness,
     });
 
-    // Center of mass
-    let cx = 0, cy = 0, cz = 0;
-    atoms.forEach(a => { cx += a.x; cy += a.y; cz += a.z; });
-    cx /= atoms.length; cy /= atoms.length; cz /= atoms.length;
-    this.comOffset = [cx, cy, cz];
-
+    // Atoms rendered in physics space (no centering offset)
     atoms.forEach(a => {
       const mesh = new THREE.Mesh(this._atomGeom, this._atomMat);
-      mesh.position.set(a.x - cx, a.y - cy, a.z - cz);
+      mesh.position.set(a.x, a.y, a.z);
       this.scene.add(mesh);
       this.atomMeshes.push(mesh);
     });
@@ -194,10 +190,9 @@ export class Renderer {
   }
 
   updatePositions(physics) {
-    const [cx, cy, cz] = this.comOffset;
     for (let i = 0; i < this.atomMeshes.length; i++) {
       const [x, y, z] = physics.getPosition(i);
-      this.atomMeshes[i].position.set(x - cx, y - cy, z - cz);
+      this.atomMeshes[i].position.set(x, y, z);
     }
 
     const bonds = physics.getBonds();
@@ -287,14 +282,13 @@ export class Renderer {
   showForceLine(fromAtomIndex, toWorldX, toWorldY, toWorldZ) {
     if (fromAtomIndex < 0) return;
     const atomPos = this.atomMeshes[fromAtomIndex].position;
-    const [cx, cy, cz] = this.comOffset;
     const positions = this.forceLine.geometry.attributes.position.array;
     positions[0] = atomPos.x;
     positions[1] = atomPos.y;
     positions[2] = atomPos.z;
-    positions[3] = toWorldX - cx;
-    positions[4] = toWorldY - cy;
-    positions[5] = (toWorldZ !== undefined ? toWorldZ : atomPos.z + cz) - cz;
+    positions[3] = toWorldX;
+    positions[4] = toWorldY;
+    positions[5] = toWorldZ !== undefined ? toWorldZ : atomPos.z;
     this.forceLine.geometry.attributes.position.needsUpdate = true;
     this.forceLine.visible = true;
   }
@@ -371,20 +365,213 @@ export class Renderer {
     }
   }
 
+  /**
+   * Append atom meshes for a newly placed molecule.
+   * Does NOT clear existing meshes — adds to the current scene.
+   * Bond meshes are NOT added here — they are managed by the pool
+   * in _syncBondPool() during updatePositions().
+   */
+  appendMeshes(atoms) {
+    if (CONFIG.debug.failRendererAppend) throw new Error('[debug] Injected renderer append failure');
+    const t = THEMES[this.currentTheme];
+    if (!this._atomGeom) {
+      this._atomGeom = new THREE.SphereGeometry(
+        CONFIG.atoms.radius, CONFIG.atoms.segments[0], CONFIG.atoms.segments[1]
+      );
+      this._atomMat = new THREE.MeshStandardMaterial({
+        color: t.atom, roughness: CONFIG.material.roughness, metalness: CONFIG.material.metalness,
+      });
+    }
+    if (!this._bondGeom) {
+      this._bondGeom = new THREE.CylinderGeometry(
+        CONFIG.bondMesh.radius, CONFIG.bondMesh.radius, 1, CONFIG.bondMesh.segments
+      );
+      this._bondMat = new THREE.MeshStandardMaterial({
+        color: t.bond, roughness: CONFIG.material.roughness, metalness: CONFIG.material.metalness,
+      });
+    }
+    const startIdx = this.atomMeshes.length;
+    try {
+      atoms.forEach(a => {
+        const mesh = new THREE.Mesh(this._atomGeom, this._atomMat);
+        mesh.position.set(a.x, a.y, a.z);
+        this.scene.add(mesh);
+        this.atomMeshes.push(mesh);
+      });
+      this.scene.updateMatrixWorld(true);
+    } catch (e) {
+      // Remove any meshes added before the failure
+      while (this.atomMeshes.length > startIdx) {
+        const mesh = this.atomMeshes.pop();
+        this.scene.remove(mesh);
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Clear all atom and bond meshes from the scene.
+   */
+  clearAllMeshes() {
+    if (this.highlightAtom >= 0 && this.highlightAtom < this.atomMeshes.length) {
+      const hm = this.atomMeshes[this.highlightAtom];
+      if (hm.material !== this._atomMat) hm.material.dispose();
+    }
+    this.highlightAtom = -1;
+    this.atomMeshes.forEach(m => this.scene.remove(m));
+    this.bondMeshes.forEach(m => this.scene.remove(m));
+    this.atomMeshes = [];
+    this.bondMeshes = [];
+    this._activeBonds = 0;
+  }
+
+  // --- Preview layer for placement mode ---
+
+  showPreview(atoms, bonds, offset) {
+    this.hidePreview();
+    const t = THEMES[this.currentTheme];
+    const group = new THREE.Group();
+    const previewAtomMat = new THREE.MeshStandardMaterial({
+      color: t.atom, roughness: 0.7, metalness: 0,
+      transparent: true, opacity: 0.4,
+      emissive: 0x334466, emissiveIntensity: 0.5,
+    });
+    const previewGeom = this._atomGeom || new THREE.SphereGeometry(
+      CONFIG.atoms.radius, CONFIG.atoms.segments[0], CONFIG.atoms.segments[1]
+    );
+    this._previewAtomMeshes = [];
+    atoms.forEach(a => {
+      const mesh = new THREE.Mesh(previewGeom, previewAtomMat);
+      mesh.position.set(a.x, a.y, a.z);
+      group.add(mesh);
+      this._previewAtomMeshes.push(mesh);
+    });
+    // Preview bonds
+    if (bonds && bonds.length > 0) {
+      const previewBondMat = new THREE.MeshStandardMaterial({
+        color: t.bond, roughness: 0.7, metalness: 0,
+        transparent: true, opacity: 0.3,
+      });
+      const bondGeom = this._bondGeom || new THREE.CylinderGeometry(
+        CONFIG.bondMesh.radius, CONFIG.bondMesh.radius, 1, CONFIG.bondMesh.segments
+      );
+      const up = new THREE.Vector3(0, 1, 0);
+      const dir = new THREE.Vector3();
+      for (const [i, j] of bonds) {
+        if (i >= atoms.length || j >= atoms.length) continue;
+        const ai = atoms[i], aj = atoms[j];
+        const dx = aj.x - ai.x, dy = aj.y - ai.y, dz = aj.z - ai.z;
+        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist > CONFIG.bonds.visibilityCutoff) continue;
+        const mesh = new THREE.Mesh(bondGeom, previewBondMat);
+        mesh.position.set((ai.x+aj.x)/2, (ai.y+aj.y)/2, (ai.z+aj.z)/2);
+        mesh.scale.y = dist;
+        dir.set(dx, dy, dz).normalize();
+        mesh.quaternion.setFromUnitVectors(up, dir);
+        group.add(mesh);
+      }
+      this._previewBondMat = previewBondMat;
+    }
+    group.position.set(offset[0], offset[1], offset[2]);
+    this.scene.add(group);
+    this._previewGroup = group;
+    this._previewMat = previewAtomMat;
+  }
+
+  updatePreviewOffset(offset) {
+    if (this._previewGroup) {
+      this._previewGroup.position.set(offset[0], offset[1], offset[2]);
+    }
+  }
+
+  hidePreview() {
+    if (this._previewGroup) {
+      this.scene.remove(this._previewGroup);
+      if (this._previewMat) this._previewMat.dispose();
+      if (this._previewBondMat) this._previewBondMat.dispose();
+      this._previewGroup = null;
+      this._previewMat = null;
+      this._previewBondMat = null;
+      this._previewAtomMeshes = null;
+    }
+  }
+
+  /**
+   * Raycast against all preview meshes (atoms and bonds) with hybrid
+   * hit preference: if both an atom and a bond are hit within a small
+   * ray-distance threshold, prefer the atom hit for more stable grab
+   * behavior. Bonds are still draggable when they are the only hit.
+   */
+  raycastPreview(screenX, screenY) {
+    if (!this._previewGroup || !this._previewGroup.children.length) {
+      return { hit: false, worldPoint: null };
+    }
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((screenX - rect.left) / rect.width) * 2 - 1,
+      -((screenY - rect.top) / rect.height) * 2 + 1
+    );
+    this.camera.updateMatrixWorld(true);
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, this.camera);
+    const hits = raycaster.intersectObjects(this._previewGroup.children, false);
+    if (hits.length === 0) return { hit: false, worldPoint: null };
+
+    // Prefer atom hits over bond hits when both are within a small threshold
+    const atomHits = this._previewAtomMeshes
+      ? hits.filter(h => this._previewAtomMeshes.includes(h.object))
+      : [];
+    const threshold = CONFIG.picker.previewAtomPreference;
+    let best = hits[0];
+    if (atomHits.length > 0 && atomHits[0].distance - hits[0].distance < threshold) {
+      best = atomHits[0];
+    }
+    const p = best.point;
+    return { hit: true, worldPoint: [p.x, p.y, p.z] };
+  }
+
+  getPreviewWorldCenter() {
+    if (!this._previewGroup) return [0, 0, 0];
+    const p = this._previewGroup.position;
+    return [p.x, p.y, p.z];
+  }
+
   _fitCamera() {
     if (this.atomMeshes.length === 0) return;
+    // Compute COM and bounding radius from atom positions (physics space)
+    let cx = 0, cy = 0, cz = 0;
+    this.atomMeshes.forEach(m => {
+      cx += m.position.x; cy += m.position.y; cz += m.position.z;
+    });
+    cx /= this.atomMeshes.length;
+    cy /= this.atomMeshes.length;
+    cz /= this.atomMeshes.length;
+
     let maxR = 0;
     this.atomMeshes.forEach(m => {
-      const r = m.position.length();
+      const dx = m.position.x - cx, dy = m.position.y - cy, dz = m.position.z - cz;
+      const r = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (r > maxR) maxR = r;
     });
     const dist = maxR * 2.5 + 5;
-    this.camera.position.set(0, 0, dist);
-    this.controls.target.set(0, 0, 0);
+    this.camera.position.set(cx, cy, cz + dist);
+    this.controls.target.set(cx, cy, cz);
     this.controls.update();
 
     // Save for resetView
-    this._defaultCamPos.set(0, 0, dist);
+    this._defaultCamPos.set(cx, cy, cz + dist);
+    this._defaultCamTarget.set(cx, cy, cz);
+  }
+
+  /** Public API: fit camera to current atom positions. */
+  fitCamera() { this._fitCamera(); }
+
+  /** Reset camera to default empty-scene position (origin-centered). */
+  resetToEmpty() {
+    this.camera.position.set(0, 0, 15);
+    this.controls.target.set(0, 0, 0);
+    this.controls.update();
+    this._defaultCamPos.set(0, 0, 15);
     this._defaultCamTarget.set(0, 0, 0);
   }
 

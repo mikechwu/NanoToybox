@@ -20,8 +20,9 @@ Or visit the live demo at [mikechwu.github.io/NanoToybox](https://mikechwu.githu
 ## Features
 
 - **Real-time Tersoff potential** — full analytical carbon force field running in optimized JavaScript
-- **Three interaction modes** — Atom (drag single atom), Move (translate molecule), Rotate (spin molecule via torque)
-- **Ctrl+click shortcut** — rotates molecule in any mode (desktop)
+- **Multi-molecule playground** — add multiple structures to the scene, collide them, watch them interact
+- **Three interaction modes** — Atom (drag single atom), Move (translate connected component), Rotate (spin component via torque)
+- **Placement mode** — new molecules appear adjacent to existing ones for immediate collision; translucent preview with drag-to-adjust
 - **15 structure presets** — C60, C180, C540, C720, carbon nanotubes (armchair/zigzag/chiral), graphene, diamond
 - **3D rendering** — PBR materials, camera-relative lighting, XYZ orientation axes
 - **NVE dynamics by default** — energy-conserving; molecules vibrate indefinitely after interaction. Adjustable damping slider (0 to heavy)

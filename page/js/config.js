@@ -29,6 +29,7 @@ export const CONFIG = {
   picker: {
     desktopExpansion: 0.12,  // NDC — fallback hit radius for desktop
     mobileExpansion: 0.20,   // NDC — fallback hit radius for mobile
+    previewAtomPreference: 0.5, // Å — prefer atom hit over bond hit within this ray-distance threshold
   },
 
   physics: {
@@ -46,5 +47,8 @@ export const CONFIG = {
   debug: {
     input: false,
     load: false,
+    assertions: false,       // invariant checks after appendMolecule
+    failAfterPhysicsAppend: false,  // fault injection: throw after physics append
+    failRendererAppend: false,      // fault injection: throw during renderer append
   },
 };
