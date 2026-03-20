@@ -70,30 +70,74 @@ function computeTersoffForces(pos, force, nl, nlc, n) {
   const p = pos;
   const f = force;
   const R_MAX_SQ = R_MAX * R_MAX;
+  const R_FLAT = R_CUT - D_CUT; // 1.80 — below this, fc=1, dfc=0
+
+  // ── Per-atom-i neighbor geometry cache (Phase 2a) ──
+  // Precomputed once per atom i, reused in zeta_ij AND 3-body-ij loops.
+  // Targets redundant recomputation (~44.5% of sqrt calls per Phase 0 profiling),
+  // but measured only ~2.6% incremental speedup — the JIT likely already optimizes
+  // the redundancy at the machine-code level. Kept for correctness and minor gain.
+  // Max K per atom is small (~10 for carbon), so stack-level arrays suffice.
+  let cacheR = new Float64Array(32);     // r_ik
+  let cacheInvR = new Float64Array(32);  // 1/r_ik
+  let cacheRx = new Float64Array(32);    // unit vector x
+  let cacheRy = new Float64Array(32);    // unit vector y
+  let cacheRz = new Float64Array(32);    // unit vector z
+  let cacheFc = new Float64Array(32);    // fc(r_ik)
+  let cacheDfc = new Float64Array(32);   // dfc/dr(r_ik)
+  let cacheValid = new Uint8Array(32);   // 1 if within R_MAX, 0 otherwise
+
+  function ensureCache(len) {
+    if (len > cacheR.length) {
+      const newLen = len * 2;
+      cacheR = new Float64Array(newLen);
+      cacheInvR = new Float64Array(newLen);
+      cacheRx = new Float64Array(newLen);
+      cacheRy = new Float64Array(newLen);
+      cacheRz = new Float64Array(newLen);
+      cacheFc = new Float64Array(newLen);
+      cacheDfc = new Float64Array(newLen);
+      cacheValid = new Uint8Array(newLen);
+    }
+  }
 
   for (let i = 0; i < n; i++) {
     const ni = nl[i], niLen = nlc[i];
     const ix = i * 3, pix = p[ix], piy = p[ix + 1], piz = p[ix + 2];
 
+    // ── Cache all i-centered neighbor geometry once per atom i ──
+    ensureCache(niLen);
+    for (let qk = 0; qk < niLen; qk++) {
+      const k = ni[qk];
+      const kx3 = k * 3;
+      const dik_x = p[kx3] - pix, dik_y = p[kx3 + 1] - piy, dik_z = p[kx3 + 2] - piz;
+      const r_ik_sq = dik_x * dik_x + dik_y * dik_y + dik_z * dik_z;
+      if (r_ik_sq < 1e-20 || r_ik_sq >= R_MAX_SQ) { cacheValid[qk] = 0; continue; }
+      cacheValid[qk] = 1;
+      const r_ik = Math.sqrt(r_ik_sq);
+      const inv_rik = 1.0 / r_ik;
+      cacheR[qk] = r_ik;
+      cacheInvR[qk] = inv_rik;
+      cacheRx[qk] = dik_x * inv_rik;
+      cacheRy[qk] = dik_y * inv_rik;
+      cacheRz[qk] = dik_z * inv_rik;
+      if (r_ik < R_FLAT) { cacheFc[qk] = 1.0; cacheDfc[qk] = 0.0; }
+      else {
+        const arg = HALF_PI_OVER_D * (r_ik - R_CUT);
+        cacheFc[qk] = 0.5 - 0.5 * Math.sin(arg);
+        cacheDfc[qk] = -0.5 * Math.cos(arg) * HALF_PI_OVER_D;
+      }
+    }
+
     for (let qi = 0; qi < niLen; qi++) {
       const j = ni[qi];
       if (j <= i) continue;
-      const jx = j * 3;
-      const dij_x = p[jx] - pix, dij_y = p[jx + 1] - piy, dij_z = p[jx + 2] - piz;
-      const r_ij_sq = dij_x * dij_x + dij_y * dij_y + dij_z * dij_z;
-      if (r_ij_sq >= R_MAX_SQ || r_ij_sq < 1e-20) continue;
-      const r_ij = Math.sqrt(r_ij_sq);
-      const inv_rij = 1.0 / r_ij;
-      const rh_ij0 = dij_x * inv_rij, rh_ij1 = dij_y * inv_rij, rh_ij2 = dij_z * inv_rij;
+      if (!cacheValid[qi]) continue; // j outside R_MAX (from i's cache)
 
-      // Inline cutoff
-      let fc_ij, dfc_ij;
-      if (r_ij < R_CUT - D_CUT) { fc_ij = 1.0; dfc_ij = 0.0; }
-      else {
-        const arg = HALF_PI_OVER_D * (r_ij - R_CUT);
-        fc_ij = 0.5 - 0.5 * Math.sin(arg);
-        dfc_ij = -0.5 * Math.cos(arg) * HALF_PI_OVER_D;
-      }
+      const r_ij = cacheR[qi], inv_rij = cacheInvR[qi];
+      const rh_ij0 = cacheRx[qi], rh_ij1 = cacheRy[qi], rh_ij2 = cacheRz[qi];
+      const fc_ij = cacheFc[qi], dfc_ij = cacheDfc[qi];
+      const jx = j * 3;
 
       const expL1 = Math.exp(-LAMBDA1 * r_ij);
       const expL2 = Math.exp(-LAMBDA2 * r_ij);
@@ -102,31 +146,17 @@ function computeTersoffForces(pos, force, nl, nlc, n) {
       const fA_ij = -T_B * expL2;
       const dfA_ij = LAMBDA2 * T_B * expL2;
 
-      // ─── Compute zeta_ij ───
+      // ─── Compute zeta_ij (reads from i's cache) ───
       let zeta_ij = 0.0;
       for (let qk = 0; qk < niLen; qk++) {
-        const k = ni[qk];
-        if (k === j) continue;
-        const kx3 = k * 3;
-        const dik_x = p[kx3] - pix, dik_y = p[kx3 + 1] - piy, dik_z = p[kx3 + 2] - piz;
-        const r_ik_sq = dik_x * dik_x + dik_y * dik_y + dik_z * dik_z;
-        if (r_ik_sq < 1e-20 || r_ik_sq >= R_MAX_SQ) continue;
-        const r_ik = Math.sqrt(r_ik_sq);
-        const inv_rik = 1.0 / r_ik;
-        const rk0 = dik_x * inv_rik, rk1 = dik_y * inv_rik, rk2 = dik_z * inv_rik;
-
-        let fc_ik;
-        if (r_ik < R_CUT - D_CUT) fc_ik = 1.0;
-        else fc_ik = 0.5 - 0.5 * Math.sin(HALF_PI_OVER_D * (r_ik - R_CUT));
-
-        let cosT = rh_ij0 * rk0 + rh_ij1 * rk1 + rh_ij2 * rk2;
+        if (qk === qi || !cacheValid[qk]) continue;
+        let cosT = rh_ij0 * cacheRx[qk] + rh_ij1 * cacheRy[qk] + rh_ij2 * cacheRz[qk];
         if (cosT > 1) cosT = 1; else if (cosT < -1) cosT = -1;
-
         const hmc = T_H - cosT;
-        zeta_ij += fc_ik * (1.0 + C2_D2 - C2 / (D2 + hmc * hmc));
+        zeta_ij += cacheFc[qk] * (1.0 + C2_D2 - C2 / (D2 + hmc * hmc));
       }
 
-      // ─── Compute zeta_ji ───
+      // ─── Compute zeta_ji (j's neighbors — NOT cached in Phase 2a) ───
       let zeta_ji = 0.0;
       const rh_ji0 = -rh_ij0, rh_ji1 = -rh_ij1, rh_ji2 = -rh_ij2;
       const pjx = p[jx], pjy = p[jx + 1], pjz = p[jx + 2];
@@ -145,7 +175,7 @@ function computeTersoffForces(pos, force, nl, nlc, n) {
         const rk0 = djk_x * inv_rjk, rk1 = djk_y * inv_rjk, rk2 = djk_z * inv_rjk;
 
         let fc_jk;
-        if (r_jk < R_CUT - D_CUT) fc_jk = 1.0;
+        if (r_jk < R_FLAT) fc_jk = 1.0;
         else fc_jk = 0.5 - 0.5 * Math.sin(HALF_PI_OVER_D * (r_jk - R_CUT));
 
         let cosT = rh_ji0 * rk0 + rh_ji1 * rk1 + rh_ji2 * rk2;
@@ -173,30 +203,18 @@ function computeTersoffForces(pos, force, nl, nlc, n) {
       f[jx + 1] -= pf * rh_ij1;
       f[jx + 2] -= pf * rh_ij2;
 
-      // ─── 3-body forces from zeta_ij ───
+      // ─── 3-body forces from zeta_ij (reads from i's cache) ───
       if (bz_ij > 0 && zeta_ij > 0) {
         const dbij = -0.5 * BETA * Math.pow(bz_ij, T_N - 1) *
                      Math.pow(1.0 + Math.pow(bz_ij, T_N), INV_2N - 1.0);
         const dEdz = 0.5 * fc_ij * fA_ij * dbij;
 
         for (let qk = 0; qk < niLen; qk++) {
-          const k = ni[qk];
-          if (k === j) continue;
-          const kx3 = k * 3;
-          const dik_x = p[kx3] - pix, dik_y = p[kx3 + 1] - piy, dik_z = p[kx3 + 2] - piz;
-          const r_ik_sq = dik_x * dik_x + dik_y * dik_y + dik_z * dik_z;
-          if (r_ik_sq < 1e-20 || r_ik_sq >= R_MAX_SQ) continue;
-          const r_ik = Math.sqrt(r_ik_sq);
-          const inv_rik = 1.0 / r_ik;
-          const rk0 = dik_x * inv_rik, rk1 = dik_y * inv_rik, rk2 = dik_z * inv_rik;
-
-          let fc_ik, dfc_ik;
-          if (r_ik < R_CUT - D_CUT) { fc_ik = 1.0; dfc_ik = 0.0; }
-          else {
-            const arg = HALF_PI_OVER_D * (r_ik - R_CUT);
-            fc_ik = 0.5 - 0.5 * Math.sin(arg);
-            dfc_ik = -0.5 * Math.cos(arg) * HALF_PI_OVER_D;
-          }
+          if (qk === qi || !cacheValid[qk]) continue;
+          const rk0 = cacheRx[qk], rk1 = cacheRy[qk], rk2 = cacheRz[qk];
+          const r_ik = cacheR[qk], inv_rik = cacheInvR[qk];
+          const fc_ik = cacheFc[qk], dfc_ik = cacheDfc[qk];
+          const kx3 = ni[qk] * 3;
 
           let cosT = rh_ij0 * rk0 + rh_ij1 * rk1 + rh_ij2 * rk2;
           if (cosT > 1) cosT = 1; else if (cosT < -1) cosT = -1;
@@ -221,7 +239,7 @@ function computeTersoffForces(pos, force, nl, nlc, n) {
         }
       }
 
-      // ─── 3-body forces from zeta_ji ───
+      // ─── 3-body forces from zeta_ji (j's neighbors — NOT cached) ───
       if (bz_ji > 0 && zeta_ji > 0) {
         const dbji = -0.5 * BETA * Math.pow(bz_ji, T_N - 1) *
                      Math.pow(1.0 + Math.pow(bz_ji, T_N), INV_2N - 1.0);
@@ -239,7 +257,7 @@ function computeTersoffForces(pos, force, nl, nlc, n) {
           const rk0 = djk_x * inv_rjk, rk1 = djk_y * inv_rjk, rk2 = djk_z * inv_rjk;
 
           let fc_jk, dfc_jk;
-          if (r_jk < R_CUT - D_CUT) { fc_jk = 1.0; dfc_jk = 0.0; }
+          if (r_jk < R_FLAT) { fc_jk = 1.0; dfc_jk = 0.0; }
           else {
             const arg = HALF_PI_OVER_D * (r_jk - R_CUT);
             fc_jk = 0.5 - 0.5 * Math.sin(arg);
@@ -478,18 +496,76 @@ export class PhysicsEngine {
     this.neighborList = arrays;
     this._nlCounts = counts;
 
-    // Build CSR as cached derivative for Wasm bridge
+    // CSR is now built from the short list in _buildShortNeighborList() every step.
+    // _csrGeneration is incremented there, not here.
+  }
+
+  /**
+   * Build short neighbor list at exact Tersoff cutoff (R_MAX = 2.10 Å) from
+   * current positions. Filters the skin-expanded list (2.60 Å) every step.
+   * The kernel iterates this short list instead of the full skin list,
+   * eliminating ~52-67% wasted inner-loop iterations (measured Phase 0).
+   */
+  _buildShortNeighborList() {
+    const p = this.pos;
+    const n = this.n;
+    const arrays = this.neighborList;
+    const counts = this._nlCounts;
+    const R_MAX_SQ = R_MAX * R_MAX;
+
+    // Reuse or allocate short-list arrays
+    if (!this._shortNlArrays || this._shortNlArrays.length !== n) {
+      this._shortNlArrays = new Array(n);
+      this._shortNlCounts = new Int32Array(n);
+      for (let i = 0; i < n; i++) this._shortNlArrays[i] = new Int32Array(8);
+    }
+    const shortArrays = this._shortNlArrays;
+    const shortCounts = this._shortNlCounts;
+    shortCounts.fill(0);
+
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      const px = p[i3], py = p[i3 + 1], pz = p[i3 + 2];
+      const arr = arrays[i];
+      const cnt = counts[i];
+
+      for (let q = 0; q < cnt; q++) {
+        const j = arr[q];
+        const j3 = j * 3;
+        const dx = p[j3] - px, dy = p[j3 + 1] - py, dz = p[j3 + 2] - pz;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < R_MAX_SQ && d2 > 1e-20) {
+          // Grow if needed
+          if (shortCounts[i] >= shortArrays[i].length) {
+            const old = shortArrays[i];
+            shortArrays[i] = new Int32Array(old.length * 2);
+            shortArrays[i].set(old);
+          }
+          shortArrays[i][shortCounts[i]++] = j;
+        }
+      }
+    }
+
+    this._shortNeighborList = shortArrays;
+    this._shortNlCounts = shortCounts;
+
+    // Build CSR from the short list for Wasm bridge
     this._csrGeneration++;
     let totalNl = 0;
-    for (let i = 0; i < n; i++) totalNl += counts[i];
-    this._csrOffsets = new Int32Array(n + 1);
-    this._csrData = new Int32Array(totalNl);
+    for (let i = 0; i < n; i++) totalNl += shortCounts[i];
+    // Reuse CSR arrays if large enough (avoid per-step allocation/GC pressure)
+    if (!this._csrOffsets || this._csrOffsets.length < n + 1) {
+      this._csrOffsets = new Int32Array(n + 1);
+    }
+    if (!this._csrData || this._csrData.length < totalNl) {
+      this._csrData = new Int32Array(Math.max(totalNl, 64));
+    }
     this._csrOffsets[0] = 0;
     let idx = 0;
     for (let i = 0; i < n; i++) {
-      this._csrOffsets[i + 1] = this._csrOffsets[i] + counts[i];
-      const arr = arrays[i];
-      for (let q = 0; q < counts[i]; q++) this._csrData[idx++] = arr[q];
+      this._csrOffsets[i + 1] = this._csrOffsets[i] + shortCounts[i];
+      const arr = shortArrays[i];
+      for (let q = 0; q < shortCounts[i]; q++) this._csrData[idx++] = arr[q];
     }
   }
 
@@ -503,6 +579,9 @@ export class PhysicsEngine {
     }
     if (!this.neighborList || this.n === 0) return;
 
+    // ── Build short Tersoff neighbor list (exact R_MAX cutoff from current positions) ──
+    this._buildShortNeighborList();
+
     // ── Tersoff kernel dispatch: Wasm if ready, JS fallback ──
     // ?kernel=js forces JS, ?kernel=wasm forces Wasm (fails if not ready)
     const useWasm = this._forceKernel !== 'js' && this._wasmReady && isReady();
@@ -515,7 +594,7 @@ export class PhysicsEngine {
         if (!csrResult.ok) {
           // Marshal failed — fall back to JS for this step
           const t1 = this._bench ? performance.now() : 0;
-          computeTersoffForces(this.pos, this.force, this.neighborList, this._nlCounts, this.n);
+          computeTersoffForces(this.pos, this.force, this._shortNeighborList, this._shortNlCounts, this.n);
           if (this._bench) this._bench.tersoffMs = (this._bench.tersoffMs || 0) + (performance.now() - t1);
           return;
         }
@@ -525,7 +604,7 @@ export class PhysicsEngine {
         // Kernel call failed — fall back to JS for this step
         this.force.fill(0);
         const t1 = this._bench ? performance.now() : 0;
-        computeTersoffForces(this.pos, this.force, this.neighborList, this._nlCounts, this.n);
+        computeTersoffForces(this.pos, this.force, this._shortNeighborList, this._shortNlCounts, this.n);
         if (this._bench) this._bench.tersoffMs = (this._bench.tersoffMs || 0) + (performance.now() - t1);
         return;
       }
@@ -533,10 +612,13 @@ export class PhysicsEngine {
         this._bench.tersoffMs = (this._bench.tersoffMs || 0) + timing.pathMs;
         this._bench.marshalMs = (this._bench.marshalMs || 0) + timing.marshalMs;
         this._bench.wasmKernelMs = (this._bench.wasmKernelMs || 0) + timing.kernelMs;
+        // Full Wasm path including CSR marshal on rebuild steps
+        this._bench.wasmPathTotalMs = (this._bench.wasmPathTotalMs || 0) +
+          timing.pathMs + (this._bench.csrMarshalMs || 0);
       }
     } else {
       const t1 = this._bench ? performance.now() : 0;
-      computeTersoffForces(this.pos, this.force, this.neighborList, this._nlCounts, this.n);
+      computeTersoffForces(this.pos, this.force, this._shortNeighborList, this._shortNlCounts, this.n);
       if (this._bench) this._bench.tersoffMs = (this._bench.tersoffMs || 0) + (performance.now() - t1);
     }
 
@@ -1023,6 +1105,9 @@ export class PhysicsEngine {
     this._csrOffsets = null;
     this._csrData = null;
     this._csrGeneration++;
+    this._shortNlArrays = null;
+    this._shortNlCounts = null;
+    this._shortNeighborList = null;
     this.componentId = null;
     this.components = [];
   }

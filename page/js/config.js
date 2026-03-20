@@ -42,7 +42,7 @@ export const CONFIG = {
     dampingDefault: 0.0,     // velocity reduction factor per legacy batch (4 steps). Applied per-step internally as (1-d)^(1/4).
     fMax: 50.0,             // eV/Å — max force per atom
     iRef: 750.0,            // Å² — reference inertia (C60)
-    useWasm: false,         // Wasm Tersoff kernel available but deferred (1.11x kernel speedup — below 1.5x threshold). Enable via ?kernel=wasm for benchmarking.
+    useWasm: true,          // Wasm Tersoff kernel (C + Emscripten, -O3 -ffast-math). ~11% faster than JS JIT. Override via ?kernel=js|wasm.
   },
 
   playback: {

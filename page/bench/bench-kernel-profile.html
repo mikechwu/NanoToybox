@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NanoToybox — Tersoff Kernel Profiling (Phase 0 — Historical)</title>
+<style>
+body { font-family: monospace; background: #1a1a2e; color: #e8e8e8; padding: 20px; max-width: 1400px; }
+h2 { color: #90b0ff; } h3 { color: #80a0e0; margin-top: 24px; }
+.pass { color: #50c050; } .warn { color: #e0a030; } .fail { color: #e05050; }
+table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+th, td { border: 1px solid #333; padding: 4px 8px; text-align: right; font-size: 12px; }
+th { background: #252540; text-align: left; }
+td:first-child { text-align: left; }
+button { background: #334; color: #ccc; border: 1px solid #555; padding: 8px 16px; cursor: pointer; margin: 4px; font-size: 14px; }
+button:disabled { opacity: 0.4; }
+.section { border-top: 1px solid #444; padding-top: 12px; margin-top: 20px; }
+pre { background: #151525; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 11px; }
+</style>
+</head>
+<body>
+<h2>Tersoff Kernel Profiling (Phase 0 — Historical)</h2>
+<p>Historical profiler from Phase 0 research. Profiles the pre-short-list, pre-cache kernel structure.<br>
+Results informed Phase 1 (short NL) and Phase 2a (i-cache) decisions. See acceleration research report.<br>
+<b>Note:</b> The production kernel has since changed — this profiler does not reflect the current code path.</p>
+<div>
+  <button id="btn-run">Run Kernel Profile</button>
+</div>
+<div id="status" style="color:#60a0ff; font-size: 14px; margin: 8px 0;"></div>
+<div id="results"></div>
+
+<script type="module">
+import { PhysicsEngine } from '../js/physics.js';
+import { buildScene } from './bench-scenes.js';
+
+const status = document.getElementById('status');
+const results = document.getElementById('results');
+
+// Tersoff parameters (mirrored from physics.js)
+const R_CUT = 1.95, D_CUT = 0.15, R_MAX = R_CUT + D_CUT; // 2.10
+const R_MAX_SQ = R_MAX * R_MAX;
+const SKIN_CUTOFF = R_MAX + 0.5; // 2.60
+
+/**
+ * Profiling kernel: identical algorithm to production computeTersoffForces,
+ * but counts operations instead of (or alongside) computing forces.
+ */
+function profileKernel(pos, nl, nlc, n) {
+  const p = pos;
+  const skinCutoff2 = SKIN_CUTOFF * SKIN_CUTOFF;
+
+  // Counters
+  let totalNlEntries = 0;      // total neighbor list entries processed in outer pair loop
+  let rejectedAtRmax = 0;      // entries rejected by r >= R_MAX (skin waste)
+  let acceptedPairs = 0;       // pairs that pass the R_MAX cutoff
+  let zetaIjIterations = 0;    // inner loop iterations in zeta_ij
+  let zetaJiIterations = 0;    // inner loop iterations in zeta_ji
+  let body3IjIterations = 0;   // inner loop iterations in 3-body ij gradient
+  let body3JiIterations = 0;   // inner loop iterations in 3-body ji gradient
+  let zetaIjAccepted = 0;      // entries that pass R_MAX in zeta_ij
+  let zetaJiAccepted = 0;      // entries that pass R_MAX in zeta_ji
+  let body3IjAccepted = 0;     // entries that pass R_MAX in 3-body ij
+  let body3JiAccepted = 0;     // entries that pass R_MAX in 3-body ji
+  let cutoffTransitions = 0;   // pairs in sin/cos transition zone (R_CUT-D_CUT < r < R_MAX)
+  let cutoffFlat = 0;          // pairs in flat zone (r < R_CUT-D_CUT, fc=1)
+  let sqrtCalls = 0;           // total sqrt computations
+  let redundantSqrt = 0;       // sqrt calls that recompute a previously-computed distance
+  let expCalls = 0;
+  let powCalls = 0;
+  let sinCosCalls = 0;
+
+  // Per-section timing (zeta + 3-body only — bond-order/pair-force scalar arithmetic is negligible)
+  let zetaTimeMs = 0, body3TimeMs = 0;
+
+  for (let i = 0; i < n; i++) {
+    const ni = nl[i], niLen = nlc[i];
+    const ix = i * 3, pix = p[ix], piy = p[ix + 1], piz = p[ix + 2];
+
+    for (let qi = 0; qi < niLen; qi++) {
+      const j = ni[qi];
+      if (j <= i) continue;
+      totalNlEntries++;
+
+      const jx = j * 3;
+      const dij_x = p[jx] - pix, dij_y = p[jx + 1] - piy, dij_z = p[jx + 2] - piz;
+      const r_ij_sq = dij_x * dij_x + dij_y * dij_y + dij_z * dij_z;
+      if (r_ij_sq >= R_MAX_SQ || r_ij_sq < 1e-20) { rejectedAtRmax++; continue; }
+      acceptedPairs++;
+
+      sqrtCalls++; // r_ij
+      const r_ij = Math.sqrt(r_ij_sq);
+
+      // Cutoff zone check
+      if (r_ij < R_CUT - D_CUT) { cutoffFlat++; }
+      else { cutoffTransitions++; sinCosCalls += 2; } // sin + cos
+
+      expCalls += 2; // exp(-λ1*r) + exp(-λ2*r)
+
+      // ── zeta_ij ──
+      const tZeta0 = performance.now();
+      for (let qk = 0; qk < niLen; qk++) {
+        const k = ni[qk];
+        if (k === j) continue;
+        zetaIjIterations++;
+        const kx3 = k * 3;
+        const dik_x = p[kx3] - pix, dik_y = p[kx3 + 1] - piy, dik_z = p[kx3 + 2] - piz;
+        const r_ik_sq = dik_x * dik_x + dik_y * dik_y + dik_z * dik_z;
+        if (r_ik_sq < 1e-20 || r_ik_sq >= R_MAX_SQ) continue;
+        zetaIjAccepted++;
+        sqrtCalls++; // r_ik
+        if (Math.sqrt(r_ik_sq) >= R_CUT - D_CUT) sinCosCalls++; // fc_ik sin
+      }
+
+      // ── zeta_ji ──
+      const pjx = p[jx], pjy = p[jx + 1], pjz = p[jx + 2];
+      const nj = nl[j], njLen = nlc[j];
+      for (let qk = 0; qk < njLen; qk++) {
+        const k = nj[qk];
+        if (k === i) continue;
+        zetaJiIterations++;
+        const kx3 = k * 3;
+        const djk_x = p[kx3] - pjx, djk_y = p[kx3 + 1] - pjy, djk_z = p[kx3 + 2] - pjz;
+        const r_jk_sq = djk_x * djk_x + djk_y * djk_y + djk_z * djk_z;
+        if (r_jk_sq < 1e-20 || r_jk_sq >= R_MAX_SQ) continue;
+        zetaJiAccepted++;
+        sqrtCalls++; // r_jk
+        if (Math.sqrt(r_jk_sq) >= R_CUT - D_CUT) sinCosCalls++; // fc_jk sin
+      }
+      zetaTimeMs += performance.now() - tZeta0;
+
+      // ── Bond orders (scalar arithmetic — not separately timed, negligible) ──
+      powCalls += 4; // bij: pow(pow()), bji: pow(pow())
+
+      // ── 3-body zeta_ij gradient ──
+      const tBody3_0 = performance.now();
+      powCalls += 2; // dbij
+      for (let qk = 0; qk < niLen; qk++) {
+        const k = ni[qk];
+        if (k === j) continue;
+        body3IjIterations++;
+        const kx3 = k * 3;
+        const dik_x = p[kx3] - pix, dik_y = p[kx3 + 1] - piy, dik_z = p[kx3 + 2] - piz;
+        const r_ik_sq = dik_x * dik_x + dik_y * dik_y + dik_z * dik_z;
+        if (r_ik_sq < 1e-20 || r_ik_sq >= R_MAX_SQ) continue;
+        body3IjAccepted++;
+        sqrtCalls++; redundantSqrt++; // same (i,k) as zeta_ij
+        const r_ik = Math.sqrt(r_ik_sq);
+        if (r_ik >= R_CUT - D_CUT) sinCosCalls += 2; // fc_ik sin + cos
+      }
+
+      // ── 3-body zeta_ji gradient ──
+      powCalls += 2; // dbji
+      for (let qk = 0; qk < njLen; qk++) {
+        const k = nj[qk];
+        if (k === i) continue;
+        body3JiIterations++;
+        const kx3 = k * 3;
+        const djk_x = p[kx3] - pjx, djk_y = p[kx3 + 1] - pjy, djk_z = p[kx3 + 2] - pjz;
+        const r_jk_sq = djk_x * djk_x + djk_y * djk_y + djk_z * djk_z;
+        if (r_jk_sq < 1e-20 || r_jk_sq >= R_MAX_SQ) continue;
+        body3JiAccepted++;
+        sqrtCalls++; redundantSqrt++; // same (j,k) as zeta_ji
+        const r_jk = Math.sqrt(r_jk_sq);
+        if (r_jk >= R_CUT - D_CUT) sinCosCalls += 2; // fc_jk sin + cos
+      }
+      body3TimeMs += performance.now() - tBody3_0;
+    }
+  }
+
+  return {
+    totalNlEntries, rejectedAtRmax, acceptedPairs,
+    wastePercent: totalNlEntries > 0 ? (rejectedAtRmax / totalNlEntries * 100) : 0,
+    zetaIjIterations, zetaJiIterations, zetaIjAccepted, zetaJiAccepted,
+    body3IjIterations, body3JiIterations, body3IjAccepted, body3JiAccepted,
+    cutoffTransitions, cutoffFlat,
+    transitionPercent: (cutoffTransitions + cutoffFlat) > 0 ? (cutoffTransitions / (cutoffTransitions + cutoffFlat) * 100) : 0,
+    sqrtCalls, redundantSqrt,
+    redundantSqrtPercent: sqrtCalls > 0 ? (redundantSqrt / sqrtCalls * 100) : 0,
+    expCalls, powCalls, sinCosCalls,
+    zetaTimeMs, body3TimeMs,
+  };
+}
+
+const TESTS = [
+  { target: 1020, variant: 'compact', label: 'C60 compact (1020)' },
+  { target: 504,  variant: 'sheet',   label: 'Graphene (504)' },
+  { target: 896,  variant: 'diamond', label: 'Diamond (896)' },
+  { target: 720,  variant: 'c720',    label: 'C720 (720)' },
+  { target: 4020, variant: 'compact', label: 'C60 compact (4020)' },
+];
+
+async function runProfile() {
+  const buttons = document.querySelectorAll('button');
+  buttons.forEach(b => b.disabled = true);
+  results.innerHTML = '';
+
+  // ── Waste fraction + redundancy table ──
+  const div1 = document.createElement('div');
+  div1.className = 'section';
+  div1.innerHTML = '<h3>Skin Waste Fraction &amp; Redundant Recomputation</h3>';
+  const t1 = document.createElement('table');
+  t1.innerHTML = `<tr>
+    <th>Topology</th><th>Atoms</th><th>NL Entries</th><th>Rejected (>R_MAX)</th><th>Waste %</th>
+    <th>sqrt Total</th><th>sqrt Redundant</th><th>Redundant %</th>
+  </tr>`;
+  div1.appendChild(t1);
+  results.appendChild(div1);
+
+  // ── Cutoff transition + math calls table ──
+  const div2 = document.createElement('div');
+  div2.className = 'section';
+  div2.innerHTML = '<h3>Cutoff Transition Zone &amp; Math Function Calls</h3>';
+  const t2 = document.createElement('table');
+  t2.innerHTML = `<tr>
+    <th>Topology</th><th>Atoms</th><th>Pairs</th><th>Flat (fc=1)</th><th>Transition</th><th>Trans %</th>
+    <th>exp</th><th>pow</th><th>sin/cos</th>
+  </tr>`;
+  div2.appendChild(t2);
+  results.appendChild(div2);
+
+  // ── Per-section timing table ──
+  const div3 = document.createElement('div');
+  div3.className = 'section';
+  div3.innerHTML = '<h3>Per-Section Timing (single kernel call)</h3>';
+  const t3 = document.createElement('table');
+  t3.innerHTML = `<tr>
+    <th>Topology</th><th>Atoms</th><th>Zeta (ms)</th><th>3-Body (ms)</th><th>Zeta+3Body (ms)</th>
+    <th>Zeta %</th><th>3-Body %</th>
+  </tr>`;
+  div3.appendChild(t3);
+  results.appendChild(div3);
+
+  for (const test of TESTS) {
+    status.textContent = `Profiling ${test.label}...`;
+    await new Promise(r => setTimeout(r, 10));
+
+    const scene = await buildScene(test.target, test.variant);
+    const physics = new PhysicsEngine();
+    physics.init(scene.atoms, scene.bonds);
+
+    // Evolve to realistic positions
+    for (let s = 0; s < 100; s++) physics.stepOnce();
+
+    // Ensure neighbor list is fresh
+    physics.buildNeighborList();
+
+    // Run profiling kernel
+    const prof = profileKernel(physics.pos, physics._nlArrays, physics._nlCounts, physics.n);
+
+    // Waste + redundancy row
+    t1.innerHTML += `<tr>
+      <td>${test.label}</td><td>${physics.n}</td>
+      <td>${prof.totalNlEntries}</td><td>${prof.rejectedAtRmax}</td>
+      <td class="${prof.wastePercent > 30 ? 'warn' : 'pass'}">${prof.wastePercent.toFixed(1)}%</td>
+      <td>${prof.sqrtCalls}</td><td>${prof.redundantSqrt}</td>
+      <td class="${prof.redundantSqrtPercent > 40 ? 'warn' : 'pass'}">${prof.redundantSqrtPercent.toFixed(1)}%</td>
+    </tr>`;
+
+    // Cutoff + math row
+    t2.innerHTML += `<tr>
+      <td>${test.label}</td><td>${physics.n}</td>
+      <td>${prof.acceptedPairs}</td><td>${prof.cutoffFlat}</td><td>${prof.cutoffTransitions}</td>
+      <td>${prof.transitionPercent.toFixed(1)}%</td>
+      <td>${prof.expCalls}</td><td>${prof.powCalls}</td><td>${prof.sinCosCalls}</td>
+    </tr>`;
+
+    // Timing row
+    const totalProfiled = prof.zetaTimeMs + prof.body3TimeMs;
+    t3.innerHTML += `<tr>
+      <td>${test.label}</td><td>${physics.n}</td>
+      <td>${prof.zetaTimeMs.toFixed(2)}</td><td>${prof.body3TimeMs.toFixed(2)}</td>
+      <td>${totalProfiled.toFixed(2)}</td>
+      <td>${totalProfiled > 0 ? (prof.zetaTimeMs / totalProfiled * 100).toFixed(1) : '—'}%</td>
+      <td>${totalProfiled > 0 ? (prof.body3TimeMs / totalProfiled * 100).toFixed(1) : '—'}%</td>
+    </tr>`;
+  }
+
+  // ── Decision summary ──
+  const div4 = document.createElement('div');
+  div4.className = 'section';
+  div4.innerHTML = `<h3>Phase 0 Decision Table</h3>
+    <p>Use measured values above against these triggers (initial thresholds, adjust after review):</p>
+    <table>
+      <tr><th>Trigger</th><th>Threshold</th><th>→ Next Phase</th></tr>
+      <tr><td>High rejection fraction</td><td>&gt; 30% waste</td><td>Phase 1 (short neighbor list)</td></tr>
+      <tr><td>Low rejection, high recomputation</td><td>&lt; 15% waste, &gt; 40% redundant sqrt</td><td>Phase 2a (per-atom caching)</td></tr>
+      <tr><td>Low both, math-dominated</td><td>&lt; 15% waste, &lt; 25% redundant, exp+pow &gt; 50% of timing</td><td>Phase 3 prototype (radial tables)</td></tr>
+      <tr><td>All modest</td><td>None fire</td><td>Accept current performance</td></tr>
+    </table>
+    <p>If multiple triggers fire: exact phases (1, 2a) outrank approximate (3). Among exact, choose larger measured share. If comparable, choose less intrusive (1 before 2a).</p>`;
+  results.appendChild(div4);
+
+  status.textContent = 'Done.';
+  buttons.forEach(b => b.disabled = false);
+}
+
+document.getElementById('btn-run').addEventListener('click', runProfile);
+</script>
+</body>
+</html>

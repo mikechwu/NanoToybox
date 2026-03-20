@@ -40,22 +40,6 @@ async function ensureWasm() {
   return true;
 }
 
-// ─── Build CSR from engine state ───
-function buildCSR(physics) {
-  const n = physics.n, counts = physics._nlCounts, arrays = physics._nlArrays;
-  let totalNl = 0;
-  for (let i = 0; i < n; i++) totalNl += counts[i];
-  const offsets = new Int32Array(n + 1);
-  const data = new Int32Array(totalNl);
-  offsets[0] = 0;
-  let idx = 0;
-  for (let i = 0; i < n; i++) {
-    offsets[i + 1] = offsets[i] + counts[i];
-    for (let q = 0; q < counts[i]; q++) data[idx++] = arrays[i][q];
-  }
-  return { offsets, data };
-}
-
 // ─── Compute forces with a specific kernel ───
 function computeWithJS(physics) {
   const force = new Float64Array(physics.n * 3);
@@ -72,9 +56,10 @@ function computeWithJS(physics) {
 
 function computeWithWasm(physics) {
   const force = new Float64Array(physics.n * 3);
+  // Use the production path: build neighbor list → short list → CSR from short list
   physics.buildNeighborList();
-  const csr = buildCSR(physics);
-  marshalCSR(csr.offsets, csr.data, physics.n, -999); // force remarshal
+  physics._buildShortNeighborList(); // builds short NL + CSR from current positions
+  marshalCSR(physics._csrOffsets, physics._csrData, physics.n, -999); // force remarshal
   const result = callTersoff(physics.pos, force, physics.n);
   if (!result.ok) throw new Error('Wasm kernel call failed');
   return force;
