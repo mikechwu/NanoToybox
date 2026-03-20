@@ -4,6 +4,9 @@
  *
  * Desktop: left-click = interact, right-click = camera, scroll = zoom
  * Mobile:  1-finger = interact, 2-finger = camera (pinch/pan)
+ *
+ * Atom picking uses an atom-source abstraction, not direct mesh references.
+ * The atom source provides { count, getWorldPosition(i, outVec3), raycastTarget }.
  */
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
@@ -11,11 +14,18 @@ import { CONFIG } from './config.js';
 const DEBUG_INPUT = CONFIG.debug.input;
 
 export class InputManager {
-  constructor(canvas, camera, controls, atomMeshes, callbacks) {
+  /**
+   * @param {HTMLCanvasElement} canvas
+   * @param {THREE.Camera} camera
+   * @param {OrbitControls} controls
+   * @param {object} atomSource - { count: number, getWorldPosition(i, outVec3): Vector3, raycastTarget: THREE.Object3D[] | THREE.InstancedMesh }
+   * @param {object} callbacks
+   */
+  constructor(canvas, camera, controls, atomSource, callbacks) {
     this.canvas = canvas;
     this.camera = camera;
     this.controls = controls;
-    this.atomMeshes = atomMeshes;
+    this._atomSource = atomSource;
     this.cb = callbacks;
 
     this.raycaster = new THREE.Raycaster();
@@ -23,26 +33,37 @@ export class InputManager {
     this.isDragging = false;
     this.isCamera = false;
 
+    // Pre-allocated scratch objects for picking and interaction (zero per-event allocations)
+    this._scratchVec3 = new THREE.Vector3();
+    this._scratchProjected = new THREE.Vector3();
+    this._scratchNDC = new THREE.Vector2();
+    this._scratchRayOrigin = new THREE.Vector3();
+    this._scratchRayDir = new THREE.Vector3();
+    this._scratchPlaneNormal = new THREE.Vector3();
+    this._scratchDiff = new THREE.Vector3();
+    this._scratchResult = [0, 0, 0]; // reused return value for screenToWorldOnAtomPlane
+
     this._bindEvents();
   }
 
-  updateAtomMeshes(meshes) {
-    this.atomMeshes = meshes;
+  updateAtomSource(atomSource) {
+    this._atomSource = atomSource;
     this.isDragging = false;
     this.isCamera = false;
   }
 
   _screenToNDC(x, y) {
     const rect = this.canvas.getBoundingClientRect();
-    return new THREE.Vector2(
+    return this._scratchNDC.set(
       ((x - rect.left) / rect.width) * 2 - 1,
       -((y - rect.top) / rect.height) * 2 + 1
     );
   }
 
   _raycastAtom(screenX, screenY) {
-    if (!this.atomMeshes || this.atomMeshes.length === 0) {
-      if (DEBUG_INPUT) console.log('[raycast] no meshes');
+    const src = this._atomSource;
+    if (!src || src.count === 0) {
+      if (DEBUG_INPUT) console.log('[raycast] no atoms');
       return -1;
     }
 
@@ -51,25 +72,28 @@ export class InputManager {
     // Force camera matrix update
     this.camera.updateMatrixWorld(true);
 
-    // 3D raycast
+    // 3D raycast against the atom target
     this.raycaster.setFromCamera(ndc, this.camera);
-    const allHits = this.raycaster.intersectObjects(this.atomMeshes, false);
+    const target = src.raycastTarget;
+    if (!target) return -1;
+    const allHits = this.raycaster.intersectObject(target, false);
 
     if (DEBUG_INPUT) {
-      console.log(`[raycast] screen=(${screenX.toFixed(0)},${screenY.toFixed(0)}) ndc=(${ndc.x.toFixed(3)},${ndc.y.toFixed(3)}) meshes=${this.atomMeshes.length} hits=${allHits.length}`);
+      console.log(`[raycast] screen=(${screenX.toFixed(0)},${screenY.toFixed(0)}) ndc=(${ndc.x.toFixed(3)},${ndc.y.toFixed(3)}) atoms=${src.count} hits=${allHits.length}`);
 
-      // Log nearest 3 atoms by screen distance for debugging
+      // Log nearest 3 atoms by screen distance for debugging (debug path, allocations acceptable)
       const screenDists = [];
-      for (let i = 0; i < Math.min(this.atomMeshes.length, 200); i++) {
-        const sp = this.atomMeshes[i].position.clone().project(this.camera);
+      for (let i = 0; i < Math.min(src.count, 200); i++) {
+        src.getWorldPosition(i, this._scratchVec3);
+        const sp = this._scratchProjected.copy(this._scratchVec3).project(this.camera);
         const d = Math.sqrt((sp.x - ndc.x) ** 2 + (sp.y - ndc.y) ** 2);
-        screenDists.push({ i, d, sp });
+        screenDists.push({ i, d, sx: sp.x, sy: sp.y });
       }
       screenDists.sort((a, b) => a.d - b.d);
       for (let k = 0; k < Math.min(3, screenDists.length); k++) {
-        const { i, d, sp } = screenDists[k];
-        const pos = this.atomMeshes[i].position;
-        console.log(`  [nearest ${k}] idx=${i} screenDist=${d.toFixed(4)} ndc=(${sp.x.toFixed(3)},${sp.y.toFixed(3)}) meshPos=(${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)})`);
+        const { i, d, sx, sy } = screenDists[k];
+        const pos = src.getWorldPosition(i, this._scratchVec3);
+        console.log(`  [nearest ${k}] idx=${i} screenDist=${d.toFixed(4)} ndc=(${sx.toFixed(3)},${sy.toFixed(3)}) pos=(${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)})`);
       }
     }
 
@@ -78,9 +102,12 @@ export class InputManager {
       let bestIdx = -1;
       let bestScreenDist = Infinity;
       for (const hit of allHits) {
-        const idx = this.atomMeshes.indexOf(hit.object);
-        if (idx < 0) continue;
-        const sp = hit.object.position.clone().project(this.camera);
+        // Resolve atom index from InstancedMesh hit
+        const idx = hit.instanceId;
+        if (idx < 0 || idx >= src.count) continue;
+
+        src.getWorldPosition(idx, this._scratchVec3);
+        const sp = this._scratchProjected.copy(this._scratchVec3).project(this.camera);
         const sd = (sp.x - ndc.x) ** 2 + (sp.y - ndc.y) ** 2;
         if (DEBUG_INPUT) console.log(`  [hit] idx=${idx} screenDist=${Math.sqrt(sd).toFixed(4)} rayDist=${hit.distance.toFixed(3)}`);
         if (sd < bestScreenDist) {
@@ -100,8 +127,9 @@ export class InputManager {
       : CONFIG.picker.desktopExpansion;
     let closest = -1;
     let closestDist = Infinity;
-    for (let i = 0; i < this.atomMeshes.length; i++) {
-      const sp = this.atomMeshes[i].position.clone().project(this.camera);
+    for (let i = 0; i < src.count; i++) {
+      src.getWorldPosition(i, this._scratchVec3);
+      const sp = this._scratchProjected.copy(this._scratchVec3).project(this.camera);
       if (sp.z < 0 || sp.z > 1) continue;
       const d = Math.sqrt((sp.x - ndc.x) ** 2 + (sp.y - ndc.y) ** 2);
       if (d < hitExpansion && d < closestDist) {
@@ -127,28 +155,28 @@ export class InputManager {
    */
   screenToWorldOnAtomPlane(screenX, screenY, atomWorldPos) {
     const ndc = this._screenToNDC(screenX, screenY);
-    const rayOrigin = this.camera.position.clone();
-    const rayDir = new THREE.Vector3(ndc.x, ndc.y, 0.5)
+    const rayOrigin = this._scratchRayOrigin.copy(this.camera.position);
+    const rayDir = this._scratchRayDir.set(ndc.x, ndc.y, 0.5)
       .unproject(this.camera)
       .sub(rayOrigin)
       .normalize();
 
     // Plane: perpendicular to camera view direction, passing through atom
-    const planeNormal = new THREE.Vector3();
-    this.camera.getWorldDirection(planeNormal); // points INTO screen
+    this.camera.getWorldDirection(this._scratchPlaneNormal);
 
     // Ray-plane intersection: t = dot(atomPos - rayOrigin, planeNormal) / dot(rayDir, planeNormal)
-    const denom = rayDir.dot(planeNormal);
+    const denom = rayDir.dot(this._scratchPlaneNormal);
+    const r = this._scratchResult;
     if (Math.abs(denom) < 1e-10) {
-      // Ray parallel to plane — fallback to atom position
-      return [atomWorldPos.x, atomWorldPos.y, atomWorldPos.z];
+      r[0] = atomWorldPos.x; r[1] = atomWorldPos.y; r[2] = atomWorldPos.z;
+      return r;
     }
 
-    const diff = atomWorldPos.clone().sub(rayOrigin);
-    const t = diff.dot(planeNormal) / denom;
+    const diff = this._scratchDiff.copy(atomWorldPos).sub(rayOrigin);
+    const t = diff.dot(this._scratchPlaneNormal) / denom;
     const worldPos = rayOrigin.add(rayDir.multiplyScalar(t));
-
-    return [worldPos.x, worldPos.y, worldPos.z];
+    r[0] = worldPos.x; r[1] = worldPos.y; r[2] = worldPos.z;
+    return r;
   }
 
   _bindEvents() {

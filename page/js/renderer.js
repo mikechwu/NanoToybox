@@ -13,21 +13,50 @@ import { CONFIG } from './config.js';
 export class Renderer {
   constructor(container) {
     this.container = container;
-    this.atomMeshes = [];
-    this.bondMeshes = [];
-    this._activeBonds = 0;
+
+    // InstancedMesh state — replaces individual atomMeshes[]/bondMeshes[]
+    this._instancedAtoms = null;  // THREE.InstancedMesh for atoms
+    this._instancedBonds = null;  // THREE.InstancedMesh for bonds
+    this._atomCapacity = 0;       // current InstancedMesh max (geometric growth)
+    this._bondCapacity = 0;       // current bond InstancedMesh max
+    this._atomCount = 0;          // active atom count
+    this._activeBonds = 0;        // active bond count (after visibility filtering)
+
     this.highlightAtom = -1;
     this.forceLine = null;
     this.currentTheme = 'dark';
     this._previewGroup = null;  // THREE.Group for placement preview
 
-    // Pre-allocated vectors reused every frame (avoid GC pressure)
+    // Pre-allocated vectors/matrices reused every frame (avoid GC pressure)
     this._bondUp = new THREE.Vector3(0, 1, 0);
     this._bondDir = new THREE.Vector3();
+    this._tmpVec3 = new THREE.Vector3();
+    this._tmpMat4 = new THREE.Matrix4();
+    this._tmpQuat = new THREE.Quaternion();
+    this._dummyObj = new THREE.Object3D(); // scratch for instance matrix writes
+
+    // Highlight overlay mesh — separate from instanced atoms
+    this._highlightMesh = null;
+    this._highlightMat = null;
+
+    // Current physics reference for position reads (set each updatePositions call)
+    this._physicsRef = null;
 
     this._initScene();
     this._initLighting();
     this._initForceLine();
+  }
+
+  /** Stable raycast target — returns the instanced atom mesh directly (no array allocation). */
+  get instancedAtoms() {
+    return this._instancedAtoms;
+  }
+
+  /** Compute next geometric capacity (next power of 2, minimum 64). */
+  static _nextCapacity(needed) {
+    let cap = 64;
+    while (cap < needed) cap *= 2;
+    return cap;
   }
 
   _initScene() {
@@ -127,23 +156,25 @@ export class Renderer {
   }
 
   loadStructure(atoms, bonds) {
-    // Dispose cloned highlight material before clearing meshes
-    if (this.highlightAtom >= 0 && this.highlightAtom < this.atomMeshes.length) {
-      const hm = this.atomMeshes[this.highlightAtom];
-      if (hm.material !== this._atomMat) hm.material.dispose();
-    }
     this.highlightAtom = -1;
+    // Dispose highlight mesh before geometry — it shares _atomGeom
+    if (this._highlightMesh) {
+      this.scene.remove(this._highlightMesh);
+      this._highlightMesh = null;
+    }
+    if (this._highlightMat) {
+      this._highlightMat.dispose();
+      this._highlightMat = null;
+    }
 
-    // Dispose old GPU resources
+    // Dispose old instanced meshes
+    this._disposeInstanced();
+
+    // Dispose old geometry/material
     if (this._atomGeom) this._atomGeom.dispose();
     if (this._atomMat) this._atomMat.dispose();
     if (this._bondGeom) this._bondGeom.dispose();
     if (this._bondMat) this._bondMat.dispose();
-    this.atomMeshes.forEach(m => this.scene.remove(m));
-    this.bondMeshes.forEach(m => this.scene.remove(m));
-    this.atomMeshes = [];
-    this.bondMeshes = [];
-    this._activeBonds = 0;
 
     const t = THEMES[this.currentTheme];
     this._atomGeom = new THREE.SphereGeometry(
@@ -154,16 +185,6 @@ export class Renderer {
       roughness: CONFIG.material.roughness,
       metalness: CONFIG.material.metalness,
     });
-
-    // Atoms rendered in physics space (no centering offset)
-    atoms.forEach(a => {
-      const mesh = new THREE.Mesh(this._atomGeom, this._atomMat);
-      mesh.position.set(a.x, a.y, a.z);
-      this.scene.add(mesh);
-      this.atomMeshes.push(mesh);
-    });
-
-    // Pre-allocate bond meshes — shared geometry and material
     this._bondGeom = new THREE.CylinderGeometry(
       CONFIG.bondMesh.radius, CONFIG.bondMesh.radius, 1, CONFIG.bondMesh.segments
     );
@@ -172,116 +193,196 @@ export class Renderer {
       roughness: CONFIG.material.roughness,
       metalness: CONFIG.material.metalness,
     });
-    bonds.forEach(() => {
-      const mesh = new THREE.Mesh(this._bondGeom, this._bondMat);
-      this.scene.add(mesh);
-      this.bondMeshes.push(mesh);
-    });
-    this._activeBonds = bonds.length;
 
-    this._updateBondTransforms(bonds);
+    // Create instanced atom mesh with geometric capacity
+    this._atomCount = atoms.length;
+    this._atomCapacity = Renderer._nextCapacity(atoms.length);
+    this._instancedAtoms = new THREE.InstancedMesh(this._atomGeom, this._atomMat, this._atomCapacity);
+    this._instancedAtoms.count = this._atomCount;
+
+    // Write initial atom positions into instance matrices
+    const dummy = this._dummyObj;
+    for (let i = 0; i < atoms.length; i++) {
+      dummy.position.set(atoms[i].x, atoms[i].y, atoms[i].z);
+      dummy.scale.setScalar(1);
+      dummy.quaternion.identity();
+      dummy.updateMatrix();
+      this._instancedAtoms.setMatrixAt(i, dummy.matrix);
+    }
+    this._instancedAtoms.instanceMatrix.needsUpdate = true;
+    this.scene.add(this._instancedAtoms);
+
+    // Create instanced bond mesh
+    this._bondCapacity = Renderer._nextCapacity(Math.max(bonds.length, 256));
+    this._instancedBonds = new THREE.InstancedMesh(this._bondGeom, this._bondMat, this._bondCapacity);
+    this._instancedBonds.count = 0; // set during _updateBondTransforms
+    this.scene.add(this._instancedBonds);
+
+    this._updateBondTransformsInstanced(bonds, null, atoms);
     this._fitCamera();
 
     // Force immediate matrix update so raycasting works before next render frame.
-    // Without this, new meshes have matrixWorld = identity until renderer.render()
-    // runs, causing raycasts to miss all atoms between loadStructure() and the
-    // next animation frame.
     this.scene.updateMatrixWorld(true);
   }
 
+  /** Dispose instanced meshes and remove from scene. */
+  _disposeInstanced() {
+    if (this._instancedAtoms) {
+      this.scene.remove(this._instancedAtoms);
+      this._instancedAtoms.dispose();
+      this._instancedAtoms = null;
+    }
+    if (this._instancedBonds) {
+      this.scene.remove(this._instancedBonds);
+      this._instancedBonds.dispose();
+      this._instancedBonds = null;
+    }
+    this._atomCount = 0;
+    this._atomCapacity = 0;
+    this._bondCapacity = 0;
+    this._activeBonds = 0;
+  }
+
   updatePositions(physics) {
-    for (let i = 0; i < this.atomMeshes.length; i++) {
-      const [x, y, z] = physics.getPosition(i);
-      this.atomMeshes[i].position.set(x, y, z);
+    // Reacquire physics reference each call (pos may be reallocated on appendMolecule)
+    this._physicsRef = physics;
+    const pos = physics.pos;
+    const n = physics.n;
+
+    // Update instanced atom matrices from physics.pos
+    if (this._instancedAtoms && n > 0) {
+      const dummy = this._dummyObj;
+      for (let i = 0; i < n; i++) {
+        const i3 = i * 3;
+        dummy.position.set(pos[i3], pos[i3 + 1], pos[i3 + 2]);
+        dummy.scale.setScalar(1);
+        dummy.quaternion.identity();
+        dummy.updateMatrix();
+        this._instancedAtoms.setMatrixAt(i, dummy.matrix);
+      }
+      this._instancedAtoms.instanceMatrix.needsUpdate = true;
     }
 
+    // Update instanced bonds
     const bonds = physics.getBonds();
-    this._syncBondPool(bonds.length);
-    this._updateBondTransforms(bonds);
-  }
+    this._ensureBondCapacity(bonds.length);
+    this._updateBondTransformsInstanced(bonds, pos, null);
 
-  /**
-   * Ensure the bond mesh pool has at least `needed` meshes.
-   * Excess meshes are hidden (not removed from the scene) to avoid
-   * Three.js internal array rebuilds that cause frame drops.
-   */
-  _syncBondPool(needed) {
-    // Grow pool if needed
-    while (this.bondMeshes.length < needed) {
-      const mesh = new THREE.Mesh(this._bondGeom, this._bondMat);
-      mesh.visible = false;
-      this.scene.add(mesh);
-      this.bondMeshes.push(mesh);
+    // Update highlight overlay position
+    if (this._highlightMesh && this._highlightMesh.visible && this.highlightAtom >= 0) {
+      const hi3 = this.highlightAtom * 3;
+      this._highlightMesh.position.set(pos[hi3], pos[hi3 + 1], pos[hi3 + 2]);
     }
-    // Hide any meshes beyond the active count (handled in _updateBondTransforms)
-    this._activeBonds = needed;
   }
 
   /**
-   * Position, orient, and show/hide bond meshes to match the current bond list.
-   * Bonds beyond _activeBonds are hidden. Bonds stretched beyond the visibility
-   * cutoff are also hidden.
+   * Ensure bond InstancedMesh capacity is sufficient.
+   * Uses geometric growth (grow-only during session).
    */
-  _updateBondTransforms(bonds) {
-    // Update active bonds
-    for (let b = 0; b < this._activeBonds; b++) {
+  _ensureBondCapacity(needed) {
+    if (this._instancedBonds && needed <= this._bondCapacity) return;
+    const newCap = Renderer._nextCapacity(Math.max(needed, 256));
+    if (this._instancedBonds) {
+      this.scene.remove(this._instancedBonds);
+      this._instancedBonds.dispose();
+    }
+    this._bondCapacity = newCap;
+    this._instancedBonds = new THREE.InstancedMesh(this._bondGeom, this._bondMat, newCap);
+    this._instancedBonds.count = 0;
+    this.scene.add(this._instancedBonds);
+  }
+
+  /**
+   * Write active bond transforms densely into the bond InstancedMesh.
+   * Active-instance compaction: only visible bonds are written, then
+   * instancedBonds.count is set to the active count.
+   *
+   * @param {Array} bonds - bond list from physics
+   * @param {Float64Array|null} pos - physics.pos typed array (null = use atoms array)
+   * @param {Array|null} atoms - atom objects with {x,y,z} (used by loadStructure initial setup)
+   */
+  _updateBondTransformsInstanced(bonds, pos, atoms) {
+    if (!this._instancedBonds) return;
+    const dummy = this._dummyObj;
+    const up = this._bondUp;
+    const dir = this._bondDir;
+    let activeCount = 0;
+    const n = pos ? pos.length / 3 : (atoms ? atoms.length : 0);
+
+    for (let b = 0; b < bonds.length; b++) {
       const [i, j] = bonds[b];
-      if (i >= this.atomMeshes.length || j >= this.atomMeshes.length) continue;
-      const pi = this.atomMeshes[i].position;
-      const pj = this.atomMeshes[j].position;
-      const dx = pj.x - pi.x, dy = pj.y - pi.y, dz = pj.z - pi.z;
+      if (i >= n || j >= n) continue;
+
+      let pix, piy, piz, pjx, pjy, pjz;
+      if (pos) {
+        const i3 = i * 3, j3 = j * 3;
+        pix = pos[i3]; piy = pos[i3 + 1]; piz = pos[i3 + 2];
+        pjx = pos[j3]; pjy = pos[j3 + 1]; pjz = pos[j3 + 2];
+      } else {
+        pix = atoms[i].x; piy = atoms[i].y; piz = atoms[i].z;
+        pjx = atoms[j].x; pjy = atoms[j].y; pjz = atoms[j].z;
+      }
+
+      const dx = pjx - pix, dy = pjy - piy, dz = pjz - piz;
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-      const mesh = this.bondMeshes[b];
-      // Hide bonds that have stretched beyond physical range
-      if (dist > CONFIG.bonds.visibilityCutoff) {
-        mesh.visible = false;
-        continue;
-      }
-      mesh.visible = true;
-      mesh.position.set(
-        (pi.x + pj.x) / 2,
-        (pi.y + pj.y) / 2,
-        (pi.z + pj.z) / 2
+      // Skip bonds beyond visibility cutoff (active-instance compaction)
+      if (dist > CONFIG.bonds.visibilityCutoff) continue;
+
+      // Write dense instance matrix
+      dummy.position.set(
+        (pix + pjx) / 2,
+        (piy + pjy) / 2,
+        (piz + pjz) / 2
       );
-      mesh.scale.y = dist;
-      this._bondDir.set(dx, dy, dz).normalize();
-      mesh.quaternion.setFromUnitVectors(this._bondUp, this._bondDir);
+      dummy.scale.set(1, dist, 1); // cylinder stretches along Y
+      dir.set(dx, dy, dz).normalize();
+      dummy.quaternion.setFromUnitVectors(up, dir);
+      dummy.updateMatrix();
+      this._instancedBonds.setMatrixAt(activeCount, dummy.matrix);
+      activeCount++;
     }
-    // Hide pooled meshes beyond active count
-    for (let b = this._activeBonds; b < this.bondMeshes.length; b++) {
-      this.bondMeshes[b].visible = false;
-    }
+
+    this._instancedBonds.count = activeCount;
+    this._instancedBonds.instanceMatrix.needsUpdate = true;
+    this._activeBonds = activeCount;
   }
 
   setHighlight(atomIndex) {
-    // Clear previous — restore shared material
-    if (this.highlightAtom >= 0 && this.highlightAtom < this.atomMeshes.length) {
-      const prev = this.atomMeshes[this.highlightAtom];
-      if (prev.material !== this._atomMat) {
-        prev.material.dispose();
-        prev.material = this._atomMat;
-      }
-      prev.scale.setScalar(1.0);
-    }
-
     this.highlightAtom = atomIndex;
 
-    if (atomIndex >= 0 && atomIndex < this.atomMeshes.length) {
-      const mesh = this.atomMeshes[atomIndex];
-      // Clone material for the highlighted atom so emissive doesn't affect all atoms
-      if (mesh.material === this._atomMat) {
-        mesh.material = this._atomMat.clone();
+    if (atomIndex >= 0) {
+      // Create overlay mesh on first use
+      if (!this._highlightMesh) {
+        const geom = this._atomGeom || new THREE.SphereGeometry(
+          CONFIG.atoms.radius, CONFIG.atoms.segments[0], CONFIG.atoms.segments[1]
+        );
+        this._highlightMat = new THREE.MeshStandardMaterial({
+          color: this._atomMat ? this._atomMat.color.clone() : new THREE.Color(0xe0e0e0),
+          roughness: CONFIG.material.roughness,
+          metalness: CONFIG.material.metalness,
+          emissive: new THREE.Color(0x335544),
+          emissiveIntensity: 1.0,
+        });
+        this._highlightMesh = new THREE.Mesh(geom, this._highlightMat);
+        this._highlightMesh.renderOrder = 1; // render after atoms for consistent depth
+        this.scene.add(this._highlightMesh);
       }
-      mesh.material.emissive.set(0x335544);
-      mesh.material.emissiveIntensity = 1.0;
-      mesh.scale.setScalar(1.15);
+
+      // Position at the highlighted atom
+      this.getAtomWorldPosition(atomIndex, this._highlightMesh.position);
+      this._highlightMesh.scale.setScalar(1.15);
+      this._highlightMat.emissive.set(0x335544);
+      this._highlightMat.emissiveIntensity = 1.0;
+      this._highlightMesh.visible = true;
+    } else if (this._highlightMesh) {
+      this._highlightMesh.visible = false;
     }
   }
 
   showForceLine(fromAtomIndex, toWorldX, toWorldY, toWorldZ) {
     if (fromAtomIndex < 0) return;
-    const atomPos = this.atomMeshes[fromAtomIndex].position;
+    const atomPos = this.getAtomWorldPosition(fromAtomIndex);
     const positions = this.forceLine.geometry.attributes.position.array;
     positions[0] = atomPos.x;
     positions[1] = atomPos.y;
@@ -315,21 +416,18 @@ export class Renderer {
     }
 
     // Active interaction gets stronger highlight with mode-specific color
-    if (isActive && activeAtom >= 0 && activeAtom < this.atomMeshes.length) {
-      const mesh = this.atomMeshes[activeAtom];
-      if (mesh.material !== this._atomMat) {
-        if (isMoving) {
-          // Blue tint for Move mode
-          mesh.material.emissive.set(0x445566);
-          this.forceLine.material.color.set(0x66aaff);
-        } else {
-          // Green tint for Atom drag and Rotate
-          mesh.material.emissive.set(0x446655);
-          this.forceLine.material.color.set(0x66ffaa);
-        }
-        mesh.material.emissiveIntensity = 1.2;
+    if (isActive && activeAtom >= 0 && this._highlightMesh && this._highlightMat) {
+      if (isMoving) {
+        // Blue tint for Move mode
+        this._highlightMat.emissive.set(0x445566);
+        this.forceLine.material.color.set(0x66aaff);
+      } else {
+        // Green tint for Atom drag and Rotate
+        this._highlightMat.emissive.set(0x446655);
+        this.forceLine.material.color.set(0x66ffaa);
       }
-      mesh.scale.setScalar(1.2);
+      this._highlightMat.emissiveIntensity = 1.2;
+      this._highlightMesh.scale.setScalar(1.2);
     }
 
     // Force line visibility tied to active interaction state
@@ -358,22 +456,20 @@ export class Renderer {
 
     if (this._atomMat) this._atomMat.color.set(t.atom);
     if (this._bondMat) this._bondMat.color.set(t.bond);
-    // Update cloned highlight material if active
-    if (this.highlightAtom >= 0 && this.highlightAtom < this.atomMeshes.length) {
-      const m = this.atomMeshes[this.highlightAtom];
-      if (m.material !== this._atomMat) m.material.color.set(t.atom);
-    }
+    // Update highlight overlay material if active
+    if (this._highlightMat) this._highlightMat.color.set(t.atom);
   }
 
   /**
-   * Append atom meshes for a newly placed molecule.
-   * Does NOT clear existing meshes — adds to the current scene.
-   * Bond meshes are NOT added here — they are managed by the pool
-   * in _syncBondPool() during updatePositions().
+   * Append atom instances for a newly placed molecule.
+   * Grows InstancedMesh capacity geometrically if needed.
+   * Bond instances are managed during updatePositions().
    */
   appendMeshes(atoms) {
     if (CONFIG.debug.failRendererAppend) throw new Error('[debug] Injected renderer append failure');
     const t = THEMES[this.currentTheme];
+
+    // Ensure geometry/material exist
     if (!this._atomGeom) {
       this._atomGeom = new THREE.SphereGeometry(
         CONFIG.atoms.radius, CONFIG.atoms.segments[0], CONFIG.atoms.segments[1]
@@ -390,39 +486,60 @@ export class Renderer {
         color: t.bond, roughness: CONFIG.material.roughness, metalness: CONFIG.material.metalness,
       });
     }
-    const startIdx = this.atomMeshes.length;
-    try {
-      atoms.forEach(a => {
-        const mesh = new THREE.Mesh(this._atomGeom, this._atomMat);
-        mesh.position.set(a.x, a.y, a.z);
-        this.scene.add(mesh);
-        this.atomMeshes.push(mesh);
-      });
-      this.scene.updateMatrixWorld(true);
-    } catch (e) {
-      // Remove any meshes added before the failure
-      while (this.atomMeshes.length > startIdx) {
-        const mesh = this.atomMeshes.pop();
-        this.scene.remove(mesh);
+
+    const newCount = this._atomCount + atoms.length;
+
+    // Grow capacity if needed (geometric, grow-only within session)
+    if (newCount > this._atomCapacity) {
+      const newCap = Renderer._nextCapacity(newCount);
+      const oldInstanced = this._instancedAtoms;
+      const newInstanced = new THREE.InstancedMesh(this._atomGeom, this._atomMat, newCap);
+
+      // Copy existing instance matrices
+      if (oldInstanced && this._atomCount > 0) {
+        for (let i = 0; i < this._atomCount; i++) {
+          oldInstanced.getMatrixAt(i, this._tmpMat4);
+          newInstanced.setMatrixAt(i, this._tmpMat4);
+        }
       }
-      throw e;
+
+      if (oldInstanced) {
+        this.scene.remove(oldInstanced);
+        oldInstanced.dispose();
+      }
+      this._instancedAtoms = newInstanced;
+      this._atomCapacity = newCap;
+      this.scene.add(newInstanced);
     }
+
+    // Write new atom positions
+    const dummy = this._dummyObj;
+    for (let i = 0; i < atoms.length; i++) {
+      dummy.position.set(atoms[i].x, atoms[i].y, atoms[i].z);
+      dummy.scale.setScalar(1);
+      dummy.quaternion.identity();
+      dummy.updateMatrix();
+      this._instancedAtoms.setMatrixAt(this._atomCount + i, dummy.matrix);
+    }
+
+    this._atomCount = newCount;
+    this._instancedAtoms.count = newCount;
+    this._instancedAtoms.instanceMatrix.needsUpdate = true;
+    this.scene.updateMatrixWorld(true);
   }
 
   /**
-   * Clear all atom and bond meshes from the scene.
+   * Clear all atom and bond instances from the scene.
+   * Retains InstancedMesh capacity within session (grow-only).
+   * Full capacity reclaim happens on resetToEmpty / page reload.
    */
   clearAllMeshes() {
-    if (this.highlightAtom >= 0 && this.highlightAtom < this.atomMeshes.length) {
-      const hm = this.atomMeshes[this.highlightAtom];
-      if (hm.material !== this._atomMat) hm.material.dispose();
-    }
     this.highlightAtom = -1;
-    this.atomMeshes.forEach(m => this.scene.remove(m));
-    this.bondMeshes.forEach(m => this.scene.remove(m));
-    this.atomMeshes = [];
-    this.bondMeshes = [];
+    if (this._highlightMesh) this._highlightMesh.visible = false;
+    this._atomCount = 0;
     this._activeBonds = 0;
+    if (this._instancedAtoms) this._instancedAtoms.count = 0;
+    if (this._instancedBonds) this._instancedBonds.count = 0;
   }
 
   // --- Preview layer for placement mode ---
@@ -537,22 +654,45 @@ export class Renderer {
   }
 
   _fitCamera() {
-    if (this.atomMeshes.length === 0) return;
-    // Compute COM and bounding radius from atom positions (physics space)
+    const n = this._atomCount;
+    if (n === 0) return;
+
+    // Compute COM and bounding radius from physics positions or instance matrices
     let cx = 0, cy = 0, cz = 0;
-    this.atomMeshes.forEach(m => {
-      cx += m.position.x; cy += m.position.y; cz += m.position.z;
-    });
-    cx /= this.atomMeshes.length;
-    cy /= this.atomMeshes.length;
-    cz /= this.atomMeshes.length;
+    if (this._physicsRef && this._physicsRef.n === n) {
+      const pos = this._physicsRef.pos;
+      for (let i = 0; i < n; i++) {
+        cx += pos[i * 3]; cy += pos[i * 3 + 1]; cz += pos[i * 3 + 2];
+      }
+    } else if (this._instancedAtoms) {
+      // Fall back to reading instance matrices (e.g., during loadStructure before physics ref is set)
+      const m = this._tmpMat4;
+      for (let i = 0; i < n; i++) {
+        this._instancedAtoms.getMatrixAt(i, m);
+        cx += m.elements[12]; cy += m.elements[13]; cz += m.elements[14];
+      }
+    } else {
+      return;
+    }
+    cx /= n; cy /= n; cz /= n;
 
     let maxR = 0;
-    this.atomMeshes.forEach(m => {
-      const dx = m.position.x - cx, dy = m.position.y - cy, dz = m.position.z - cz;
-      const r = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (r > maxR) maxR = r;
-    });
+    if (this._physicsRef && this._physicsRef.n === n) {
+      const pos = this._physicsRef.pos;
+      for (let i = 0; i < n; i++) {
+        const dx = pos[i * 3] - cx, dy = pos[i * 3 + 1] - cy, dz = pos[i * 3 + 2] - cz;
+        const r = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (r > maxR) maxR = r;
+      }
+    } else if (this._instancedAtoms) {
+      const m = this._tmpMat4;
+      for (let i = 0; i < n; i++) {
+        this._instancedAtoms.getMatrixAt(i, m);
+        const dx = m.elements[12] - cx, dy = m.elements[13] - cy, dz = m.elements[14] - cz;
+        const r = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (r > maxR) maxR = r;
+      }
+    }
     const dist = maxR * 2.5 + 5;
     this.camera.position.set(cx, cy, cz + dist);
     this.controls.target.set(cx, cy, cz);
@@ -566,13 +706,68 @@ export class Renderer {
   /** Public API: fit camera to current atom positions. */
   fitCamera() { this._fitCamera(); }
 
-  /** Reset camera to default empty-scene position (origin-centered). */
-  resetToEmpty() {
+  /** Reset camera to default empty-scene position. Retains instanced capacity. */
+  resetCamera() {
+    this._physicsRef = null;
     this.camera.position.set(0, 0, 15);
     this.controls.target.set(0, 0, 0);
     this.controls.update();
     this._defaultCamPos.set(0, 0, 15);
     this._defaultCamTarget.set(0, 0, 0);
+  }
+
+  /** Hard reset: reclaims instanced capacity. Reserved for debug/explicit reset only. */
+  resetToEmpty() {
+    this._disposeInstanced();
+    this.highlightAtom = -1;
+    if (this._highlightMesh) this._highlightMesh.visible = false;
+    this.resetCamera();
+  }
+
+  /**
+   * Get atom world position for the latest physics state.
+   * Renderer-owned API, physics-backed. Returns scene/world coordinates
+   * without depending on mesh objects. Callers within the same frame get
+   * a consistent snapshot.
+   *
+   * Fast path: reads from _physicsRef.pos (O(1) typed-array lookup).
+   * Fallback path: reads from InstancedMesh instance matrix via getMatrixAt() —
+   * materially slower. Only used before the first updatePositions() call
+   * (e.g., during loadStructure). Interaction and picking should always run
+   * after updatePositions() to avoid the fallback.
+   *
+   * @param {number} index - atom index
+   * @param {THREE.Vector3} [out] - optional output vector (avoids allocation)
+   * @returns {THREE.Vector3} the atom's world position
+   */
+  getAtomWorldPosition(index, out) {
+    const v = out || this._tmpVec3;
+    if (this._physicsRef && index >= 0 && index < this._physicsRef.n) {
+      const pos = this._physicsRef.pos;
+      const i3 = index * 3;
+      v.set(pos[i3], pos[i3 + 1], pos[i3 + 2]);
+    } else if (this._instancedAtoms && index >= 0 && index < this._atomCount) {
+      this._instancedAtoms.getMatrixAt(index, this._tmpMat4);
+      v.set(this._tmpMat4.elements[12], this._tmpMat4.elements[13], this._tmpMat4.elements[14]);
+    } else {
+      v.set(0, 0, 0);
+    }
+    return v;
+  }
+
+  /** Number of active atoms. */
+  getAtomCount() {
+    return this._atomCount;
+  }
+
+  /** Debug info for instanced capacity monitoring. */
+  getCapacityInfo() {
+    return {
+      atomCount: this._atomCount,
+      atomCapacity: this._atomCapacity,
+      bondActive: this._activeBonds,
+      bondCapacity: this._bondCapacity,
+    };
   }
 
   /**

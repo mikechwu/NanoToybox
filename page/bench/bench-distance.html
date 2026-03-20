@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NanoToybox — Tersoff Kernel Benchmark</title>
+<style>
+body { font-family: monospace; background: #1a1a2e; color: #e8e8e8; padding: 20px; max-width: 1400px; }
+.pass { color: #50c050; } .warn { color: #e0a030; } .fail { color: #e05050; }
+table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+th, td { border: 1px solid #333; padding: 4px 8px; text-align: right; font-size: 12px; }
+th { background: #252540; text-align: left; }
+td:first-child { text-align: left; }
+button { background: #334; color: #ccc; border: 1px solid #555; padding: 8px 16px; cursor: pointer; margin: 4px; }
+button:disabled { opacity: 0.4; }
+</style>
+</head>
+<body>
+<h2>Tersoff Kernel Benchmark</h2>
+<p>Measures the current production Tersoff kernel (on-the-fly distances) at ~1020 and ~2040 atoms.<br>
+The original C.proof comparison (cached N×N vs on-the-fly) was run before the on-the-fly kernel was adopted.<br>
+Historical C.proof results are in .reports/2026-03-19-cproof-results.md.</p>
+<div>
+  <button id="btn-run">Run Benchmark</button>
+</div>
+<div id="status" style="color:#60a0ff;"></div>
+<div id="results"></div>
+
+<script type="module">
+import { PhysicsEngine } from '../js/physics.js';
+import { buildScene } from './bench-scenes.js';
+
+const status = document.getElementById('status');
+const results = document.getElementById('results');
+
+const TARGETS = [1020, 2040];
+const SAMPLE_STEPS = 200;
+const WARMUP_STEPS = 100;
+
+async function runBenchmark() {
+  const buttons = document.querySelectorAll('button');
+  buttons.forEach(b => b.disabled = true);
+  results.innerHTML = '';
+
+  const table = document.createElement('table');
+  table.innerHTML = `<tr>
+    <th>Atoms</th><th>Kernel Mean (ms)</th><th>Kernel P95 (ms)</th>
+    <th>Kernel Max (ms)</th><th>stepOnce Mean (ms)</th><th>Steps/sec</th><th>Notes</th>
+  </tr>`;
+  results.appendChild(table);
+
+  for (const target of TARGETS) {
+    status.textContent = `Building scene: ${target} atoms...`;
+    await new Promise(r => setTimeout(r, 10));
+    const scene = await buildScene(target, 'compact');
+    const n = scene.atoms.length;
+
+    status.textContent = `[${n} atoms] Warming up...`;
+    await new Promise(r => setTimeout(r, 10));
+    const physics = new PhysicsEngine();
+    physics.init(scene.atoms, scene.bonds);
+
+    // Warmup
+    for (let s = 0; s < WARMUP_STEPS; s++) {
+      physics.stepOnce();
+      if (s % 50 === 0) await new Promise(r => setTimeout(r, 0));
+    }
+
+    // Sample: use _bench hooks to isolate Tersoff kernel time
+    const kernelTimings = [];
+    const stepTimings = [];
+    let kernelMs = 0, stepMs = 0;
+    for (let s = 0; s < SAMPLE_STEPS; s++) {
+      physics._bench = { neighborMs: 0, tersoffMs: 0, bondRebuildMs: 0, componentMs: 0 };
+      const t0 = performance.now();
+      physics.stepOnce();
+      const elapsed = performance.now() - t0;
+      kernelTimings.push(physics._bench.tersoffMs);
+      stepTimings.push(elapsed);
+      kernelMs += physics._bench.tersoffMs;
+      stepMs += elapsed;
+      physics._bench = null;
+
+      if (s % 50 === 0) {
+        status.textContent = `[${n} atoms] ${Math.round(s / SAMPLE_STEPS * 100)}%`;
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+    kernelTimings.sort((a, b) => a - b);
+    const kMean = kernelMs / kernelTimings.length;
+    const kP95 = kernelTimings.length >= 50 ? kernelTimings[Math.ceil(kernelTimings.length * 0.95) - 1] : null;
+    const sMean = stepMs / stepTimings.length;
+    const stepsPerSec = stepMs > 0 ? SAMPLE_STEPS * 1000 / stepMs : 0;
+
+    const row = document.createElement('tr');
+    row.innerHTML = `<td>${n}</td><td>${kMean.toFixed(3)}</td>
+      <td>${kP95 ? kP95.toFixed(3) : '—'}</td><td>${kernelTimings[kernelTimings.length - 1].toFixed(3)}</td>
+      <td>${sMean.toFixed(3)}</td><td>${Math.round(stepsPerSec)}</td>
+      <td>Production on-the-fly kernel (zero N×N buffers)</td>`;
+    table.appendChild(row);
+  }
+
+  const summary = document.createElement('div');
+  summary.innerHTML = `<h3>Context</h3>
+    <p>This measures the production on-the-fly Tersoff kernel adopted after C.proof.</p>
+    <p>C.proof showed on-the-fly was 45% faster than cached (N×N) at 2040 atoms and eliminated 127 MB of distance buffers.</p>
+    <p>Remaining O(N²) bottlenecks: buildNeighborList (every 10 steps) and updateBondList (every 20 steps).</p>`;
+  results.appendChild(summary);
+
+  status.textContent = 'Done.';
+  buttons.forEach(b => b.disabled = false);
+}
+
+document.getElementById('btn-run').addEventListener('click', runBenchmark);
+</script>
+</body>
+</html>

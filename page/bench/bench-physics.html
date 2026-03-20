@@ -161,8 +161,9 @@ async function benchAtomCount(targetAtoms, variant, sweepProgress) {
   // Memory proxies
   let heapMB = null;
   if (performance.memory) heapMB = (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(1);
-  const distMB = (physics._dist ? physics._dist.byteLength / 1024 / 1024 : 0).toFixed(2);
-  const rhatMB = (physics._rhat ? physics._rhat.byteLength / 1024 / 1024 : 0).toFixed(2);
+  // _dist/_rhat removed after C.proof (on-the-fly kernel adopted). Report 0 for backward compat.
+  const distMB = '0';
+  const rhatMB = '0';
 
   const result = {
     targetAtoms, actualAtoms: n, bonds: bondCount, variant,
@@ -192,7 +193,7 @@ async function runSweep(sweep, variant) {
   table.innerHTML = `<tr>
     <th>Atoms</th><th>Bonds</th><th>Status</th><th>Warmup</th><th>Steps</th>
     <th>stepOnce (ms)</th><th>Neighbor (ms)</th><th>Tersoff (ms)</th><th>BondRebuild (ms)</th><th>Component (ms)</th>
-    <th>Steps/sec</th><th>Spikes</th><th>Dist+Rhat (MB)</th><th>Heap (MB)</th>
+    <th>Steps/sec</th><th>Spikes</th><th>Heap (MB)</th>
   </tr>`;
   results.appendChild(table);
 
@@ -207,7 +208,7 @@ async function runSweep(sweep, variant) {
       row.innerHTML = `
         <td>${r.actualAtoms}</td><td>${r.bonds}</td>
         <td class="fail">warmup_abort</td><td>${r.warmupConfidence}</td>
-        <td colspan="10">\u2014</td>`;
+        <td colspan="9">\u2014</td>`;
       table.appendChild(row);
       break;
     }
@@ -221,7 +222,6 @@ async function runSweep(sweep, variant) {
       <td>${r.bondRebuild.mean.toFixed(3)} (${r.bondRebuild.count})</td>
       <td>${r.component.mean.toFixed(3)} (${r.component.count})</td>
       <td>${Math.round(r.stepsPerSec)}</td><td>${r.spikeCount}</td>
-      <td>${(parseFloat(r.distMB) + parseFloat(r.rhatMB)).toFixed(1)}</td>
       <td>${r.heapMB || '—'}</td>
     `;
     table.appendChild(row);
@@ -271,12 +271,12 @@ document.getElementById('btn-run-graphene').addEventListener('click', () => runS
 document.getElementById('btn-run-sparse').addEventListener('click', () => runSweep(SPARSE_SWEEP, 'sparse'));
 document.getElementById('btn-export').addEventListener('click', () => {
   if (allResults.length === 0) return;
-  const header = 'targetAtoms,actualAtoms,bonds,variant,status,reason,warmupConfidence,sampleSteps,stepOnceMeanMs,stepOnceP95Ms,stepOnceMaxMs,neighborMeanMs,neighborP95Ms,neighborCalls,tersoffMeanMs,tersoffP95Ms,tersoffMaxMs,bondRebuildMeanMs,bondRebuildCalls,componentMeanMs,componentCalls,stepsPerSec,spikeCount,distRhatMB,heapMB\n';
+  const header = 'targetAtoms,actualAtoms,bonds,variant,status,reason,warmupConfidence,sampleSteps,stepOnceMeanMs,stepOnceP95Ms,stepOnceMaxMs,neighborMeanMs,neighborP95Ms,neighborCalls,tersoffMeanMs,tersoffP95Ms,tersoffMaxMs,bondRebuildMeanMs,bondRebuildCalls,componentMeanMs,componentCalls,stepsPerSec,spikeCount,heapMB\n';
   const fmt = (s) => s.mean !== undefined ? s.mean.toFixed(4) : '0';
   const fmtP = (s) => s.p95 != null ? s.p95.toFixed(4) : '';
   const fmtM = (s) => s.max !== undefined ? s.max.toFixed(4) : '';
   const rows = allResults.map(r =>
-    `${r.targetAtoms},${r.actualAtoms},${r.bonds},${r.variant},${r.status},${r.reason||''},${r.warmupConfidence},${r.sampleSteps},${fmt(r.stepOnce)},${fmtP(r.stepOnce)},${fmtM(r.stepOnce)},${fmt(r.neighbor)},${fmtP(r.neighbor)},${r.neighbor.count},${fmt(r.tersoff)},${fmtP(r.tersoff)},${fmtM(r.tersoff)},${fmt(r.bondRebuild)},${r.bondRebuild.count},${fmt(r.component)},${r.component.count},${r.stepsPerSec.toFixed(1)},${r.spikeCount},${(parseFloat(r.distMB)+parseFloat(r.rhatMB)).toFixed(1)},${r.heapMB||''}`
+    `${r.targetAtoms},${r.actualAtoms},${r.bonds},${r.variant},${r.status},${r.reason||''},${r.warmupConfidence},${r.sampleSteps},${fmt(r.stepOnce)},${fmtP(r.stepOnce)},${fmtM(r.stepOnce)},${fmt(r.neighbor)},${fmtP(r.neighbor)},${r.neighbor.count},${fmt(r.tersoff)},${fmtP(r.tersoff)},${fmtM(r.tersoff)},${fmt(r.bondRebuild)},${r.bondRebuild.count},${fmt(r.component)},${r.component.count},${r.stepsPerSec.toFixed(1)},${r.spikeCount},${r.heapMB||''}`
   ).join('\n');
   const blob = new Blob([header + rows], { type: 'text/csv' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob);

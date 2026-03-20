@@ -2,11 +2,14 @@
  * Tersoff potential engine for browser — optimized analytical force computation.
  *
  * Direct port of sim/potentials/tersoff.py to JavaScript, optimized for
- * real-time performance using flat TypedArrays instead of Maps.
+ * real-time performance.
  *
- * Key optimizations over the naive port:
- * 1. Flat Float64Array for distance/rhat cache (vs Map — 5-10x faster lookup)
- * 2. Pre-allocated buffers reused across frames (zero GC pressure)
+ * Key optimizations:
+ * 1. On-the-fly distance computation — no N×N distance/unit-vector cache.
+ *    Distances are computed inline from pos (L1-cacheable) instead of
+ *    random access into N×N arrays that exceed CPU cache at ~500 atoms.
+ *    Benchmarked 45% faster than cached approach at 2040 atoms (see C.proof).
+ * 2. Pre-allocated neighbor list buffers reused across frames (zero GC pressure)
  * 3. Inlined cutoff/force functions (avoids function call overhead)
  * 4. Neighbor list rebuilt every 10 steps (not every step)
  */
@@ -48,9 +51,10 @@ const ACC_FACTOR = 1.602176634e-29 / 1.9944235e-26;
 /**
  * Standalone Tersoff force kernel — pure science, no UX dependencies.
  *
- * This function computes Tersoff (1988) interatomic forces for carbon.
- * It reads positions and writes forces. It does not know about drag,
- * rotation, clamping, or energy control.
+ * Computes Tersoff (1988) interatomic forces for carbon using on-the-fly
+ * distance computation. No pre-allocated N×N distance/unit-vector cache —
+ * distances are computed inline from pos, keeping memory access within
+ * the L1-cacheable pos array (~N×24 bytes vs N²×32 bytes for the cache).
  *
  * Extracted as a standalone function so it can be replaced with a
  * Wasm implementation without touching the interaction/runtime layer.
@@ -60,68 +64,30 @@ const ACC_FACTOR = 1.602176634e-29 / 1.9944235e-26;
  * @param {Int32Array[]} nl - neighbor list arrays (nl[i][0..nlc[i]-1] = neighbors)
  * @param {Int32Array} nlc - neighbor counts (nlc[i] = number of neighbors of i)
  * @param {number} n - number of atoms
- * @param {Float64Array} distBuf - pre-allocated distance cache [n*n]
- * @param {Float64Array} rhatBuf - pre-allocated unit vector cache [n*n*3]
  */
-function computeTersoffForces(pos, force, nl, nlc, n, distBuf, rhatBuf) {
+function computeTersoffForces(pos, force, nl, nlc, n) {
   const p = pos;
   const f = force;
-  const dist = distBuf;
-  const rhat = rhatBuf;
+  const R_MAX_SQ = R_MAX * R_MAX;
 
-  // ─── Precompute distances and unit vectors into flat arrays ───
-  dist.fill(0);
   for (let i = 0; i < n; i++) {
-    const ix = i * 3;
-    const ni = nl[i];
-    const niLen = nlc[i];
+    const ni = nl[i], niLen = nlc[i];
+    const ix = i * 3, pix = p[ix], piy = p[ix + 1], piz = p[ix + 2];
+
     for (let qi = 0; qi < niLen; qi++) {
       const j = ni[qi];
       if (j <= i) continue;
       const jx = j * 3;
-      const dx = p[jx] - p[ix];
-      const dy = p[jx + 1] - p[ix + 1];
-      const dz = p[jx + 2] - p[ix + 2];
-      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-      const kij = i * n + j;
-      const kji = j * n + i;
-      dist[kij] = d;
-      dist[kji] = d;
-
-      if (d > 1e-10) {
-        const inv = 1.0 / d;
-        const r3ij = kij * 3;
-        const r3ji = kji * 3;
-        rhat[r3ij] = dx * inv;
-        rhat[r3ij + 1] = dy * inv;
-        rhat[r3ij + 2] = dz * inv;
-        rhat[r3ji] = -dx * inv;
-        rhat[r3ji + 1] = -dy * inv;
-        rhat[r3ji + 2] = -dz * inv;
-      }
-    }
-  }
-
-  // ─── Main force loop ───
-  for (let i = 0; i < n; i++) {
-    const ni = nl[i];
-    const niLen = nlc[i];
-    for (let qi = 0; qi < niLen; qi++) {
-      const j = ni[qi];
-      if (j <= i) continue;
-
-      const kij = i * n + j;
-      const r_ij = dist[kij];
-      if (r_ij >= R_MAX || r_ij < 1e-10) continue;
-
-      const r3ij = kij * 3;
-      const rh_ij0 = rhat[r3ij], rh_ij1 = rhat[r3ij + 1], rh_ij2 = rhat[r3ij + 2];
+      const dij_x = p[jx] - pix, dij_y = p[jx + 1] - piy, dij_z = p[jx + 2] - piz;
+      const r_ij_sq = dij_x * dij_x + dij_y * dij_y + dij_z * dij_z;
+      if (r_ij_sq >= R_MAX_SQ || r_ij_sq < 1e-20) continue;
+      const r_ij = Math.sqrt(r_ij_sq);
+      const inv_rij = 1.0 / r_ij;
+      const rh_ij0 = dij_x * inv_rij, rh_ij1 = dij_y * inv_rij, rh_ij2 = dij_z * inv_rij;
 
       // Inline cutoff
       let fc_ij, dfc_ij;
       if (r_ij < R_CUT - D_CUT) { fc_ij = 1.0; dfc_ij = 0.0; }
-      else if (r_ij > R_MAX) { fc_ij = 0.0; dfc_ij = 0.0; }
       else {
         const arg = HALF_PI_OVER_D * (r_ij - R_CUT);
         fc_ij = 0.5 - 0.5 * Math.sin(arg);
@@ -140,17 +106,19 @@ function computeTersoffForces(pos, force, nl, nlc, n, distBuf, rhatBuf) {
       for (let qk = 0; qk < niLen; qk++) {
         const k = ni[qk];
         if (k === j) continue;
-        const kik = i * n + k;
-        const r_ik = dist[kik];
-        if (r_ik === 0 || r_ik >= R_MAX) continue;
+        const kx3 = k * 3;
+        const dik_x = p[kx3] - pix, dik_y = p[kx3 + 1] - piy, dik_z = p[kx3 + 2] - piz;
+        const r_ik_sq = dik_x * dik_x + dik_y * dik_y + dik_z * dik_z;
+        if (r_ik_sq < 1e-20 || r_ik_sq >= R_MAX_SQ) continue;
+        const r_ik = Math.sqrt(r_ik_sq);
+        const inv_rik = 1.0 / r_ik;
+        const rk0 = dik_x * inv_rik, rk1 = dik_y * inv_rik, rk2 = dik_z * inv_rik;
 
         let fc_ik;
         if (r_ik < R_CUT - D_CUT) fc_ik = 1.0;
-        else if (r_ik > R_MAX) fc_ik = 0.0;
         else fc_ik = 0.5 - 0.5 * Math.sin(HALF_PI_OVER_D * (r_ik - R_CUT));
 
-        const r3ik = kik * 3;
-        let cosT = rh_ij0 * rhat[r3ik] + rh_ij1 * rhat[r3ik + 1] + rh_ij2 * rhat[r3ik + 2];
+        let cosT = rh_ij0 * rk0 + rh_ij1 * rk1 + rh_ij2 * rk2;
         if (cosT > 1) cosT = 1; else if (cosT < -1) cosT = -1;
 
         const hmc = T_H - cosT;
@@ -159,26 +127,27 @@ function computeTersoffForces(pos, force, nl, nlc, n, distBuf, rhatBuf) {
 
       // ─── Compute zeta_ji ───
       let zeta_ji = 0.0;
-      const kji = j * n + i;
-      const r3ji = kji * 3;
-      const rh_ji0 = rhat[r3ji], rh_ji1 = rhat[r3ji + 1], rh_ji2 = rhat[r3ji + 2];
+      const rh_ji0 = -rh_ij0, rh_ji1 = -rh_ij1, rh_ji2 = -rh_ij2;
+      const pjx = p[jx], pjy = p[jx + 1], pjz = p[jx + 2];
       const nj = nl[j];
       const njLen = nlc[j];
 
       for (let qk = 0; qk < njLen; qk++) {
         const k = nj[qk];
         if (k === i) continue;
-        const kjk = j * n + k;
-        const r_jk = dist[kjk];
-        if (r_jk === 0 || r_jk >= R_MAX) continue;
+        const kx3 = k * 3;
+        const djk_x = p[kx3] - pjx, djk_y = p[kx3 + 1] - pjy, djk_z = p[kx3 + 2] - pjz;
+        const r_jk_sq = djk_x * djk_x + djk_y * djk_y + djk_z * djk_z;
+        if (r_jk_sq < 1e-20 || r_jk_sq >= R_MAX_SQ) continue;
+        const r_jk = Math.sqrt(r_jk_sq);
+        const inv_rjk = 1.0 / r_jk;
+        const rk0 = djk_x * inv_rjk, rk1 = djk_y * inv_rjk, rk2 = djk_z * inv_rjk;
 
         let fc_jk;
         if (r_jk < R_CUT - D_CUT) fc_jk = 1.0;
-        else if (r_jk > R_MAX) fc_jk = 0.0;
         else fc_jk = 0.5 - 0.5 * Math.sin(HALF_PI_OVER_D * (r_jk - R_CUT));
 
-        const r3jk = kjk * 3;
-        let cosT = rh_ji0 * rhat[r3jk] + rh_ji1 * rhat[r3jk + 1] + rh_ji2 * rhat[r3jk + 2];
+        let cosT = rh_ji0 * rk0 + rh_ji1 * rk1 + rh_ji2 * rk2;
         if (cosT > 1) cosT = 1; else if (cosT < -1) cosT = -1;
 
         const hmc = T_H - cosT;
@@ -196,7 +165,6 @@ function computeTersoffForces(pos, force, nl, nlc, n, distBuf, rhatBuf) {
       const pf_ji = 0.5 * (dfc_ij * (fR_ij + bji * fA_ij) + fc_ij * (dfR_ij + bji * dfA_ij));
       const pf = pf_ij + pf_ji;
 
-      const ix = i * 3, jx = j * 3;
       f[ix]     += pf * rh_ij0;
       f[ix + 1] += pf * rh_ij1;
       f[ix + 2] += pf * rh_ij2;
@@ -213,12 +181,13 @@ function computeTersoffForces(pos, force, nl, nlc, n, distBuf, rhatBuf) {
         for (let qk = 0; qk < niLen; qk++) {
           const k = ni[qk];
           if (k === j) continue;
-          const kik = i * n + k;
-          const r_ik = dist[kik];
-          if (r_ik === 0 || r_ik >= R_MAX) continue;
-
-          const r3ik = kik * 3;
-          const rk0 = rhat[r3ik], rk1 = rhat[r3ik + 1], rk2 = rhat[r3ik + 2];
+          const kx3 = k * 3;
+          const dik_x = p[kx3] - pix, dik_y = p[kx3 + 1] - piy, dik_z = p[kx3 + 2] - piz;
+          const r_ik_sq = dik_x * dik_x + dik_y * dik_y + dik_z * dik_z;
+          if (r_ik_sq < 1e-20 || r_ik_sq >= R_MAX_SQ) continue;
+          const r_ik = Math.sqrt(r_ik_sq);
+          const inv_rik = 1.0 / r_ik;
+          const rk0 = dik_x * inv_rik, rk1 = dik_y * inv_rik, rk2 = dik_z * inv_rik;
 
           let fc_ik, dfc_ik;
           if (r_ik < R_CUT - D_CUT) { fc_ik = 1.0; dfc_ik = 0.0; }
@@ -236,10 +205,6 @@ function computeTersoffForces(pos, force, nl, nlc, n, distBuf, rhatBuf) {
           const g_val = 1.0 + C2_D2 - C2 / denom;
           const dg_val = -2.0 * C2 * hmc / (denom * denom);
 
-          const kx = k * 3;
-          const inv_rij = 1.0 / r_ij;
-          const inv_rik = 1.0 / r_ik;
-
           for (let d = 0; d < 3; d++) {
             const rij_d = d === 0 ? rh_ij0 : d === 1 ? rh_ij1 : rh_ij2;
             const rik_d = d === 0 ? rk0 : d === 1 ? rk1 : rk2;
@@ -248,10 +213,9 @@ function computeTersoffForces(pos, force, nl, nlc, n, distBuf, rhatBuf) {
             const dcos_drk = (rij_d - cosT * rik_d) * inv_rik;
             const dcos_dri = -(dcos_drj + dcos_drk);
 
-            const dz_dri = dfc_ik * (-rik_d) * g_val + fc_ik * dg_val * dcos_dri;
-            f[ix + d] -= dEdz * dz_dri;
+            f[ix + d] -= dEdz * (dfc_ik * (-rik_d) * g_val + fc_ik * dg_val * dcos_dri);
             f[jx + d] -= dEdz * fc_ik * dg_val * dcos_drj;
-            f[kx + d] -= dEdz * (dfc_ik * rik_d * g_val + fc_ik * dg_val * dcos_drk);
+            f[kx3 + d] -= dEdz * (dfc_ik * rik_d * g_val + fc_ik * dg_val * dcos_drk);
           }
         }
       }
@@ -265,12 +229,13 @@ function computeTersoffForces(pos, force, nl, nlc, n, distBuf, rhatBuf) {
         for (let qk = 0; qk < njLen; qk++) {
           const k = nj[qk];
           if (k === i) continue;
-          const kjk = j * n + k;
-          const r_jk = dist[kjk];
-          if (r_jk === 0 || r_jk >= R_MAX) continue;
-
-          const r3jk = kjk * 3;
-          const rk0 = rhat[r3jk], rk1 = rhat[r3jk + 1], rk2 = rhat[r3jk + 2];
+          const kx3 = k * 3;
+          const djk_x = p[kx3] - pjx, djk_y = p[kx3 + 1] - pjy, djk_z = p[kx3 + 2] - pjz;
+          const r_jk_sq = djk_x * djk_x + djk_y * djk_y + djk_z * djk_z;
+          if (r_jk_sq < 1e-20 || r_jk_sq >= R_MAX_SQ) continue;
+          const r_jk = Math.sqrt(r_jk_sq);
+          const inv_rjk = 1.0 / r_jk;
+          const rk0 = djk_x * inv_rjk, rk1 = djk_y * inv_rjk, rk2 = djk_z * inv_rjk;
 
           let fc_jk, dfc_jk;
           if (r_jk < R_CUT - D_CUT) { fc_jk = 1.0; dfc_jk = 0.0; }
@@ -288,21 +253,17 @@ function computeTersoffForces(pos, force, nl, nlc, n, distBuf, rhatBuf) {
           const g_val = 1.0 + C2_D2 - C2 / denom;
           const dg_val = -2.0 * C2 * hmc / (denom * denom);
 
-          const kx = k * 3;
-          const inv_rji = 1.0 / r_ij;
-          const inv_rjk = 1.0 / r_jk;
-
           for (let d = 0; d < 3; d++) {
             const rji_d = d === 0 ? rh_ji0 : d === 1 ? rh_ji1 : rh_ji2;
             const rjk_d = d === 0 ? rk0 : d === 1 ? rk1 : rk2;
 
-            const dcos_dri = (rjk_d - cosT * rji_d) * inv_rji;
+            const dcos_dri = (rjk_d - cosT * rji_d) * inv_rij;
             const dcos_drk = (rji_d - cosT * rjk_d) * inv_rjk;
             const dcos_drj = -(dcos_dri + dcos_drk);
 
             f[jx + d] -= dEdz * (dfc_jk * (-rjk_d) * g_val + fc_jk * dg_val * dcos_drj);
             f[ix + d] -= dEdz * fc_jk * dg_val * dcos_dri;
-            f[kx + d] -= dEdz * (dfc_jk * rjk_d * g_val + fc_jk * dg_val * dcos_drk);
+            f[kx3 + d] -= dEdz * (dfc_jk * rjk_d * g_val + fc_jk * dg_val * dcos_drk);
           }
         }
       }
@@ -337,8 +298,6 @@ export class PhysicsEngine {
     this._bench = null; // set to {} to enable per-stage timing
 
     // Pre-allocated cache buffers (resized in init)
-    this._dist = null;   // Float64Array[n*n] — distance cache
-    this._rhat = null;   // Float64Array[n*n*3] — unit vector cache
     this._maxN = 0;
     this._nlArrays = null;  // Reusable neighbor list sub-arrays
     this._nlCounts = null;  // Int32Array tracking used length of each sub-array
@@ -369,8 +328,6 @@ export class PhysicsEngine {
     // Allocate cache buffers — right-size when switching to a smaller structure
     if (this.n !== this._maxN) {
       this._maxN = this.n;
-      this._dist = new Float64Array(this.n * this.n);
-      this._rhat = new Float64Array(this.n * this.n * 3);
       // Pre-allocate neighbor list arrays (one Int32Array per atom, initial capacity 8)
       this._nlArrays = new Array(this.n);
       this._nlCounts = new Int32Array(this.n);
@@ -427,11 +384,9 @@ export class PhysicsEngine {
     }
     if (!this.neighborList || this.n === 0) return;
 
-    // ── Tersoff kernel ──
+    // ── Tersoff kernel (on-the-fly distances, no N×N cache) ──
     const t1 = this._bench ? performance.now() : 0;
-    computeTersoffForces(
-      this.pos, this.force, this.neighborList, this._nlCounts, this.n, this._dist, this._rhat
-    );
+    computeTersoffForces(this.pos, this.force, this.neighborList, this._nlCounts, this.n);
     if (this._bench) this._bench.tersoffMs = (this._bench.tersoffMs || 0) + (performance.now() - t1);
 
     // ── Interaction forces: UX layer ──
@@ -809,8 +764,6 @@ export class PhysicsEngine {
     const newPos = new Float64Array(newN * 3);
     const newVel = new Float64Array(newN * 3);
     const newForce = new Float64Array(newN * 3);
-    const newDist = new Float64Array(newN * newN);
-    const newRhat = new Float64Array(newN * newN * 3);
     const newNlArrays = new Array(newN);
     const newNlCounts = new Int32Array(newN);
     for (let i = 0; i < newN; i++) newNlArrays[i] = new Int32Array(8);
@@ -841,8 +794,6 @@ export class PhysicsEngine {
     }
 
     this._maxN = newN;
-    this._dist = newDist;
-    this._rhat = newRhat;
     this._nlArrays = newNlArrays;
     this._nlCounts = newNlCounts;
 
@@ -875,8 +826,6 @@ export class PhysicsEngine {
     this.neighborList = null;
     this.stepCount = 0;
     this._maxN = 0;
-    this._dist = null;
-    this._rhat = null;
     this._nlArrays = null;
     this._nlCounts = null;
     this.componentId = null;

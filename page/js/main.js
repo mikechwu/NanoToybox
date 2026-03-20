@@ -352,7 +352,7 @@ function clearPlayground() {
   session.scene.nextId = 1;
   session.scene.totalAtoms = 0;
   syncInputManager();
-  renderer.resetToEmpty();
+  renderer.resetCamera();
   fullSchedulerReset();
   updateSceneStatus();
 }
@@ -397,7 +397,7 @@ async function startPlacement(filename, name) {
     // Cleanup any active simulation interaction
     handleCommand(stateMachine.forceIdle());
     renderer.clearFeedback();
-    if (inputManager) inputManager.updateAtomMeshes(renderer.atomMeshes);
+    if (inputManager) inputManager.updateAtomSource(buildAtomSource());
 
     session.placement.active = true;
     session.placement.structureFile = filename;
@@ -563,6 +563,10 @@ function commitMolecule(filename, name, atoms, bonds, offset) {
   session.scene.molecules.push(mol);
   session.scene.totalAtoms += result.atomCount;
   syncInputManager();
+  if (DEBUG_LOAD) {
+    const cap = renderer.getCapacityInfo();
+    console.log(`[load] Renderer capacity: atoms=${cap.atomCount}/${cap.atomCapacity} bonds=${cap.bondActive}/${cap.bondCapacity}`);
+  }
   // Partial profiler reset: scene cost changed
   partialProfilerReset();
 
@@ -868,11 +872,19 @@ function unregisterPlacementListeners() {
 // --- Input manager ---
 function syncInputManager() {
   if (!inputManager) createInputManager();
-  inputManager.updateAtomMeshes(renderer.atomMeshes);
+  inputManager.updateAtomSource(buildAtomSource());
 }
 
 function updateStatus(text) {
   document.getElementById('status').textContent = text;
+}
+
+function buildAtomSource() {
+  return {
+    get count() { return renderer.getAtomCount(); },
+    getWorldPosition(i, out) { return renderer.getAtomWorldPosition(i, out); },
+    get raycastTarget() { return renderer.instancedAtoms; },
+  };
 }
 
 function createInputManager() {
@@ -880,7 +892,7 @@ function createInputManager() {
     renderer.getCanvas(),
     renderer.camera,
     renderer.controls,
-    renderer.atomMeshes,
+    buildAtomSource(),
     {
       onHover: (atomIdx) => {
         if (session.placement.active) return;
@@ -913,8 +925,7 @@ function createInputManager() {
 const _atomRenderPos = new THREE.Vector3();
 
 function screenToPhysics(atomIdx, sx, sy) {
-  const meshPos = renderer.atomMeshes[atomIdx].position;
-  const atomRenderPos = _atomRenderPos.set(meshPos.x, meshPos.y, meshPos.z);
+  const atomRenderPos = renderer.getAtomWorldPosition(atomIdx, _atomRenderPos);
   return inputManager.screenToWorldOnAtomPlane(sx, sy, atomRenderPos);
 }
 
@@ -1266,7 +1277,7 @@ function frameLoop(timestamp) {
 
     // Update positions + feedback (every tick)
     const updateStart = performance.now();
-    if (renderer.atomMeshes.length > 0 && physics.n > 0) {
+    if (renderer.getAtomCount() > 0 && physics.n > 0) {
       renderer.updatePositions(physics);
     }
     renderer.updateFeedback(stateMachine.getFeedbackState());
