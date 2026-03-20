@@ -36,9 +36,12 @@ function gridOffset(c, spacing, gridSize) {
 }
 
 const SCENE_DEFS = {
-  compact: { template: 'c60.xyz', spacing: 'tangent+1A' },
-  sparse:  { template: 'c60.xyz', spacing: '10x_radius' },
-  sheet:   { template: 'graphene_6x6.xyz', spacing: 'tangent+1A' },
+  compact:  { template: 'c60.xyz', spacing: 'tangent+1A' },
+  sparse:   { template: 'c60.xyz', spacing: '10x_radius' },
+  sheet:    { template: 'graphene_6x6.xyz', spacing: 'tangent+1A' },
+  c720:     { template: 'c720.xyz', spacing: 'tangent+1A' },
+  diamond:  { template: 'diamond_2x2x2.xyz', spacing: 'tangent+1A' },
+  c720_single: { template: 'c720.xyz', spacing: '10x_radius' },
 };
 
 /**
@@ -110,3 +113,9 @@ export const RENDER_SWEEP = [60, 120, 240, 480, 720, 1020, 2040, 3000, 4020, 504
 
 /** Graphene 6x6 sweep points (exact multiples of 72). */
 export const GRAPHENE_SWEEP = [72, 216, 504, 1008, 1512, 2016, 2520];
+
+/** C720 sweep points (exact multiples of 720). Single large fullerene. */
+export const C720_SWEEP = [720, 1440, 2160, 2880, 3600];
+
+/** Diamond 2x2x2 sweep points (exact multiples of 64). High bond density, sp3 topology. */
+export const DIAMOND_SWEEP = [64, 192, 448, 896, 1344, 1792, 2560];

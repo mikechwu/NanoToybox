@@ -38,6 +38,7 @@ NanoToybox/
 │   │   ├── bench-render.html     # Raw Three.js renderer microbench (3 modes)
 │   │   ├── bench-distance.html   # Tersoff kernel benchmark (production on-the-fly)
 │   │   ├── bench-celllist.html   # Cell-list equivalence validation
+│   │   ├── bench-preWasm.html    # Pre-Wasm evaluation suite (validation + profiling + scaling)
 │   │   └── bench-scenes.js       # Shared scene generator
 │   └── js/
 │       ├── config.js             # Centralized page configuration (single source of truth)

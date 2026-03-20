@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NanoToybox — Pre-Wasm Evaluation Suite</title>
+<style>
+body { font-family: monospace; background: #1a1a2e; color: #e8e8e8; padding: 20px; max-width: 1400px; }
+h2 { color: #90b0ff; } h3 { color: #80a0e0; margin-top: 24px; }
+.pass { color: #50c050; } .warn { color: #e0a030; } .fail { color: #e05050; }
+table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+th, td { border: 1px solid #333; padding: 4px 8px; text-align: right; font-size: 12px; }
+th { background: #252540; text-align: left; }
+td:first-child { text-align: left; }
+button { background: #334; color: #ccc; border: 1px solid #555; padding: 8px 16px; cursor: pointer; margin: 4px; font-size: 14px; }
+button:disabled { opacity: 0.4; }
+.section { border-top: 1px solid #444; padding-top: 12px; margin-top: 20px; }
+pre { background: #151525; padding: 12px; border-radius: 4px; overflow-x: auto; }
+</style>
+</head>
+<body>
+<h2>Pre-Wasm Evaluation Suite</h2>
+<p>Comprehensive baseline across 6 topology classes: C60 compact, C60 sparse, graphene (sp2 sheet),
+C720 (large fullerene), diamond (sp3, 4 bonds/atom), and single-molecule C720.<br>
+Tests: cell-list correctness → topology-aware profiling → scaling analysis → Wasm readiness.</p>
+<div>
+  <button id="btn-run">Run Full Evaluation</button>
+  <button id="btn-export">Export CSV</button>
+</div>
+<div id="status" style="color:#60a0ff; font-size: 14px; margin: 8px 0;"></div>
+<div id="results"></div>
+
+<script type="module">
+import { PhysicsEngine } from '../js/physics.js';
+import { buildScene, C60_SWEEP, SPARSE_SWEEP, GRAPHENE_SWEEP, C720_SWEEP, DIAMOND_SWEEP } from './bench-scenes.js';
+import { CONFIG } from '../js/config.js';
+
+const status = document.getElementById('status');
+const results = document.getElementById('results');
+let allData = { validation: null, sweeps: {}, analysis: null };
+
+// ─── Utilities ───
+function safeMax(arr) { let m = -Infinity; for (const v of arr) if (v > m) m = v; return m === -Infinity ? 0 : m; }
+function percentile(arr, p) {
+  if (arr.length < 50) return null;
+  const sorted = [...arr].sort((a, b) => a - b);
+  return sorted[Math.max(0, Math.ceil(sorted.length * p / 100) - 1)];
+}
+function calcStats(arr) {
+  if (arr.length === 0) return { mean: 0, p95: null, max: 0, count: 0 };
+  return { mean: arr.reduce((a,b)=>a+b,0)/arr.length, p95: percentile(arr,95), max: safeMax(arr), count: arr.length };
+}
+
+// ═══════════════════════════════════════════════════════
+// PART 1: Cell-List Equivalence (expanded topology coverage)
+// ═══════════════════════════════════════════════════════
+
+// Mirror of physics.js R_CUT=1.95 + D_CUT=0.15. Must stay in sync.
+function allPairsNeighborList(pos, n) {
+  const cutoff2 = (1.95 + 0.15 + 0.5) * (1.95 + 0.15 + 0.5); // 2.60²
+  const arrays = new Array(n);
+  const counts = new Int32Array(n);
+  for (let i = 0; i < n; i++) arrays[i] = [];
+  for (let i = 0; i < n; i++) {
+    const ix = i * 3;
+    for (let j = i + 1; j < n; j++) {
+      const jx = j * 3;
+      const dx = pos[jx]-pos[ix], dy = pos[jx+1]-pos[ix+1], dz = pos[jx+2]-pos[ix+2];
+      if (dx*dx+dy*dy+dz*dz < cutoff2) { arrays[i].push(j); arrays[j].push(i); counts[i]++; counts[j]++; }
+    }
+  }
+  return { arrays, counts };
+}
+
+function allPairsBondList(pos, n) {
+  const cutoff = CONFIG.bonds.cutoff, minDist = CONFIG.bonds.minDist;
+  const bonds = [];
+  for (let i = 0; i < n; i++) {
+    const ix = i * 3;
+    for (let j = i + 1; j < n; j++) {
+      const jx = j * 3;
+      const dx = pos[jx]-pos[ix], dy = pos[jx+1]-pos[ix+1], dz = pos[jx+2]-pos[ix+2];
+      const d = Math.sqrt(dx*dx+dy*dy+dz*dz);
+      if (d < cutoff && d > minDist) bonds.push([i, j]);
+    }
+  }
+  return bonds;
+}
+
+function checkEquivalence(physics) {
+  const n = physics.n, pos = physics.pos;
+
+  // Neighbor equivalence
+  const ref = allPairsNeighborList(pos, n);
+  physics.buildNeighborList();
+  let nPass = true;
+  for (let i = 0; i < n && nPass; i++) {
+    if (ref.counts[i] !== physics._nlCounts[i]) { nPass = false; break; }
+    const refSet = new Set(ref.arrays[i]);
+    for (let q = 0; q < physics._nlCounts[i]; q++) {
+      if (!refSet.has(physics._nlArrays[i][q])) { nPass = false; break; }
+    }
+  }
+
+  // Bond equivalence
+  const refBonds = allPairsBondList(pos, n);
+  physics.updateBondList();
+  const bPass = refBonds.length === physics.bonds.length;
+
+  // Component equivalence (symmetric)
+  physics.rebuildComponents();
+  const cellComp = new Int32Array(physics.componentId);
+  const parent = new Int32Array(n);
+  for (let i = 0; i < n; i++) parent[i] = i;
+  function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+  for (const [a, b] of refBonds) { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; }
+  const refComp = new Int32Array(n);
+  for (let i = 0; i < n; i++) refComp[i] = find(i);
+
+  let cPass = true;
+  const groupsA = new Map(), groupsB = new Map();
+  for (let i = 0; i < n; i++) {
+    if (!groupsA.has(refComp[i])) groupsA.set(refComp[i], []);
+    groupsA.get(refComp[i]).push(i);
+    if (!groupsB.has(cellComp[i])) groupsB.set(cellComp[i], []);
+    groupsB.get(cellComp[i]).push(i);
+  }
+  if (groupsA.size !== groupsB.size) cPass = false;
+  if (cPass) for (const [, atoms] of groupsA) {
+    const bId = cellComp[atoms[0]];
+    for (const a of atoms) if (cellComp[a] !== bId) { cPass = false; break; }
+    if (!cPass) break;
+  }
+  if (cPass) for (const [, atoms] of groupsB) {
+    const aId = refComp[atoms[0]];
+    for (const a of atoms) if (refComp[a] !== aId) { cPass = false; break; }
+    if (!cPass) break;
+  }
+
+  return { nPass, bPass, cPass, bonds: physics.bonds.length, components: groupsA.size };
+}
+
+async function runValidation() {
+  const tests = [
+    // Topology diversity: sp2 curved, sp2 flat, sp3, large fullerene, multi-molecule, sparse
+    { target: 60,   variant: 'compact',     label: 'C60 single (sp2 curved)' },
+    { target: 720,  variant: 'c720_single', label: 'C720 single (large fullerene, 720 atoms)' },
+    { target: 64,   variant: 'diamond',     label: 'Diamond 2x2x2 single (sp3, 4 bonds/atom)' },
+    { target: 504,  variant: 'sheet',       label: 'Graphene 6x6 × 7 (sp2 flat sheet)' },
+    { target: 720,  variant: 'compact',     label: 'C60 × 12 compact (multi-molecule, cross-interaction)' },
+    { target: 480,  variant: 'sparse',      label: 'C60 × 8 sparse (isolated molecules)' },
+    { target: 640,  variant: 'diamond',     label: 'Diamond × 10 compact (high bond density, sp3)' },
+    { target: 1440, variant: 'c720',        label: 'C720 × 2 compact (large + cross-interaction)' },
+    { target: 1020, variant: 'compact',     label: 'C60 × 17 compact (mid-scale)' },
+    { target: 2040, variant: 'compact',     label: 'C60 × 34 compact (near wall)' },
+  ];
+
+  const div = document.createElement('div');
+  div.className = 'section';
+  div.innerHTML = '<h3>Part 1: Cell-List Equivalence Validation (10 topology scenarios)</h3>';
+  results.appendChild(div);
+
+  const table = document.createElement('table');
+  table.innerHTML = '<tr><th>Scenario</th><th>Atoms</th><th>Bonds</th><th>Components</th><th>Neighbors</th><th>Bonds</th><th>Components</th></tr>';
+  div.appendChild(table);
+
+  let allPass = true;
+  for (const test of tests) {
+    status.textContent = `[Validation] ${test.label}...`;
+    await new Promise(r => setTimeout(r, 10));
+    const scene = await buildScene(test.target, test.variant);
+    const physics = new PhysicsEngine();
+    physics.init(scene.atoms, scene.bonds);
+    // Evolve 50 steps so positions are realistic (not initial placement)
+    for (let s = 0; s < 50; s++) physics.stepOnce();
+
+    const eq = checkEquivalence(physics);
+    const ok = eq.nPass && eq.bPass && eq.cPass;
+    const c = (v) => v ? '<span class="pass">OK</span>' : '<span class="fail">FAIL</span>';
+    table.innerHTML += `<tr><td>${test.label}</td><td>${physics.n}</td><td>${eq.bonds}</td><td>${eq.components}</td>
+      <td>${c(eq.nPass)}</td><td>${c(eq.bPass)}</td><td>${c(eq.cPass)}</td></tr>`;
+    if (!ok) { allPass = false; break; }
+  }
+  const cls = allPass ? 'pass' : 'fail';
+  div.innerHTML += `<p class="${cls}"><b>${allPass ? 'ALL 10 EQUIVALENCE TESTS PASSED' : 'SOME TESTS FAILED'}</b></p>`;
+  allData.validation = allPass;
+  return allPass;
+}
+
+// ═══════════════════════════════════════════════════════
+// PART 2: Topology-Aware Physics Profiling
+// ═══════════════════════════════════════════════════════
+
+const WARMUP_STEPS = 100;
+const SAMPLE_STEPS = 500;
+const ABORT_MEAN_MS = 100;
+
+async function benchAtomCount(targetAtoms, variant, label) {
+  status.textContent = `${label}...`;
+  await new Promise(r => setTimeout(r, 10));
+
+  const scene = await buildScene(targetAtoms, variant);
+  const physics = new PhysicsEngine();
+  physics.init(scene.atoms, scene.bonds);
+  const n = physics.n, bondCount = physics.bonds.length;
+  const bondsPerAtom = (bondCount * 2 / n).toFixed(1); // each bond connects 2 atoms
+
+  // Warmup
+  const warmStart = performance.now();
+  let warmSteps = 0;
+  while (true) {
+    physics.stepOnce(); warmSteps++;
+    const elapsed = performance.now() - warmStart;
+    const nrb = Math.floor(warmSteps/10), brb = Math.floor(warmSteps/20);
+    if (warmSteps >= 100 && elapsed >= 5000 && nrb >= 3 && brb >= 2) break;
+    if ((elapsed > 30000 || (warmSteps > 10 && elapsed/warmSteps > 50)) && nrb >= 1 && brb >= 1) break;
+    if (elapsed > 60000) return { targetAtoms, actualAtoms: n, bonds: bondCount, bondsPerAtom, variant, status: 'warmup_abort', reason: 'warmup_timeout' };
+    if (warmSteps % 50 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+  const warmupConfidence = (warmSteps >= 100 && Math.floor(warmSteps/10) >= 3 && Math.floor(warmSteps/20) >= 2) ? 'normal' : 'low';
+
+  // Sampling
+  const timings = { stepOnce: [], neighbor: [], tersoff: [], bondRebuild: [], component: [] };
+  let sampleSteps = 0, abortedEarly = false, computeElapsedMs = 0;
+  const sampleStart = performance.now();
+
+  while (sampleSteps < SAMPLE_STEPS) {
+    const wallElapsed = performance.now() - sampleStart;
+    if (wallElapsed > 10000) break;
+    if (sampleSteps > 10 && computeElapsedMs / sampleSteps > ABORT_MEAN_MS) { abortedEarly = true; break; }
+
+    physics._bench = { neighborMs: 0, tersoffMs: 0, bondRebuildMs: 0, componentMs: 0 };
+    const t0 = performance.now();
+    physics.stepOnce();
+    const stepMs = performance.now() - t0;
+    computeElapsedMs += stepMs;
+
+    timings.stepOnce.push(stepMs);
+    if (physics._bench.neighborMs > 0) timings.neighbor.push(physics._bench.neighborMs);
+    timings.tersoff.push(physics._bench.tersoffMs);
+    if (physics._bench.bondRebuildMs > 0) timings.bondRebuild.push(physics._bench.bondRebuildMs);
+    if (physics._bench.componentMs > 0) timings.component.push(physics._bench.componentMs);
+    physics._bench = null;
+    sampleSteps++;
+    if (sampleSteps % 20 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+
+  const benchStatus = abortedEarly ? 'aborted' : (sampleSteps < 50 ? 'low_sample_count' : 'completed');
+  const stepStats = calcStats(timings.stepOnce);
+
+  return {
+    targetAtoms, actualAtoms: n, bonds: bondCount, bondsPerAtom, variant,
+    status: benchStatus, warmupConfidence, sampleSteps,
+    stepOnce: stepStats,
+    neighbor: calcStats(timings.neighbor),
+    tersoff: calcStats(timings.tersoff),
+    bondRebuild: calcStats(timings.bondRebuild),
+    component: calcStats(timings.component),
+    spikeCount: timings.stepOnce.filter(t => t > stepStats.mean * 2).length,
+    stepsPerSec: computeElapsedMs > 0 ? sampleSteps * 1000 / computeElapsedMs : 0,
+  };
+}
+
+function renderSweepTable(div, title, sweepResults) {
+  div.innerHTML += `<h3>${title}</h3>`;
+  const table = document.createElement('table');
+  table.innerHTML = `<tr>
+    <th>Atoms</th><th>Bonds</th><th>B/A</th><th>Status</th><th>Steps</th>
+    <th>stepOnce (ms)</th><th>Neighbor (ms)</th><th>Tersoff (ms)</th><th>BondRebuild (ms)</th>
+    <th>Steps/sec</th><th>Spikes</th>
+  </tr>`;
+  for (const r of sweepResults) {
+    if (r.status === 'warmup_abort') {
+      table.innerHTML += `<tr><td>${r.actualAtoms}</td><td>${r.bonds}</td><td>${r.bondsPerAtom}</td><td class="fail">warmup_abort</td><td colspan="7">\u2014</td></tr>`;
+      continue;
+    }
+    const cls = r.status === 'completed' ? 'pass' : (r.status === 'aborted' ? 'fail' : 'warn');
+    table.innerHTML += `<tr>
+      <td>${r.actualAtoms}</td><td>${r.bonds}</td><td>${r.bondsPerAtom}</td>
+      <td class="${cls}">${r.status}</td><td>${r.sampleSteps}</td>
+      <td>${r.stepOnce.mean.toFixed(3)}</td>
+      <td>${r.neighbor.mean.toFixed(3)} (${r.neighbor.count})</td>
+      <td>${r.tersoff.mean.toFixed(3)}</td>
+      <td>${r.bondRebuild.mean.toFixed(3)} (${r.bondRebuild.count})</td>
+      <td>${Math.round(r.stepsPerSec)}</td><td>${r.spikeCount}</td>
+    </tr>`;
+  }
+  div.appendChild(table);
+}
+
+async function runSweep(sweep, variant, label) {
+  const sweepResults = [];
+  for (let si = 0; si < sweep.length; si++) {
+    const r = await benchAtomCount(sweep[si], variant, `[${si+1}/${sweep.length}] ${label}`);
+    sweepResults.push(r);
+    if (r.status === 'warmup_abort' || r.status === 'aborted' || r.stepOnce.mean > ABORT_MEAN_MS) break;
+  }
+  return sweepResults;
+}
+
+async function runPhysicsProfiling() {
+  const div = document.createElement('div');
+  div.className = 'section';
+  div.innerHTML = '<h3>Part 2: Topology-Aware Physics Profiling</h3>';
+  results.appendChild(div);
+
+  // C60 compact (primary benchmark — sp2 fullerene)
+  const compact = await runSweep(C60_SWEEP, 'compact', 'C60 compact');
+  renderSweepTable(div, 'C60 Compact (sp2 fullerene, 3 bonds/atom)', compact);
+  allData.sweeps.compact = compact;
+
+  // Sparse C60 (cell-list effectiveness)
+  const sparse = await runSweep(SPARSE_SWEEP, 'sparse', 'C60 sparse');
+  renderSweepTable(div, 'C60 Sparse (isolated molecules)', sparse);
+  allData.sweeps.sparse = sparse;
+
+  // Graphene (sp2 flat, different neighbor geometry)
+  const graphene = await runSweep(GRAPHENE_SWEEP, 'sheet', 'Graphene');
+  renderSweepTable(div, 'Graphene 6×6 (sp2 flat sheet, 3 bonds/atom)', graphene);
+  allData.sweeps.graphene = graphene;
+
+  // C720 (large single fullerene — stress-tests kernel with more neighbors per atom)
+  const c720 = await runSweep(C720_SWEEP, 'c720', 'C720');
+  renderSweepTable(div, 'C720 (large fullerene, 720 atoms/molecule)', c720);
+  allData.sweeps.c720 = c720;
+
+  // Diamond (sp3, 4 bonds/atom — highest bond density in the library)
+  const diamond = await runSweep(DIAMOND_SWEEP, 'diamond', 'Diamond');
+  renderSweepTable(div, 'Diamond 2×2×2 (sp3 tetrahedral, 4 bonds/atom)', diamond);
+  allData.sweeps.diamond = diamond;
+}
+
+// ═══════════════════════════════════════════════════════
+// PART 3: Cross-Topology Scaling Analysis
+// ═══════════════════════════════════════════════════════
+
+function runAnalysis() {
+  const div = document.createElement('div');
+  div.className = 'section';
+  div.innerHTML = '<h3>Part 3: Cross-Topology Scaling Analysis</h3>';
+  results.appendChild(div);
+
+  const STEP_BUDGET_MS = 1000 / 240;
+
+  // Scaling exponents for each topology
+  div.innerHTML += '<h4>Scaling Exponents</h4>';
+  const exTable = document.createElement('table');
+  exTable.innerHTML = '<tr><th>Topology</th><th>Range</th><th>stepOnce exp</th><th>Tersoff exp</th><th>Neighbor exp</th></tr>';
+
+  function computeExponent(results, field, lowAtoms, highAtoms) {
+    const lo = results.find(r => r.actualAtoms === lowAtoms && r.status === 'completed');
+    const hi = results.find(r => r.actualAtoms === highAtoms && r.status === 'completed');
+    if (!lo || !hi || lo[field].mean <= 0 || hi[field].mean <= 0) return null;
+    return Math.log(hi[field].mean / lo[field].mean) / Math.log(highAtoms / lowAtoms);
+  }
+
+  const expData = [];
+  for (const [name, key, lo, hi] of [
+    ['C60 compact', 'compact', 1020, 4020],
+    ['Graphene', 'graphene', 504, 2520],
+    ['Diamond', 'diamond', 448, 1792],
+  ]) {
+    const data = allData.sweeps[key];
+    if (!data || data.length < 2) continue;
+    const sE = computeExponent(data, 'stepOnce', lo, hi);
+    const tE = computeExponent(data, 'tersoff', lo, hi);
+    const nE = computeExponent(data, 'neighbor', lo, hi);
+    exTable.innerHTML += `<tr><td>${name}</td><td>${lo}→${hi}</td>
+      <td>${sE !== null ? sE.toFixed(2) : '—'}</td>
+      <td>${tE !== null ? tE.toFixed(2) : '—'}</td>
+      <td>${nE !== null ? nE.toFixed(2) : '—'}</td></tr>`;
+    expData.push({ name, stepOnce: sE, tersoff: tE, neighbor: nE });
+  }
+  div.appendChild(exTable);
+
+  // Wall-hit per topology
+  div.innerHTML += '<h4>Physics Wall per Topology (stepOnce > 4.17 ms)</h4>';
+  for (const [name, key] of [['C60 compact', 'compact'], ['Graphene', 'graphene'], ['C720', 'c720'], ['Diamond', 'diamond']]) {
+    const data = allData.sweeps[key];
+    if (!data) continue;
+    const wall = data.find(r => r.stepOnce.mean > STEP_BUDGET_MS && r.status !== 'warmup_abort');
+    div.innerHTML += `<p>${name}: <b>${wall ? wall.actualAtoms + ' atoms (' + wall.stepOnce.mean.toFixed(3) + ' ms)' : 'not reached'}</b></p>`;
+  }
+
+  // Stage breakdown at wall (C60 compact)
+  const compactWall = (allData.sweeps.compact || []).find(r => r.stepOnce.mean > STEP_BUDGET_MS && r.status !== 'warmup_abort');
+  if (compactWall) {
+    const total = compactWall.stepOnce.mean;
+    const tersoffPct = (compactWall.tersoff.mean / total * 100).toFixed(1);
+    const neighborAmort = compactWall.neighbor.mean * compactWall.neighbor.count / compactWall.sampleSteps;
+    const neighborPct = (neighborAmort / total * 100).toFixed(1);
+    const bondAmort = compactWall.bondRebuild.mean * compactWall.bondRebuild.count / compactWall.sampleSteps;
+    const bondPct = (bondAmort / total * 100).toFixed(1);
+    const otherPct = (100 - parseFloat(tersoffPct) - parseFloat(neighborPct) - parseFloat(bondPct)).toFixed(1);
+
+    div.innerHTML += `<h4>Stage Breakdown at C60 Wall (${compactWall.actualAtoms} atoms)</h4>
+      <pre>stepOnce total:           ${total.toFixed(3)} ms  (100.0%)
+├─ Tersoff kernel:        ${compactWall.tersoff.mean.toFixed(3)} ms  (${tersoffPct}%)
+├─ Neighbor (amortized):  ${neighborAmort.toFixed(3)} ms  (${neighborPct}%)
+├─ Bond rebuild (amort.): ${bondAmort.toFixed(3)} ms  (${bondPct}%)
+└─ Other:                 ${(total - compactWall.tersoff.mean - neighborAmort - bondAmort).toFixed(3)} ms  (${otherPct}%)</pre>`;
+
+    allData.analysis = { wall: compactWall.actualAtoms, stepOnce: total, tersoffPct: parseFloat(tersoffPct) };
+  }
+
+  // Sparse vs compact
+  div.innerHTML += '<h4>Sparse vs Compact (cell-list effectiveness)</h4>';
+  const sparseTable = document.createElement('table');
+  sparseTable.innerHTML = '<tr><th>Atoms</th><th>Compact (ms)</th><th>Sparse (ms)</th><th>Ratio</th><th>Neighbor Compact</th><th>Neighbor Sparse</th><th>NL Ratio</th></tr>';
+  for (const sp of (allData.sweeps.sparse || [])) {
+    const cp = (allData.sweeps.compact || []).find(r => r.actualAtoms === sp.actualAtoms);
+    if (cp && sp.status === 'completed' && cp.status === 'completed') {
+      sparseTable.innerHTML += `<tr>
+        <td>${sp.actualAtoms}</td><td>${cp.stepOnce.mean.toFixed(3)}</td><td>${sp.stepOnce.mean.toFixed(3)}</td>
+        <td>${(sp.stepOnce.mean / cp.stepOnce.mean).toFixed(2)}×</td>
+        <td>${cp.neighbor.mean.toFixed(3)}</td><td>${sp.neighbor.mean.toFixed(3)}</td>
+        <td>${(sp.neighbor.mean / cp.neighbor.mean).toFixed(2)}×</td>
+      </tr>`;
+    }
+  }
+  div.appendChild(sparseTable);
+
+  // Bond density comparison across topologies at similar atom counts
+  div.innerHTML += '<h4>Topology Comparison at ~500 atoms</h4>';
+  const topoTable = document.createElement('table');
+  topoTable.innerHTML = '<tr><th>Topology</th><th>Atoms</th><th>Bonds</th><th>B/A</th><th>stepOnce (ms)</th><th>Tersoff (ms)</th><th>Neighbor (ms)</th></tr>';
+  const nearestTo500 = (data) => {
+    if (!data) return null;
+    let best = null, bestDist = Infinity;
+    for (const r of data) {
+      if (r.status !== 'completed') continue;
+      const d = Math.abs(r.actualAtoms - 500);
+      if (d < bestDist) { bestDist = d; best = r; }
+    }
+    return best;
+  };
+  for (const [name, key] of [['C60 compact', 'compact'], ['Graphene', 'graphene'], ['Diamond', 'diamond']]) {
+    const r = nearestTo500(allData.sweeps[key]);
+    if (r) {
+      topoTable.innerHTML += `<tr><td>${name}</td><td>${r.actualAtoms}</td><td>${r.bonds}</td><td>${r.bondsPerAtom}</td>
+        <td>${r.stepOnce.mean.toFixed(3)}</td><td>${r.tersoff.mean.toFixed(3)}</td><td>${r.neighbor.mean.toFixed(3)}</td></tr>`;
+    }
+  }
+  div.appendChild(topoTable);
+
+  // Wasm readiness
+  div.innerHTML += '<h4>Wasm Readiness</h4>';
+  if (allData.analysis) {
+    const ts = allData.analysis.tersoffPct;
+    const maxSpeedup = (1 / (1 - ts/100)).toFixed(1);
+    const wall = allData.analysis.wall;
+    div.innerHTML += `<p>Tersoff share at wall: <b>${ts}%</b> → Amdahl max <b>${maxSpeedup}×</b> on stepOnce</p>
+      <p>Copy volume at ${wall} atoms: ~${(wall * 3 * 8 * 2 / 1024).toFixed(0)} KB/step (pos + force)</p>
+      <p class="pass"><b>Pre-Wasm baseline established across all topologies.</b></p>`;
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// MAIN
+// ═══════════════════════════════════════════════════════
+
+async function runAll() {
+  const buttons = document.querySelectorAll('button');
+  buttons.forEach(b => b.disabled = true);
+  results.innerHTML = '';
+  allData = { validation: null, sweeps: {}, analysis: null };
+
+  const ok = await runValidation();
+  if (!ok) { status.textContent = 'VALIDATION FAILED — aborting.'; buttons.forEach(b => b.disabled = false); return; }
+
+  await runPhysicsProfiling();
+  runAnalysis();
+
+  status.textContent = 'Done.';
+  buttons.forEach(b => b.disabled = false);
+}
+
+document.getElementById('btn-run').addEventListener('click', runAll);
+document.getElementById('btn-export').addEventListener('click', () => {
+  const all = [];
+  for (const key of Object.keys(allData.sweeps)) {
+    for (const r of allData.sweeps[key]) {
+      if (r.status !== 'warmup_abort') all.push(r);
+    }
+  }
+  if (all.length === 0) return;
+  const header = 'atoms,bonds,bondsPerAtom,variant,status,stepOnceMeanMs,neighborMeanMs,neighborCalls,tersoffMeanMs,bondRebuildMeanMs,bondRebuildCalls,stepsPerSec,spikeCount\n';
+  const rows = all.map(r =>
+    `${r.actualAtoms},${r.bonds},${r.bondsPerAtom},${r.variant},${r.status},${r.stepOnce.mean.toFixed(4)},${r.neighbor.mean.toFixed(4)},${r.neighbor.count},${r.tersoff.mean.toFixed(4)},${r.bondRebuild.mean.toFixed(4)},${r.bondRebuild.count},${r.stepsPerSec.toFixed(1)},${r.spikeCount}`
+  ).join('\n');
+  const blob = new Blob([header + rows], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `pre-wasm-eval-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+});
+</script>
+</body>
+</html>

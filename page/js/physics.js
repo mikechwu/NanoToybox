@@ -14,6 +14,7 @@
  * 4. Neighbor list rebuilt every 10 steps (not every step)
  */
 import { CONFIG } from './config.js';
+import { initWasm, isReady, callTersoff, marshalCSR, csrIsCurrent } from './tersoff-wasm.js';
 
 // ─── Tersoff parameters for carbon (1988) ───
 const LAMBDA1 = 3.4879;
@@ -307,6 +308,22 @@ export class PhysicsEngine {
     this._cellNext = null;
     this._bondCellHead = null;
     this._bondCellNext = null;
+
+    // CSR neighbor list (cached derivative for Wasm bridge)
+    this._csrOffsets = null;  // Int32Array[n+1]
+    this._csrData = null;     // Int32Array[total_neighbors]
+    this._csrGeneration = 0;  // incremented on each buildNeighborList()
+
+    // Wasm initialization (non-blocking, opportunistic)
+    // URL param ?kernel=js|wasm|auto overrides config for benchmarking
+    const urlKernel = typeof URLSearchParams !== 'undefined'
+      ? new URLSearchParams(globalThis.location?.search).get('kernel') : null;
+    this._forceKernel = urlKernel; // 'js' | 'wasm' | null (auto)
+    this._wasmReady = false;
+    // Load Wasm if config enables it OR URL param explicitly requests it
+    if (urlKernel === 'wasm' || (urlKernel !== 'js' && CONFIG.physics.useWasm)) {
+      initWasm().then(ok => { this._wasmReady = ok; });
+    }
   }
 
   init(atoms, bonds) {
@@ -460,6 +477,20 @@ export class PhysicsEngine {
     }
     this.neighborList = arrays;
     this._nlCounts = counts;
+
+    // Build CSR as cached derivative for Wasm bridge
+    this._csrGeneration++;
+    let totalNl = 0;
+    for (let i = 0; i < n; i++) totalNl += counts[i];
+    this._csrOffsets = new Int32Array(n + 1);
+    this._csrData = new Int32Array(totalNl);
+    this._csrOffsets[0] = 0;
+    let idx = 0;
+    for (let i = 0; i < n; i++) {
+      this._csrOffsets[i + 1] = this._csrOffsets[i] + counts[i];
+      const arr = arrays[i];
+      for (let q = 0; q < counts[i]; q++) this._csrData[idx++] = arr[q];
+    }
   }
 
   computeForces() {
@@ -472,10 +503,42 @@ export class PhysicsEngine {
     }
     if (!this.neighborList || this.n === 0) return;
 
-    // ── Tersoff kernel (on-the-fly distances, no N×N cache) ──
-    const t1 = this._bench ? performance.now() : 0;
-    computeTersoffForces(this.pos, this.force, this.neighborList, this._nlCounts, this.n);
-    if (this._bench) this._bench.tersoffMs = (this._bench.tersoffMs || 0) + (performance.now() - t1);
+    // ── Tersoff kernel dispatch: Wasm if ready, JS fallback ──
+    // ?kernel=js forces JS, ?kernel=wasm forces Wasm (fails if not ready)
+    const useWasm = this._forceKernel !== 'js' && this._wasmReady && isReady();
+
+    if (useWasm) {
+      // Ensure CSR is marshaled into Wasm memory
+      if (!csrIsCurrent(this._csrGeneration)) {
+        const csrResult = marshalCSR(this._csrOffsets, this._csrData, this.n, this._csrGeneration);
+        if (this._bench) this._bench.csrMarshalMs = (this._bench.csrMarshalMs || 0) + csrResult.csrMarshalMs;
+        if (!csrResult.ok) {
+          // Marshal failed — fall back to JS for this step
+          const t1 = this._bench ? performance.now() : 0;
+          computeTersoffForces(this.pos, this.force, this.neighborList, this._nlCounts, this.n);
+          if (this._bench) this._bench.tersoffMs = (this._bench.tersoffMs || 0) + (performance.now() - t1);
+          return;
+        }
+      }
+      const timing = callTersoff(this.pos, this.force, this.n);
+      if (!timing.ok) {
+        // Kernel call failed — fall back to JS for this step
+        this.force.fill(0);
+        const t1 = this._bench ? performance.now() : 0;
+        computeTersoffForces(this.pos, this.force, this.neighborList, this._nlCounts, this.n);
+        if (this._bench) this._bench.tersoffMs = (this._bench.tersoffMs || 0) + (performance.now() - t1);
+        return;
+      }
+      if (this._bench) {
+        this._bench.tersoffMs = (this._bench.tersoffMs || 0) + timing.pathMs;
+        this._bench.marshalMs = (this._bench.marshalMs || 0) + timing.marshalMs;
+        this._bench.wasmKernelMs = (this._bench.wasmKernelMs || 0) + timing.kernelMs;
+      }
+    } else {
+      const t1 = this._bench ? performance.now() : 0;
+      computeTersoffForces(this.pos, this.force, this.neighborList, this._nlCounts, this.n);
+      if (this._bench) this._bench.tersoffMs = (this._bench.tersoffMs || 0) + (performance.now() - t1);
+    }
 
     // ── Interaction forces: UX layer ──
     // Drag spring, rotation torque — user-driven forces.
@@ -957,6 +1020,9 @@ export class PhysicsEngine {
     this._cellNext = null;
     this._bondCellHead = null;
     this._bondCellNext = null;
+    this._csrOffsets = null;
+    this._csrData = null;
+    this._csrGeneration++;
     this.componentId = null;
     this.components = [];
   }

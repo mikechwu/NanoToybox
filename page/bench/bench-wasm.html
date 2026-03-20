@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NanoToybox — Wasm Tersoff Validation &amp; Benchmark</title>
+<style>
+body { font-family: monospace; background: #1a1a2e; color: #e8e8e8; padding: 20px; max-width: 1400px; }
+h2 { color: #90b0ff; } h3 { color: #80a0e0; margin-top: 24px; }
+.pass { color: #50c050; } .warn { color: #e0a030; } .fail { color: #e05050; }
+table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+th, td { border: 1px solid #333; padding: 4px 8px; text-align: right; font-size: 12px; }
+th { background: #252540; text-align: left; }
+td:first-child { text-align: left; }
+button { background: #334; color: #ccc; border: 1px solid #555; padding: 8px 16px; cursor: pointer; margin: 4px; font-size: 14px; }
+button:disabled { opacity: 0.4; }
+.section { border-top: 1px solid #444; padding-top: 12px; margin-top: 20px; }
+</style>
+</head>
+<body>
+<h2>Wasm Tersoff Validation &amp; Benchmark</h2>
+<p>Force parity, structural checks, and performance comparison between JS and Wasm kernels.</p>
+<div>
+  <button id="btn-run">Run Full Validation</button>
+</div>
+<div id="status" style="color:#60a0ff; font-size: 14px; margin: 8px 0;"></div>
+<div id="results"></div>
+
+<script type="module">
+import { PhysicsEngine } from '../js/physics.js';
+import { buildScene } from './bench-scenes.js';
+import { initWasm, isReady, marshalCSR, callTersoff, csrIsCurrent } from '../js/tersoff-wasm.js';
+
+const status = document.getElementById('status');
+const results = document.getElementById('results');
+
+// ─── Wait for Wasm to be ready ───
+async function ensureWasm() {
+  const ok = await initWasm();
+  if (!ok) throw new Error('Wasm module failed to load');
+  return true;
+}
+
+// ─── Build CSR from engine state ───
+function buildCSR(physics) {
+  const n = physics.n, counts = physics._nlCounts, arrays = physics._nlArrays;
+  let totalNl = 0;
+  for (let i = 0; i < n; i++) totalNl += counts[i];
+  const offsets = new Int32Array(n + 1);
+  const data = new Int32Array(totalNl);
+  offsets[0] = 0;
+  let idx = 0;
+  for (let i = 0; i < n; i++) {
+    offsets[i + 1] = offsets[i] + counts[i];
+    for (let q = 0; q < counts[i]; q++) data[idx++] = arrays[i][q];
+  }
+  return { offsets, data };
+}
+
+// ─── Compute forces with a specific kernel ───
+function computeWithJS(physics) {
+  const force = new Float64Array(physics.n * 3);
+  // Access the standalone JS kernel directly — it's module-private in physics.js
+  // Instead, use the engine's own computeForces with Wasm disabled
+  const saved = physics._wasmReady;
+  physics._wasmReady = false;
+  physics.force.fill(0);
+  physics.computeForces();
+  force.set(physics.force);
+  physics._wasmReady = saved;
+  return force;
+}
+
+function computeWithWasm(physics) {
+  const force = new Float64Array(physics.n * 3);
+  physics.buildNeighborList();
+  const csr = buildCSR(physics);
+  marshalCSR(csr.offsets, csr.data, physics.n, -999); // force remarshal
+  const result = callTersoff(physics.pos, force, physics.n);
+  if (!result.ok) throw new Error('Wasm kernel call failed');
+  return force;
+}
+
+// ═══════════════════════════════════════════════════════
+// PART 1: Force Parity
+// ═══════════════════════════════════════════════════════
+
+async function runForceParity() {
+  const div = document.createElement('div');
+  div.className = 'section';
+  div.innerHTML = '<h3>Part 1: Force Parity (JS vs Wasm)</h3>';
+  results.appendChild(div);
+
+  const tests = [
+    { target: 60, variant: 'compact', label: 'C60 single (60)' },
+    { target: 720, variant: 'compact', label: 'C60 compact × 12 (720)' },
+    { target: 480, variant: 'sparse', label: 'C60 sparse × 8 (480)' },
+    { target: 504, variant: 'sheet', label: 'Graphene 6×6 (504)' },
+    { target: 640, variant: 'diamond', label: 'Diamond × 10 (640)' },
+  ];
+
+  const table = document.createElement('table');
+  table.innerHTML = '<tr><th>Scene</th><th>Atoms</th><th>Max Rel Error</th><th>Mean Rel Error</th><th>Net Force (JS)</th><th>Net Force (Wasm)</th><th>NaN/Inf</th><th>Result</th></tr>';
+  div.appendChild(table);
+
+  let allPass = true;
+  for (const test of tests) {
+    status.textContent = `[Parity] ${test.label}...`;
+    await new Promise(r => setTimeout(r, 10));
+    const scene = await buildScene(test.target, test.variant);
+    const physics = new PhysicsEngine();
+    physics.init(scene.atoms, scene.bonds);
+    for (let s = 0; s < 50; s++) physics.stepOnce();
+
+    const jsForce = computeWithJS(physics);
+    const wasmForce = computeWithWasm(physics);
+    const n = physics.n;
+
+    // Compute per-atom force magnitude relative error
+    let maxRelErr = 0, sumRelErr = 0, count = 0;
+    let hasNanInf = false;
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      if (!isFinite(wasmForce[i3]) || !isFinite(wasmForce[i3+1]) || !isFinite(wasmForce[i3+2])) {
+        hasNanInf = true; continue;
+      }
+      const jsMag = Math.sqrt(jsForce[i3]**2 + jsForce[i3+1]**2 + jsForce[i3+2]**2);
+      const dx = wasmForce[i3]-jsForce[i3], dy = wasmForce[i3+1]-jsForce[i3+1], dz = wasmForce[i3+2]-jsForce[i3+2];
+      const errMag = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      const relErr = jsMag > 1e-15 ? errMag / jsMag : errMag;
+      if (relErr > maxRelErr) maxRelErr = relErr;
+      sumRelErr += relErr;
+      count++;
+    }
+    const meanRelErr = count > 0 ? sumRelErr / count : 0;
+
+    // Net force vector magnitude (Newton's third law check — should be near zero)
+    let jsFx = 0, jsFy = 0, jsFz = 0, wasmFx = 0, wasmFy = 0, wasmFz = 0;
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      jsFx += jsForce[i3]; jsFy += jsForce[i3+1]; jsFz += jsForce[i3+2];
+      wasmFx += wasmForce[i3]; wasmFy += wasmForce[i3+1]; wasmFz += wasmForce[i3+2];
+    }
+    const jsNetF = Math.sqrt(jsFx*jsFx + jsFy*jsFy + jsFz*jsFz);
+    const wasmNetF = Math.sqrt(wasmFx*wasmFx + wasmFy*wasmFy + wasmFz*wasmFz);
+
+    const pass = maxRelErr < 1e-6 && !hasNanInf;
+    if (!pass) allPass = false;
+    table.innerHTML += `<tr>
+      <td>${test.label}</td><td>${n}</td>
+      <td>${maxRelErr.toExponential(2)}</td><td>${meanRelErr.toExponential(2)}</td>
+      <td>${jsNetF.toExponential(2)}</td><td>${wasmNetF.toExponential(2)}</td>
+      <td>${hasNanInf ? '<span class="fail">YES</span>' : 'None'}</td>
+      <td class="${pass ? 'pass' : 'fail'}">${pass ? 'PASS' : 'FAIL'}</td>
+    </tr>`;
+  }
+  div.innerHTML += `<p class="${allPass ? 'pass' : 'fail'}"><b>${allPass ? 'ALL PARITY TESTS PASSED' : 'SOME PARITY TESTS FAILED'}</b></p>`;
+  return allPass;
+}
+
+// ═══════════════════════════════════════════════════════
+// PART 2: Performance Comparison
+// ═══════════════════════════════════════════════════════
+
+async function runPerformance() {
+  const div = document.createElement('div');
+  div.className = 'section';
+  div.innerHTML = '<h3>Part 2: Performance (JS vs Wasm at 1020 and 4020 atoms)</h3>';
+  results.appendChild(div);
+
+  const WARMUP = 100, SAMPLES = 300;
+  const targets = [1020, 4020];
+
+  const table = document.createElement('table');
+  table.innerHTML = '<tr><th>Atoms</th><th>Kernel</th><th>marshalMs</th><th>kernelMs</th><th>pathMs</th><th>stepOnce (ms)</th><th>Steps/sec</th></tr>';
+  div.appendChild(table);
+
+  for (const target of targets) {
+    for (const mode of ['js', 'wasm']) {
+      status.textContent = `[Perf] ${target} atoms, ${mode}...`;
+      await new Promise(r => setTimeout(r, 10));
+      const scene = await buildScene(target, 'compact');
+      const physics = new PhysicsEngine();
+      physics.init(scene.atoms, scene.bonds);
+
+      // Force kernel mode
+      const savedWasm = physics._wasmReady;
+      const savedForce = physics._forceKernel;
+      physics._forceKernel = mode;
+      if (mode === 'js') {
+        physics._wasmReady = false;
+      } else {
+        physics._wasmReady = true; // Wasm confirmed ready by ensureWasm() above
+      }
+
+      // Warmup
+      for (let s = 0; s < WARMUP; s++) { physics.stepOnce(); if (s % 50 === 0) await new Promise(r => setTimeout(r, 0)); }
+
+      // Sample
+      const stepTimes = [], marshalTimes = [], kernelTimes = [], pathTimes = [];
+      for (let s = 0; s < SAMPLES; s++) {
+        physics._bench = { neighborMs: 0, tersoffMs: 0, bondRebuildMs: 0, componentMs: 0, marshalMs: 0, wasmKernelMs: 0, csrMarshalMs: 0 };
+        const t0 = performance.now();
+        physics.stepOnce();
+        stepTimes.push(performance.now() - t0);
+        marshalTimes.push(physics._bench.marshalMs + physics._bench.csrMarshalMs);
+        kernelTimes.push(physics._bench.wasmKernelMs || physics._bench.tersoffMs);
+        pathTimes.push(physics._bench.tersoffMs);
+        physics._bench = null;
+        if (s % 50 === 0) { status.textContent = `[Perf] ${target} ${mode} ${Math.round(s/SAMPLES*100)}%`; await new Promise(r => setTimeout(r, 0)); }
+      }
+
+      physics._wasmReady = savedWasm;
+      physics._forceKernel = savedForce;
+
+      const mean = arr => arr.reduce((a,b)=>a+b,0)/arr.length;
+      const n = physics.n;
+      table.innerHTML += `<tr>
+        <td>${n}</td><td>${mode}</td>
+        <td>${mean(marshalTimes).toFixed(3)}</td><td>${mean(kernelTimes).toFixed(3)}</td>
+        <td>${mean(pathTimes).toFixed(3)}</td><td>${mean(stepTimes).toFixed(3)}</td>
+        <td>${Math.round(1000 / mean(stepTimes))}</td>
+      </tr>`;
+    }
+  }
+
+  // Go/no-go summary
+  div.innerHTML += '<h3>Go/No-Go Assessment</h3>';
+  div.innerHTML += '<p>Compare Wasm vs JS stepOnce at 4020 atoms. Threshold: ≥ 1.2× improvement to proceed.</p>';
+}
+
+// ═══════════════════════════════════════════════════════
+// MAIN
+// ═══════════════════════════════════════════════════════
+
+async function runAll() {
+  const buttons = document.querySelectorAll('button');
+  buttons.forEach(b => b.disabled = true);
+  results.innerHTML = '';
+
+  try {
+    status.textContent = 'Loading Wasm module...';
+    await ensureWasm();
+    status.textContent = 'Wasm loaded. Running parity tests...';
+  } catch (e) {
+    results.innerHTML = `<p class="fail">Wasm module failed to load: ${e.message}</p>`;
+    buttons.forEach(b => b.disabled = false);
+    return;
+  }
+
+  const parityOk = await runForceParity();
+  if (!parityOk) {
+    status.textContent = 'PARITY FAILED — skipping performance tests.';
+    buttons.forEach(b => b.disabled = false);
+    return;
+  }
+
+  await runPerformance();
+
+  status.textContent = 'Done.';
+  buttons.forEach(b => b.disabled = false);
+}
+
+document.getElementById('btn-run').addEventListener('click', runAll);
+</script>
+</body>
+</html>
