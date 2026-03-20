@@ -135,15 +135,16 @@ The Tersoff potential has a hard cutoff at R + D = 2.1 Å. Atoms from different 
 
 The simulator uses the standard cosine cutoff transition (not the exponential variant found in some implementations). Both are smooth and produce similar equilibrium structures.
 
-### Three implementations
+### Four implementations
 
 | Implementation | Location | Use |
 |---------------|----------|-----|
 | Pure Python | `sim/potentials/tersoff.py` | Reference, validation, force decomposition |
 | Numba JIT | `sim/potentials/tersoff_fast.py` | Server-side relaxation, library building |
-| JavaScript | `page/js/physics.js` | Browser interactive page (real-time) |
+| JavaScript | `page/js/physics.js` | Browser interactive page (fallback) |
+| C/Wasm | `sim/wasm/tersoff.c` → `page/wasm/tersoff.wasm` | Browser default (~11% faster than JS JIT) |
 
-All three use identical Tersoff (1988) carbon parameters and produce consistent results.
+All four use identical Tersoff (1988) carbon parameters and produce consistent results.
 
 ### JavaScript Implementation Details
 

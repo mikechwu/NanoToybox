@@ -18,6 +18,9 @@ NanoToybox/
 │   │   └── library.py            # Structure catalog with CATALOG dict
 │   └── io/
 │       └── output.py             # XYZ trajectory + CSV energy writers
+│   └── wasm/
+│       ├── tersoff.c             # C Tersoff kernel for Wasm (Emscripten)
+│       └── Makefile              # Build: emcc -O3 -ffast-math → page/wasm/
 ├── tests/                        # 8 validation tests (see testing.md)
 ├── scripts/                      # CLI tools and analysis scripts
 │   ├── library_cli.py            # Structure library management CLI
@@ -39,7 +42,12 @@ NanoToybox/
 │   │   ├── bench-distance.html   # Tersoff kernel benchmark (production on-the-fly)
 │   │   ├── bench-celllist.html   # Cell-list equivalence validation
 │   │   ├── bench-preWasm.html    # Pre-Wasm evaluation suite (validation + profiling + scaling)
+│   │   ├── bench-kernel-profile.html  # Kernel stage profiling
+│   │   ├── bench-wasm.html       # Wasm kernel benchmarks
 │   │   └── bench-scenes.js       # Shared scene generator
+│   ├── wasm/                     # Pre-built Wasm kernel (committed binaries)
+│   │   ├── tersoff.wasm          # Compiled C Tersoff kernel
+│   │   └── tersoff.js            # Emscripten glue code
 │   └── js/
 │       ├── config.js             # Centralized page configuration (single source of truth)
 │       ├── main.js               # Entry point, session state, lifecycle, command dispatch
@@ -49,7 +57,8 @@ NanoToybox/
 │       ├── state-machine.js      # Interaction states (idle/hover/drag/rotate/camera)
 │       ├── loader.js             # Structure library loader + bond topology
 │       ├── fps-monitor.js        # Frame time measurement + degradation tiers
-│       └── themes.js             # Dark/light theme definitions
+│       ├── themes.js             # Dark/light theme definitions
+│       └── tersoff-wasm.js       # Wasm kernel bridge (lazy-load, buffer mgmt, CSR marshaling, JS fallback)
 ├── viewer/
 │   └── index.html                # Three.js pre-computed trajectory viewer
 ├── data/                         # ML training/test datasets (NPY + metadata)

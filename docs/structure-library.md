@@ -62,7 +62,7 @@ For each structure, the CLI:
 
 ### Performance
 
-With Numba (`tersoff_fast.py`): full rebuild of 7 standard structures takes **~4 seconds**.
+With Numba (`tersoff_fast.py`): full rebuild of all 15 library structures takes **~4 seconds**.
 
 Without Numba: same rebuild takes ~10 minutes. Numba is auto-detected.
 

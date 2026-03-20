@@ -103,8 +103,17 @@ page/index.html
         ├── input.js        → mouse/touch → raycasting via atom-source → state machine events
         ├── renderer.js     → InstancedMesh atoms/bonds, highlight overlay, axis triad
         ├── fps-monitor.js  → frame time measurement
-        └── themes.js       → dark/light definitions
+        ├── themes.js       → dark/light definitions
+        └── tersoff-wasm.js → Wasm kernel bridge (lazy-load, buffer mgmt, CSR marshaling, JS fallback)
   └── bench/                → performance benchmarks and validation
+        ├── bench-physics.html      — physics-only microbench
+        ├── bench-render.html       — raw Three.js renderer test
+        ├── bench-distance.html     — Tersoff kernel benchmark
+        ├── bench-celllist.html     — cell-list validation
+        ├── bench-preWasm.html      — pre-Wasm evaluation suite
+        ├── bench-kernel-profile.html — kernel stage profiling
+        ├── bench-wasm.html         — Wasm kernel benchmarks
+        └── bench-scenes.js         — shared scene generator
 ```
 
 ### Module Contracts
@@ -122,6 +131,7 @@ Each page module has defined ownership boundaries:
 | `main.js` | App lifecycle, session state, command dispatch, UI wiring | Everything above | Orchestration (no direct exports) |
 | `fps-monitor.js` | Frame time measurement | begin/end calls from main.js | FPS display text |
 | `themes.js` | Color/lighting definitions | — | `THEMES` object |
+| `tersoff-wasm.js` | Wasm lifecycle, buffer management, CSR marshaling | CSR neighbor data from physics.js | `computeForces()` or null (fallback signal) |
 
 **Key rules:**
 - Modules import from `config.js` for shared constants. They do NOT import from each other's internals. Data flows through `main.js` orchestration.
@@ -186,7 +196,7 @@ For trajectory playback of large structures, use high stride values (20–100).
 | **InstancedMesh** | Done | Draw calls reduced from N+bonds to 2. Geometric capacity growth, active-instance compaction for bonds. |
 | **On-the-fly Tersoff** | Done | 45% faster kernel at 2040 atoms. Eliminates 127 MB N×N distance cache. |
 | **Cell-list neighbor/bond** | Done | O(N) instead of O(N²) for neighbor and bond detection. Shared `_buildCellGrid` helper. |
-| **C/Wasm Tersoff** | Pending | Simplified by on-the-fly kernel (no distBuf/rhatBuf in interface). |
+| **C/Wasm Tersoff** | Done | ~11% faster than JS JIT. Enabled by default (config.js `useWasm: true`). CSR neighbor marshaling. Automatic JS fallback on load failure. |
 | **Web Workers** | Pending | Secondary architecture direction — improves responsiveness, not throughput. |
 
 Benchmark scripts are in `page/bench/`. Run via local server to collect data.

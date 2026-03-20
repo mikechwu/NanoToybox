@@ -52,4 +52,5 @@ Build an immersive, interactive, scientifically accurate browser-based playgroun
 - Collision simulations: 8 verified scenarios with relaxed structures (120–3,600 atoms)
 - ML surrogate: explored, deferred (analytical is faster for target system sizes)
 - Performance benchmarks in `page/bench/` (physics, renderer, kernel, cell-list validation)
-- **Next steps**: C/Wasm Tersoff kernel for further scaling, Web Workers for responsiveness
+- **Wasm Tersoff kernel**: deployed and enabled by default (~11% faster than JS JIT, automatic JS fallback)
+- **Next steps**: Web Workers for responsiveness, viewer modernization

@@ -28,7 +28,7 @@ Or visit the live demo at [mikechwu.github.io/NanoToybox](https://mikechwu.githu
 - **NVE dynamics by default** — energy-conserving; molecules vibrate indefinitely after interaction. Adjustable damping slider (0 to heavy)
 - **Dark/Light themes** — full UI adaptation
 - **Works on desktop and mobile** — mouse and touch interaction
-- **No build step** — pure ES modules loaded via importmap from CDN
+- **No build step** — pure ES modules loaded via importmap from CDN (Wasm kernel pre-built; Emscripten needed only for kernel development)
 
 ## How It Works
 
@@ -80,13 +80,15 @@ NanoToybox/
 │       ├── state-machine.js
 │       ├── loader.js       # Structure library loader
 │       ├── fps-monitor.js
-│       └── themes.js
+│       ├── themes.js
+│       └── tersoff-wasm.js  # Wasm kernel bridge
 ├── viewer/                 # Pre-computed trajectory viewer
 ├── sim/                    # Python simulation engine
 │   ├── potentials/         # Tersoff (Python + Numba)
 │   ├── integrators/        # Velocity Verlet
 │   ├── structures/         # Geometry generators
-│   └── io/                 # XYZ output
+│   ├── io/                 # XYZ output
+│   └── wasm/               # C Tersoff kernel + Emscripten build
 ├── structures/library/     # 15 relaxed 0K structures
 ├── scripts/                # CLI tools, scaling research
 ├── tests/                  # 8 physics validation tests

@@ -26,8 +26,9 @@ The long-term vision:
 - Expandable to ML surrogates for larger systems later
 
 Measured limits (see [scaling-research.md](scaling-research.md)):
-- Numba Tersoff: 30 FPS up to ~2,100 atoms; C/Wasm target: ~10,000 atoms
-- Current viewer: 30 FPS up to ~250 atoms (O(N²) bond detection)
+- Numba Tersoff: 30 FPS up to ~2,100 atoms; C/Wasm (browser): ~3,000–5,000 atoms (measured ~11% faster than JS JIT)
+- Interactive page (InstancedMesh + cell-list + Wasm): ~2,400 atoms at 30 FPS
+- Trajectory viewer (`viewer/`): ~250 atoms at 30 FPS (still O(N²) individual meshes)
 - Optimized viewer (InstancedMesh + neighbor list): ~5,000–10,000 atoms
 
 ## Rules to Obey
@@ -61,25 +62,28 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - Camera-plane force projection (forces align with user's visual perspective)
 - Inertia-normalized rotation (consistent feel across molecule sizes)
 - 3D axis triad indicator, dark/light themes, advanced settings panel
+- InstancedMesh rendering — 2 draw calls for atoms+bonds, geometric capacity growth (`page/js/renderer.js`)
+- On-the-fly Tersoff kernel — 45% faster than cached at 2040 atoms, eliminates 127 MB N×N cache (`page/js/physics.js`)
+- Cell-list spatial acceleration — O(N) neighbor and bond detection instead of O(N²) (`page/js/physics.js`)
+- C/Wasm Tersoff kernel — ~11% faster than JS JIT, enabled by default, automatic JS fallback (`page/wasm/`, `page/js/tersoff-wasm.js`)
 
 ## Next Steps (Priority Order)
 
-### 1. Optimize for Larger Structures
-- InstancedMesh for atoms/bonds (reduce draw calls)
-- Cell-list neighbor search (O(N) bond detection)
-- Target: 300–1,000 atoms at 30 FPS
+### 1. Web Workers for Responsiveness
+- Move Tersoff computation off the main thread
+- Improves UI responsiveness, not raw throughput
+- SharedArrayBuffer for zero-copy position/force transfer
 
-### 2. Port Tersoff to C/Wasm (for >1,000 atoms)
-- Translate `sim/potentials/tersoff.py` to C, compile with Emscripten
-- Validate forces match Python reference to <1e-4
-- Replace `page/js/physics.js` force computation with Wasm calls
-
-### 3. Expand Structure Library
+### 2. Expand Structure Library
 - More CNT chiralities, larger graphene sheets
 - Multi-structure collision presets
 
+### 3. Viewer Modernization
+- Port trajectory viewer (`viewer/index.html`) to InstancedMesh + cell-list
+- Currently limited to ~250 atoms at 30 FPS due to individual meshes + O(N²) bonds
+
 ### 4. ML (Future, When Needed)
-- GNN architecture for >1,000 atoms where Wasm is too slow
+- GNN architecture for >5,000 atoms where Wasm is too slow
 - Use existing data pipeline and force decomposition code
 
 ## Development Workflow

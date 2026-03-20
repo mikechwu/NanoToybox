@@ -135,7 +135,7 @@ Collision trajectories are saved as XYZ files in `outputs/scaling_research/` and
 
 2. **Phase 2 (720–2,400 atoms):** Achieved with current optimizations (InstancedMesh + cell-list + on-the-fly kernel). Smooth at 30+ FPS at the physics wall (~2,400 atoms estimated).
 
-3. **Phase 3 (2,400–5,000+ atoms):** Requires C/Wasm Tersoff kernel. The Wasm interface is simplified by the on-the-fly distance strategy (no N×N buffer copies needed).
+3. **Phase 3 (2,400–5,000+ atoms):** C/Wasm Tersoff kernel deployed and enabled by default (~11% faster than JS JIT). Further gains require algorithmic improvements or Web Workers.
 
 4. **Beyond 5,000 atoms:** Not practical for real-time browser MD. Pre-computed trajectories with stride-based playback (now supported in the viewer) are the viable approach.
 

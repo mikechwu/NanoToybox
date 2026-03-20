@@ -8,7 +8,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** Scaling benchmarks showed analytical Tersoff handles all target scenes (60–300 atoms) at interactive frame rates. The JavaScript implementation achieves sufficient performance for the target range without requiring Wasm. ML provided no speed advantage — descriptor computation has the same O(N·neighbors²) complexity as the analytical force. ML only becomes worthwhile for >1000 atoms with a GNN that avoids explicit descriptors.
 
-**Update:** The interactive page (`page/`) now runs the full Tersoff potential in optimized JavaScript. Wasm remains an option for scaling to >300 atoms.
+**Update:** The interactive page (`page/`) now runs the full Tersoff potential with a C/Wasm kernel enabled by default (`config.js` `useWasm: true`), providing ~11% speedup over JS JIT. Automatic fallback to JavaScript if Wasm fails to load.
 
 **Evidence:** dev_report_simdev9, dev_report_simdev10, page/js/physics.js
 
