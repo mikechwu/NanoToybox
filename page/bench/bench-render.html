@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NanoToybox — Raw Three.js Renderer Microbench</title>
+<style>
+body { font-family: monospace; background: #1a1a2e; color: #e8e8e8; padding: 20px; max-width: 1400px; }
+.pass { color: #50c050; } .warn { color: #e0a030; } .fail { color: #e05050; }
+table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+th, td { border: 1px solid #333; padding: 4px 8px; text-align: right; font-size: 12px; }
+th { background: #252540; text-align: left; }
+td:first-child { text-align: left; }
+button { background: #334; color: #ccc; border: 1px solid #555; padding: 8px 16px; cursor: pointer; margin: 4px; }
+button:disabled { opacity: 0.4; }
+</style>
+</head>
+<body>
+<h2>Raw Three.js Renderer Microbench</h2>
+<p>Isolates raw Three.js scene rendering cost (individual meshes, no OrbitControls/axis triad).
+Not the full app Renderer class — measures GPU draw + CPU mesh-update overhead only.
+Canonical: 1280×720, DPR=1.</p>
+<div>
+  <button id="btn-run">Run Sweep (3 modes)</button>
+  <button id="btn-export">Export CSV</button>
+</div>
+<div id="status" style="color:#60a0ff;"></div>
+<div id="results"></div>
+<!-- Canvas container: fixed at top-left, near-invisible but in compositing tree -->
+<div id="container" style="position:fixed; top:0; left:0; width:1280px; height:720px; opacity:0.01; pointer-events:none;"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { buildScene, RENDER_SWEEP } from './bench-scenes.js';
+import { CONFIG } from '../js/config.js';
+
+const FRAMES_TARGET = 300;
+const MAX_MS = 10000;
+const ABORT_MEAN_MS = 100;
+
+const status = document.getElementById('status');
+const results = document.getElementById('results');
+let allResults = [];
+
+function safeMax(arr) {
+  let m = -Infinity;
+  for (const v of arr) if (v > m) m = v;
+  return m === -Infinity ? 0 : m;
+}
+
+function percentile(arr, p) {
+  if (arr.length < 50) return null;
+  const sorted = [...arr].sort((a, b) => a - b);
+  return sorted[Math.max(0, Math.ceil(sorted.length * p / 100) - 1)];
+}
+
+function stats(arr) {
+  if (arr.length === 0) return { mean: 0, p95: null, max: 0 };
+  return { mean: arr.reduce((a,b)=>a+b,0)/arr.length, p95: percentile(arr, 95), max: safeMax(arr) };
+}
+
+function createRenderer(container) {
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x181820);
+  const camera = new THREE.PerspectiveCamera(50, 1280/720, 0.1, 2000);
+  const webgl = new THREE.WebGLRenderer({ antialias: true });
+  webgl.setPixelRatio(1); // canonical DPR=1
+  webgl.setSize(1280, 720);
+  webgl.toneMapping = THREE.ACESFilmicToneMapping;
+  const ambient = new THREE.AmbientLight(0x8090b0, 1.2);
+  scene.add(ambient);
+  const key = new THREE.DirectionalLight(0xffffff, 3.0);
+  key.position.set(1.0, 0.7, 0.6);
+  camera.add(key);
+  scene.add(camera);
+  container.appendChild(webgl.domElement);
+  return { scene, camera, webgl };
+}
+
+function buildMeshScene(r, sceneData) {
+  const atomGeom = new THREE.SphereGeometry(CONFIG.atoms.radius, CONFIG.atoms.segments[0], CONFIG.atoms.segments[1]);
+  const atomMat = new THREE.MeshStandardMaterial({ color: 0xe0e0e0, roughness: 0.7, metalness: 0 });
+  const bondGeom = new THREE.CylinderGeometry(CONFIG.bondMesh.radius, CONFIG.bondMesh.radius, 1, CONFIG.bondMesh.segments);
+  const bondMat = new THREE.MeshStandardMaterial({ color: 0x808080, roughness: 0.7, metalness: 0 });
+  const atomMeshes = [], bondMeshes = [];
+  const up = new THREE.Vector3(0,1,0), dir = new THREE.Vector3();
+
+  for (const a of sceneData.atoms) {
+    const mesh = new THREE.Mesh(atomGeom, atomMat);
+    mesh.position.set(a.x, a.y, a.z);
+    r.scene.add(mesh);
+    atomMeshes.push(mesh);
+  }
+  for (const [i, j] of sceneData.bonds) {
+    if (i >= sceneData.atoms.length || j >= sceneData.atoms.length) continue;
+    const ai = sceneData.atoms[i], aj = sceneData.atoms[j];
+    const mesh = new THREE.Mesh(bondGeom, bondMat);
+    const dx=aj.x-ai.x, dy=aj.y-ai.y, dz=aj.z-ai.z;
+    const dist = Math.sqrt(dx*dx+dy*dy+dz*dz);
+    mesh.position.set((ai.x+aj.x)/2,(ai.y+aj.y)/2,(ai.z+aj.z)/2);
+    mesh.scale.y = dist;
+    dir.set(dx,dy,dz).normalize();
+    mesh.quaternion.setFromUnitVectors(up, dir);
+    r.scene.add(mesh);
+    bondMeshes.push(mesh);
+  }
+  // Fit camera
+  let cx=0, cy=0, cz=0;
+  for (const a of sceneData.atoms) { cx+=a.x; cy+=a.y; cz+=a.z; }
+  cx/=sceneData.atoms.length; cy/=sceneData.atoms.length; cz/=sceneData.atoms.length;
+  let maxR = 0;
+  for (const a of sceneData.atoms) {
+    const d = Math.sqrt((a.x-cx)**2+(a.y-cy)**2+(a.z-cz)**2);
+    if (d > maxR) maxR = d;
+  }
+  r.camera.position.set(cx, cy, cz + maxR * 2.5 + 5);
+  r.camera.lookAt(cx, cy, cz);
+  return { atomMeshes, bondMeshes, atomGeom, atomMat, bondGeom, bondMat };
+}
+
+function clearScene(r, md) {
+  if (md) {
+    md.atomMeshes.forEach(m => r.scene.remove(m));
+    md.bondMeshes.forEach(m => r.scene.remove(m));
+    md.atomGeom.dispose(); md.atomMat.dispose();
+    md.bondGeom.dispose(); md.bondMat.dispose();
+  }
+}
+
+async function benchRenderMode(r, sceneData, md, mode, progressPrefix) {
+  const up = new THREE.Vector3(0,1,0), dir = new THREE.Vector3();
+  const timings = { updatePos: [], bondTransform: [], render: [], total: [] };
+  let frames = 0;
+  let abortedEarly = false;
+  let computeElapsedMs = 0; // pure compute time (excludes yield pauses)
+  const start = performance.now();
+
+  while (frames < FRAMES_TARGET) {
+    const wallElapsed = performance.now() - start;
+    if (wallElapsed > MAX_MS) break;
+    // Abort check uses compute time, not wall time (yields inflate wall clock)
+    if (frames > 10 && computeElapsedMs / frames > ABORT_MEAN_MS) { abortedEarly = true; break; }
+
+    const frameStart = performance.now();
+    let updateMs = 0, bondMs = 0, renderMs = 0;
+
+    if (mode === 'cpu' || mode === 'full') {
+      const t0 = performance.now();
+      for (let i = 0; i < md.atomMeshes.length; i++) {
+        const m = md.atomMeshes[i];
+        m.position.x += (Math.random()-0.5)*0.001;
+        m.position.y += (Math.random()-0.5)*0.001;
+      }
+      updateMs = performance.now() - t0;
+
+      const t1 = performance.now();
+      for (let b = 0; b < Math.min(md.bondMeshes.length, sceneData.bonds.length); b++) {
+        const [i,j] = sceneData.bonds[b];
+        if (i >= md.atomMeshes.length || j >= md.atomMeshes.length) continue;
+        const pi = md.atomMeshes[i].position, pj = md.atomMeshes[j].position;
+        const dx=pj.x-pi.x, dy=pj.y-pi.y, dz=pj.z-pi.z;
+        const dist = Math.sqrt(dx*dx+dy*dy+dz*dz);
+        md.bondMeshes[b].position.set((pi.x+pj.x)/2,(pi.y+pj.y)/2,(pi.z+pj.z)/2);
+        md.bondMeshes[b].scale.y = dist;
+        dir.set(dx,dy,dz).normalize();
+        md.bondMeshes[b].quaternion.setFromUnitVectors(up, dir);
+      }
+      bondMs = performance.now() - t1;
+    }
+
+    if (mode === 'render' || mode === 'full') {
+      const t2 = performance.now();
+      r.webgl.render(r.scene, r.camera);
+      renderMs = performance.now() - t2;
+    }
+
+    timings.updatePos.push(updateMs);
+    timings.bondTransform.push(bondMs);
+    timings.render.push(renderMs);
+    const frameTotalMs = performance.now() - frameStart;
+    timings.total.push(frameTotalMs);
+    computeElapsedMs += frameTotalMs;
+    frames++;
+    if (frames % 10 === 0) {
+      status.textContent = `${progressPrefix} [${mode}] ${sceneData.actualAtoms} atoms... ${Math.round(frames / FRAMES_TARGET * 100)}%`;
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+
+  let benchStatus, reason = '';
+  if (abortedEarly) { benchStatus = 'aborted'; reason = 'mean_frame_over_100ms'; }
+  else if (frames < 50) { benchStatus = 'low_sample_count'; reason = 'low_sample_count'; }
+  else benchStatus = 'completed';
+
+  return {
+    mode, frames, reason,
+    updatePos: stats(timings.updatePos),
+    bondTransform: stats(timings.bondTransform),
+    render: stats(timings.render),
+    total: stats(timings.total),
+    status: benchStatus,
+  };
+}
+
+async function runSweep() {
+  const buttons = document.querySelectorAll('button');
+  buttons.forEach(b => b.disabled = true);
+  results.innerHTML = '';
+  allResults = [];
+
+  const container = document.getElementById('container');
+  const r = createRenderer(container);
+  const modes = ['cpu', 'render', 'full'];
+
+  const totalPoints = modes.length * RENDER_SWEEP.length;
+
+  for (const mode of modes) {
+    const table = document.createElement('table');
+    table.innerHTML = `<tr>
+      <th>Mode: ${mode}</th><th>Atoms</th><th>Bonds</th><th>Frames</th><th>Status</th>
+      <th>UpdatePos (ms)</th><th>BondXform (ms)</th><th>Render (ms)</th><th>Total (ms)</th><th>Est FPS</th>
+    </tr>`;
+    results.appendChild(table);
+    for (let si = 0; si < RENDER_SWEEP.length; si++) {
+      const target = RENDER_SWEEP[si];
+      const modeIdx = modes.indexOf(mode);
+      const overallIdx = modeIdx * RENDER_SWEEP.length + si + 1;
+      const pct = `[${overallIdx}/${totalPoints}]`;
+      status.textContent = `${pct} [${mode}] Building ${target} atoms...`;
+      await new Promise(r => setTimeout(r, 10));
+      const sceneData = await buildScene(target, 'compact');
+      const md = buildMeshScene(r, sceneData);
+      status.textContent = `${pct} [${mode}] Benchmarking ${sceneData.actualAtoms} atoms...`;
+      await new Promise(r => setTimeout(r, 10));
+
+      const bench = await benchRenderMode(r, sceneData, md, mode, pct);
+      bench.targetAtoms = target;
+      bench.actualAtoms = sceneData.actualAtoms;
+      bench.bonds = sceneData.bonds.length;
+      allResults.push(bench);
+
+      const cls = bench.status === 'completed' ? 'pass' : (bench.status === 'aborted' ? 'fail' : 'warn');
+      const estFps = bench.total.mean > 0 ? Math.round(1000 / bench.total.mean) : '—';
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${mode}</td><td>${bench.actualAtoms}</td><td>${bench.bonds}</td>
+        <td>${bench.frames}</td><td class="${cls}">${bench.status}</td>
+        <td>${bench.updatePos.mean.toFixed(3)}</td><td>${bench.bondTransform.mean.toFixed(3)}</td>
+        <td>${bench.render.mean.toFixed(3)}</td><td>${bench.total.mean.toFixed(3)}</td><td>${estFps}</td>
+      `;
+      table.appendChild(row);
+      clearScene(r, md);
+      if (bench.status === 'aborted') break;
+      if (bench.total.mean > ABORT_MEAN_MS) { status.textContent = `[${mode}] Stopped at ${bench.actualAtoms}`; break; }
+    }
+  }
+
+  // Wall-hit analysis
+  const wallDiv = document.createElement('div');
+  wallDiv.innerHTML = '<h3>Render Wall-Hit Thresholds</h3>';
+  const fullResults = allResults.filter(r => r.mode === 'full');
+  const fpsWall = fullResults.find(r => r.total.mean > 33.3);
+  const renderWall = allResults.filter(r => r.mode === 'render').find(r => r.render.mean > 16.7);
+  wallDiv.innerHTML += `<p>30 FPS wall (full tick > 33ms): <b>${fpsWall ? fpsWall.actualAtoms + ' atoms' : 'not reached'}</b></p>`;
+  wallDiv.innerHTML += `<p>Render-only wall (render > 16.7ms): <b>${renderWall ? renderWall.actualAtoms + ' atoms' : 'not reached'}</b></p>`;
+  results.appendChild(wallDiv);
+
+  r.webgl.dispose();
+  container.innerHTML = '';
+  status.textContent = 'Done.';
+  buttons.forEach(b => b.disabled = false);
+}
+
+document.getElementById('btn-run').addEventListener('click', runSweep);
+document.getElementById('btn-export').addEventListener('click', () => {
+  if (allResults.length === 0) return;
+  const header = 'mode,targetAtoms,actualAtoms,bonds,frames,status,reason,warmupConfidence,updatePosMeanMs,updatePosP95Ms,bondTransformMeanMs,bondTransformP95Ms,renderMeanMs,renderP95Ms,renderMaxMs,totalMeanMs,totalP95Ms,totalMaxMs,estFPS\n';
+  const fmtP = (s) => s.p95 != null ? s.p95.toFixed(4) : '';
+  const rows = allResults.map(r =>
+    `${r.mode},${r.targetAtoms},${r.actualAtoms},${r.bonds},${r.frames},${r.status},${r.reason||''},,${r.updatePos.mean.toFixed(4)},${fmtP(r.updatePos)},${r.bondTransform.mean.toFixed(4)},${fmtP(r.bondTransform)},${r.render.mean.toFixed(4)},${fmtP(r.render)},${r.render.max.toFixed(4)},${r.total.mean.toFixed(4)},${fmtP(r.total)},${r.total.max.toFixed(4)},${r.total.mean > 0 ? Math.round(1000/r.total.mean) : ''}`
+  ).join('\n');
+  const blob = new Blob([header + rows], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `render-bench-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+});
+</script>
+</body>
+</html>

@@ -71,5 +71,6 @@ export const CONFIG = {
     assertions: false,       // invariant checks after appendMolecule
     failAfterPhysicsAppend: false,  // fault injection: throw after physics append
     failRendererAppend: false,      // fault injection: throw during renderer append
+    profiler: false,                // 'live' | 'bench' | false — runtime stage instrumentation
   },
 };

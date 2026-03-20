@@ -12,8 +12,8 @@ export async function loadManifest() {
   return resp.json();
 }
 
-export async function loadStructure(filename) {
-  const resp = await fetch(`${LIBRARY_PATH}/${filename}`);
+export async function loadStructure(filename, basePath) {
+  const resp = await fetch(`${basePath || LIBRARY_PATH}/${filename}`);
   if (!resp.ok) throw new Error(`Failed to load ${filename}: ${resp.status}`);
   const text = await resp.text();
   const atoms = parseXYZ(text);

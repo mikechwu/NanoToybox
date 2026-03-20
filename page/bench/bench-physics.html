@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NanoToybox — Physics Microbench</title>
+<style>
+body { font-family: monospace; background: #1a1a2e; color: #e8e8e8; padding: 20px; max-width: 1400px; }
+.pass { color: #50c050; } .warn { color: #e0a030; } .fail { color: #e05050; }
+table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+th, td { border: 1px solid #333; padding: 4px 8px; text-align: right; font-size: 12px; }
+th { background: #252540; text-align: left; }
+td:first-child { text-align: left; }
+button { background: #334; color: #ccc; border: 1px solid #555; padding: 8px 16px; cursor: pointer; margin: 4px; }
+button:disabled { opacity: 0.4; }
+</style>
+</head>
+<body>
+<h2>Physics Microbench</h2>
+<p>Times physics stages across atom counts using engine timing hooks. No rendering.</p>
+<div>
+  <button id="btn-run-c60">Run C60 Compact</button>
+  <button id="btn-run-graphene">Run Graphene Sweep</button>
+  <button id="btn-run-sparse">Run Sparse C60</button>
+  <button id="btn-export">Export CSV</button>
+</div>
+<div id="status" style="color:#60a0ff;"></div>
+<div id="results"></div>
+
+<script type="module">
+import { PhysicsEngine } from '../js/physics.js';
+import { buildScene, C60_SWEEP, GRAPHENE_SWEEP, SPARSE_SWEEP } from './bench-scenes.js';
+
+const ABORT_MEAN_MS = 100;
+const STEP_BUDGET_MS = 1000 / 240; // 4.17 ms at 1x
+
+const status = document.getElementById('status');
+const results = document.getElementById('results');
+let allResults = [];
+
+function safeMax(arr) {
+  let m = -Infinity;
+  for (const v of arr) if (v > m) m = v;
+  return m === -Infinity ? 0 : m;
+}
+
+function percentile(arr, p) {
+  if (arr.length < 50) return null;
+  const sorted = [...arr].sort((a, b) => a - b);
+  return sorted[Math.max(0, Math.ceil(sorted.length * p / 100) - 1)];
+}
+
+function stats(arr) {
+  if (arr.length === 0) return { mean: 0, p95: null, max: 0, count: 0 };
+  return {
+    mean: arr.reduce((a, b) => a + b, 0) / arr.length,
+    p95: percentile(arr, 95),
+    max: safeMax(arr),
+    count: arr.length,
+  };
+}
+
+async function benchAtomCount(targetAtoms, variant, sweepProgress) {
+  status.textContent = `${sweepProgress} Building scene: ${targetAtoms} atoms (${variant})...`;
+  await new Promise(r => setTimeout(r, 10));
+
+  const scene = await buildScene(targetAtoms, variant);
+  const physics = new PhysicsEngine();
+  physics.init(scene.atoms, scene.bonds);
+  const n = physics.n;
+  const bondCount = physics.bonds.length;
+
+  // --- Warmup ---
+  status.textContent = `${sweepProgress} Warming up: ${n} atoms...`;
+  await new Promise(r => setTimeout(r, 10));
+
+  const warmStart = performance.now();
+  let warmSteps = 0;
+  while (true) {
+    physics.stepOnce();
+    warmSteps++;
+    const elapsed = performance.now() - warmStart;
+    const neighborRebuilds = Math.floor(warmSteps / 10);
+    const bondRebuilds = Math.floor(warmSteps / 20);
+    // Normal exit: max(100 steps, 5s) AND 3 neighbor + 2 bond rebuilds
+    if (warmSteps >= 100 && elapsed >= 5000 && neighborRebuilds >= 3 && bondRebuilds >= 2) break;
+    // Low-confidence: 30s OR mean step > 50ms, with at least 1 rebuild each
+    if ((elapsed > 30000 || (warmSteps > 10 && elapsed / warmSteps > 50)) && neighborRebuilds >= 1 && bondRebuilds >= 1) break;
+    // Abort
+    if (elapsed > 60000) {
+      const empty = { mean: 0, p95: null, max: 0, count: 0 };
+      const result = {
+        targetAtoms, actualAtoms: n, bonds: bondCount, variant,
+        status: 'warmup_abort', warmupConfidence: 'low', reason: 'warmup_timeout',
+        sampleSteps: 0,
+        stepOnce: empty, neighbor: empty, tersoff: empty, bondRebuild: empty, component: empty,
+        spikeCount: 0, heapMB: null, distMB: '0', rhatMB: '0',
+        computeElapsedMs: 0, stepsPerSec: 0,
+      };
+      allResults.push(result);
+      return result;
+    }
+    if (warmSteps % 50 === 0) {
+      const warmPct = Math.min(99, Math.round(elapsed / 5000 * 100));
+      status.textContent = `${sweepProgress} Warming up: ${n} atoms... ${warmPct}%`;
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+  const warmElapsed = performance.now() - warmStart;
+  const warmupConfidence = (warmSteps >= 100 && Math.floor(warmSteps/10) >= 3 && Math.floor(warmSteps/20) >= 2) ? 'normal' : 'low';
+
+  // --- Sampling with per-stage timing ---
+  status.textContent = `${sweepProgress} Sampling: ${n} atoms... 0%`;
+  await new Promise(r => setTimeout(r, 10));
+
+  const timings = { stepOnce: [], neighbor: [], tersoff: [], bondRebuild: [], component: [] };
+  let sampleSteps = 0;
+  let abortedEarly = false;
+  let computeElapsedMs = 0; // pure compute time (excludes yield pauses)
+  const sampleStart = performance.now();
+
+  while (sampleSteps < 500) {
+    const wallElapsed = performance.now() - sampleStart;
+    if (wallElapsed > 10000) break;
+    // Abort check uses compute time, not wall time (yields inflate wall clock)
+    if (sampleSteps > 10 && computeElapsedMs / sampleSteps > ABORT_MEAN_MS) { abortedEarly = true; break; }
+
+    // Enable bench timing, reset accumulators
+    physics._bench = { neighborMs: 0, tersoffMs: 0, bondRebuildMs: 0, componentMs: 0 };
+
+    const stepStart = performance.now();
+    physics.stepOnce();
+    const stepMs = performance.now() - stepStart;
+    computeElapsedMs += stepMs;
+
+    // Collect stage timings from the hooks
+    timings.stepOnce.push(stepMs);
+    if (physics._bench.neighborMs > 0) timings.neighbor.push(physics._bench.neighborMs);
+    timings.tersoff.push(physics._bench.tersoffMs);
+    if (physics._bench.bondRebuildMs > 0) timings.bondRebuild.push(physics._bench.bondRebuildMs);
+    if (physics._bench.componentMs > 0) timings.component.push(physics._bench.componentMs);
+
+    physics._bench = null; // disable hooks
+    sampleSteps++;
+    if (sampleSteps % 20 === 0) {
+      status.textContent = `${sweepProgress} Sampling: ${n} atoms... ${Math.round(sampleSteps / 500 * 100)}%`;
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+
+  physics.applySafetyControls();
+
+  // Determine status and reason
+  let benchStatus, reason = '';
+  if (abortedEarly) { benchStatus = 'aborted'; reason = 'mean_step_over_100ms'; }
+  else if (sampleSteps < 50) { benchStatus = 'low_sample_count'; reason = 'low_sample_count'; }
+  else benchStatus = 'completed';
+
+  const stepStats = stats(timings.stepOnce);
+  const spikeCount = timings.stepOnce.filter(t => t > stepStats.mean * 2).length;
+
+  // Memory proxies
+  let heapMB = null;
+  if (performance.memory) heapMB = (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(1);
+  const distMB = (physics._dist ? physics._dist.byteLength / 1024 / 1024 : 0).toFixed(2);
+  const rhatMB = (physics._rhat ? physics._rhat.byteLength / 1024 / 1024 : 0).toFixed(2);
+
+  const result = {
+    targetAtoms, actualAtoms: n, bonds: bondCount, variant,
+    status: benchStatus, warmupConfidence, reason,
+    sampleSteps,
+    stepOnce: stepStats,
+    neighbor: stats(timings.neighbor),
+    tersoff: stats(timings.tersoff),
+    bondRebuild: stats(timings.bondRebuild),
+    component: stats(timings.component),
+    spikeCount,
+    heapMB, distMB, rhatMB,
+    computeElapsedMs,
+    stepsPerSec: computeElapsedMs > 0 ? sampleSteps * 1000 / computeElapsedMs : 0,
+  };
+  allResults.push(result);
+  return result;
+}
+
+async function runSweep(sweep, variant) {
+  const buttons = document.querySelectorAll('button');
+  buttons.forEach(b => b.disabled = true);
+  results.innerHTML = '';
+  allResults = [];
+
+  const table = document.createElement('table');
+  table.innerHTML = `<tr>
+    <th>Atoms</th><th>Bonds</th><th>Status</th><th>Warmup</th><th>Steps</th>
+    <th>stepOnce (ms)</th><th>Neighbor (ms)</th><th>Tersoff (ms)</th><th>BondRebuild (ms)</th><th>Component (ms)</th>
+    <th>Steps/sec</th><th>Spikes</th><th>Dist+Rhat (MB)</th><th>Heap (MB)</th>
+  </tr>`;
+  results.appendChild(table);
+
+  for (let si = 0; si < sweep.length; si++) {
+    const target = sweep[si];
+    const sweepProgress = `[${si + 1}/${sweep.length}]`;
+    const r = await benchAtomCount(target, variant, sweepProgress);
+    const cls = r.status === 'completed' ? 'pass' : (r.status === 'warmup_abort' || r.status === 'aborted' ? 'fail' : 'warn');
+    const row = document.createElement('tr');
+
+    if (r.status === 'warmup_abort') {
+      row.innerHTML = `
+        <td>${r.actualAtoms}</td><td>${r.bonds}</td>
+        <td class="fail">warmup_abort</td><td>${r.warmupConfidence}</td>
+        <td colspan="10">\u2014</td>`;
+      table.appendChild(row);
+      break;
+    }
+
+    row.innerHTML = `
+      <td>${r.actualAtoms}</td><td>${r.bonds}</td>
+      <td class="${cls}">${r.status}</td><td>${r.warmupConfidence}</td><td>${r.sampleSteps}</td>
+      <td>${r.stepOnce.mean.toFixed(3)}</td>
+      <td>${r.neighbor.mean.toFixed(3)} (${r.neighbor.count})</td>
+      <td>${r.tersoff.mean.toFixed(3)}</td>
+      <td>${r.bondRebuild.mean.toFixed(3)} (${r.bondRebuild.count})</td>
+      <td>${r.component.mean.toFixed(3)} (${r.component.count})</td>
+      <td>${Math.round(r.stepsPerSec)}</td><td>${r.spikeCount}</td>
+      <td>${(parseFloat(r.distMB) + parseFloat(r.rhatMB)).toFixed(1)}</td>
+      <td>${r.heapMB || '—'}</td>
+    `;
+    table.appendChild(row);
+
+    if (r.status === 'aborted') break;
+    if (r.stepOnce.mean > ABORT_MEAN_MS) {
+      status.textContent = `Stopped at ${r.actualAtoms} atoms (mean > 100ms)`;
+      break;
+    }
+  }
+
+  // Wall-hit analysis
+  const wallDiv = document.createElement('div');
+  wallDiv.innerHTML = '<h3>Wall-Hit Thresholds</h3>';
+  const physWall = allResults.find(r => r.stepOnce.mean > STEP_BUDGET_MS && r.status !== 'warmup_abort');
+  const jankWall = allResults.find(r => r.stepOnce.p95 && r.stepOnce.p95 > 50);
+  wallDiv.innerHTML += `<p>Physics wall (mean > ${STEP_BUDGET_MS.toFixed(2)} ms): <b>${physWall ? physWall.actualAtoms + ' atoms' : 'not reached'}</b></p>`;
+  wallDiv.innerHTML += `<p>P95 jank (> 50 ms): <b>${jankWall ? jankWall.actualAtoms + ' atoms' : 'not reached'}</b></p>`;
+
+  // Ranked breakdown at the wall
+  if (physWall) {
+    const r = physWall;
+    const total = r.stepOnce.mean;
+    wallDiv.innerHTML += `<h4>Stage breakdown at ${r.actualAtoms} atoms</h4>`;
+    const stages = [
+      ['Tersoff total', r.tersoff.mean],
+      ['Neighbor rebuild (amortized)', r.neighbor.mean * r.neighbor.count / r.sampleSteps],
+      ['Bond rebuild (amortized)', r.bondRebuild.mean * r.bondRebuild.count / r.sampleSteps],
+      ['Component rebuild (amortized)', r.component.mean * r.component.count / r.sampleSteps],
+      ['Other (integration+damping)', Math.max(0, total - r.tersoff.mean -
+        r.neighbor.mean * r.neighbor.count / r.sampleSteps -
+        r.bondRebuild.mean * r.bondRebuild.count / r.sampleSteps -
+        r.component.mean * r.component.count / r.sampleSteps)],
+    ].sort((a, b) => b[1] - a[1]);
+    for (const [name, ms] of stages) {
+      wallDiv.innerHTML += `<p>&nbsp;&nbsp;${name}: ${ms.toFixed(3)} ms (${(ms/total*100).toFixed(1)}%)</p>`;
+    }
+  }
+  results.appendChild(wallDiv);
+
+  status.textContent = 'Done.';
+  buttons.forEach(b => b.disabled = false);
+}
+
+document.getElementById('btn-run-c60').addEventListener('click', () => runSweep(C60_SWEEP, 'compact'));
+document.getElementById('btn-run-graphene').addEventListener('click', () => runSweep(GRAPHENE_SWEEP, 'sheet'));
+document.getElementById('btn-run-sparse').addEventListener('click', () => runSweep(SPARSE_SWEEP, 'sparse'));
+document.getElementById('btn-export').addEventListener('click', () => {
+  if (allResults.length === 0) return;
+  const header = 'targetAtoms,actualAtoms,bonds,variant,status,reason,warmupConfidence,sampleSteps,stepOnceMeanMs,stepOnceP95Ms,stepOnceMaxMs,neighborMeanMs,neighborP95Ms,neighborCalls,tersoffMeanMs,tersoffP95Ms,tersoffMaxMs,bondRebuildMeanMs,bondRebuildCalls,componentMeanMs,componentCalls,stepsPerSec,spikeCount,distRhatMB,heapMB\n';
+  const fmt = (s) => s.mean !== undefined ? s.mean.toFixed(4) : '0';
+  const fmtP = (s) => s.p95 != null ? s.p95.toFixed(4) : '';
+  const fmtM = (s) => s.max !== undefined ? s.max.toFixed(4) : '';
+  const rows = allResults.map(r =>
+    `${r.targetAtoms},${r.actualAtoms},${r.bonds},${r.variant},${r.status},${r.reason||''},${r.warmupConfidence},${r.sampleSteps},${fmt(r.stepOnce)},${fmtP(r.stepOnce)},${fmtM(r.stepOnce)},${fmt(r.neighbor)},${fmtP(r.neighbor)},${r.neighbor.count},${fmt(r.tersoff)},${fmtP(r.tersoff)},${fmtM(r.tersoff)},${fmt(r.bondRebuild)},${r.bondRebuild.count},${fmt(r.component)},${r.component.count},${r.stepsPerSec.toFixed(1)},${r.spikeCount},${(parseFloat(r.distMB)+parseFloat(r.rhatMB)).toFixed(1)},${r.heapMB||''}`
+  ).join('\n');
+  const blob = new Blob([header + rows], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `physics-bench-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+});
+</script>
+</body>
+</html>

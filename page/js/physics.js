@@ -333,6 +333,9 @@ export class PhysicsEngine {
     this.damping = CONFIG.physics.dampingDefault;
     this._dampingFactor = this.damping > 0 ? Math.pow(1 - this.damping, 1 / STEPS_PER_FRAME) : 1.0;
 
+    // Benchmark timing hooks (null when not benchmarking, zero overhead)
+    this._bench = null; // set to {} to enable per-stage timing
+
     // Pre-allocated cache buffers (resized in init)
     this._dist = null;   // Float64Array[n*n] — distance cache
     this._rhat = null;   // Float64Array[n*n*3] — unit vector cache
@@ -418,15 +421,18 @@ export class PhysicsEngine {
     this.force.fill(0);
 
     if (this.stepCount % 10 === 0 || !this.neighborList) {
+      const t0 = this._bench ? performance.now() : 0;
       this.buildNeighborList();
+      if (this._bench) this._bench.neighborMs = (this._bench.neighborMs || 0) + (performance.now() - t0);
     }
     if (!this.neighborList || this.n === 0) return;
 
-    // ── Tersoff kernel: pure science, no UX dependencies ──
-    // This call can be replaced with a Wasm implementation.
+    // ── Tersoff kernel ──
+    const t1 = this._bench ? performance.now() : 0;
     computeTersoffForces(
       this.pos, this.force, this.neighborList, this._nlCounts, this.n, this._dist, this._rhat
     );
+    if (this._bench) this._bench.tersoffMs = (this._bench.tersoffMs || 0) + (performance.now() - t1);
 
     // ── Interaction forces: UX layer ──
     // Drag spring, rotation torque — user-driven forces.
@@ -651,8 +657,12 @@ export class PhysicsEngine {
       for (let i = 0; i < this.n * 3; i++) this.vel[i] *= this._dampingFactor;
     }
     if (this.stepCount % 20 === 0) {
+      const t0 = this._bench ? performance.now() : 0;
       this.updateBondList();
+      if (this._bench) this._bench.bondRebuildMs = (this._bench.bondRebuildMs || 0) + (performance.now() - t0);
+      const t1 = this._bench ? performance.now() : 0;
       this.rebuildComponents();
+      if (this._bench) this._bench.componentMs = (this._bench.componentMs || 0) + (performance.now() - t1);
     }
   }
 
