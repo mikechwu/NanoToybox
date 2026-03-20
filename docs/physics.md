@@ -145,4 +145,12 @@ The simulator uses the standard cosine cutoff transition (not the exponential va
 
 All three use identical Tersoff (1988) carbon parameters and produce consistent results.
 
+### JavaScript Implementation Details
+
+The browser implementation (`page/js/physics.js`) includes several optimizations beyond a direct port:
+
+- **On-the-fly distance computation** — distances and unit vectors are computed inline from the `pos` array instead of pre-cached in N×N `Float64Array` buffers. Benchmarked 45% faster than the cached approach at 2040 atoms because the `pos` array (~49 KB) fits in L1 cache while the N×N arrays (~127 MB at 2040 atoms) cause main-memory random-access traffic.
+- **Cell-list spatial acceleration** — `buildNeighborList()` and `updateBondList()` use linked-list cell grids instead of O(N²) all-pairs scans. Neighbor grid uses 2.60 Å cells; bond grid uses 1.8 Å cells. Shared `_buildCellGrid()` helper. Validated via `page/bench/bench-celllist.html`.
+- **InstancedMesh rendering** — atoms and bonds are rendered via `THREE.InstancedMesh` (2 draw calls total) instead of individual `THREE.Mesh` objects. Active-instance compaction for bonds (only visible bonds uploaded). Highlight via separate overlay mesh.
+
 CNT geometry is generated via the graphene-sheet-rolling algorithm with chiral vector rotation (`sim/structures/generate.py`). Fullerene coordinates (C60, C180, C540, C720) are stored as relaxed structures in the library.

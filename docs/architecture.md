@@ -33,6 +33,12 @@ NanoToybox/
 │   └── library/                  # 15 canonical relaxed 0K structures (XYZ + manifest.json)
 ├── page/                         # Interactive carbon playground (real-time simulation)
 │   ├── index.html                # HTML shell, UI controls, advanced settings panel
+│   ├── bench/                    # Performance benchmarks
+│   │   ├── bench-physics.html    # Physics-only microbench (per-stage timing)
+│   │   ├── bench-render.html     # Raw Three.js renderer microbench (3 modes)
+│   │   ├── bench-distance.html   # Tersoff kernel benchmark (production on-the-fly)
+│   │   ├── bench-celllist.html   # Cell-list equivalence validation
+│   │   └── bench-scenes.js       # Shared scene generator
 │   └── js/
 │       ├── config.js             # Centralized page configuration (single source of truth)
 │       ├── main.js               # Entry point, session state, lifecycle, command dispatch

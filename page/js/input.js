@@ -148,10 +148,15 @@ export class InputManager {
    * This ensures drag/rotation forces are always in the user's visual plane,
    * regardless of camera orientation.
    *
+   * WARNING: Returns a shared internal scratch array (this._scratchResult).
+   * The returned array is mutated on the next call. Callers must consume
+   * the values immediately (same synchronous block) — do not store the
+   * reference across events, frames, or async boundaries.
+   *
    * @param {number} screenX - screen pixel X
    * @param {number} screenY - screen pixel Y
    * @param {THREE.Vector3} atomWorldPos - the atom's world position (defines the plane)
-   * @returns {number[]} [wx, wy, wz] — 3D world position on the camera plane
+   * @returns {number[]} [wx, wy, wz] — shared scratch array, consume immediately
    */
   screenToWorldOnAtomPlane(screenX, screenY, atomWorldPos) {
     const ndc = this._screenToNDC(screenX, screenY);

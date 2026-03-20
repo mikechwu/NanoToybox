@@ -73,7 +73,9 @@ Measured with Numba JIT engine on desktop CPU. The force evaluation scales as t 
 
 ### Bottleneck 2: Three.js Rendering
 
-The current viewer (`viewer/index.html`) uses individual `THREE.Mesh` per atom and an O(N²) nested loop for bond detection. Estimated costs:
+> **Update:** The interactive page now uses InstancedMesh (2 draw calls) and cell-list bond detection (O(N)). The estimates below apply to the **trajectory viewer** (`viewer/index.html`) which still uses individual meshes.
+
+The trajectory viewer uses individual `THREE.Mesh` per atom and an O(N²) nested loop for bond detection. Estimated costs:
 
 | Atoms | Draw Calls | Pair Checks | Frame Time (ms) | FPS |
 |------:|----------:|-----------:|----------------:|----:|
@@ -84,9 +86,7 @@ The current viewer (`viewer/index.html`) uses individual `THREE.Mesh` per atom a
 | 1,000 | 2,500 | 499,500 | 525 | 2 |
 | 5,000 | 12,500 | 12.5M | 12,600 | <1 |
 
-The rendering limit at 30 FPS is approximately **250 atoms** with the current architecture. The O(N²) bond detection dominates above ~200 atoms.
-
-With `InstancedMesh` and a cell-list neighbor search (both standard Three.js optimizations), the rendering limit would move to ~5,000–10,000 atoms.
+The trajectory viewer's rendering limit at 30 FPS is approximately **250 atoms**. The interactive page (`page/`) has no such limit — InstancedMesh rendering is linear in instance count (2 draw calls regardless of atom count).
 
 ### Bottleneck 3: Data Transfer (XYZ File Size)
 
@@ -120,21 +120,24 @@ Collision trajectories are saved as XYZ files in `outputs/scaling_research/` and
 
 ## Practical Limits Summary
 
+> **Update (2026-03-19):** The interactive page (`page/`) now uses InstancedMesh rendering, on-the-fly Tersoff distances, and cell-list neighbor/bond search. The "unoptimized viewer" row below is historical. See `docs/viewer.md` for current optimization status. Browser benchmark data is in `page/bench/`.
+
 | Configuration | Max Atoms (30 FPS) | Limiting Bottleneck |
 |---------------|-------------------:|---------------------|
-| Current viewer (unoptimized) | ~250 | O(N²) bond detection in JS |
-| Optimized viewer + Numba Tersoff | ~2,100 | Tersoff force computation |
-| Optimized viewer + C/Wasm Tersoff (est. 5–10x) | ~10,000–21,000 | GPU draw calls |
+| ~~Unoptimized viewer~~ (historical) | ~~~250~~ | ~~O(N²) bond detection in JS~~ |
+| Current interactive page (InstancedMesh + cell-list + on-the-fly) | ~2,400 (estimated) | Tersoff kernel + O(N²) stages eliminated |
+| Optimized viewer + Numba Tersoff (server) | ~2,100 | Tersoff force computation |
+| + C/Wasm Tersoff (est. 2–5x kernel) | ~3,000–5,000 | Remaining physics stages |
 
 ### Implications for the Browser Deployment Roadmap
 
-1. **Phase 1 (current target: 60–300 atoms):** Achievable with the current viewer and Wasm Tersoff. C60 collisions, small CNTs, and graphene patches run comfortably at 30+ FPS.
+1. **Phase 1 (60–720 atoms):** Achieved. InstancedMesh rendering and on-the-fly Tersoff run comfortably at 60+ FPS. Multi-molecule playground is live.
 
-2. **Phase 2 (300–2,000 atoms):** Requires viewer optimization (InstancedMesh + neighbor list for bonds) but the Wasm Tersoff engine should handle the simulation at 30+ FPS.
+2. **Phase 2 (720–2,400 atoms):** Achieved with current optimizations (InstancedMesh + cell-list + on-the-fly kernel). Smooth at 30+ FPS at the physics wall (~2,400 atoms estimated).
 
-3. **Phase 3 (2,000–10,000 atoms):** Requires both optimized rendering and a C/Wasm force engine. This is the frontier where desktop-grade molecular visualization meets browser constraints.
+3. **Phase 3 (2,400–5,000+ atoms):** Requires C/Wasm Tersoff kernel. The Wasm interface is simplified by the on-the-fly distance strategy (no N×N buffer copies needed).
 
-4. **Beyond 10,000 atoms:** Not practical for real-time browser MD. Pre-computed trajectories with stride-based playback (now supported in the viewer) are the viable approach.
+4. **Beyond 5,000 atoms:** Not practical for real-time browser MD. Pre-computed trajectories with stride-based playback (now supported in the viewer) are the viable approach.
 
 ## Collision Protocol Lessons
 

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NanoToybox — Cell-List Equivalence Validation</title>
+<style>
+body { font-family: monospace; background: #1a1a2e; color: #e8e8e8; padding: 20px; max-width: 1200px; }
+.pass { color: #50c050; } .fail { color: #e05050; }
+button { background: #334; color: #ccc; border: 1px solid #555; padding: 8px 16px; cursor: pointer; margin: 4px; }
+button:disabled { opacity: 0.4; }
+</style>
+</head>
+<body>
+<h2>Cell-List Equivalence Validation</h2>
+<p>Validates that cell-list neighbor/bond scans produce identical results to all-pairs scans.<br>
+Tests neighbor-set equivalence, bond-set equivalence, and component-equivalence preservation.</p>
+<div>
+  <button id="btn-run">Run Validation</button>
+</div>
+<div id="status" style="color:#60a0ff;"></div>
+<div id="results"></div>
+
+<script type="module">
+import { PhysicsEngine } from '../js/physics.js';
+import { buildScene } from './bench-scenes.js';
+import { CONFIG } from '../js/config.js';
+
+const status = document.getElementById('status');
+const results = document.getElementById('results');
+
+// Reference all-pairs neighbor scan (the old O(N²) implementation)
+function allPairsNeighborList(pos, n) {
+  const R_MAX = 1.95 + 0.15;
+  const cutoff2 = (R_MAX + 0.5) * (R_MAX + 0.5);
+  const arrays = new Array(n);
+  const counts = new Int32Array(n);
+  for (let i = 0; i < n; i++) arrays[i] = [];
+
+  for (let i = 0; i < n; i++) {
+    const ix = i * 3;
+    for (let j = i + 1; j < n; j++) {
+      const jx = j * 3;
+      const dx = pos[jx] - pos[ix], dy = pos[jx+1] - pos[ix+1], dz = pos[jx+2] - pos[ix+2];
+      const d2 = dx*dx + dy*dy + dz*dz;
+      if (d2 < cutoff2) {
+        arrays[i].push(j);
+        arrays[j].push(i);
+        counts[i]++;
+        counts[j]++;
+      }
+    }
+  }
+  return { arrays, counts };
+}
+
+// Reference all-pairs bond scan
+function allPairsBondList(pos, n) {
+  const cutoff = CONFIG.bonds.cutoff;
+  const minDist = CONFIG.bonds.minDist;
+  const bonds = [];
+  for (let i = 0; i < n; i++) {
+    const ix = i * 3;
+    for (let j = i + 1; j < n; j++) {
+      const jx = j * 3;
+      const dx = pos[jx]-pos[ix], dy = pos[jx+1]-pos[ix+1], dz = pos[jx+2]-pos[ix+2];
+      const d = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      if (d < cutoff && d > minDist) bonds.push([i, j]);
+    }
+  }
+  return bonds;
+}
+
+// Compare neighbor sets (order-independent)
+function compareNeighborSets(refArrays, refCounts, cellArrays, cellCounts, n) {
+  for (let i = 0; i < n; i++) {
+    if (refCounts[i] !== cellCounts[i]) {
+      return { pass: false, msg: `Atom ${i}: ref has ${refCounts[i]} neighbors, cell has ${cellCounts[i]}` };
+    }
+    const refSet = new Set(refArrays[i]);
+    for (let q = 0; q < cellCounts[i]; q++) {
+      if (!refSet.has(cellArrays[i][q])) {
+        return { pass: false, msg: `Atom ${i}: cell neighbor ${cellArrays[i][q]} not in ref set` };
+      }
+    }
+  }
+  return { pass: true, msg: 'All neighbor sets match' };
+}
+
+// Compare bond sets (order-independent)
+function compareBondSets(refBonds, cellBonds) {
+  if (refBonds.length !== cellBonds.length) {
+    return { pass: false, msg: `Bond count: ref=${refBonds.length}, cell=${cellBonds.length}` };
+  }
+  const refSet = new Set(refBonds.map(b => b[0] < b[1] ? `${b[0]}-${b[1]}` : `${b[1]}-${b[0]}`));
+  for (const b of cellBonds) {
+    const key = b[0] < b[1] ? `${b[0]}-${b[1]}` : `${b[1]}-${b[0]}`;
+    if (!refSet.has(key)) {
+      return { pass: false, msg: `Cell bond ${key} not in ref set` };
+    }
+  }
+  return { pass: true, msg: 'All bond sets match' };
+}
+
+// Compare component assignments (order-independent — same grouping, not same IDs)
+function compareComponents(compA, compB, n) {
+  // Build group maps
+  const groupsA = new Map(), groupsB = new Map();
+  for (let i = 0; i < n; i++) {
+    if (!groupsA.has(compA[i])) groupsA.set(compA[i], []);
+    groupsA.get(compA[i]).push(i);
+    if (!groupsB.has(compB[i])) groupsB.set(compB[i], []);
+    groupsB.get(compB[i]).push(i);
+  }
+  if (groupsA.size !== groupsB.size) {
+    return { pass: false, msg: `Component count: A=${groupsA.size}, B=${groupsB.size}` };
+  }
+  // A→B: each A-group maps consistently into B
+  for (const [, atoms] of groupsA) {
+    const bId = compB[atoms[0]];
+    for (const a of atoms) {
+      if (compB[a] !== bId) {
+        return { pass: false, msg: `Atom ${a}: in same A-component as ${atoms[0]}, but different B-components (${compB[a]} vs ${bId})` };
+      }
+    }
+  }
+  // B→A: each B-group maps consistently into A (symmetric check)
+  for (const [, atoms] of groupsB) {
+    const aId = compA[atoms[0]];
+    for (const a of atoms) {
+      if (compA[a] !== aId) {
+        return { pass: false, msg: `Atom ${a}: in same B-component as ${atoms[0]}, but different A-components (${compA[a]} vs ${aId})` };
+      }
+    }
+  }
+  return { pass: true, msg: 'All component groupings match' };
+}
+
+const TESTS = [
+  { target: 60, variant: 'compact', label: 'C60 (60 atoms)' },
+  { target: 720, variant: 'compact', label: 'C60 compact (720 atoms)' },
+  { target: 480, variant: 'sparse', label: 'C60 sparse (480 atoms)' },
+  { target: 504, variant: 'sheet', label: 'Graphene 6x6 (504 atoms)' },
+  { target: 1020, variant: 'compact', label: 'C60 compact (1020 atoms)' },
+];
+
+async function runValidation() {
+  const buttons = document.querySelectorAll('button');
+  buttons.forEach(b => b.disabled = true);
+  results.innerHTML = '';
+
+  let allPass = true;
+
+  for (const test of TESTS) {
+    status.textContent = `Testing ${test.label}...`;
+    await new Promise(r => setTimeout(r, 10));
+
+    const scene = await buildScene(test.target, test.variant);
+    const physics = new PhysicsEngine();
+    physics.init(scene.atoms, scene.bonds);
+
+    // Run 50 steps to evolve positions
+    for (let s = 0; s < 50; s++) physics.stepOnce();
+
+    const n = physics.n;
+    const pos = physics.pos;
+
+    // ─── Neighbor equivalence ───
+    const ref = allPairsNeighborList(pos, n);
+    physics.buildNeighborList();
+    const nResult = compareNeighborSets(ref.arrays, ref.counts, physics._nlArrays, physics._nlCounts, n);
+
+    // ─── Bond equivalence ───
+    const refBonds = allPairsBondList(pos, n);
+    physics.updateBondList();
+    const bResult = compareBondSets(refBonds, physics.bonds);
+
+    // ─── Component equivalence ───
+    // Rebuild from ref bonds vs cell bonds
+    physics.rebuildComponents();
+    const cellCompId = new Int32Array(physics.componentId);
+
+    // Rebuild from ref bonds manually
+    const parent = new Int32Array(n);
+    for (let i = 0; i < n; i++) parent[i] = i;
+    function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+    for (const [a, b] of refBonds) { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; }
+    const refCompId = new Int32Array(n);
+    for (let i = 0; i < n; i++) refCompId[i] = find(i);
+
+    const cResult = compareComponents(refCompId, cellCompId, n);
+
+    // Report
+    const div = document.createElement('div');
+    const nCls = nResult.pass ? 'pass' : 'fail';
+    const bCls = bResult.pass ? 'pass' : 'fail';
+    const cCls = cResult.pass ? 'pass' : 'fail';
+    div.innerHTML = `<h3>${test.label}</h3>
+      <p class="${nCls}">Neighbors: ${nResult.msg}</p>
+      <p class="${bCls}">Bonds: ${bResult.msg}</p>
+      <p class="${cCls}">Components: ${cResult.msg}</p>`;
+    results.appendChild(div);
+
+    if (!nResult.pass || !bResult.pass || !cResult.pass) allPass = false;
+  }
+
+  const summary = document.createElement('div');
+  summary.innerHTML = allPass
+    ? '<h2 class="pass">ALL TESTS PASSED</h2>'
+    : '<h2 class="fail">SOME TESTS FAILED</h2>';
+  results.appendChild(summary);
+
+  status.textContent = 'Done.';
+  buttons.forEach(b => b.disabled = false);
+}
+
+document.getElementById('btn-run').addEventListener('click', runValidation);
+</script>
+</body>
+</html>

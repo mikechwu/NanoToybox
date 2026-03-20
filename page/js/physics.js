@@ -301,6 +301,12 @@ export class PhysicsEngine {
     this._maxN = 0;
     this._nlArrays = null;  // Reusable neighbor list sub-arrays
     this._nlCounts = null;  // Int32Array tracking used length of each sub-array
+
+    // Cell-list spatial acceleration buffers (allocated on demand)
+    this._cellHead = null;
+    this._cellNext = null;
+    this._bondCellHead = null;
+    this._bondCellNext = null;
   }
 
   init(atoms, bonds) {
@@ -338,35 +344,117 @@ export class PhysicsEngine {
     this.rebuildComponents();
   }
 
+  /**
+   * Shared cell-grid construction. Computes bounding box, grid dimensions,
+   * assigns atoms to cells via linked-list insertion.
+   * @returns {{ cellHead, cellNext, nx, ny, nz, minX, minY, minZ, cellSide }} or null if n===0
+   */
+  _buildCellGrid(cellSide, headKey, nextKey) {
+    const p = this.pos;
+    const n = this.n;
+    if (n === 0) return null;
+
+    // Bounding box
+    let minX = p[0], minY = p[1], minZ = p[2];
+    let maxX = minX, maxY = minY, maxZ = minZ;
+    for (let i = 1; i < n; i++) {
+      const i3 = i * 3;
+      const x = p[i3], y = p[i3 + 1], z = p[i3 + 2];
+      if (x < minX) minX = x; else if (x > maxX) maxX = x;
+      if (y < minY) minY = y; else if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z; else if (z > maxZ) maxZ = z;
+    }
+
+    const nx = Math.max(1, Math.ceil((maxX - minX) / cellSide) + 1);
+    const ny = Math.max(1, Math.ceil((maxY - minY) / cellSide) + 1);
+    const nz = Math.max(1, Math.ceil((maxZ - minZ) / cellSide) + 1);
+    const nCells = nx * ny * nz;
+
+    // Allocate or reuse
+    if (!this[headKey] || this[headKey].length < nCells) {
+      this[headKey] = new Int32Array(nCells);
+      this[nextKey] = new Int32Array(Math.max(n, 64));
+    } else if (this[nextKey].length < n) {
+      this[nextKey] = new Int32Array(n);
+    }
+    const cellHead = this[headKey];
+    const cellNext = this[nextKey];
+    cellHead.fill(-1, 0, nCells);
+
+    // Assign atoms to cells
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      const cx = Math.floor((p[i3] - minX) / cellSide);
+      const cy = Math.floor((p[i3 + 1] - minY) / cellSide);
+      const cz = Math.floor((p[i3 + 2] - minZ) / cellSide);
+      const cellIdx = cx + cy * nx + cz * nx * ny;
+      cellNext[i] = cellHead[cellIdx];
+      cellHead[cellIdx] = i;
+    }
+
+    return { cellHead, cellNext, nx, ny, nz, minX, minY, minZ, cellSide };
+  }
+
+  /**
+   * Build neighbor list using cell-list spatial acceleration.
+   * O(N) construction + O(N × 27K) search instead of O(N²) all-pairs.
+   */
   buildNeighborList() {
     const counts = this._nlCounts;
     const arrays = this._nlArrays;
     counts.fill(0);
     const p = this.pos;
-    const cutoff2 = (R_MAX + 0.5) * (R_MAX + 0.5);
+    const n = this.n;
+    const cutoff = R_MAX + 0.5; // 2.60 Å
+    const cutoff2 = cutoff * cutoff;
 
-    for (let i = 0; i < this.n; i++) {
-      const ix = i * 3;
-      for (let j = i + 1; j < this.n; j++) {
-        const jx = j * 3;
-        const dx = p[jx] - p[ix];
-        const dy = p[jx + 1] - p[ix + 1];
-        const dz = p[jx + 2] - p[ix + 2];
-        const d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 < cutoff2) {
-          // Grow array if needed (doubling strategy)
-          if (counts[i] >= arrays[i].length) {
-            const old = arrays[i];
-            arrays[i] = new Int32Array(old.length * 2);
-            arrays[i].set(old);
+    const grid = this._buildCellGrid(cutoff, '_cellHead', '_cellNext');
+    if (!grid) { this.neighborList = arrays; return; }
+    const { cellHead, cellNext, nx, ny, nz, minX, minY, minZ, cellSide } = grid;
+
+    // ─── Search 27 neighboring cells for each atom ───
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      const px = p[i3], py = p[i3 + 1], pz = p[i3 + 2];
+      const cx = Math.floor((px - minX) / cellSide);
+      const cy = Math.floor((py - minY) / cellSide);
+      const cz = Math.floor((pz - minZ) / cellSide);
+
+      for (let dz = -1; dz <= 1; dz++) {
+        const gz = cz + dz;
+        if (gz < 0 || gz >= nz) continue;
+        for (let dy = -1; dy <= 1; dy++) {
+          const gy = cy + dy;
+          if (gy < 0 || gy >= ny) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const gx = cx + dx;
+            if (gx < 0 || gx >= nx) continue;
+            const cellIdx = gx + gy * nx + gz * nx * ny;
+            let j = cellHead[cellIdx];
+            while (j !== -1) {
+              if (j > i) {
+                const j3 = j * 3;
+                const ddx = p[j3] - px, ddy = p[j3 + 1] - py, ddz = p[j3 + 2] - pz;
+                const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+                if (d2 < cutoff2) {
+                  // Add to both i's and j's neighbor lists (symmetric)
+                  if (counts[i] >= arrays[i].length) {
+                    const old = arrays[i];
+                    arrays[i] = new Int32Array(old.length * 2);
+                    arrays[i].set(old);
+                  }
+                  arrays[i][counts[i]++] = j;
+                  if (counts[j] >= arrays[j].length) {
+                    const old = arrays[j];
+                    arrays[j] = new Int32Array(old.length * 2);
+                    arrays[j].set(old);
+                  }
+                  arrays[j][counts[j]++] = i;
+                }
+              }
+              j = cellNext[j];
+            }
           }
-          arrays[i][counts[i]++] = j;
-          if (counts[j] >= arrays[j].length) {
-            const old = arrays[j];
-            arrays[j] = new Int32Array(old.length * 2);
-            arrays[j].set(old);
-          }
-          arrays[j][counts[j]++] = i;
         }
       }
     }
@@ -527,26 +615,63 @@ export class PhysicsEngine {
     }
   }
 
+  /**
+   * Update bond list using cell-list spatial acceleration.
+   * Uses bond-specific cell side (1.8 Å) for tighter candidate density.
+   */
   updateBondList() {
+    const p = this.pos;
+    const n = this.n;
+    const bondCutoff = CONFIG.bonds.cutoff;
+    const bondCutoff2 = bondCutoff * bondCutoff;
+    const minDist = CONFIG.bonds.minDist;
+    const minDist2 = minDist * minDist;
     let count = 0;
-    for (let i = 0; i < this.n; i++) {
-      const ix = i * 3;
-      for (let j = i + 1; j < this.n; j++) {
-        const jx = j * 3;
-        const dx = this.pos[jx] - this.pos[ix];
-        const dy = this.pos[jx+1] - this.pos[ix+1];
-        const dz = this.pos[jx+2] - this.pos[ix+2];
-        const d = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        if (d < CONFIG.bonds.cutoff && d > CONFIG.bonds.minDist) {
-          // Reuse existing bond entry or push a new one
-          if (count < this.bonds.length) {
-            this.bonds[count][0] = i;
-            this.bonds[count][1] = j;
-            this.bonds[count][2] = d;
-          } else {
-            this.bonds.push([i, j, d]);
+
+    if (n === 0) { this.bonds.length = 0; return; }
+
+    const grid = this._buildCellGrid(bondCutoff, '_bondCellHead', '_bondCellNext');
+    if (!grid) { this.bonds.length = 0; return; }
+    const { cellHead, cellNext, nx, ny, nz, minX, minY, minZ, cellSide } = grid;
+
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      const px = p[i3], py = p[i3 + 1], pz = p[i3 + 2];
+      const cx = Math.floor((px - minX) / cellSide);
+      const cy = Math.floor((py - minY) / cellSide);
+      const cz = Math.floor((pz - minZ) / cellSide);
+
+      for (let ddz = -1; ddz <= 1; ddz++) {
+        const gz = cz + ddz;
+        if (gz < 0 || gz >= nz) continue;
+        for (let ddy = -1; ddy <= 1; ddy++) {
+          const gy = cy + ddy;
+          if (gy < 0 || gy >= ny) continue;
+          for (let ddx = -1; ddx <= 1; ddx++) {
+            const gx = cx + ddx;
+            if (gx < 0 || gx >= nx) continue;
+            const cellIdx = gx + gy * nx + gz * nx * ny;
+            let j = cellHead[cellIdx];
+            while (j !== -1) {
+              if (j > i) {
+                const j3 = j * 3;
+                const dx = p[j3] - px, dy = p[j3 + 1] - py, dz = p[j3 + 2] - pz;
+                const d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 < bondCutoff2 && d2 > minDist2) {
+                  const d = Math.sqrt(d2);
+                  if (count < this.bonds.length) {
+                    this.bonds[count][0] = i;
+                    this.bonds[count][1] = j;
+                    this.bonds[count][2] = d;
+                  } else {
+                    this.bonds.push([i, j, d]);
+                  }
+                  count++;
+                }
+              }
+              j = cellNext[j];
+            }
           }
-          count++;
         }
       }
     }
@@ -828,6 +953,10 @@ export class PhysicsEngine {
     this._maxN = 0;
     this._nlArrays = null;
     this._nlCounts = null;
+    this._cellHead = null;
+    this._cellNext = null;
+    this._bondCellHead = null;
+    this._bondCellNext = null;
     this.componentId = null;
     this.components = [];
   }

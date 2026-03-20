@@ -30,7 +30,7 @@ python3 -m http.server 8000
 | Interact modes | Atom (drag single atom), Move (translate connected component), Rotate (torque on component) |
 | Camera | Right-drag = orbit, scroll = zoom (OrbitControls, always active) |
 | Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame, component-aware forces |
-| Rendering | MeshStandardMaterial (PBR), camera-relative 4-light rig, axis triad |
+| Rendering | InstancedMesh (2 draw calls for atoms+bonds), MeshStandardMaterial (PBR), camera-relative 4-light rig, axis triad |
 | Themes | Dark (default) / Light |
 | Advanced | Adjustable drag strength, rotation strength, damping, and speed |
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
@@ -81,7 +81,8 @@ The control bar has a three-way mode selector: **Atom** | **Move** | **Rotate**.
 
 The page runs a full analytical Tersoff (1988) potential in JavaScript:
 - Same parameters and algorithm as the Python reference (`sim/potentials/tersoff.py`)
-- Optimized with flat `Float64Array` caches (no Map overhead)
+- On-the-fly distance computation — no N×N distance/unit-vector cache (benchmarked 45% faster than cached at 2040 atoms, eliminates 127 MB memory)
+- Cell-list spatial acceleration for neighbor and bond detection (O(N) instead of O(N²) all-pairs)
 - Neighbor list rebuilt every 10 steps
 - Velocity Verlet integration with proper eV/Å → Å/fs² unit conversion
 - **NVE by default** — no artificial damping; energy injected by user persists as thermal vibration. User-adjustable damping available (0 = NVE, up to 0.5 = heavy viscous drag, cubic slider scale)
@@ -94,14 +95,16 @@ The page runs a full analytical Tersoff (1988) potential in JavaScript:
 
 ```
 page/index.html
-  └── js/main.js (entry point, frame loop)
+  └── js/main.js (entry point, frame loop, atom-source abstraction)
         ├── loader.js       → fetch manifest.json + XYZ → atoms + bonds
-        ├── physics.js      → Tersoff forces, Verlet integration, drag/rotate
+        ├── physics.js      → Tersoff forces (on-the-fly distances), cell-list neighbor/bond,
+        │                      Verlet integration, drag/rotate, Union-Find components
         ├── state-machine.js → interaction states (idle/hover/drag/move/rotate)
-        ├── input.js        → mouse/touch → raycasting → state machine events
-        ├── renderer.js     → Three.js scene, materials, lighting, axis triad
+        ├── input.js        → mouse/touch → raycasting via atom-source → state machine events
+        ├── renderer.js     → InstancedMesh atoms/bonds, highlight overlay, axis triad
         ├── fps-monitor.js  → frame time measurement
         └── themes.js       → dark/light definitions
+  └── bench/                → performance benchmarks and validation
 ```
 
 ### Module Contracts
@@ -112,8 +115,8 @@ Each page module has defined ownership boundaries:
 |--------|------|----------|----------|
 | `config.js` | All tuning constants, thresholds, defaults | — | `CONFIG` object imported by all modules |
 | `physics.js` | Atom positions, velocities, forces, Tersoff computation | Drag/move/rotate targets, damping setting from main.js | Positions, bonds, KE via getter methods |
-| `renderer.js` | Three.js scene, meshes, lighting, axis triad | Positions from physics, theme from main.js | Canvas element, atom mesh array for raycasting |
-| `input.js` | Event handling, raycasting, screen-to-world projection | Mesh array + camera from renderer | Atom index + screen coords via callbacks |
+| `renderer.js` | Three.js scene, InstancedMesh atoms/bonds, lighting, axis triad, highlight overlay | Positions from physics.pos, theme from main.js | Canvas element, instancedAtoms for raycasting, getAtomWorldPosition(idx, out) API |
+| `input.js` | Event handling, raycasting, screen-to-world projection | Atom-source abstraction (count, getWorldPosition, raycastTarget) + camera from renderer | Atom index + screen coords via callbacks |
 | `state-machine.js` | Interaction state transitions (IDLE→DRAG/MOVE/ROTATE→IDLE etc.) | Pointer events + resolved mode from main.js | Commands dispatched to main.js |
 | `loader.js` | XYZ parsing, manifest fetching, bond topology | Library path from config | `{ atoms, bonds }` data |
 | `main.js` | App lifecycle, session state, command dispatch, UI wiring | Everything above | Orchestration (no direct exports) |
@@ -128,6 +131,7 @@ Each page module has defined ownership boundaries:
 ### Technology
 
 - Three.js v0.170 (CDN, ES modules via importmap)
+- InstancedMesh for atoms and bonds (2 draw calls, geometric capacity growth)
 - OrbitControls for camera (right-click orbit, scroll zoom)
 - Custom axis triad (ArrowHelper + sprites, scissor-test viewport)
 - MeshStandardMaterial with roughness 0.7, metalness 0 (PBR)
@@ -175,11 +179,14 @@ For trajectory playback of large structures, use high stride values (20–100).
 
 ---
 
-## Future Optimization
+## Optimization Status
 
-For real-time simulation beyond ~300 atoms:
+| Optimization | Status | Impact |
+|-------------|--------|--------|
+| **InstancedMesh** | Done | Draw calls reduced from N+bonds to 2. Geometric capacity growth, active-instance compaction for bonds. |
+| **On-the-fly Tersoff** | Done | 45% faster kernel at 2040 atoms. Eliminates 127 MB N×N distance cache. |
+| **Cell-list neighbor/bond** | Done | O(N) instead of O(N²) for neighbor and bond detection. Shared `_buildCellGrid` helper. |
+| **C/Wasm Tersoff** | Pending | Simplified by on-the-fly kernel (no distBuf/rhatBuf in interface). |
+| **Web Workers** | Pending | Secondary architecture direction — improves responsiveness, not throughput. |
 
-1. **InstancedMesh** — reduce draw calls from N+bonds to 2
-2. **Cell-list neighbor search** — reduce bond detection from O(N²) to O(N)
-3. **C/Wasm Tersoff** — 5–10x speedup over JavaScript for force computation
-4. **Web Workers** — offload physics to a separate thread
+Benchmark scripts are in `page/bench/`. Run via local server to collect data.
