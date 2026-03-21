@@ -37,6 +37,11 @@ const C2_D2 = C2 / D2;
 const HALF_PI_OVER_D = Math.PI / (2 * D_CUT);
 const INV_2N = -1.0 / (2.0 * T_N);
 
+// ─── Spatial hash function (Teschner et al. 2003) ───
+function _hashCell(cx, cy, cz, tableSize) {
+  return (((cx * 73856093) ^ (cy * 19349663) ^ (cz * 83492791)) & 0x7FFFFFFF) % tableSize;
+}
+
 // ─── Interaction parameters ───
 const F_MAX = CONFIG.physics.fMax;
 const V_HARD_MAX = CONFIG.physics.vHardMax;
@@ -384,114 +389,87 @@ export class PhysicsEngine {
    * assigns atoms to cells via linked-list insertion.
    * @returns {{ cellHead, cellNext, nx, ny, nz, minX, minY, minZ, cellSide }} or null if n===0
    */
-  _buildCellGrid(cellSide, headKey, nextKey) {
+  /**
+   * Spatial hash construction. O(N) time and O(N) memory regardless of domain extent.
+   * Replaces the dense cell grid to avoid cubic blowup when atoms spread apart.
+   * Uses Teschner et al. (2003) hash function with 3-pass compact layout (Müller).
+   *
+   * @returns {{ counts, offsets, atoms, cells, tableSize, cellSide }} or null if n===0
+   */
+  _buildCellGrid(cellSide, headKey, _nextKey) {
     const p = this.pos;
     const n = this.n;
     if (n === 0) return null;
 
-    // Bounding box
-    let minX = p[0], minY = p[1], minZ = p[2];
-    let maxX = minX, maxY = minY, maxZ = minZ;
-    for (let i = 1; i < n; i++) {
-      const i3 = i * 3;
-      const x = p[i3], y = p[i3 + 1], z = p[i3 + 2];
-      if (x < minX) minX = x; else if (x > maxX) maxX = x;
-      if (y < minY) minY = y; else if (y > maxY) maxY = y;
-      if (z < minZ) minZ = z; else if (z > maxZ) maxZ = z;
-    }
+    const tableSize = Math.max(n * 2, 64);
+    const prefix = headKey;
 
-    const nx = Math.max(1, Math.ceil((maxX - minX) / cellSide) + 1);
-    const ny = Math.max(1, Math.ceil((maxY - minY) / cellSide) + 1);
-    const nz = Math.max(1, Math.ceil((maxZ - minZ) / cellSide) + 1);
-    const nCells = nx * ny * nz;
-
-    // Allocate or reuse
-    if (!this[headKey] || this[headKey].length < nCells) {
-      const _th = this._bench ? performance.now() : 0;
-      this[headKey] = new Int32Array(nCells);
+    // Grow-only allocation — O(N) arrays, independent of domain extent
+    if (!this[headKey + '_hashCounts'] || this[headKey + '_hashSize'] < tableSize) {
+      const _tg = this._bench ? performance.now() : 0;
+      this[headKey + '_hashCounts'] = new Int32Array(tableSize);
+      this[headKey + '_hashOffsets'] = new Int32Array(tableSize);
+      this[headKey + '_hashRunning'] = new Int32Array(tableSize);
+      this[headKey + '_hashSize'] = tableSize;
       if (this._bench) {
-        const prefix = headKey;
-        const dh = performance.now() - _th;
-        this._bench[prefix + '_growMs'] = (this._bench[prefix + '_growMs'] || 0) + dh;
-        this._bench[prefix + '_headGrowMs'] = (this._bench[prefix + '_headGrowMs'] || 0) + dh;
-        this._bench[prefix + '_reallocCount'] = (this._bench[prefix + '_reallocCount'] || 0) + 1;
-      }
-      const _tn2 = this._bench ? performance.now() : 0;
-      this[nextKey] = new Int32Array(Math.max(n, 64));
-      if (this._bench) {
-        const prefix = headKey;
-        const dn = performance.now() - _tn2;
-        this._bench[prefix + '_growMs'] = (this._bench[prefix + '_growMs'] || 0) + dn;
-        this._bench[prefix + '_nextGrowMs'] = (this._bench[prefix + '_nextGrowMs'] || 0) + dn;
-      }
-      this[headKey + '_touchedN'] = 0;
-    } else if (this[nextKey].length < n) {
-      const _tn = this._bench ? performance.now() : 0;
-      this[nextKey] = new Int32Array(n);
-      if (this._bench) {
-        const prefix = headKey;
-        const dt = performance.now() - _tn;
+        const dt = performance.now() - _tg;
         this._bench[prefix + '_growMs'] = (this._bench[prefix + '_growMs'] || 0) + dt;
-        this._bench[prefix + '_nextGrowMs'] = (this._bench[prefix + '_nextGrowMs'] || 0) + dt;
         this._bench[prefix + '_reallocCount'] = (this._bench[prefix + '_reallocCount'] || 0) + 1;
       }
     }
-    const cellHead = this[headKey];
-    const cellNext = this[nextKey];
-    // Touched-cell tracking: per grid family, keyed by headKey
-    const touchedKey = headKey + '_touched';
-    const touchedCountKey = headKey + '_touchedN';
-    if (!this[touchedKey] || this[touchedKey].length < n) {
-      const _tt = this._bench ? performance.now() : 0;
-      this[touchedKey] = new Int32Array(Math.max(n, 64));
-      this[touchedCountKey] = 0;
+    if (!this[headKey + '_hashAtoms'] || this[headKey + '_hashAtoms'].length < n) {
+      const _ta = this._bench ? performance.now() : 0;
+      this[headKey + '_hashAtoms'] = new Int32Array(Math.max(n, 64));
+      this[headKey + '_hashCells'] = new Int32Array(Math.max(n * 3, 192));
       if (this._bench) {
-        const prefix = headKey;
-        const dt = performance.now() - _tt;
+        const dt = performance.now() - _ta;
         this._bench[prefix + '_growMs'] = (this._bench[prefix + '_growMs'] || 0) + dt;
-        this._bench[prefix + '_touchedGrowMs'] = (this._bench[prefix + '_touchedGrowMs'] || 0) + dt;
         this._bench[prefix + '_reallocCount'] = (this._bench[prefix + '_reallocCount'] || 0) + 1;
       }
     }
 
-    // Clear only previously occupied cells (O(N) instead of O(nCells))
-    const touched = this[touchedKey];
-    const prevCount = this[touchedCountKey] || 0;
+    const counts = this[headKey + '_hashCounts'];
+    const offsets = this[headKey + '_hashOffsets'];
+    const running = this[headKey + '_hashRunning'];
+    const atoms = this[headKey + '_hashAtoms'];
+    const cells = this[headKey + '_hashCells'];
+
     const _bt0 = this._bench ? performance.now() : 0;
-    if (prevCount === 0) {
-      cellHead.fill(-1, 0, nCells);
-    } else {
-      for (let t = 0; t < prevCount; t++) {
-        cellHead[touched[t]] = -1;
-      }
-    }
-    let touchedCount = 0;
-    if (this._bench) {
-      const prefix = headKey;
-      this._bench[prefix + '_clearMs'] = (this._bench[prefix + '_clearMs'] || 0) + (performance.now() - _bt0);
-    }
-    const _bt1 = this._bench ? performance.now() : 0;
 
-    // Assign atoms to cells
+    // Pass 1: compute cell coords and count per hash bucket
+    counts.fill(0, 0, tableSize);
+    const invCS = 1.0 / cellSide;
     for (let i = 0; i < n; i++) {
       const i3 = i * 3;
-      const cx = Math.floor((p[i3] - minX) / cellSide);
-      const cy = Math.floor((p[i3 + 1] - minY) / cellSide);
-      const cz = Math.floor((p[i3 + 2] - minZ) / cellSide);
-      const cellIdx = cx + cy * nx + cz * nx * ny;
-      if (cellHead[cellIdx] === -1) {
-        touched[touchedCount++] = cellIdx;
-      }
-      cellNext[i] = cellHead[cellIdx];
-      cellHead[cellIdx] = i;
-    }
-    this[touchedCountKey] = touchedCount;
-    if (this._bench) {
-      const prefix = headKey;
-      this._bench[prefix + '_insertMs'] = (this._bench[prefix + '_insertMs'] || 0) + (performance.now() - _bt1);
+      const cx = Math.floor(p[i3] * invCS);
+      const cy = Math.floor(p[i3 + 1] * invCS);
+      const cz = Math.floor(p[i3 + 2] * invCS);
+      cells[i3] = cx; cells[i3 + 1] = cy; cells[i3 + 2] = cz;
+      const h = _hashCell(cx, cy, cz, tableSize);
+      counts[h]++;
     }
 
-    return { cellHead, cellNext, nx, ny, nz, minX, minY, minZ, cellSide };
+    // Pass 2: prefix sum → offsets
+    offsets[0] = 0;
+    for (let h = 1; h < tableSize; h++) {
+      offsets[h] = offsets[h - 1] + counts[h - 1];
+    }
+
+    // Pass 3: scatter atoms into sorted order
+    running.fill(0, 0, tableSize);
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      const h = _hashCell(cells[i3], cells[i3 + 1], cells[i3 + 2], tableSize);
+      atoms[offsets[h] + running[h]] = i;
+      running[h]++;
+    }
+
+    if (this._bench) {
+      this._bench[prefix + '_clearMs'] = (this._bench[prefix + '_clearMs'] || 0) + 0; // no fill cost in spatial hash
+      this._bench[prefix + '_insertMs'] = (this._bench[prefix + '_insertMs'] || 0) + (performance.now() - _bt0);
+    }
+
+    return { counts, offsets, atoms, cells, tableSize, cellSide };
   }
 
   /**
@@ -507,51 +485,49 @@ export class PhysicsEngine {
     const cutoff = R_MAX + 0.5; // 2.60 Å
     const cutoff2 = cutoff * cutoff;
 
-    const grid = this._buildCellGrid(cutoff, '_cellHead', '_cellNext');
-    if (!grid) { this.neighborList = arrays; return; }
-    const { cellHead, cellNext, nx, ny, nz, minX, minY, minZ, cellSide } = grid;
+    const hash = this._buildCellGrid(cutoff, '_cellHead', '_cellNext');
+    if (!hash) { this.neighborList = arrays; return; }
+    const { counts: hCounts, offsets, atoms: hAtoms, cells, tableSize, cellSide } = hash;
+    const invCS = 1.0 / cellSide;
 
-    // ─── Search 27 neighboring cells for each atom ───
+    // ─── Search 27 neighboring cells via spatial hash for each atom ───
     for (let i = 0; i < n; i++) {
       const i3 = i * 3;
       const px = p[i3], py = p[i3 + 1], pz = p[i3 + 2];
-      const cx = Math.floor((px - minX) / cellSide);
-      const cy = Math.floor((py - minY) / cellSide);
-      const cz = Math.floor((pz - minZ) / cellSide);
+      const cx = cells[i3], cy = cells[i3 + 1], cz = cells[i3 + 2];
 
       for (let dz = -1; dz <= 1; dz++) {
-        const gz = cz + dz;
-        if (gz < 0 || gz >= nz) continue;
+        const ncz = cz + dz;
         for (let dy = -1; dy <= 1; dy++) {
-          const gy = cy + dy;
-          if (gy < 0 || gy >= ny) continue;
+          const ncy = cy + dy;
           for (let dx = -1; dx <= 1; dx++) {
-            const gx = cx + dx;
-            if (gx < 0 || gx >= nx) continue;
-            const cellIdx = gx + gy * nx + gz * nx * ny;
-            let j = cellHead[cellIdx];
-            while (j !== -1) {
-              if (j > i) {
-                const j3 = j * 3;
-                const ddx = p[j3] - px, ddy = p[j3 + 1] - py, ddz = p[j3 + 2] - pz;
-                const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
-                if (d2 < cutoff2) {
-                  // Add to both i's and j's neighbor lists (symmetric)
-                  if (counts[i] >= arrays[i].length) {
-                    const old = arrays[i];
-                    arrays[i] = new Int32Array(old.length * 2);
-                    arrays[i].set(old);
-                  }
-                  arrays[i][counts[i]++] = j;
-                  if (counts[j] >= arrays[j].length) {
-                    const old = arrays[j];
-                    arrays[j] = new Int32Array(old.length * 2);
-                    arrays[j].set(old);
-                  }
-                  arrays[j][counts[j]++] = i;
+            const ncx = cx + dx;
+            const h = _hashCell(ncx, ncy, ncz, tableSize);
+            const start = offsets[h];
+            const end = start + hCounts[h];
+            for (let k = start; k < end; k++) {
+              const j = hAtoms[k];
+              // Filter hash collisions: verify exact cell match
+              if (cells[j * 3] !== ncx || cells[j * 3 + 1] !== ncy || cells[j * 3 + 2] !== ncz) continue;
+              if (j <= i) continue;
+              const j3 = j * 3;
+              const ddx = p[j3] - px, ddy = p[j3 + 1] - py, ddz = p[j3 + 2] - pz;
+              const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+              if (d2 < cutoff2) {
+                // Add to both i's and j's neighbor lists (symmetric)
+                if (counts[i] >= arrays[i].length) {
+                  const old = arrays[i];
+                  arrays[i] = new Int32Array(old.length * 2);
+                  arrays[i].set(old);
                 }
+                arrays[i][counts[i]++] = j;
+                if (counts[j] >= arrays[j].length) {
+                  const old = arrays[j];
+                  arrays[j] = new Int32Array(old.length * 2);
+                  arrays[j].set(old);
+                }
+                arrays[j][counts[j]++] = i;
               }
-              j = cellNext[j];
             }
           }
         }
@@ -843,46 +819,42 @@ export class PhysicsEngine {
 
     if (n === 0) { this.bonds.length = 0; return; }
 
-    const grid = this._buildCellGrid(bondCutoff, '_bondCellHead', '_bondCellNext');
-    if (!grid) { this.bonds.length = 0; return; }
-    const { cellHead, cellNext, nx, ny, nz, minX, minY, minZ, cellSide } = grid;
+    const hash = this._buildCellGrid(bondCutoff, '_bondCellHead', '_bondCellNext');
+    if (!hash) { this.bonds.length = 0; return; }
+    const { counts: hCounts, offsets, atoms: hAtoms, cells, tableSize, cellSide } = hash;
 
     for (let i = 0; i < n; i++) {
       const i3 = i * 3;
       const px = p[i3], py = p[i3 + 1], pz = p[i3 + 2];
-      const cx = Math.floor((px - minX) / cellSide);
-      const cy = Math.floor((py - minY) / cellSide);
-      const cz = Math.floor((pz - minZ) / cellSide);
+      const cx = cells[i3], cy = cells[i3 + 1], cz = cells[i3 + 2];
 
       for (let ddz = -1; ddz <= 1; ddz++) {
-        const gz = cz + ddz;
-        if (gz < 0 || gz >= nz) continue;
+        const ncz = cz + ddz;
         for (let ddy = -1; ddy <= 1; ddy++) {
-          const gy = cy + ddy;
-          if (gy < 0 || gy >= ny) continue;
+          const ncy = cy + ddy;
           for (let ddx = -1; ddx <= 1; ddx++) {
-            const gx = cx + ddx;
-            if (gx < 0 || gx >= nx) continue;
-            const cellIdx = gx + gy * nx + gz * nx * ny;
-            let j = cellHead[cellIdx];
-            while (j !== -1) {
-              if (j > i) {
-                const j3 = j * 3;
-                const dx = p[j3] - px, dy = p[j3 + 1] - py, dz = p[j3 + 2] - pz;
-                const d2 = dx * dx + dy * dy + dz * dz;
-                if (d2 < bondCutoff2 && d2 > minDist2) {
-                  const d = Math.sqrt(d2);
-                  if (count < this.bonds.length) {
-                    this.bonds[count][0] = i;
-                    this.bonds[count][1] = j;
-                    this.bonds[count][2] = d;
-                  } else {
-                    this.bonds.push([i, j, d]);
-                  }
-                  count++;
+            const ncx = cx + ddx;
+            const h = _hashCell(ncx, ncy, ncz, tableSize);
+            const start = offsets[h];
+            const end = start + hCounts[h];
+            for (let k = start; k < end; k++) {
+              const j = hAtoms[k];
+              if (cells[j * 3] !== ncx || cells[j * 3 + 1] !== ncy || cells[j * 3 + 2] !== ncz) continue;
+              if (j <= i) continue;
+              const j3 = j * 3;
+              const dx = p[j3] - px, dy = p[j3 + 1] - py, dz = p[j3 + 2] - pz;
+              const d2 = dx * dx + dy * dy + dz * dz;
+              if (d2 < bondCutoff2 && d2 > minDist2) {
+                const d = Math.sqrt(d2);
+                if (count < this.bonds.length) {
+                  this.bonds[count][0] = i;
+                  this.bonds[count][1] = j;
+                  this.bonds[count][2] = d;
+                } else {
+                  this.bonds.push([i, j, d]);
                 }
+                count++;
               }
-              j = cellNext[j];
             }
           }
         }

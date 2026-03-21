@@ -73,7 +73,7 @@ Measured with Numba JIT engine on desktop CPU. The force evaluation scales as t 
 
 ### Bottleneck 2: Three.js Rendering
 
-> **Update:** The interactive page now uses InstancedMesh (2 draw calls) and cell-list bond detection (O(N)). The estimates below apply to the **trajectory viewer** (`viewer/index.html`) which still uses individual meshes.
+> **Update:** The interactive page now uses InstancedMesh (2 draw calls) and spatial-hash bond detection (O(N)). The estimates below apply to the **trajectory viewer** (`viewer/index.html`) which still uses individual meshes.
 
 The trajectory viewer uses individual `THREE.Mesh` per atom and an O(N²) nested loop for bond detection. Estimated costs:
 
@@ -120,12 +120,12 @@ Collision trajectories are saved as XYZ files in `outputs/scaling_research/` and
 
 ## Practical Limits Summary
 
-> **Update (2026-03-19):** The interactive page (`page/`) now uses InstancedMesh rendering, on-the-fly Tersoff distances, and cell-list neighbor/bond search. The "unoptimized viewer" row below is historical. See `docs/viewer.md` for current optimization status. Browser benchmark data is in `page/bench/`.
+> **Update (2026-03-19):** The interactive page (`page/`) now uses InstancedMesh rendering, on-the-fly Tersoff distances, and spatial-hash neighbor/bond search. The "unoptimized viewer" row below is historical. See `docs/viewer.md` for current optimization status. Browser benchmark data is in `page/bench/`.
 
 | Configuration | Max Atoms (30 FPS) | Limiting Bottleneck |
 |---------------|-------------------:|---------------------|
 | ~~Unoptimized viewer~~ (historical) | ~~~250~~ | ~~O(N²) bond detection in JS~~ |
-| Current interactive page (InstancedMesh + cell-list + on-the-fly) | ~2,400 (estimated) | Tersoff kernel + O(N²) stages eliminated |
+| Current interactive page (InstancedMesh + spatial hash + on-the-fly) | ~2,400 (estimated) | Tersoff kernel + O(N²) stages eliminated |
 | Optimized viewer + Numba Tersoff (server) | ~2,100 | Tersoff force computation |
 | + C/Wasm Tersoff (est. 2–5x kernel) | ~3,000–5,000 | Remaining physics stages |
 
@@ -133,7 +133,7 @@ Collision trajectories are saved as XYZ files in `outputs/scaling_research/` and
 
 1. **Phase 1 (60–720 atoms):** Achieved. InstancedMesh rendering and on-the-fly Tersoff run comfortably at 60+ FPS. Multi-molecule playground is live.
 
-2. **Phase 2 (720–2,400 atoms):** Achieved with current optimizations (InstancedMesh + cell-list + on-the-fly kernel). Smooth at 30+ FPS at the physics wall (~2,400 atoms estimated).
+2. **Phase 2 (720–2,400 atoms):** Achieved with current optimizations (InstancedMesh + spatial hash + on-the-fly kernel). Smooth at 30+ FPS at the physics wall (~2,400 atoms estimated).
 
 3. **Phase 3 (2,400–5,000+ atoms):** C/Wasm Tersoff kernel deployed and enabled by default (~11% faster than JS JIT). Further gains require algorithmic improvements or Web Workers.
 

@@ -27,7 +27,7 @@ The long-term vision:
 
 Measured limits (see [scaling-research.md](scaling-research.md)):
 - Numba Tersoff: 30 FPS up to ~2,100 atoms; C/Wasm (browser): ~3,000–5,000 atoms (measured ~11% faster than JS JIT)
-- Interactive page (InstancedMesh + cell-list + Wasm): ~2,400 atoms at 30 FPS
+- Interactive page (InstancedMesh + spatial hash + Wasm): ~2,400 atoms at 30 FPS
 - Trajectory viewer (`viewer/`): ~250 atoms at 30 FPS (still O(N²) individual meshes)
 - Optimized viewer (InstancedMesh + neighbor list): ~5,000–10,000 atoms
 
@@ -79,7 +79,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - Multi-structure collision presets
 
 ### 3. Viewer Modernization
-- Port trajectory viewer (`viewer/index.html`) to InstancedMesh + cell-list
+- Port trajectory viewer (`viewer/index.html`) to InstancedMesh + spatial hash
 - Currently limited to ~250 atoms at 30 FPS due to individual meshes + O(N²) bonds
 
 ### 4. ML (Future, When Needed)

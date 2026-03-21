@@ -43,7 +43,7 @@ Build an immersive, interactive, scientifically accurate browser-based playgroun
 ## Current Status
 
 - **Interactive page: live** (`page/index.html`) — real-time Tersoff simulation in the browser with drag, rotate, multi-molecule playground, speed control, and advanced settings
-- **Performance optimized**: InstancedMesh rendering (2 draw calls), on-the-fly Tersoff kernel (45% faster), cell-list neighbor/bond search (O(N) instead of O(N²))
+- **Performance optimized**: InstancedMesh rendering (2 draw calls), on-the-fly Tersoff kernel (45% faster), spatial-hash neighbor/bond search (O(N) instead of O(N²))
 - Analytical Tersoff simulator: validated (8 tests pass) in Python, ported to JavaScript for browser
 - Structure library: 15 canonical relaxed structures (60–720 atoms)
 - Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)
@@ -51,6 +51,6 @@ Build an immersive, interactive, scientifically accurate browser-based playgroun
 - Scaling research: completed — real-time limit ~2,100 atoms (Numba)
 - Collision simulations: 8 verified scenarios with relaxed structures (120–3,600 atoms)
 - ML surrogate: explored, deferred (analytical is faster for target system sizes)
-- Performance benchmarks in `page/bench/` (physics, renderer, kernel, cell-list validation)
+- Performance benchmarks in `page/bench/` (physics, renderer, kernel, spatial-hash equivalence validation)
 - **Wasm Tersoff kernel**: deployed and enabled by default (~11% faster than JS JIT, automatic JS fallback)
 - **Next steps**: Web Workers for responsiveness, viewer modernization

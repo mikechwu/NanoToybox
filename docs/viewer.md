@@ -97,7 +97,7 @@ The page runs a full analytical Tersoff (1988) potential in JavaScript:
 page/index.html
   └── js/main.js (entry point, frame loop, atom-source abstraction)
         ├── loader.js       → fetch manifest.json + XYZ → atoms + bonds
-        ├── physics.js      → Tersoff forces (on-the-fly distances), cell-list neighbor/bond,
+        ├── physics.js      → Tersoff forces (on-the-fly distances), spatial-hash neighbor/bond,
         │                      Verlet integration, drag/rotate, Union-Find components
         ├── state-machine.js → interaction states (idle/hover/drag/move/rotate)
         ├── input.js        → mouse/touch → raycasting via atom-source → state machine events
@@ -109,7 +109,7 @@ page/index.html
         ├── bench-physics.html      — physics-only microbench
         ├── bench-render.html       — raw Three.js renderer test
         ├── bench-distance.html     — Tersoff kernel benchmark
-        ├── bench-celllist.html     — cell-list validation
+        ├── bench-celllist.html     — spatial-hash equivalence validation
         ├── bench-preWasm.html      — pre-Wasm evaluation suite
         ├── bench-kernel-profile.html — kernel stage profiling
         ├── bench-wasm.html         — Wasm kernel benchmarks
@@ -196,7 +196,7 @@ For trajectory playback of large structures, use high stride values (20–100).
 |-------------|--------|--------|
 | **InstancedMesh** | Done | Draw calls reduced from N+bonds to 2. Geometric capacity growth, active-instance compaction for bonds. |
 | **On-the-fly Tersoff** | Done | 45% faster kernel at 2040 atoms. Eliminates 127 MB N×N distance cache. |
-| **Cell-list neighbor/bond** | Done | O(N) instead of O(N²) for neighbor and bond detection. Shared `_buildCellGrid` helper. |
+| **Spatial-hash neighbor/bond** | Done | O(N) time and memory via Teschner hash, independent of domain extent. Shared `_buildCellGrid` helper. |
 | **C/Wasm Tersoff** | Done | ~11% faster than JS JIT. Enabled by default (config.js `useWasm: true`). CSR neighbor marshaling. Automatic JS fallback on load failure. |
 | **Web Workers** | Pending | Secondary architecture direction — improves responsiveness, not throughput. |
 

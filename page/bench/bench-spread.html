@@ -30,7 +30,8 @@ import { CONFIG } from '../js/config.js';
 import { buildScene } from './bench-scenes.js';
 
 const WARMUP = 50;
-const MEASURED = 200;
+const MEASURED_STATIC = 200;
+const MEASURED_DYNAMIC = 5000; // longer runs for dynamic cases to reach extreme spans
 
 const status = document.getElementById('status');
 const results = document.getElementById('results');
@@ -185,7 +186,42 @@ const CASES = [
       return { atoms: allAtoms, bonds: allBonds };
     },
   },
+  // ── Dynamic spread: positions drift apart each step ──
+  {
+    label: 'C60 dyn-spread',
+    build: (tA, tB, r) => buildSpreadScene(tA, tB, { copies: 1, targetSpan: null }),
+    dynamic: true,
+    driftRate: 0.05,  // Å/step per atom, random direction
+  },
+  {
+    label: '780 dyn-spread',
+    build: (tA, tB, r) => buildSpreadScene(tA, tB, { copies: 13, separation: 2 * r + 1 }),
+    dynamic: true,
+    driftRate: 0.05,
+  },
+  {
+    label: '780 dyn-spread fast',
+    build: (tA, tB, r) => buildSpreadScene(tA, tB, { copies: 13, separation: 2 * r + 1 }),
+    dynamic: true,
+    driftRate: 0.2,  // faster expansion, simulates rotation fling
+  },
 ];
+
+function applyDrift(engine, rate) {
+  const pos = engine.pos;
+  const n = engine.n;
+  for (let i = 0; i < n; i++) {
+    const i3 = i * 3;
+    // Drift each atom outward from COM
+    const dx = pos[i3] - engine._comX;
+    const dy = pos[i3+1] - engine._comY;
+    const dz = pos[i3+2] - engine._comZ;
+    const d = Math.sqrt(dx*dx + dy*dy + dz*dz) || 1;
+    pos[i3]   += rate * dx / d;
+    pos[i3+1] += rate * dy / d;
+    pos[i3+2] += rate * dz / d;
+  }
+}
 
 async function runBenchmark() {
   const btn = document.getElementById('btn-run');
@@ -216,6 +252,7 @@ async function runBenchmark() {
   thead.innerHTML = `<tr>
     <th class="label">Case</th>
     <th>N</th>
+    <th>iters</th>
     <th>computeForces<br>(ms/iter)</th>
     <th>nbrGrid<br>nCells</th>
     <th>bondGrid<br>nCells</th>
@@ -229,6 +266,7 @@ async function runBenchmark() {
     <th>bCellHead<br>reallocs</th>
     <th>cellHead<br>growMs</th>
     <th>bCellHead<br>growMs</th>
+    <th>finalSpan<br>(Å)</th>
   </tr>`;
   table.appendChild(thead);
   const tbody = document.createElement('tbody');
@@ -250,8 +288,18 @@ async function runBenchmark() {
     // Enable bench counters
     engine._bench = {};
 
+    // Compute COM for dynamic drift
+    let comX = 0, comY = 0, comZ = 0;
+    for (let i = 0; i < engine.n; i++) {
+      comX += engine.pos[i*3]; comY += engine.pos[i*3+1]; comZ += engine.pos[i*3+2];
+    }
+    engine._comX = comX / engine.n;
+    engine._comY = comY / engine.n;
+    engine._comZ = comZ / engine.n;
+
     // Warm-up: run computeForces with fixed positions
     for (let i = 0; i < WARMUP; i++) {
+      if (cs.dynamic) applyDrift(engine, cs.driftRate);
       engine.stepCount++;
       engine.computeForces();
       if (engine.stepCount % 20 === 0) {
@@ -265,9 +313,17 @@ async function runBenchmark() {
     let nbrRebuilds = 0;
     let bondRebuilds = 0;
 
-    // Measured iterations
+    // Measured iterations — dynamic cases run longer to reach extreme spans
+    const iters = cs.dynamic ? MEASURED_DYNAMIC : MEASURED_STATIC;
+    const SNAPSHOT_INTERVAL = 500; // for dynamic cases, snapshot every 500 iters
+    const snapshots = []; // periodic performance snapshots
+
     const t0 = performance.now();
-    for (let i = 0; i < MEASURED; i++) {
+    let windowStart = t0;
+    let windowIters = 0;
+
+    for (let i = 0; i < iters; i++) {
+      if (cs.dynamic) applyDrift(engine, cs.driftRate);
       engine.stepCount++;
       if (engine.stepCount % 10 === 0) nbrRebuilds++;
       engine.computeForces();
@@ -276,20 +332,68 @@ async function runBenchmark() {
         engine.rebuildComponents();
         bondRebuilds++;
       }
+      windowIters++;
+
+      // Periodic snapshot for dynamic cases
+      if (cs.dynamic && windowIters >= SNAPSHOT_INTERVAL) {
+        const now = performance.now();
+        const windowMs = now - windowStart;
+        const msPerStep = windowMs / windowIters;
+        // Compute span at this point
+        let sMax = 0;
+        if (engine.n > 0) {
+          let sx0 = engine.pos[0], sx1 = sx0, sy0 = engine.pos[1], sy1 = sy0, sz0 = engine.pos[2], sz1 = sz0;
+          for (let k = 1; k < engine.n; k++) {
+            const x = engine.pos[k*3], y = engine.pos[k*3+1], z = engine.pos[k*3+2];
+            if (x < sx0) sx0 = x; if (x > sx1) sx1 = x;
+            if (y < sy0) sy0 = y; if (y > sy1) sy1 = y;
+            if (z < sz0) sz0 = z; if (z > sz1) sz1 = z;
+          }
+          sMax = Math.max(sx1-sx0, sy1-sy0, sz1-sz0);
+        }
+        const nCellsNow = engine._cellHead_hashSize || 0;
+        const bCellsNow = engine._bondCellHead_hashSize || 0;
+        const simSpeed = (240 * 0.5 / 1000) / (msPerStep / 1000); // relative to 1x = 240 steps/sec
+        const psPerSec = 240 * 0.5e-3 * (1 / msPerStep) * 1000; // ps/s
+        snapshots.push({
+          step: i + 1,
+          msPerStep: msPerStep.toFixed(3),
+          simX: simSpeed.toFixed(2),
+          psPerSec: psPerSec.toFixed(3),
+          span: sMax.toFixed(0),
+          nbrCells: nCellsNow,
+          bondCells: bCellsNow,
+        });
+        windowStart = now;
+        windowIters = 0;
+      }
     }
     const elapsed = performance.now() - t0;
-    const msPerIter = elapsed / MEASURED;
+    const msPerIter = elapsed / iters;
+
+    // Compute final bounding span
+    let spanMax = 0;
+    if (engine.n > 0) {
+      let minX = engine.pos[0], maxX = minX, minY = engine.pos[1], maxY = minY, minZ = engine.pos[2], maxZ = minZ;
+      for (let i = 1; i < engine.n; i++) {
+        const x = engine.pos[i*3], y = engine.pos[i*3+1], z = engine.pos[i*3+2];
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+      }
+      spanMax = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+    }
 
     // Read grid sizes from allocated arrays
-    const nbrCells = engine._cellHead ? engine._cellHead.length : 0;
-    const bondCells = engine._bondCellHead ? engine._bondCellHead.length : 0;
+    const nbrCells = engine._cellHead_hashSize || 0;
+    const bondCells = engine._bondCellHead_hashSize || 0;
 
     // Read bench counters
     const b = engine._bench;
-    const cellClear = (b._cellHead_clearMs || 0) / MEASURED;
-    const cellInsert = (b._cellHead_insertMs || 0) / MEASURED;
-    const bCellClear = (b._bondCellHead_clearMs || 0) / MEASURED;
-    const bCellInsert = (b._bondCellHead_insertMs || 0) / MEASURED;
+    const cellClear = (b._cellHead_clearMs || 0) / iters;
+    const cellInsert = (b._cellHead_insertMs || 0) / iters;
+    const bCellClear = (b._bondCellHead_clearMs || 0) / iters;
+    const bCellInsert = (b._bondCellHead_insertMs || 0) / iters;
     const cellReallocs = b._cellHead_reallocCount || 0;
     const bCellReallocs = b._bondCellHead_reallocCount || 0;
     const cellGrowMs = (b._cellHead_growMs || 0);
@@ -299,6 +403,7 @@ async function runBenchmark() {
     row.innerHTML = `
       <td class="label">${cs.label}</td>
       <td>${scene.atoms.length}</td>
+      <td>${iters}</td>
       <td>${msPerIter.toFixed(3)}</td>
       <td>${nbrCells}</td>
       <td>${bondCells}</td>
@@ -311,11 +416,24 @@ async function runBenchmark() {
       <td>${cellReallocs}</td>
       <td>${bCellReallocs}</td>
       <td>${cellGrowMs.toFixed(3)}</td>
-      <td>${bCellGrowMs.toFixed(3)}</td>`;
+      <td>${bCellGrowMs.toFixed(3)}</td>
+      <td>${spanMax.toFixed(1)}</td>`;
     tbody.appendChild(row);
+
+    // For dynamic cases, output periodic snapshot table (pasteable text format)
+    if (cs.dynamic && snapshots.length > 0) {
+      const snapDiv = document.createElement('div');
+      snapDiv.style.margin = '8px 0 16px 0';
+      snapDiv.innerHTML = `<details><summary style="cursor:pointer;color:#60a0ff;">▸ ${cs.label} — periodic snapshots (${snapshots.length} windows)</summary>
+<pre style="font-size:12px;line-height:1.4;margin:4px 0;">step | ms/step | simX | ps/s   | span(Å) | nbrCells    | bondCells
+${snapshots.map(s =>
+  `${String(s.step).padStart(5)} | ${s.msPerStep.padStart(7)} | ${s.simX.padStart(4)}x | ${s.psPerSec.padStart(6)} | ${String(s.span).padStart(7)} | ${String(s.nbrCells).padStart(11)} | ${String(s.bondCells).padStart(11)}`
+).join('\n')}</pre></details>`;
+      tbody.parentElement.parentElement.insertBefore(snapDiv, tbody.parentElement.nextSibling);
+    }
   }
 
-  status.textContent = `Done. ${WARMUP} warm-up + ${MEASURED} measured iterations per case.`;
+  status.textContent = `Done. ${WARMUP} warm-up. Static: ${MEASURED_STATIC} iters, Dynamic: ${MEASURED_DYNAMIC} iters.`;
   btn.disabled = false;
 }
 
