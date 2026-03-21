@@ -83,14 +83,14 @@ function ensureBuffers(n, nlTotal) {
 /**
  * @returns {{ ok: boolean, csrMarshalMs: number }}
  */
-export function marshalCSR(csrOffsets, csrData, n, generation) {
+export function marshalCSR(csrOffsets, csrData, n, generation, totalNl) {
   const t0 = performance.now();
   try {
-    ensureBuffers(n, csrData.length);
+    ensureBuffers(n, totalNl);
     const offView = new Int32Array(wasmModule.HEAP32.buffer, wasmNlOffsets, n + 1);
     offView.set(csrOffsets);
-    const dataView = new Int32Array(wasmModule.HEAP32.buffer, wasmNlData, csrData.length);
-    dataView.set(csrData);
+    const dataView = new Int32Array(wasmModule.HEAP32.buffer, wasmNlData, totalNl);
+    dataView.set(csrData.subarray(0, totalNl));
     _marshaledCsrGeneration = generation;
     return { ok: true, csrMarshalMs: performance.now() - t0 };
   } catch (e) {

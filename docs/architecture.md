@@ -44,6 +44,7 @@ NanoToybox/
 │   │   ├── bench-preWasm.html    # Pre-Wasm evaluation suite (validation + profiling + scaling)
 │   │   ├── bench-kernel-profile.html  # Kernel stage profiling
 │   │   ├── bench-wasm.html       # Wasm kernel benchmarks
+│   │   ├── bench-spread.html     # Spread-domain sparse-grid benchmark (9-case span sweep)
 │   │   └── bench-scenes.js       # Shared scene generator
 │   ├── wasm/                     # Pre-built Wasm kernel (committed binaries)
 │   │   ├── tersoff.wasm          # Compiled C Tersoff kernel

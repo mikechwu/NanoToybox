@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NanoToybox — Spread-Domain Benchmark</title>
+<style>
+body { font-family: monospace; background: #1a1a2e; color: #e8e8e8; padding: 20px; max-width: 1200px; }
+table { border-collapse: collapse; margin: 10px 0; }
+th, td { border: 1px solid #444; padding: 4px 10px; text-align: right; }
+th { background: #223; }
+.label { text-align: left; }
+button { background: #334; color: #ccc; border: 1px solid #555; padding: 8px 16px; cursor: pointer; margin: 4px; }
+button:disabled { opacity: 0.4; }
+</style>
+</head>
+<body>
+<h2>Spread-Domain Benchmark</h2>
+<p>Measures step-time breakdown across spread configurations.<br>
+Fixed layouts (no integration) &mdash; calls <code>computeForces()</code> directly.<br>
+Kernel: <span id="kernel-label">auto</span></p>
+<div>
+  <button id="btn-run">Run Benchmark</button>
+</div>
+<div id="status" style="color:#60a0ff;"></div>
+<div id="results"></div>
+
+<script type="module">
+import { PhysicsEngine } from '../js/physics.js';
+import { CONFIG } from '../js/config.js';
+import { buildScene } from './bench-scenes.js';
+
+const WARMUP = 50;
+const MEASURED = 200;
+
+const status = document.getElementById('status');
+const results = document.getElementById('results');
+const kernelLabel = document.getElementById('kernel-label');
+
+// ── Kernel detection from URL ──
+const params = new URLSearchParams(location.search);
+let kernelParam = params.get('kernel');
+if (!kernelParam) kernelParam = 'js'; // default to js
+kernelLabel.textContent = kernelParam;
+
+// ── Spread scene builder ──
+// Takes a template scene (atoms + bonds) and produces a new scene with
+// positions scaled or replicated to achieve target spatial spread.
+
+function buildSpreadScene(templateAtoms, templateBonds, opts) {
+  const { copies = 1, separation = 0, scaleTo = null } = opts;
+
+  // Compute bounding info of template
+  let cx = 0, cy = 0, cz = 0;
+  for (const a of templateAtoms) { cx += a.x; cy += a.y; cz += a.z; }
+  cx /= templateAtoms.length; cy /= templateAtoms.length; cz /= templateAtoms.length;
+  let maxR = 0;
+  for (const a of templateAtoms) {
+    const d = Math.sqrt((a.x - cx) ** 2 + (a.y - cy) ** 2 + (a.z - cz) ** 2);
+    if (d > maxR) maxR = d;
+  }
+  const radius = maxR;
+
+  // Single-molecule scaling: scale coordinates so bounding box reaches scaleTo
+  if (copies === 1 && scaleTo !== null) {
+    // Current diameter (bounding box span)
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (const a of templateAtoms) {
+      if (a.x < minX) minX = a.x; if (a.x > maxX) maxX = a.x;
+      if (a.y < minY) minY = a.y; if (a.y > maxY) maxY = a.y;
+      if (a.z < minZ) minZ = a.z; if (a.z > maxZ) maxZ = a.z;
+    }
+    const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+    const scale = span > 0 ? scaleTo / span : 1;
+
+    const atoms = templateAtoms.map(a => ({
+      x: cx + (a.x - cx) * scale,
+      y: cy + (a.y - cy) * scale,
+      z: cz + (a.z - cz) * scale,
+    }));
+    // Bonds are index-based, topology preserved
+    const bonds = templateBonds.map(b => [b[0], b[1], b[2]]);
+    return { atoms, bonds };
+  }
+
+  // Multi-molecule: place copies along x-axis at given separation
+  const allAtoms = [];
+  const allBonds = [];
+  for (let c = 0; c < copies; c++) {
+    const ox = c * separation;
+    const offset = allAtoms.length;
+    for (const a of templateAtoms) {
+      allAtoms.push({ x: a.x - cx + ox, y: a.y - cy, z: a.z - cz });
+    }
+    for (const b of templateBonds) {
+      allBonds.push([b[0] + offset, b[1] + offset, b[2]]);
+    }
+  }
+  return { atoms: allAtoms, bonds: allBonds };
+}
+
+// ── Benchmark cases ──
+// Each case defines how to build its scene from the c60 template.
+const CASES = [
+  {
+    label: 'C60 compact',
+    build: (tA, tB, r) => buildSpreadScene(tA, tB, { copies: 1 }),
+  },
+  {
+    label: 'C60 spread 50A',
+    build: (tA, tB, r) => buildSpreadScene(tA, tB, { copies: 1, scaleTo: 50 }),
+  },
+  {
+    label: 'C60 spread 100A',
+    build: (tA, tB, r) => buildSpreadScene(tA, tB, { copies: 1, scaleTo: 100 }),
+  },
+  {
+    label: 'C60 spread 200A',
+    build: (tA, tB, r) => buildSpreadScene(tA, tB, { copies: 1, scaleTo: 200 }),
+  },
+  {
+    label: '2xC60 compact',
+    build: (tA, tB, r) => buildSpreadScene(tA, tB, { copies: 2, separation: 2 * r + 3 }),
+  },
+  {
+    label: '2xC60 100A apart',
+    build: (tA, tB, r) => buildSpreadScene(tA, tB, { copies: 2, separation: 100 }),
+  },
+  {
+    label: '2xC60 500A apart',
+    build: (tA, tB, r) => buildSpreadScene(tA, tB, { copies: 2, separation: 500 }),
+  },
+  {
+    label: '~1020 compact',
+    build: (tA, tB, r) => {
+      // 17 copies on a grid, tangent+1A spacing
+      const spacing = 2 * r + 1;
+      const gridSize = Math.ceil(Math.cbrt(17));
+      const allAtoms = [];
+      const allBonds = [];
+      // Center template
+      let cx = 0, cy = 0, cz = 0;
+      for (const a of tA) { cx += a.x; cy += a.y; cz += a.z; }
+      cx /= tA.length; cy /= tA.length; cz /= tA.length;
+      for (let c = 0; c < 17; c++) {
+        const ix = c % gridSize;
+        const iy = Math.floor(c / gridSize) % gridSize;
+        const iz = Math.floor(c / (gridSize * gridSize));
+        const ox = ix * spacing, oy = iy * spacing, oz = iz * spacing;
+        const offset = allAtoms.length;
+        for (const a of tA) {
+          allAtoms.push({ x: a.x - cx + ox, y: a.y - cy + oy, z: a.z - cz + oz });
+        }
+        for (const b of tB) {
+          allBonds.push([b[0] + offset, b[1] + offset, b[2]]);
+        }
+      }
+      return { atoms: allAtoms, bonds: allBonds };
+    },
+  },
+  {
+    label: '~1020 spread',
+    build: (tA, tB, r) => {
+      // 17 copies on a grid, 200A spacing
+      const spacing = 200;
+      const gridSize = Math.ceil(Math.cbrt(17));
+      const allAtoms = [];
+      const allBonds = [];
+      let cx = 0, cy = 0, cz = 0;
+      for (const a of tA) { cx += a.x; cy += a.y; cz += a.z; }
+      cx /= tA.length; cy /= tA.length; cz /= tA.length;
+      for (let c = 0; c < 17; c++) {
+        const ix = c % gridSize;
+        const iy = Math.floor(c / gridSize) % gridSize;
+        const iz = Math.floor(c / (gridSize * gridSize));
+        const ox = ix * spacing, oy = iy * spacing, oz = iz * spacing;
+        const offset = allAtoms.length;
+        for (const a of tA) {
+          allAtoms.push({ x: a.x - cx + ox, y: a.y - cy + oy, z: a.z - cz + oz });
+        }
+        for (const b of tB) {
+          allBonds.push([b[0] + offset, b[1] + offset, b[2]]);
+        }
+      }
+      return { atoms: allAtoms, bonds: allBonds };
+    },
+  },
+];
+
+async function runBenchmark() {
+  const btn = document.getElementById('btn-run');
+  btn.disabled = true;
+  results.innerHTML = '';
+
+  // Load c60 template via buildScene (single copy)
+  status.textContent = 'Loading C60 template...';
+  await new Promise(r => setTimeout(r, 10));
+  const base = await buildScene(60, 'compact');
+  const tAtoms = base.atoms;
+  const tBonds = base.bonds;
+
+  // Compute template bounding radius
+  let cx = 0, cy = 0, cz = 0;
+  for (const a of tAtoms) { cx += a.x; cy += a.y; cz += a.z; }
+  cx /= tAtoms.length; cy /= tAtoms.length; cz /= tAtoms.length;
+  let maxR = 0;
+  for (const a of tAtoms) {
+    const d = Math.sqrt((a.x - cx) ** 2 + (a.y - cy) ** 2 + (a.z - cz) ** 2);
+    if (d > maxR) maxR = d;
+  }
+  const templateRadius = maxR;
+
+  // Build results table
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  thead.innerHTML = `<tr>
+    <th class="label">Case</th>
+    <th>N</th>
+    <th>computeForces<br>(ms/iter)</th>
+    <th>nbrGrid<br>nCells</th>
+    <th>bondGrid<br>nCells</th>
+    <th>cellHead<br>clearMs/iter</th>
+    <th>cellHead<br>insertMs/iter</th>
+    <th>bondHead<br>clearMs/iter</th>
+    <th>bondHead<br>insertMs/iter</th>
+    <th>nbr<br>rebuilds</th>
+    <th>bond<br>rebuilds</th>
+    <th>cellHead<br>reallocs</th>
+    <th>bCellHead<br>reallocs</th>
+    <th>cellHead<br>growMs</th>
+    <th>bCellHead<br>growMs</th>
+  </tr>`;
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+  results.appendChild(table);
+
+  for (const cs of CASES) {
+    status.textContent = `Running: ${cs.label}...`;
+    await new Promise(r => setTimeout(r, 10));
+
+    const scene = cs.build(tAtoms, tBonds, templateRadius);
+    const engine = new PhysicsEngine();
+    engine.init(scene.atoms, scene.bonds);
+
+    // Force kernel via URL param (already handled by PhysicsEngine constructor
+    // reading location.search, but we set it explicitly to be safe)
+    engine._forceKernel = kernelParam;
+
+    // Enable bench counters
+    engine._bench = {};
+
+    // Warm-up: run computeForces with fixed positions
+    for (let i = 0; i < WARMUP; i++) {
+      engine.stepCount++;
+      engine.computeForces();
+      if (engine.stepCount % 20 === 0) {
+        engine.updateBondList();
+        engine.rebuildComponents();
+      }
+    }
+
+    // Reset bench counters for measurement
+    engine._bench = {};
+    let nbrRebuilds = 0;
+    let bondRebuilds = 0;
+
+    // Measured iterations
+    const t0 = performance.now();
+    for (let i = 0; i < MEASURED; i++) {
+      engine.stepCount++;
+      if (engine.stepCount % 10 === 0) nbrRebuilds++;
+      engine.computeForces();
+      if (engine.stepCount % 20 === 0) {
+        engine.updateBondList();
+        engine.rebuildComponents();
+        bondRebuilds++;
+      }
+    }
+    const elapsed = performance.now() - t0;
+    const msPerIter = elapsed / MEASURED;
+
+    // Read grid sizes from allocated arrays
+    const nbrCells = engine._cellHead ? engine._cellHead.length : 0;
+    const bondCells = engine._bondCellHead ? engine._bondCellHead.length : 0;
+
+    // Read bench counters
+    const b = engine._bench;
+    const cellClear = (b._cellHead_clearMs || 0) / MEASURED;
+    const cellInsert = (b._cellHead_insertMs || 0) / MEASURED;
+    const bCellClear = (b._bondCellHead_clearMs || 0) / MEASURED;
+    const bCellInsert = (b._bondCellHead_insertMs || 0) / MEASURED;
+    const cellReallocs = b._cellHead_reallocCount || 0;
+    const bCellReallocs = b._bondCellHead_reallocCount || 0;
+    const cellGrowMs = (b._cellHead_growMs || 0);
+    const bCellGrowMs = (b._bondCellHead_growMs || 0);
+
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td class="label">${cs.label}</td>
+      <td>${scene.atoms.length}</td>
+      <td>${msPerIter.toFixed(3)}</td>
+      <td>${nbrCells}</td>
+      <td>${bondCells}</td>
+      <td>${cellClear.toFixed(4)}</td>
+      <td>${cellInsert.toFixed(4)}</td>
+      <td>${bCellClear.toFixed(4)}</td>
+      <td>${bCellInsert.toFixed(4)}</td>
+      <td>${nbrRebuilds}</td>
+      <td>${bondRebuilds}</td>
+      <td>${cellReallocs}</td>
+      <td>${bCellReallocs}</td>
+      <td>${cellGrowMs.toFixed(3)}</td>
+      <td>${bCellGrowMs.toFixed(3)}</td>`;
+    tbody.appendChild(row);
+  }
+
+  status.textContent = `Done. ${WARMUP} warm-up + ${MEASURED} measured iterations per case.`;
+  btn.disabled = false;
+}
+
+document.getElementById('btn-run').addEventListener('click', runBenchmark);
+</script>
+</body>
+</html>

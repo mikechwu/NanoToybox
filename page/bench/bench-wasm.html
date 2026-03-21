@@ -59,7 +59,8 @@ function computeWithWasm(physics) {
   // Use the production path: build neighbor list → short list → CSR from short list
   physics.buildNeighborList();
   physics._buildShortNeighborList(); // builds short NL + CSR from current positions
-  marshalCSR(physics._csrOffsets, physics._csrData, physics.n, -999); // force remarshal
+  const marshalResult = marshalCSR(physics._csrOffsets, physics._csrData, physics.n, -999, physics._csrTotalNl);
+  if (!marshalResult.ok) throw new Error('CSR marshal failed');
   const result = callTersoff(physics.pos, force, physics.n);
   if (!result.ok) throw new Error('Wasm kernel call failed');
   return force;

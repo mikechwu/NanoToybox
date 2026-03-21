@@ -113,6 +113,7 @@ page/index.html
         ├── bench-preWasm.html      — pre-Wasm evaluation suite
         ├── bench-kernel-profile.html — kernel stage profiling
         ├── bench-wasm.html         — Wasm kernel benchmarks
+        ├── bench-spread.html       — spread-domain sparse-grid benchmark
         └── bench-scenes.js         — shared scene generator
 ```
 

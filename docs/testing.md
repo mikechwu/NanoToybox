@@ -178,6 +178,10 @@ python3 -m http.server 8000
 | 65 | Pause/resume visual update | Screen updates immediately on toggle (forced render) |
 | 66 | Placement enter/exit visual update | Screen updates immediately (forced render) |
 | 67 | Mobile: tap status area | Diagnostics (ms/fps) expand for ~5s, then collapse |
+| 68 | Drag atom far from molecule | Simulation stays responsive (no sparse-domain slowdown) |
+| 69 | Fragment molecule into scattered atoms | No FPS drop from spread atoms |
+| 70 | Two molecules placed far apart | Smooth interaction, no stutter |
+| 71 | Move molecules together and apart repeatedly | No stutter or memory growth |
 
 **Transaction rollback verification:**
 

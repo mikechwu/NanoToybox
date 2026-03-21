@@ -407,14 +407,70 @@ export class PhysicsEngine {
 
     // Allocate or reuse
     if (!this[headKey] || this[headKey].length < nCells) {
+      const _th = this._bench ? performance.now() : 0;
       this[headKey] = new Int32Array(nCells);
+      if (this._bench) {
+        const prefix = headKey;
+        const dh = performance.now() - _th;
+        this._bench[prefix + '_growMs'] = (this._bench[prefix + '_growMs'] || 0) + dh;
+        this._bench[prefix + '_headGrowMs'] = (this._bench[prefix + '_headGrowMs'] || 0) + dh;
+        this._bench[prefix + '_reallocCount'] = (this._bench[prefix + '_reallocCount'] || 0) + 1;
+      }
+      const _tn2 = this._bench ? performance.now() : 0;
       this[nextKey] = new Int32Array(Math.max(n, 64));
+      if (this._bench) {
+        const prefix = headKey;
+        const dn = performance.now() - _tn2;
+        this._bench[prefix + '_growMs'] = (this._bench[prefix + '_growMs'] || 0) + dn;
+        this._bench[prefix + '_nextGrowMs'] = (this._bench[prefix + '_nextGrowMs'] || 0) + dn;
+      }
+      this[headKey + '_touchedN'] = 0;
     } else if (this[nextKey].length < n) {
+      const _tn = this._bench ? performance.now() : 0;
       this[nextKey] = new Int32Array(n);
+      if (this._bench) {
+        const prefix = headKey;
+        const dt = performance.now() - _tn;
+        this._bench[prefix + '_growMs'] = (this._bench[prefix + '_growMs'] || 0) + dt;
+        this._bench[prefix + '_nextGrowMs'] = (this._bench[prefix + '_nextGrowMs'] || 0) + dt;
+        this._bench[prefix + '_reallocCount'] = (this._bench[prefix + '_reallocCount'] || 0) + 1;
+      }
     }
     const cellHead = this[headKey];
     const cellNext = this[nextKey];
-    cellHead.fill(-1, 0, nCells);
+    // Touched-cell tracking: per grid family, keyed by headKey
+    const touchedKey = headKey + '_touched';
+    const touchedCountKey = headKey + '_touchedN';
+    if (!this[touchedKey] || this[touchedKey].length < n) {
+      const _tt = this._bench ? performance.now() : 0;
+      this[touchedKey] = new Int32Array(Math.max(n, 64));
+      this[touchedCountKey] = 0;
+      if (this._bench) {
+        const prefix = headKey;
+        const dt = performance.now() - _tt;
+        this._bench[prefix + '_growMs'] = (this._bench[prefix + '_growMs'] || 0) + dt;
+        this._bench[prefix + '_touchedGrowMs'] = (this._bench[prefix + '_touchedGrowMs'] || 0) + dt;
+        this._bench[prefix + '_reallocCount'] = (this._bench[prefix + '_reallocCount'] || 0) + 1;
+      }
+    }
+
+    // Clear only previously occupied cells (O(N) instead of O(nCells))
+    const touched = this[touchedKey];
+    const prevCount = this[touchedCountKey] || 0;
+    const _bt0 = this._bench ? performance.now() : 0;
+    if (prevCount === 0) {
+      cellHead.fill(-1, 0, nCells);
+    } else {
+      for (let t = 0; t < prevCount; t++) {
+        cellHead[touched[t]] = -1;
+      }
+    }
+    let touchedCount = 0;
+    if (this._bench) {
+      const prefix = headKey;
+      this._bench[prefix + '_clearMs'] = (this._bench[prefix + '_clearMs'] || 0) + (performance.now() - _bt0);
+    }
+    const _bt1 = this._bench ? performance.now() : 0;
 
     // Assign atoms to cells
     for (let i = 0; i < n; i++) {
@@ -423,8 +479,16 @@ export class PhysicsEngine {
       const cy = Math.floor((p[i3 + 1] - minY) / cellSide);
       const cz = Math.floor((p[i3 + 2] - minZ) / cellSide);
       const cellIdx = cx + cy * nx + cz * nx * ny;
+      if (cellHead[cellIdx] === -1) {
+        touched[touchedCount++] = cellIdx;
+      }
       cellNext[i] = cellHead[cellIdx];
       cellHead[cellIdx] = i;
+    }
+    this[touchedCountKey] = touchedCount;
+    if (this._bench) {
+      const prefix = headKey;
+      this._bench[prefix + '_insertMs'] = (this._bench[prefix + '_insertMs'] || 0) + (performance.now() - _bt1);
     }
 
     return { cellHead, cellNext, nx, ny, nz, minX, minY, minZ, cellSide };
@@ -504,7 +568,8 @@ export class PhysicsEngine {
    * Build short neighbor list at exact Tersoff cutoff (R_MAX = 2.10 Å) from
    * current positions. Filters the skin-expanded list (2.60 Å) every step.
    * The kernel iterates this short list instead of the full skin list,
-   * eliminating ~52-67% wasted inner-loop iterations (measured Phase 0).
+   * eliminating ~52-67% wasted inner-loop iterations (measured on Phase 0 benchmark set;
+   * actual reduction depends on topology and neighbor density).
    */
   _buildShortNeighborList() {
     const p = this.pos;
@@ -553,6 +618,7 @@ export class PhysicsEngine {
     this._csrGeneration++;
     let totalNl = 0;
     for (let i = 0; i < n; i++) totalNl += shortCounts[i];
+    this._csrTotalNl = totalNl;
     // Reuse CSR arrays if large enough (avoid per-step allocation/GC pressure)
     if (!this._csrOffsets || this._csrOffsets.length < n + 1) {
       this._csrOffsets = new Int32Array(n + 1);
@@ -585,12 +651,14 @@ export class PhysicsEngine {
     // ── Tersoff kernel dispatch: Wasm if ready, JS fallback ──
     // ?kernel=js forces JS, ?kernel=wasm forces Wasm (fails if not ready)
     const useWasm = this._forceKernel !== 'js' && this._wasmReady && isReady();
+    let _csrMarshalThisStep = 0;
 
     if (useWasm) {
       // Ensure CSR is marshaled into Wasm memory
       if (!csrIsCurrent(this._csrGeneration)) {
-        const csrResult = marshalCSR(this._csrOffsets, this._csrData, this.n, this._csrGeneration);
+        const csrResult = marshalCSR(this._csrOffsets, this._csrData, this.n, this._csrGeneration, this._csrTotalNl);
         if (this._bench) this._bench.csrMarshalMs = (this._bench.csrMarshalMs || 0) + csrResult.csrMarshalMs;
+        _csrMarshalThisStep = csrResult.csrMarshalMs;
         if (!csrResult.ok) {
           // Marshal failed — fall back to JS for this step
           const t1 = this._bench ? performance.now() : 0;
@@ -614,7 +682,7 @@ export class PhysicsEngine {
         this._bench.wasmKernelMs = (this._bench.wasmKernelMs || 0) + timing.kernelMs;
         // Full Wasm path including CSR marshal on rebuild steps
         this._bench.wasmPathTotalMs = (this._bench.wasmPathTotalMs || 0) +
-          timing.pathMs + (this._bench.csrMarshalMs || 0);
+          timing.pathMs + _csrMarshalThisStep;
       }
     } else {
       const t1 = this._bench ? performance.now() : 0;
