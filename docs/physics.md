@@ -148,6 +148,25 @@ All four use identical Tersoff (1988) carbon parameters and produce consistent r
 
 The Wasm bridge (`tersoff-wasm.js`) marshals the short neighbor list in CSR format into Wasm memory. The marshal copies exactly `totalNl` live entries, not the full allocated capacity, to avoid stale-data overhead on every step.
 
+### Containment Boundary
+
+The interactive page applies a soft containment boundary to prevent atoms from expanding to arbitrarily large distances (which would degrade spatial hash and rendering performance).
+
+| Parameter | Config key | Default | Description |
+|-----------|-----------|---------|-------------|
+| Spring constant | `wall.springK` | 5.0 eV/Å² | Harmonic restoring force in Contain mode |
+| Target density | `wall.density` | 0.00005 atoms/ų | Determines wall radius from atom count |
+| Padding | `wall.padding` | 50 Å | Minimum clearance beyond density-derived radius |
+| Remove margin | `wall.removeMargin` | 10 Å | Extra distance past R_wall before removal |
+| Shrink hysteresis | `wall.shrinkHysteresis` | 2.0 | Only shrink if R_wall > target × this factor |
+| Recenter threshold | `wall.recenterThreshold` | 0.25 | Recenter wall after >25% atoms removed in one event |
+
+**Contain mode:** Harmonic wall force `F = -K × (r - R_wall)` for atoms beyond R_wall. Energy conservation maintained at O(dt²).
+
+**Remove mode:** No wall force. Atoms beyond R_wall + removeMargin are deleted. Post-removal: forces recomputed via JS Tersoff kernel (intentional slow-path to avoid CSR re-marshal). Wall radius shrinks with hysteresis; wall center recenters after large asymmetric removals.
+
+**Wall radius:** `R_wall = cbrt(3N / (4π × density)) + padding`. Monotonically increasing in Contain mode. In Remove mode, shrinks when `R_wall > target × shrinkHysteresis`. Resets on scene clear or when all atoms are removed.
+
 ### JavaScript Implementation Details
 
 The browser implementation (`page/js/physics.js`) includes several optimizations beyond a direct port:

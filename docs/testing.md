@@ -182,6 +182,13 @@ python3 -m http.server 8000
 | 69 | Fragment molecule into scattered atoms | No FPS drop from spread atoms |
 | 70 | Two molecules placed far apart | Smooth interaction, no stutter |
 | 71 | Move molecules together and apart repeatedly | No stutter or memory growth |
+| 72 | Contain mode: fling atom outward | Atom bounces back from invisible boundary, stays in scene |
+| 73 | Remove mode: fling atom outward | Atom deleted when it crosses boundary, atom count decreases |
+| 74 | Remove mode: fling fragment (bonded pair) | Both atoms in fragment deleted when past boundary |
+| 75 | Atom count display | Shows "N: 58 (2 removed)" after removal events |
+| 76 | Add molecule after Remove empties scene | Wall resets, new molecule gets fresh boundary |
+| 77 | Switch Contain → Remove during flight | Atom that was bouncing back now flies freely and gets deleted |
+| 78 | Boundary toggle in Advanced panel | Contain/Remove buttons toggle correctly, visual feedback |
 
 **Transaction rollback verification:**
 

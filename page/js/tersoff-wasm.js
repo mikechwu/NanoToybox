@@ -88,7 +88,7 @@ export function marshalCSR(csrOffsets, csrData, n, generation, totalNl) {
   try {
     ensureBuffers(n, totalNl);
     const offView = new Int32Array(wasmModule.HEAP32.buffer, wasmNlOffsets, n + 1);
-    offView.set(csrOffsets);
+    offView.set(csrOffsets.subarray(0, n + 1));
     const dataView = new Int32Array(wasmModule.HEAP32.buffer, wasmNlData, totalNl);
     dataView.set(csrData.subarray(0, totalNl));
     _marshaledCsrGeneration = generation;

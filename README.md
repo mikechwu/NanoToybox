@@ -27,6 +27,7 @@ Or visit the live demo at [mikechwu.github.io/NanoToybox](https://mikechwu.githu
 - **3D rendering** — PBR materials, camera-relative lighting, XYZ orientation axes
 - **NVE dynamics by default** — energy-conserving; molecules vibrate indefinitely after interaction. Adjustable damping slider (0 to heavy)
 - **Dark/Light themes** — full UI adaptation
+- **Containment boundary** — soft harmonic wall prevents atoms from flying to infinity. Boundary mode toggle: Contain (atoms bounce back) or Remove (atoms deleted when they escape). Live atom count display. Wall radius scales dynamically with atom count
 - **Works on desktop and mobile** — mouse and touch interaction
 - **No build step** — pure ES modules loaded via importmap from CDN (Wasm kernel pre-built; Emscripten needed only for kernel development)
 

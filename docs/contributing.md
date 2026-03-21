@@ -66,6 +66,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - On-the-fly Tersoff kernel — 45% faster than cached at 2040 atoms, eliminates 127 MB N×N cache (`page/js/physics.js`)
 - Cell-list spatial acceleration — O(N) neighbor and bond detection instead of O(N²) (`page/js/physics.js`)
 - C/Wasm Tersoff kernel — ~11% faster than JS JIT, enabled by default, automatic JS fallback (`page/wasm/`, `page/js/tersoff-wasm.js`)
+- Containment boundary — dynamic soft harmonic wall (`page/js/physics.js`), Contain/Remove toggle, live atom count, auto-scaling radius with hysteresis shrinkage
 
 ## Next Steps (Priority Order)
 

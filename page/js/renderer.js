@@ -760,6 +760,21 @@ export class Renderer {
     return this._atomCount;
   }
 
+  /** Update active atom count (e.g. after boundary removal compacts physics arrays). */
+  setAtomCount(n) {
+    this._atomCount = n;
+    if (this._instancedAtoms) {
+      this._instancedAtoms.count = n;
+      this._instancedAtoms.instanceMatrix.needsUpdate = true;
+    }
+    // Clear bond visuals when all atoms are removed
+    if (n === 0 && this._instancedBonds) {
+      this._instancedBonds.count = 0;
+      this._instancedBonds.instanceMatrix.needsUpdate = true;
+      this._activeBonds = 0;
+    }
+  }
+
   /** Debug info for instanced capacity monitoring. */
   getCapacityInfo() {
     return {

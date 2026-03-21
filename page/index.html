@@ -155,6 +155,7 @@ canvas { display: block; touch-action: none; }
     <button id="theme-toggle">Theme</button>
     <button id="btn-advanced">Advanced</button>
     <button id="btn-help-open">?</button>
+    <span id="atom-count" style="color:#8fd8b0; font-size:11px; font-variant-numeric:tabular-nums; margin-left:8px; opacity:0.7;"></span>
   </div>
   <!-- Structure drawer (opened by Add Molecule) -->
   <div id="structure-drawer" style="display:none; position:absolute; bottom:50px; left:12px;
@@ -222,6 +223,16 @@ canvas { display: block; touch-action: none; }
       <div style="display:flex; justify-content:space-between; margin-top:2px;">
         <span style="color:#555; font-size:9px;">NVE (conserve energy)</span>
         <span style="color:#555; font-size:9px;">Heavy drag</span>
+      </div>
+    </div>
+    <div style="margin-top:12px; margin-bottom:4px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+        <label style="color:#888; font-size:11px; text-transform:uppercase; letter-spacing:0.3px;">Boundary</label>
+        <span id="boundary-mode-val" style="color:#8fd8b0; font-size:11px;">Contain</span>
+      </div>
+      <div style="display:inline-flex; gap:0;">
+        <button class="boundary-btn active" data-boundary="contain" style="background:rgba(255,255,255,0.08); color:#ccc; border:1px solid rgba(255,255,255,0.12); padding:4px 12px; border-radius:4px 0 0 4px; cursor:pointer; font-size:11px;">Contain</button>
+        <button class="boundary-btn" data-boundary="remove" style="background:rgba(255,255,255,0.04); color:#888; border:1px solid rgba(255,255,255,0.08); padding:4px 12px; border-radius:0 4px 4px 0; cursor:pointer; font-size:11px;">Remove</button>
       </div>
     </div>
   </div>

@@ -45,6 +45,15 @@ export const CONFIG = {
     useWasm: true,          // Wasm Tersoff kernel (C + Emscripten, -O3 -ffast-math). ~11% faster than JS JIT. Override via ?kernel=js|wasm.
   },
 
+  wall: {
+    springK: 5.0,            // eV/Å² — wall spring constant (soft harmonic)
+    density: 0.00005,        // atoms/ų — target density for wall radius calculation
+    padding: 50,             // Å — minimum clearance beyond density-derived radius
+    removeMargin: 10,        // Å — extra distance past R_wall before atom removal (Remove mode)
+    shrinkHysteresis: 2.0,   // shrink wall only if R_wall > target × this factor (prevents flapping)
+    recenterThreshold: 0.25, // recenter wall when removal fraction exceeds this (0.25 = 25% of atoms removed in one event)
+  },
+
   playback: {
     baseStepsPerSecond: 240,  // canonical 1x = 240 steps/sec (independent of display refresh)
     minSpeed: 0.5,

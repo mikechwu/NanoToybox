@@ -252,6 +252,21 @@ async function init() {
     else dampVal.textContent = damping.toFixed(3);
   });
 
+  // ── Boundary mode toggle ──
+  document.querySelectorAll('.boundary-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.boundary;
+      physics.setWallMode(mode);
+      document.querySelectorAll('.boundary-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.boundary === mode);
+        b.style.background = b.dataset.boundary === mode ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)';
+        b.style.color = b.dataset.boundary === mode ? '#ccc' : '#888';
+      });
+      document.getElementById('boundary-mode-val').textContent =
+        mode === 'contain' ? 'Contain' : 'Remove';
+    });
+  });
+
   // Pause button
   const pauseBtn = document.getElementById('btn-pause');
   if (pauseBtn) {
@@ -537,6 +552,8 @@ function commitMolecule(filename, name, atoms, bonds, offset) {
       x: a.x + offset[0], y: a.y + offset[1], z: a.z + offset[2]
     }));
     renderer.appendMeshes(offsetAtoms);
+    physics.updateWallCenter(atoms, offset);
+    physics.updateWallRadius();
   } catch (e) {
     // Rollback physics to pre-append state
     physics.n = oldN;
@@ -1277,6 +1294,14 @@ function frameLoop(timestamp) {
 
     // Update positions + feedback (every tick)
     const updateStart = performance.now();
+    // Sync renderer if atoms were removed by containment wall
+    if (physics.n !== renderer.getAtomCount()) {
+      renderer.setAtomCount(physics.n);
+      // Force full visual sync after boundary removal: update bonds immediately
+      // so atom and bond visuals are consistent even if rendering is delayed.
+      physics.updateBondList();
+      physics.rebuildComponents();
+    }
     if (renderer.getAtomCount() > 0 && physics.n > 0) {
       renderer.updatePositions(physics);
     }
@@ -1366,6 +1391,25 @@ function frameLoop(timestamp) {
           : `Sim ${displaySpeed.toFixed(1)}x · ${mdRate.toFixed(2)} ps/s`;
       }
       fpsMonitor.displayEl.textContent = statusText;
+
+      // Atom count: physics.n is the authoritative active count. session.scene.totalAtoms
+      // is historical (total placed) and is intentionally NOT decremented by boundary removal.
+      // "removed" count = totalAtoms - active. This separation allows the UI to show both
+      // the original placement count and the current active count.
+
+      // Update atom count display
+      const atomCountEl = document.getElementById('atom-count');
+      if (atomCountEl) {
+        const active = physics.getActiveAtomCount();
+        const removed = physics.getWallRemovedCount();
+        if (active === 0) {
+          atomCountEl.textContent = '';
+        } else if (removed > 0) {
+          atomCountEl.textContent = `N: ${active} (${removed} removed)`;
+        } else {
+          atomCountEl.textContent = `N: ${active}`;
+        }
+      }
     }
 
   } catch (e) {

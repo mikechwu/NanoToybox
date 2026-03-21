@@ -53,4 +53,5 @@ Build an immersive, interactive, scientifically accurate browser-based playgroun
 - ML surrogate: explored, deferred (analytical is faster for target system sizes)
 - Performance benchmarks in `page/bench/` (physics, renderer, kernel, spatial-hash equivalence validation)
 - **Wasm Tersoff kernel**: deployed and enabled by default (~11% faster than JS JIT, automatic JS fallback)
+- **Containment boundary**: dynamic soft wall with Contain/Remove modes, live atom count, auto-scaling radius
 - **Next steps**: Web Workers for responsiveness, viewer modernization

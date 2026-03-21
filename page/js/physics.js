@@ -302,6 +302,14 @@ export class PhysicsEngine {
     this.vel = null;
     this.force = null;
     this.mass = 1.9944235e-26;
+
+    // ─── Containment boundary ───
+    this._wallRadius = 0;       // Å — current wall radius (monotonically increasing until clear)
+    this._wallCenter = [0, 0, 0]; // fixed center, set on first molecule placement
+    this._wallCenterSet = false;  // true after first molecule sets the center
+    this._wallMode = 'contain';   // 'contain' | 'remove'
+    this._wallRemovedCount = 0;   // atoms removed by wall (cumulative since last clear)
+
     this.dragAtom = -1;
     this.isRotateMode = false;
     this.isTranslateMode = false;
@@ -631,39 +639,85 @@ export class PhysicsEngine {
 
     if (useWasm) {
       // Ensure CSR is marshaled into Wasm memory
+      let wasmOk = false;
       if (!csrIsCurrent(this._csrGeneration)) {
         const csrResult = marshalCSR(this._csrOffsets, this._csrData, this.n, this._csrGeneration, this._csrTotalNl);
         if (this._bench) this._bench.csrMarshalMs = (this._bench.csrMarshalMs || 0) + csrResult.csrMarshalMs;
         _csrMarshalThisStep = csrResult.csrMarshalMs;
-        if (!csrResult.ok) {
-          // Marshal failed — fall back to JS for this step
+        if (csrResult.ok) wasmOk = true;
+      } else {
+        wasmOk = true;
+      }
+      if (wasmOk) {
+        const timing = callTersoff(this.pos, this.force, this.n);
+        if (!timing.ok) {
+          // Kernel call failed — fall back to JS for this step
+          this.force.fill(0);
           const t1 = this._bench ? performance.now() : 0;
           computeTersoffForces(this.pos, this.force, this._shortNeighborList, this._shortNlCounts, this.n);
           if (this._bench) this._bench.tersoffMs = (this._bench.tersoffMs || 0) + (performance.now() - t1);
-          return;
+        } else if (this._bench) {
+          this._bench.tersoffMs = (this._bench.tersoffMs || 0) + timing.pathMs;
+          this._bench.marshalMs = (this._bench.marshalMs || 0) + timing.marshalMs;
+          this._bench.wasmKernelMs = (this._bench.wasmKernelMs || 0) + timing.kernelMs;
+          this._bench.wasmPathTotalMs = (this._bench.wasmPathTotalMs || 0) +
+            timing.pathMs + _csrMarshalThisStep;
         }
-      }
-      const timing = callTersoff(this.pos, this.force, this.n);
-      if (!timing.ok) {
-        // Kernel call failed — fall back to JS for this step
-        this.force.fill(0);
+      } else {
+        // Marshal failed — fall back to JS for this step
         const t1 = this._bench ? performance.now() : 0;
         computeTersoffForces(this.pos, this.force, this._shortNeighborList, this._shortNlCounts, this.n);
         if (this._bench) this._bench.tersoffMs = (this._bench.tersoffMs || 0) + (performance.now() - t1);
-        return;
-      }
-      if (this._bench) {
-        this._bench.tersoffMs = (this._bench.tersoffMs || 0) + timing.pathMs;
-        this._bench.marshalMs = (this._bench.marshalMs || 0) + timing.marshalMs;
-        this._bench.wasmKernelMs = (this._bench.wasmKernelMs || 0) + timing.kernelMs;
-        // Full Wasm path including CSR marshal on rebuild steps
-        this._bench.wasmPathTotalMs = (this._bench.wasmPathTotalMs || 0) +
-          timing.pathMs + _csrMarshalThisStep;
       }
     } else {
       const t1 = this._bench ? performance.now() : 0;
       computeTersoffForces(this.pos, this.force, this._shortNeighborList, this._shortNlCounts, this.n);
       if (this._bench) this._bench.tersoffMs = (this._bench.tersoffMs || 0) + (performance.now() - t1);
+    }
+
+    // ── Containment wall ──
+    if (this._wallRadius > 0) {
+      const wcx = this._wallCenter[0], wcy = this._wallCenter[1], wcz = this._wallCenter[2];
+      const Rw = this._wallRadius;
+      const K = CONFIG.wall.springK;
+
+      if (this._wallMode === 'remove') {
+        // Remove mode: delete any atom beyond R_wall. The wall is generous
+        // (~116 Å for 60 atoms) — anything that far out was intentionally flung.
+        // No neighbor check: fragments (bonded pairs/clusters) flying together
+        // must also be removed, not just isolated atoms.
+        const removeR = Rw + CONFIG.wall.removeMargin;
+        const removeR2 = removeR * removeR;
+        let needRemoval = false;
+        for (let i = 0; i < this.n; i++) {
+          const i3 = i * 3;
+          const dx = this.pos[i3] - wcx, dy = this.pos[i3 + 1] - wcy, dz = this.pos[i3 + 2] - wcz;
+          if (dx * dx + dy * dy + dz * dz > removeR2) {
+            needRemoval = true;
+            break;
+          }
+        }
+        if (needRemoval) {
+          this._removeAtomsOutsideWall(removeR);
+          this._recomputeForcesAfterRemoval();
+        }
+      }
+
+      // Apply harmonic wall force to atoms outside R_wall (Contain mode only)
+      // In Remove mode, atoms fly freely past the wall and are deleted at the margin.
+      if (this._wallMode !== 'remove')
+      for (let i = 0; i < this.n; i++) {
+        const i3 = i * 3;
+        const dx = this.pos[i3] - wcx, dy = this.pos[i3 + 1] - wcy, dz = this.pos[i3 + 2] - wcz;
+        const r2 = dx * dx + dy * dy + dz * dz;
+        if (r2 > Rw * Rw) {
+          const r = Math.sqrt(r2);
+          const f = -K * (r - Rw) / r;
+          this.force[i3] += f * dx;
+          this.force[i3 + 1] += f * dy;
+          this.force[i3 + 2] += f * dz;
+        }
+      }
     }
 
     // ── Interaction forces: UX layer ──
@@ -1150,6 +1204,200 @@ export class PhysicsEngine {
     this._shortNeighborList = null;
     this.componentId = null;
     this.components = [];
+    this._wallRadius = 0;
+    this._wallCenter = [0, 0, 0];
+    this._wallCenterSet = false;
+    this._wallRemovedCount = 0;
+  }
+
+  /**
+   * Update wall radius based on current atom count and target density.
+   * In contain mode: monotonically increasing (only grows).
+   * In remove mode: allows controlled shrinkage after removal, with hysteresis.
+   */
+  updateWallRadius() {
+    if (this.n === 0) return;
+    const density = CONFIG.wall.density;
+    const padding = CONFIG.wall.padding;
+    const densityRadius = Math.cbrt((3 * this.n) / (4 * Math.PI * density));
+    const targetRadius = densityRadius + padding;
+    if (targetRadius > this._wallRadius) {
+      this._wallRadius = targetRadius;
+    }
+  }
+
+  /**
+   * Recompute wall radius after boundary removal reduces atom count.
+   * Allows shrinkage in remove mode so the boundary stays meaningful
+   * for the reduced system. Uses 2× the density-derived radius as a
+   * hysteresis band — only shrinks if the current wall is more than
+   * double the target for the active atom count.
+   */
+  shrinkWallRadiusAfterRemoval() {
+    if (this.n === 0) return; // handled by the n===0 reset in _removeAtomsOutsideWall
+    if (this._wallMode !== 'remove') return; // contain mode stays monotonic
+    const density = CONFIG.wall.density;
+    const padding = CONFIG.wall.padding;
+    const hysteresis = CONFIG.wall.shrinkHysteresis;
+    const targetRadius = Math.cbrt((3 * this.n) / (4 * Math.PI * density)) + padding;
+    if (this._wallRadius > targetRadius * hysteresis) {
+      this._wallRadius = targetRadius * hysteresis;
+    }
+  }
+
+  /**
+   * Recenter the wall to the COM of surviving atoms after a large asymmetric removal.
+   * Only fires when the removal fraction exceeds CONFIG.wall.recenterThreshold.
+   *
+   * v1 limitation: uses single-event fraction, not cumulative drift. If the system
+   * loses atoms through many small removals (each below threshold), the wall center
+   * may lag behind the surviving structure. Future options if this becomes noticeable:
+   *   - cumulative recenter debt across multiple removals
+   *   - recenter when COM drift exceeds a distance threshold
+   *   - recenter when both removal fraction and COM shift are significant
+   *
+   * @param {number} removedCount — atoms removed in this event
+   * @param {number} prevN — atom count before removal
+   */
+  _recenterWallAfterRemoval(removedCount, prevN) {
+    if (this.n === 0) return; // handled by the n===0 reset
+    const fraction = removedCount / prevN;
+    if (fraction < CONFIG.wall.recenterThreshold) return; // small removal — keep center stable
+    // Recompute center from surviving atom positions
+    let cx = 0, cy = 0, cz = 0;
+    for (let i = 0; i < this.n; i++) {
+      cx += this.pos[i * 3];
+      cy += this.pos[i * 3 + 1];
+      cz += this.pos[i * 3 + 2];
+    }
+    this._wallCenter[0] = cx / this.n;
+    this._wallCenter[1] = cy / this.n;
+    this._wallCenter[2] = cz / this.n;
+  }
+
+  /**
+   * Recompute forces after boundary removal reduced the atom count.
+   * Uses JS Tersoff kernel directly (not Wasm) to avoid re-marshaling CSR
+   * mid-step. This is an intentional rare slow-path: boundary removal is
+   * infrequent and the one-step JS fallback has negligible impact on overall
+   * performance. The Wasm path resumes on the next normal step.
+   */
+  _recomputeForcesAfterRemoval() {
+    if (this.n === 0) return;
+    if (this._bench) {
+      this._bench.removalRecomputeCount = (this._bench.removalRecomputeCount || 0) + 1;
+    }
+    this.force.fill(0);
+    this.buildNeighborList();
+    this._buildShortNeighborList();
+    computeTersoffForces(this.pos, this.force, this._shortNeighborList, this._shortNlCounts, this.n);
+  }
+
+  /**
+   * Set wall center to the COM of newly placed atoms.
+   * Called on first molecule placement; subsequent placements blend the center.
+   */
+  updateWallCenter(atoms, offset) {
+    let cx = 0, cy = 0, cz = 0;
+    for (const a of atoms) {
+      cx += a.x + offset[0];
+      cy += a.y + offset[1];
+      cz += a.z + offset[2];
+    }
+    cx /= atoms.length; cy /= atoms.length; cz /= atoms.length;
+
+    if (!this._wallCenterSet) {
+      this._wallCenter[0] = cx;
+      this._wallCenter[1] = cy;
+      this._wallCenter[2] = cz;
+      this._wallCenterSet = true;
+    } else {
+      // Weighted blend: existing center weighted by (n - newAtoms), new by newAtoms
+      const w = atoms.length / this.n;
+      this._wallCenter[0] += w * (cx - this._wallCenter[0]);
+      this._wallCenter[1] += w * (cy - this._wallCenter[1]);
+      this._wallCenter[2] += w * (cz - this._wallCenter[2]);
+    }
+  }
+
+  setWallMode(mode) { this._wallMode = mode; }
+  getWallMode() { return this._wallMode; }
+  getWallRadius() { return this._wallRadius; }
+  getWallRemovedCount() { return this._wallRemovedCount; }
+  getActiveAtomCount() { return this.n; }
+
+  /**
+   * Remove all atoms beyond the wall radius from wall center.
+   * Removes any atom (isolated or bonded) that has crossed the boundary.
+   * Compacts pos/vel/force arrays in-place. Triggers neighbor/bond rebuild.
+   */
+  _removeAtomsOutsideWall(wallR) {
+    const wcx = this._wallCenter[0], wcy = this._wallCenter[1], wcz = this._wallCenter[2];
+    const Rw2 = wallR * wallR;
+    const keep = [];
+    for (let i = 0; i < this.n; i++) {
+      const i3 = i * 3;
+      const dx = this.pos[i3] - wcx, dy = this.pos[i3 + 1] - wcy, dz = this.pos[i3 + 2] - wcz;
+      if (dx * dx + dy * dy + dz * dz <= Rw2) {
+        keep.push(i);
+      }
+    }
+    const removed = this.n - keep.length;
+    if (removed === 0) return;
+
+    this._wallRemovedCount += removed;
+    const newN = keep.length;
+    const newPos = new Float64Array(newN * 3);
+    const newVel = new Float64Array(newN * 3);
+    const newForce = new Float64Array(newN * 3);
+    for (let k = 0; k < newN; k++) {
+      const old3 = keep[k] * 3;
+      const new3 = k * 3;
+      newPos[new3] = this.pos[old3];
+      newPos[new3 + 1] = this.pos[old3 + 1];
+      newPos[new3 + 2] = this.pos[old3 + 2];
+      newVel[new3] = this.vel[old3];
+      newVel[new3 + 1] = this.vel[old3 + 1];
+      newVel[new3 + 2] = this.vel[old3 + 2];
+      newForce[new3] = this.force[old3];
+      newForce[new3 + 1] = this.force[old3 + 1];
+      newForce[new3 + 2] = this.force[old3 + 2];
+    }
+    this.pos = newPos;
+    this.vel = newVel;
+    this.force = newForce;
+    this.n = newN;
+    this._maxN = newN;
+    this._nlArrays = new Array(newN);
+    this._nlCounts = new Int32Array(newN);
+    for (let i = 0; i < newN; i++) this._nlArrays[i] = new Int32Array(8);
+    this.neighborList = null;
+    // Bonds and components will be rebuilt on next updateBondList/rebuildComponents cycle
+    this.bonds = [];
+    this.componentId = null;
+    this.components = [];
+    this.activeComponent = -1;
+    this.isRotateMode = false;
+    this.isTranslateMode = false;
+    if (this.dragAtom >= 0) {
+      if (!keep.includes(this.dragAtom)) {
+        this.dragAtom = -1;
+      } else {
+        this.dragAtom = keep.indexOf(this.dragAtom);
+      }
+    }
+
+    // If removal emptied the system, reset wall state so next molecule
+    // gets a fresh boundary scaled to its own size, not the old scene's.
+    if (this.n === 0) {
+      this._wallRadius = 0;
+      this._wallCenter = [0, 0, 0];
+      this._wallCenterSet = false;
+    } else {
+      // Partial removal: recenter if asymmetric, then shrink in remove mode
+      this._recenterWallAfterRemoval(removed, removed + this.n);
+      this.shrinkWallRadiusAfterRemoval();
+    }
   }
 
   // ─── User-adjustable parameters ───

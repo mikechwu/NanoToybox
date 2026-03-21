@@ -32,7 +32,8 @@ python3 -m http.server 8000
 | Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame, component-aware forces |
 | Rendering | InstancedMesh (2 draw calls for atoms+bonds), MeshStandardMaterial (PBR), camera-relative 4-light rig, axis triad |
 | Themes | Dark (default) / Light |
-| Advanced | Adjustable drag strength, rotation strength, damping, and speed |
+| Advanced | Adjustable drag strength, rotation strength, damping, speed, and boundary mode (Contain/Remove) |
+| Containment boundary | Contain mode (soft harmonic wall bounces atoms back) or Remove mode (atoms deleted past boundary). Live atom count in control bar. Wall radius auto-scales with atom count (CONFIG.wall.density). Toggle in Advanced panel. |
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
 | Pause | Primary control — freezes physics, camera/UI remain active |
 | Status | Sim speed (Nx), MD rate (ps/s), hardware-limited indicator. Tap to expand on mobile |
@@ -90,6 +91,7 @@ The page runs a full analytical Tersoff (1988) potential in JavaScript:
 - Translation (Move mode): uniform force applied to all atoms in the picked atom's **connected component** (patch), normalized by component size. Total force is `K_DRAG × displacement`, independent of patch size. Detached fragments are not affected. Components are recomputed from the bond graph via Union-Find after each bond refresh (~every 5 frames)
 - Rotation (Rotate mode): spring force → torque → angular acceleration via diagonal inertia tensor → distributed tangential forces, scoped to the picked atom's **connected component**. COM and inertia are computed over the component only. Inertia-normalized so `K_ROTATE` feels consistent across patch sizes
 - Safety guards: per-atom velocity hard cap and total KE cap (only trigger on extreme inputs)
+- Containment boundary: soft harmonic wall at dynamically computed radius (`CONFIG.wall`). In Contain mode, applies `F = -K × (r - R_wall) / r` for atoms outside R_wall. In Remove mode, wall force is off; atoms beyond R_wall + removeMargin are deleted. Wall radius = `cbrt(3N / (4π × density)) + padding`, monotonically increasing in Contain mode, allows hysteresis-gated shrinkage in Remove mode. Wall center recenters from surviving atoms after large removals (>25% threshold).
 
 ### Architecture
 
@@ -124,7 +126,7 @@ Each page module has defined ownership boundaries:
 | Module | Owns | Receives | Provides |
 |--------|------|----------|----------|
 | `config.js` | All tuning constants, thresholds, defaults | — | `CONFIG` object imported by all modules |
-| `physics.js` | Atom positions, velocities, forces, Tersoff computation | Drag/move/rotate targets, damping setting from main.js | Positions, bonds, KE via getter methods |
+| `physics.js` | Atom positions, velocities, forces, Tersoff computation | Drag/move/rotate targets, damping setting from main.js | Positions, bonds, KE via getter methods, wall state (radius, mode, removed count) |
 | `renderer.js` | Three.js scene, InstancedMesh atoms/bonds, lighting, axis triad, highlight overlay | Positions from physics.pos, theme from main.js | Canvas element, instancedAtoms for raycasting, getAtomWorldPosition(idx, out) API |
 | `input.js` | Event handling, raycasting, screen-to-world projection | Atom-source abstraction (count, getWorldPosition, raycastTarget) + camera from renderer | Atom index + screen coords via callbacks |
 | `state-machine.js` | Interaction state transitions (IDLE→DRAG/MOVE/ROTATE→IDLE etc.) | Pointer events + resolved mode from main.js | Commands dispatched to main.js |
