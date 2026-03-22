@@ -11,7 +11,7 @@ import { StateMachine, State } from './state-machine.js';
 import { InputManager } from './input.js';
 import { Renderer } from './renderer.js';
 import { FPSMonitor } from './fps-monitor.js';
-import { THEMES } from './themes.js';
+import { THEMES, applyThemeTokens } from './themes.js';
 import { CONFIG } from './config.js';
 
 const DEBUG_LOAD = CONFIG.debug.load;
@@ -95,6 +95,31 @@ const scheduler = {
   effectiveSpeedWindow: [],
 };
 
+// ── UI effects auto-gate ──
+const effectsGate = {
+  slowCount: 0,       // consecutive slow frames
+  fastCount: 0,       // consecutive fast frames
+  reduced: false,     // current state
+  mode: 'auto',       // 'auto' | 'forced-reduced' | 'forced-normal'
+  SLOW_THRESHOLD: 20, // ms — enter reduced if sustained above this
+  FAST_THRESHOLD: 16, // ms — exit reduced if sustained below this
+  ENTER_COUNT: 30,    // frames to sustain before entering reduced
+  EXIT_COUNT: 60,     // frames to sustain before exiting reduced
+};
+
+// Glass UI visibility — used by FPS gate to only measure when glass surfaces are active.
+// Returns true when any glass surface (dock, open sheet, visible backdrop) is on screen.
+// PHASE 2 SCAFFOLDING: checks test-* fixture IDs. Phase 3 must replace this with
+// real dock/sheet state checks and remove the test-* fixture coupling.
+function isGlassUiVisible() {
+  const dock = document.getElementById('test-dock');
+  const sheet = document.getElementById('test-sheet');
+  if (dock && dock.style.display !== 'none' && dock.style.display !== '') return true;
+  if (sheet && sheet.classList.contains('open')) return true;
+  // Phase 3: replace above with real .dock / .sheet visibility checks
+  return false;
+}
+
 // --- Initialization ---
 async function init() {
   const container = document.getElementById('container');
@@ -104,6 +129,91 @@ async function init() {
   fpsMonitor = new FPSMonitor(document.getElementById('fps'));
 
   renderer.applyTheme(session.theme);
+  applyThemeTokens(session.theme);
+
+  // Device mode detection — sets data-device-mode on <html> for CSS
+  function updateDeviceMode() {
+    const w = window.innerWidth;
+    const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
+    const canHover = window.matchMedia('(hover: hover)').matches;
+    let mode;
+    if (w < 768) mode = 'phone';
+    else if (w < 1024 || (coarsePointer && !canHover)) mode = 'tablet';
+    else mode = 'desktop';
+    document.documentElement.dataset.deviceMode = mode;
+  }
+  updateDeviceMode();
+  window.addEventListener('resize', updateDeviceMode);
+  window.addEventListener('orientationchange', updateDeviceMode);
+
+  // UI effects mode — 'auto', 'forced-reduced', or 'forced-normal'.
+  // Manual override is sticky — auto gate skips when mode is forced.
+  // Automatic FPS gate with hysteresis runs in frameLoop when glass surfaces are visible.
+  // Dev/testing hook: _setUiEffectsMode('reduced'|'normal'|'auto') in console.
+  // Intentionally global for Phase 2 validation. Consider gating behind CONFIG.debug later.
+  window._setUiEffectsMode = function(mode) {
+    if (mode === 'reduced') {
+      effectsGate.mode = 'forced-reduced';
+      effectsGate.reduced = true;
+      document.documentElement.dataset.uiEffects = 'reduced';
+    } else if (mode === 'normal') {
+      effectsGate.mode = 'forced-normal';
+      effectsGate.reduced = false;
+      delete document.documentElement.dataset.uiEffects;
+    } else {
+      effectsGate.mode = 'auto';
+      // Let the auto gate take over on next frame
+    }
+  };
+
+  // ── Preview controller ──
+  // PHASE 2 SCAFFOLDING: ?preview=ui reveals test dock/sheet/backdrop fixtures.
+  // Phase 3 must replace this with the real overlay controller and remove
+  // test-* fixture coupling. Do not extend — replace wholesale.
+  const previewController = {
+    active: false,
+    dock: document.getElementById('test-dock'),
+    sheet: document.getElementById('test-sheet'),
+    backdrop: document.getElementById('test-backdrop'),
+
+    init() {
+      if (new URLSearchParams(location.search).get('preview') !== 'ui') return;
+      this.active = true;
+
+      // Reveal dock (always visible in preview)
+      if (this.dock) { this.dock.style.display = 'flex'; }
+      // Open sheet initially
+      this.openSheet();
+
+      // Backdrop click closes sheet
+      if (this.backdrop) {
+        this.backdrop.addEventListener('click', () => this.closeSheet());
+      }
+      // Settings dock item toggles sheet
+      if (this.dock) {
+        const settingsBtn = this.dock.querySelector('.dock-item:last-child');
+        if (settingsBtn) {
+          settingsBtn.addEventListener('click', () => this.toggleSheet());
+        }
+      }
+    },
+
+    openSheet() {
+      if (this.sheet) { this.sheet.style.display = 'block'; this.sheet.classList.add('open'); }
+      if (this.backdrop) { this.backdrop.style.display = 'block'; this.backdrop.classList.add('visible'); }
+    },
+
+    closeSheet() {
+      if (this.sheet) this.sheet.classList.remove('open');
+      if (this.backdrop) this.backdrop.classList.remove('visible');
+    },
+
+    toggleSheet() {
+      const isOpen = this.sheet && this.sheet.classList.contains('open');
+      if (isOpen) this.closeSheet(); else this.openSheet();
+    },
+  };
+  previewController.init();
 
   // Load manifest
   try {
@@ -129,7 +239,7 @@ async function init() {
   document.getElementById('theme-toggle').addEventListener('click', () => {
     session.theme = session.theme === 'dark' ? 'light' : 'dark';
     renderer.applyTheme(session.theme);
-    applyUITheme(session.theme);
+    applyThemeTokens(session.theme);
   });
 
   // Clear playground
@@ -153,7 +263,7 @@ async function init() {
         b.style.background = '';
       });
       btn.classList.add('active');
-      applyUITheme(session.theme);
+      applyThemeTokens(session.theme);
     });
   });
 
@@ -259,8 +369,6 @@ async function init() {
       physics.setWallMode(mode);
       document.querySelectorAll('.boundary-btn').forEach(b => {
         b.classList.toggle('active', b.dataset.boundary === mode);
-        b.style.background = b.dataset.boundary === mode ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)';
-        b.style.color = b.dataset.boundary === mode ? '#ccc' : '#888';
       });
       document.getElementById('boundary-mode-val').textContent =
         mode === 'contain' ? 'Contain' : 'Remove';
@@ -1392,6 +1500,34 @@ function frameLoop(timestamp) {
       }
       fpsMonitor.displayEl.textContent = statusText;
 
+    // ── Auto FPS gate for UI effects ──
+    // Only runs when glass UI is visible AND mode is 'auto' (not forced by developer).
+    const frameMs = scheduler.prof.rafIntervalMs;
+    const glassVisible = isGlassUiVisible();
+    if (glassVisible && effectsGate.mode === 'auto' && !effectsGate.reduced) {
+      if (frameMs > effectsGate.SLOW_THRESHOLD) {
+        effectsGate.slowCount++;
+        effectsGate.fastCount = 0;
+        if (effectsGate.slowCount >= effectsGate.ENTER_COUNT) {
+          effectsGate.reduced = true;
+          document.documentElement.dataset.uiEffects = 'reduced';
+        }
+      } else {
+        effectsGate.slowCount = 0;
+      }
+    } else if (glassVisible && effectsGate.mode === 'auto') {
+      if (frameMs < effectsGate.FAST_THRESHOLD) {
+        effectsGate.fastCount++;
+        if (effectsGate.fastCount >= effectsGate.EXIT_COUNT) {
+          effectsGate.reduced = false;
+          delete document.documentElement.dataset.uiEffects;
+          effectsGate.slowCount = 0;
+        }
+      } else {
+        effectsGate.fastCount = 0;
+      }
+    }
+
       // Atom count: physics.n is the authoritative active count. session.scene.totalAtoms
       // is historical (total placed) and is intentionally NOT decremented by boundary removal.
       // "removed" count = totalAtoms - active. This separation allows the UI to show both
@@ -1416,46 +1552,6 @@ function frameLoop(timestamp) {
     console.error('[frameLoop] ERROR:', e);
   }
   requestAnimationFrame(frameLoop);
-}
-
-// --- UI Theme ---
-function applyUITheme(name) {
-  const t = THEMES[name];
-  const bar = document.getElementById('controls');
-  bar.style.background = t.uiBg;
-  bar.style.borderTopColor = t.uiBorder;
-  bar.querySelectorAll('button:not(.mode-btn)').forEach(b => {
-    b.style.color = t.uiText;
-    b.style.background = t.uiBtn;
-    b.style.borderColor = t.uiBorder;
-  });
-  bar.querySelectorAll('select').forEach(s => {
-    s.style.color = t.uiText;
-    s.style.background = t.uiBtn;
-    s.style.borderColor = t.uiBorder;
-  });
-  bar.querySelectorAll('label, span').forEach(el => {
-    el.style.color = t.uiMuted;
-  });
-  bar.querySelectorAll('.mode-btn').forEach(b => {
-    b.style.borderColor = t.uiBorder;
-    if (b.classList.contains('active')) {
-      b.style.color = '';
-      b.style.background = '';
-    } else {
-      b.style.color = t.uiMuted;
-      b.style.background = t.uiBtn;
-    }
-  });
-
-  const info = document.getElementById('info');
-  info.style.background = t.uiBg;
-  info.style.borderColor = t.uiBorder;
-  info.querySelectorAll('*').forEach(el => {
-    el.style.color = t.uiText;
-  });
-  document.getElementById('status').style.color = t.uiMuted;
-  document.getElementById('fps').style.color = t.uiMuted;
 }
 
 // --- Start ---
