@@ -21,6 +21,10 @@ let renderer, physics, stateMachine, inputManager, fpsMonitor;
 let manifest = null;
 let overlay = null;
 
+// Dock state — initialized in init(), used by module-scoped placement functions
+let _dockEl = null, _dockAddIcon = null, _dockAddLabel = null;
+let _dockPauseEl = null, _dockSettingsEl = null;
+
 const session = {
   theme: 'dark',
   isLoading: false,
@@ -342,43 +346,18 @@ async function init() {
   });
 
   // ── Dock placement mode ──
-  const dockEl = document.getElementById('dock');
-  const dockAddIcon = dockAdd.querySelector('.dock-icon');
-  const dockPauseEl = document.getElementById('dock-pause');
-  const dockSettingsEl = document.getElementById('dock-settings');
+  // Initialize module-scoped dock refs for use by startPlacement/exitPlacementMode
+  _dockEl = document.getElementById('dock');
+  _dockAddIcon = dockAdd.querySelector('.dock-icon');
+  _dockAddLabel = dockAddLabel;
+  _dockPauseEl = document.getElementById('dock-pause');
+  _dockSettingsEl = document.getElementById('dock-settings');
+  if (!_dockEl || !_dockAddIcon || !_dockAddLabel || !_dockPauseEl || !_dockSettingsEl) {
+    console.error('[init] Missing required dock elements — placement mode will not work');
+  }
 
   // Cancel button (in HTML, hidden by CSS unless .dock.placement is set)
   document.getElementById('dock-cancel').addEventListener('click', () => exitPlacementMode(false));
-
-  function setDockPlacementMode(active) {
-    if (active) {
-      // Slot 1: Add → Place (accent color via CSS .dock.placement #dock-add)
-      dockAddIcon.textContent = '✓';
-      dockAddLabel.textContent = 'Place';
-      // Toggle placement class — CSS handles slot 2 swap, cancel, and accent color
-      dockEl.classList.add('placement');
-      // Slot 3-4: disabled
-      dockPauseEl.disabled = true;
-      dockSettingsEl.disabled = true;
-    } else {
-      // Restore slot 1 (accent color removed by CSS when .placement is gone)
-      dockAddIcon.textContent = '+';
-      updateDockAddLabel();
-      // Remove placement class — CSS restores mode segmented, hides cancel
-      dockEl.classList.remove('placement');
-      // Restore slot 3-4
-      dockPauseEl.disabled = false;
-      dockSettingsEl.disabled = false;
-    }
-  }
-
-  function updateDockAddLabel() {
-    if (session.placement.lastStructureFile && session.scene.molecules.length > 0) {
-      dockAddLabel.textContent = 'Add Another';
-    } else {
-      dockAddLabel.textContent = 'Add';
-    }
-  }
 
   // ── Settings sheet actions ──
 
@@ -532,6 +511,33 @@ async function addMoleculeToScene(filename, name, offset) {
   session.isLoading = false;
 }
 
+// ── Dock placement mode (module-scoped for access by startPlacement/exitPlacementMode) ──
+function setDockPlacementMode(active) {
+  if (!_dockEl || !_dockAddIcon || !_dockAddLabel || !_dockPauseEl || !_dockSettingsEl) return;
+  if (active) {
+    _dockAddIcon.textContent = '✓';
+    _dockAddLabel.textContent = 'Place';
+    _dockEl.classList.add('placement');
+    _dockPauseEl.disabled = true;
+    _dockSettingsEl.disabled = true;
+  } else {
+    _dockAddIcon.textContent = '+';
+    updateDockAddLabel();
+    _dockEl.classList.remove('placement');
+    _dockPauseEl.disabled = false;
+    _dockSettingsEl.disabled = false;
+  }
+}
+
+function updateDockAddLabel() {
+  if (!_dockAddLabel) return;
+  if (session.placement.lastStructureFile && session.scene.molecules.length > 0) {
+    _dockAddLabel.textContent = 'Add Another';
+  } else {
+    _dockAddLabel.textContent = 'Add';
+  }
+}
+
 function clearPlayground() {
   _placementGeneration++;  // invalidate any pending preview loads
   _placementLoading = false; // clear transient loading state immediately
@@ -547,8 +553,7 @@ function clearPlayground() {
   renderer.resetCamera();
   fullSchedulerReset();
   updateSceneStatus();
-  const addLabel = document.getElementById('dock-add-label');
-  if (addLabel) addLabel.textContent = 'Add';
+  updateDockAddLabel();
 }
 
 function updateSceneStatus() {
