@@ -151,10 +151,7 @@ canvas { display: block; touch-action: none; }
 .panel-helper {
   color: var(--color-text-secondary); font-size: 9px;
 }
-#atom-count {
-  color: var(--color-accent-text); font-size: var(--font-xs);
-  font-variant-numeric: tabular-nums; margin-left: var(--space-sm); opacity: 0.7;
-}
+/* Atom count in settings sheet Scene section — styled via .group-value */
 
 /* ── Help modal ── */
 #help {
@@ -383,6 +380,7 @@ canvas { display: block; touch-action: none; }
 .sheet-page { /* default visible */ }
 .sheet-visible { display: block; }
 .sheet-page-hidden { display: none; }
+.row-hidden { display: none; }
 </style>
 </head>
 <body>
@@ -417,8 +415,12 @@ canvas { display: block; touch-action: none; }
             <li class="group-item group-action" id="sheet-clear" style="color:var(--color-danger);">Clear</li>
             <li class="group-item group-action" id="sheet-reset-view">Reset View</li>
             <li class="group-item">
-              <span>Atoms</span>
-              <span class="group-value" id="sheet-atom-count">0</span>
+              <span>Placed</span>
+              <span class="group-value" id="sheet-placed-count">0</span>
+            </li>
+            <li class="group-item row-hidden" id="sheet-active-row">
+              <span>Active</span>
+              <span class="group-value" id="sheet-active-count">0</span>
             </li>
           </ul>
         </div>

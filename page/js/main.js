@@ -564,8 +564,34 @@ function updateSceneStatus() {
   } else {
     updateStatus(`${n} molecule${n > 1 ? 's' : ''} · ${a} atoms`);
   }
-  const sheetCount = document.getElementById('sheet-atom-count');
-  if (sheetCount) sheetCount.textContent = a || '0';
+  updatePlacedCount();
+  updateActiveCountRow();
+}
+
+/** Update Placed count in settings sheet. Called on scene mutations only (not per-frame). */
+function updatePlacedCount() {
+  const el = document.getElementById('sheet-placed-count');
+  if (el) el.textContent = session.scene.totalAtoms || '0';
+}
+
+/** Update Active row in settings sheet. Called from both updateSceneStatus() (for immediate
+ *  refresh after discrete scene changes) and the frame loop (for live boundary removal tracking).
+ *  Dual ownership is intentional — mutation paths need immediate response, frame loop needs live updates. */
+function updateActiveCountRow() {
+  const row = document.getElementById('sheet-active-row');
+  const el = document.getElementById('sheet-active-count');
+  if (!row || !el) return;
+  const removed = physics.getWallRemovedCount();
+  if (removed > 0) {
+    const text = `${physics.getActiveAtomCount()} (${removed} removed)`;
+    if (el.textContent !== text) el.textContent = text;
+    row.classList.remove('row-hidden');
+  } else {
+    if (!row.classList.contains('row-hidden')) {
+      row.classList.add('row-hidden');
+      el.textContent = '';
+    }
+  }
 }
 
 // --- Placement mode ---
@@ -1606,24 +1632,8 @@ function frameLoop(timestamp) {
       }
     }
 
-      // Atom count: physics.n is the authoritative active count. session.scene.totalAtoms
-      // is historical (total placed) and is intentionally NOT decremented by boundary removal.
-      // "removed" count = totalAtoms - active. This separation allows the UI to show both
-      // the original placement count and the current active count.
-
-      // Update atom count display
-      const atomCountEl = document.getElementById('atom-count');
-      if (atomCountEl) {
-        const active = physics.getActiveAtomCount();
-        const removed = physics.getWallRemovedCount();
-        if (active === 0) {
-          atomCountEl.textContent = '';
-        } else if (removed > 0) {
-          atomCountEl.textContent = `N: ${active} (${removed} removed)`;
-        } else {
-          atomCountEl.textContent = `N: ${active}`;
-        }
-      }
+      // Update Active row in settings sheet (live boundary removal tracking)
+      updateActiveCountRow();
     }
 
   } catch (e) {
