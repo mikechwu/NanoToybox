@@ -47,7 +47,7 @@ The page loads relaxed carbon structures from a pre-computed library, then runs 
 
 ### Modes
 
-Select **Atom**, **Move**, or **Rotate** in the control bar to change interaction behavior.
+Select **Atom**, **Move**, or **Rotate** in the dock's segmented control to change interaction behavior.
 
 ### Desktop
 

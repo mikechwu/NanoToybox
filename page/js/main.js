@@ -19,6 +19,7 @@ const DEBUG_LOAD = CONFIG.debug.load;
 // --- Globals ---
 let renderer, physics, stateMachine, inputManager, fpsMonitor;
 let manifest = null;
+let overlay = null;
 
 const session = {
   theme: 'dark',
@@ -108,15 +109,14 @@ const effectsGate = {
 };
 
 // Glass UI visibility — used by FPS gate to only measure when glass surfaces are active.
-// Returns true when any glass surface (dock, open sheet, visible backdrop) is on screen.
-// PHASE 2 SCAFFOLDING: checks test-* fixture IDs. Phase 3 must replace this with
-// real dock/sheet state checks and remove the test-* fixture coupling.
+// Returns true when the dock is visible or any sheet is open.
 function isGlassUiVisible() {
-  const dock = document.getElementById('test-dock');
-  const sheet = document.getElementById('test-sheet');
-  if (dock && dock.style.display !== 'none' && dock.style.display !== '') return true;
-  if (sheet && sheet.classList.contains('open')) return true;
-  // Phase 3: replace above with real .dock / .sheet visibility checks
+  const dock = document.getElementById('dock');
+  const settingsSheet = document.getElementById('settings-sheet');
+  const chooserSheet = document.getElementById('chooser-sheet');
+  if (dock) return true; // dock is always visible
+  if (settingsSheet && settingsSheet.classList.contains('open')) return true;
+  if (chooserSheet && chooserSheet.classList.contains('open')) return true;
   return false;
 }
 
@@ -140,6 +140,8 @@ async function init() {
     if (w < 768) mode = 'phone';
     else if (w < 1024 || (coarsePointer && !canHover)) mode = 'tablet';
     else mode = 'desktop';
+    const prev = document.documentElement.dataset.deviceMode;
+    if (prev && prev !== mode && overlay) overlay.close();
     document.documentElement.dataset.deviceMode = mode;
   }
   updateDeviceMode();
@@ -166,59 +168,9 @@ async function init() {
     }
   };
 
-  // ── Preview controller ──
-  // PHASE 2 SCAFFOLDING: ?preview=ui reveals test dock/sheet/backdrop fixtures.
-  // Phase 3 must replace this with the real overlay controller and remove
-  // test-* fixture coupling. Do not extend — replace wholesale.
-  const previewController = {
-    active: false,
-    dock: document.getElementById('test-dock'),
-    sheet: document.getElementById('test-sheet'),
-    backdrop: document.getElementById('test-backdrop'),
-
-    init() {
-      if (new URLSearchParams(location.search).get('preview') !== 'ui') return;
-      this.active = true;
-
-      // Reveal dock (always visible in preview)
-      if (this.dock) { this.dock.style.display = 'flex'; }
-      // Open sheet initially
-      this.openSheet();
-
-      // Backdrop click closes sheet
-      if (this.backdrop) {
-        this.backdrop.addEventListener('click', () => this.closeSheet());
-      }
-      // Settings dock item toggles sheet
-      if (this.dock) {
-        const settingsBtn = this.dock.querySelector('.dock-item:last-child');
-        if (settingsBtn) {
-          settingsBtn.addEventListener('click', () => this.toggleSheet());
-        }
-      }
-    },
-
-    openSheet() {
-      if (this.sheet) { this.sheet.style.display = 'block'; this.sheet.classList.add('open'); }
-      if (this.backdrop) { this.backdrop.style.display = 'block'; this.backdrop.classList.add('visible'); }
-    },
-
-    closeSheet() {
-      if (this.sheet) this.sheet.classList.remove('open');
-      if (this.backdrop) this.backdrop.classList.remove('visible');
-    },
-
-    toggleSheet() {
-      const isOpen = this.sheet && this.sheet.classList.contains('open');
-      if (isOpen) this.closeSheet(); else this.openSheet();
-    },
-  };
-  previewController.init();
-
   // Load manifest
   try {
     manifest = await loadManifest();
-    populateStructureDrawer(manifest);
 
     // Auto-load C60 as first molecule
     const entries = Object.entries(manifest).sort((a, b) => a[1].n_atoms - b[1].n_atoms);
@@ -233,72 +185,97 @@ async function init() {
     return;
   }
 
-  // --- UI wiring ---
+  // ═══════════════════════════════════════════════════════
+  // Phase 3: Dock + Sheet UI wiring
+  // ═══════════════════════════════════════════════════════
 
-  // Theme toggle
-  document.getElementById('theme-toggle').addEventListener('click', () => {
-    session.theme = session.theme === 'dark' ? 'light' : 'dark';
-    renderer.applyTheme(session.theme);
-    applyThemeTokens(session.theme);
-  });
+  // ── Overlay controller ──
+  // One overlay at a time: 'none' | 'settings' | 'chooser'
+  overlay = {
+    current: 'none',
+    settingsSheet: document.getElementById('settings-sheet'),
+    chooserSheet: document.getElementById('chooser-sheet'),
+    backdrop: document.getElementById('sheet-backdrop'),
 
-  // Clear playground
-  document.getElementById('btn-clear').addEventListener('click', () => {
-    clearPlayground();
-  });
+    open(name) {
+      if (this.current === name) { this.close(); return; }
+      if (this.current !== 'none') this._hide(this.current);
+      this.current = name;
+      this._show(name);
+    },
 
-  // Reset camera view
-  document.getElementById('btn-reset-view').addEventListener('click', () => {
-    renderer.resetView();
-  });
+    close() {
+      if (this.current === 'none') return;
+      this._hide(this.current);
+      this.current = 'none';
+    },
 
-  // Interaction mode buttons
-  const modeButtons = document.querySelectorAll('.mode-btn');
-  modeButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      session.interactionMode = btn.dataset.mode;
-      modeButtons.forEach(b => {
-        b.classList.remove('active');
-        b.style.color = '';
-        b.style.background = '';
-      });
-      btn.classList.add('active');
-      applyThemeTokens(session.theme);
-    });
-  });
+    _show(name) {
+      const sheet = name === 'settings' ? this.settingsSheet : this.chooserSheet;
+      sheet.classList.add('sheet-visible');
+      sheet.removeAttribute('inert');
+      sheet.setAttribute('aria-hidden', 'false');
+      this.backdrop.classList.add('sheet-visible');
+      // Trigger reflow for transition
+      sheet.offsetHeight;
+      sheet.classList.add('open');
+      this.backdrop.classList.add('visible');
+    },
 
-  // Add Molecule button
-  document.getElementById('btn-add-molecule').addEventListener('click', () => {
-    const drawer = document.getElementById('structure-drawer');
-    drawer.style.display = drawer.style.display === 'none' ? 'block' : 'none';
-  });
+    _hide(name) {
+      const sheet = name === 'settings' ? this.settingsSheet : this.chooserSheet;
+      sheet.classList.remove('open');
+      sheet.setAttribute('aria-hidden', 'true');
+      sheet.setAttribute('inert', '');
+      this.backdrop.classList.remove('visible');
+      // Remove sheet-visible after transition ends (fully unmount from layout).
+      // Fallback: if transition duration is 0 (prefers-reduced-motion), remove immediately.
+      const backdrop = this.backdrop;
+      const sheetDuration = parseFloat(getComputedStyle(sheet).transitionDuration);
+      if (sheetDuration === 0) {
+        sheet.classList.remove('sheet-visible');
+        backdrop.classList.remove('sheet-visible');
+      } else {
+        sheet.addEventListener('transitionend', function onEnd() {
+          sheet.removeEventListener('transitionend', onEnd);
+          if (!sheet.classList.contains('open')) {
+            sheet.classList.remove('sheet-visible');
+          }
+        });
+        backdrop.addEventListener('transitionend', function onEnd() {
+          backdrop.removeEventListener('transitionend', onEnd);
+          if (!backdrop.classList.contains('visible')) {
+            backdrop.classList.remove('sheet-visible');
+          }
+        });
+      }
+      // Reset help drill-in when closing settings
+      if (name === 'settings') {
+        document.getElementById('sheet-main').classList.remove('sheet-page-hidden');
+        document.getElementById('sheet-help').classList.add('sheet-page-hidden');
+      }
+    },
+  };
 
-  // Add Another button
-  document.getElementById('btn-add-another').addEventListener('click', () => {
-    if (session.placement.lastStructureFile) {
-      startPlacement(session.placement.lastStructureFile, session.placement.lastStructureName);
-    }
-  });
+  // Backdrop click closes overlay
+  overlay.backdrop.addEventListener('click', () => overlay.close());
 
-  // Place / Cancel buttons
-  document.getElementById('btn-place').addEventListener('click', () => {
-    exitPlacementMode(true);
-  });
-  document.getElementById('btn-cancel-place').addEventListener('click', () => {
-    exitPlacementMode(false);
-  });
+  // Populate structure chooser now that overlay is defined
+  populateStructureDrawer(manifest);
 
-  // Keyboard shortcuts for placement (works during preview AND pending load)
+  // Escape key: close overlay or cancel placement
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (session.placement.active) {
         exitPlacementMode(false);
         e.preventDefault();
       } else if (_placementLoading) {
-        // Cancel a pending preview load
         _placementGeneration++;
         _placementLoading = false;
         updateSceneStatus();
+        e.preventDefault();
+      } else if (overlay.current !== 'none') {
+        overlay.close();
         e.preventDefault();
       }
     }
@@ -308,29 +285,152 @@ async function init() {
     }
   });
 
-  // Close panels when clicking outside
-  const advPanel = document.getElementById('advanced-panel');
-  const helpPanel = document.getElementById('help');
-  const drawer = document.getElementById('structure-drawer');
-  document.getElementById('btn-advanced').addEventListener('click', () => {
-    advPanel.style.display = advPanel.style.display === 'none' ? 'block' : 'none';
+  // ── Segmented control helper ──
+  function wireSegmented(segEl, callback) {
+    const labels = segEl.querySelectorAll('label');
+    labels.forEach((label, i) => {
+      label.addEventListener('click', () => {
+        labels.forEach(l => l.classList.remove('active'));
+        label.classList.add('active');
+        segEl.style.setProperty('--seg-active', i);
+        callback(label);
+      });
+    });
+  }
+
+  // ── Dock buttons ──
+
+  // Add button
+  const dockAdd = document.getElementById('dock-add');
+  const dockAddLabel = document.getElementById('dock-add-label');
+  dockAdd.addEventListener('click', () => {
+    if (session.placement.active) {
+      exitPlacementMode(true); // Place action during placement
+      return;
+    }
+    if (session.placement.lastStructureFile && session.scene.molecules.length > 0) {
+      // Add Another shortcut: go straight to placement
+      startPlacement(session.placement.lastStructureFile, session.placement.lastStructureName);
+    } else {
+      overlay.open('chooser');
+    }
   });
-  document.getElementById('btn-help-open').addEventListener('click', () => {
-    helpPanel.style.display = 'block';
+
+  // Mode segmented control
+  wireSegmented(document.getElementById('mode-seg'), (label) => {
+    session.interactionMode = label.dataset.mode;
   });
-  document.addEventListener('pointerdown', (e) => {
-    if (advPanel.style.display !== 'none' &&
-        !advPanel.contains(e.target) && e.target.id !== 'btn-advanced') {
-      advPanel.style.display = 'none';
+
+  // Pause button
+  const dockPause = document.getElementById('dock-pause');
+  dockPause.addEventListener('click', () => {
+    if (session.placement.active) return; // blocked during placement
+    session.playback.paused = !session.playback.paused;
+    dockPause.querySelector('.dock-label').textContent =
+      session.playback.paused ? 'Resume' : 'Pause';
+    if (!session.playback.paused) {
+      scheduler.lastFrameTs = performance.now();
+      scheduler.simBudgetMs = 0;
     }
-    if (helpPanel.style.display !== 'none' &&
-        !helpPanel.contains(e.target) && e.target.id !== 'btn-help-open') {
-      helpPanel.style.display = 'none';
+    scheduler.forceRenderThisTick = true;
+  });
+
+  // Settings button
+  document.getElementById('dock-settings').addEventListener('click', () => {
+    if (session.placement.active) return; // blocked during placement
+    overlay.open('settings');
+  });
+
+  // ── Dock placement mode ──
+  const dockEl = document.getElementById('dock');
+  const dockAddIcon = dockAdd.querySelector('.dock-icon');
+  const dockPauseEl = document.getElementById('dock-pause');
+  const dockSettingsEl = document.getElementById('dock-settings');
+
+  // Cancel button (in HTML, hidden by CSS unless .dock.placement is set)
+  document.getElementById('dock-cancel').addEventListener('click', () => exitPlacementMode(false));
+
+  function setDockPlacementMode(active) {
+    if (active) {
+      // Slot 1: Add → Place (accent color via CSS .dock.placement #dock-add)
+      dockAddIcon.textContent = '✓';
+      dockAddLabel.textContent = 'Place';
+      // Toggle placement class — CSS handles slot 2 swap, cancel, and accent color
+      dockEl.classList.add('placement');
+      // Slot 3-4: disabled
+      dockPauseEl.disabled = true;
+      dockSettingsEl.disabled = true;
+    } else {
+      // Restore slot 1 (accent color removed by CSS when .placement is gone)
+      dockAddIcon.textContent = '+';
+      updateDockAddLabel();
+      // Remove placement class — CSS restores mode segmented, hides cancel
+      dockEl.classList.remove('placement');
+      // Restore slot 3-4
+      dockPauseEl.disabled = false;
+      dockSettingsEl.disabled = false;
     }
-    if (drawer.style.display !== 'none' &&
-        !drawer.contains(e.target) && e.target.id !== 'btn-add-molecule') {
-      drawer.style.display = 'none';
+  }
+
+  function updateDockAddLabel() {
+    if (session.placement.lastStructureFile && session.scene.molecules.length > 0) {
+      dockAddLabel.textContent = 'Add Another';
+    } else {
+      dockAddLabel.textContent = 'Add';
     }
+  }
+
+  // ── Settings sheet actions ──
+
+  // Scene: Add Molecule (opens chooser)
+  document.getElementById('sheet-add-molecule').addEventListener('click', () => {
+    overlay.open('chooser');
+  });
+
+  // Scene: Clear
+  document.getElementById('sheet-clear').addEventListener('click', () => {
+    overlay.close();
+    clearPlayground();
+  });
+
+  // Scene: Reset View
+  document.getElementById('sheet-reset-view').addEventListener('click', () => {
+    renderer.resetView();
+  });
+
+  // Help drill-in
+  document.getElementById('sheet-help-link').addEventListener('click', () => {
+    document.getElementById('sheet-main').classList.add('sheet-page-hidden');
+    document.getElementById('sheet-help').classList.remove('sheet-page-hidden');
+  });
+  document.getElementById('help-back').addEventListener('click', () => {
+    document.getElementById('sheet-help').classList.add('sheet-page-hidden');
+    document.getElementById('sheet-main').classList.remove('sheet-page-hidden');
+  });
+
+  // Speed segmented
+  wireSegmented(document.getElementById('speed-seg'), (label) => {
+    const val = label.dataset.speed;
+    if (val === 'max') {
+      session.playback.speedMode = 'max';
+    } else {
+      session.playback.speedMode = 'fixed';
+      session.playback.selectedSpeed = parseFloat(val);
+    }
+    scheduler.forceRenderThisTick = true;
+    updateSpeedControls();
+  });
+
+  // Theme segmented
+  wireSegmented(document.getElementById('theme-seg'), (label) => {
+    session.theme = label.dataset.theme;
+    renderer.applyTheme(session.theme);
+    applyThemeTokens(session.theme);
+  });
+
+  // Boundary segmented
+  wireSegmented(document.getElementById('boundary-seg'), (label) => {
+    physics.setWallMode(label.dataset.boundary);
   });
 
   // Sliders
@@ -362,53 +462,22 @@ async function init() {
     else dampVal.textContent = damping.toFixed(3);
   });
 
-  // ── Boundary mode toggle ──
-  document.querySelectorAll('.boundary-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const mode = btn.dataset.boundary;
-      physics.setWallMode(mode);
-      document.querySelectorAll('.boundary-btn').forEach(b => {
-        b.classList.toggle('active', b.dataset.boundary === mode);
-      });
-      document.getElementById('boundary-mode-val').textContent =
-        mode === 'contain' ? 'Contain' : 'Remove';
-    });
-  });
-
-  // Pause button
-  const pauseBtn = document.getElementById('btn-pause');
-  if (pauseBtn) {
-    pauseBtn.addEventListener('click', () => {
-      session.playback.paused = !session.playback.paused;
-      pauseBtn.textContent = session.playback.paused ? 'Resume' : 'Pause';
-      if (!session.playback.paused) {
-        // Resume: prevent catch-up burst
-        scheduler.lastFrameTs = performance.now();
-        scheduler.simBudgetMs = 0;
-      }
-      scheduler.forceRenderThisTick = true;
-    });
-  }
-
-  // Speed buttons
-  document.querySelectorAll('.speed-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const val = btn.dataset.speed;
-      if (val === 'max') {
-        session.playback.speedMode = 'max';
-      } else {
-        session.playback.speedMode = 'fixed';
-        session.playback.selectedSpeed = parseFloat(val);
-      }
-      document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      scheduler.forceRenderThisTick = true;
-      updateSpeedControls();
-    });
-  });
+  // ── Structure chooser wiring ──
+  // Structure items close the chooser and start placement
+  // (populateStructureDrawer already sets up click handlers)
 
   // Initial speed button state
   updateSpeedControls();
+
+  // Notify renderer of dock height for overlay positioning (axis triad)
+  function updateDockInsets() {
+    const dock = document.getElementById('dock');
+    if (dock && renderer) {
+      renderer.setOverlayInsets({ bottom: dock.offsetHeight + 8 });
+    }
+  }
+  updateDockInsets();
+  window.addEventListener('resize', updateDockInsets);
 
   // Mobile: tap FPS area to expand diagnostics for 5s
   const fpsEl = document.getElementById('fps');
@@ -440,7 +509,7 @@ function populateStructureDrawer(manifest) {
     item.className = 'drawer-item';
     item.textContent = `${info.description} (${info.n_atoms} atoms)`;
     item.addEventListener('click', () => {
-      document.getElementById('structure-drawer').style.display = 'none';
+      overlay.close();
       startPlacement(info.file, info.description);
     });
     list.appendChild(item);
@@ -478,6 +547,8 @@ function clearPlayground() {
   renderer.resetCamera();
   fullSchedulerReset();
   updateSceneStatus();
+  const addLabel = document.getElementById('dock-add-label');
+  if (addLabel) addLabel.textContent = 'Add';
 }
 
 function updateSceneStatus() {
@@ -488,6 +559,8 @@ function updateSceneStatus() {
   } else {
     updateStatus(`${n} molecule${n > 1 ? 's' : ''} · ${a} atoms`);
   }
+  const sheetCount = document.getElementById('sheet-atom-count');
+  if (sheetCount) sheetCount.textContent = a || '0';
 }
 
 // --- Placement mode ---
@@ -555,7 +628,7 @@ async function startPlacement(filename, name) {
     renderer.showPreview(atoms, bonds, offset);
 
     // Show placement UI
-    document.getElementById('placement-bar').style.display = 'flex';
+    setDockPlacementMode(true);
     const targetName = getTargetMoleculeName();
     if (targetName) {
       updateStatus(`Placing ${name} near ${targetName} · target: center of view`);
@@ -607,7 +680,7 @@ function exitPlacementMode(commit) {
   session.placement.previewOffset = [0, 0, 0];
   session.placement.placementPlane = null;
   session.placement.grabOffset = [0, 0, 0];
-  document.getElementById('placement-bar').style.display = 'none';
+  setDockPlacementMode(false);
 
   if (commitData) {
     try {
@@ -615,9 +688,7 @@ function exitPlacementMode(commit) {
       // Only update "last structure" after successful commit
       session.placement.lastStructureFile = commitData.file;
       session.placement.lastStructureName = commitData.name;
-      const btn = document.getElementById('btn-add-another');
-      btn.textContent = `Add Another ${commitData.name}`;
-      btn.style.display = '';
+      updateDockAddLabel();
     } catch (e) {
       console.error('[placement] Commit failed:', e);
       updateStatus(`Error placing molecule: ${e.message}`);
@@ -1245,18 +1316,20 @@ let _fpsExpandTimer = null;
 function updateSpeedControls() {
   const max = session.playback.maxSpeed;
   const warm = scheduler.warmUpComplete;
-  document.querySelectorAll('.speed-btn').forEach(btn => {
-    const val = btn.dataset.speed;
+  const seg = document.getElementById('speed-seg');
+  if (!seg) return;
+  seg.querySelectorAll('label').forEach(label => {
+    const val = label.dataset.speed;
     if (val === 'max') {
-      btn.style.opacity = '';
-      btn.disabled = false;
+      label.style.opacity = '';
+      label.style.pointerEvents = '';
     } else if (!warm) {
-      btn.style.opacity = '0.4';
-      btn.disabled = true;
+      label.style.opacity = '0.4';
+      label.style.pointerEvents = 'none';
     } else {
       const spd = parseFloat(val);
-      btn.style.opacity = spd > max ? '0.4' : '';
-      btn.disabled = spd > max;
+      label.style.opacity = spd > max ? '0.4' : '';
+      label.style.pointerEvents = spd > max ? 'none' : '';
     }
   });
 }

@@ -32,8 +32,8 @@ python3 -m http.server 8000
 | Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame, component-aware forces |
 | Rendering | InstancedMesh (2 draw calls for atoms+bonds), MeshStandardMaterial (PBR), camera-relative 4-light rig, axis triad |
 | Themes | Dark (default) / Light |
-| Advanced | Adjustable drag strength, rotation strength, damping, speed, and boundary mode (Contain/Remove) |
-| Containment boundary | Contain mode (soft harmonic wall bounces atoms back) or Remove mode (atoms deleted past boundary). Live atom count in control bar. Wall radius auto-scales with atom count (CONFIG.wall.density). Toggle in Advanced panel. |
+| Settings sheet | Adjustable drag strength, rotation strength, damping, speed, and boundary mode — organized in grouped sections (Scene, Simulation, Interaction, Appearance, Boundary, Help) |
+| Containment boundary | Contain mode (soft harmonic wall bounces atoms back) or Remove mode (atoms deleted past boundary). Live atom count in Settings sheet (Scene section). Wall radius auto-scales with atom count (CONFIG.wall.density). Toggle in Settings sheet (Boundary section). |
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
 | Pause | Primary control — freezes physics, camera/UI remain active |
 | Status | Sim speed (Nx), MD rate (ps/s), hardware-limited indicator. Tap to expand on mobile |
@@ -41,7 +41,7 @@ python3 -m http.server 8000
 
 ### Interaction Modes
 
-The control bar has a three-way mode selector: **Atom** | **Move** | **Rotate**. The mode determines what happens when the user drags an atom. Mode persists across structure loads.
+The dock has a three-way segmented mode selector: **Atom** | **Move** | **Rotate**. The mode determines what happens when the user drags an atom. Mode persists across structure loads.
 
 | Mode | Physics behavior |
 |------|-----------------|
@@ -51,9 +51,9 @@ The control bar has a three-way mode selector: **Atom** | **Move** | **Rotate**.
 
 ### Speed & Pause
 
-**Pause** is a primary control in the main control bar. Physics freezes; camera, UI, and input remain active. Resume resets the accumulator to prevent catch-up burst.
+**Pause** is a primary dock button. Physics freezes; camera, UI, and input remain active. Resume resets the accumulator to prevent catch-up burst.
 
-**Speed** is in the Advanced panel: `0.5x | 1x | 2x | 4x | Max`. Canonical 1x = 240 steps/sec, independent of display refresh rate (fixes the old monitor-dependent behavior). Speed buttons above the current `maxSpeed` are disabled. **Max** is always enabled — it tracks the live maximum sustainable speed.
+**Speed** is in the Settings sheet (Simulation section): `0.5x | 1x | 2x | 4x | Max`. Canonical 1x = 240 steps/sec, independent of display refresh rate (fixes the old monitor-dependent behavior). Speed buttons above the current `maxSpeed` are disabled. **Max** is always enabled — it tracks the live maximum sustainable speed.
 
 **Selected vs effective speed**: the user selects a target speed. The scheduler delivers the actual speed the hardware can sustain. Status shows both: `Sim 2.0x · 0.24 ps/s`. When hardware-limited: `Hardware-limited · Sim 1.6x · 0.19 ps/s`.
 
@@ -138,7 +138,7 @@ Each page module has defined ownership boundaries:
 
 **Key rules:**
 - Modules import from `config.js` for shared constants. They do NOT import from each other's internals. Data flows through `main.js` orchestration.
-- **Interaction mode coordination:** main.js resolves gesture intent into a mode string (`'atom'` | `'move'` | `'rotate'`) before passing it to the state machine. input.js reports raw gestures (atom index + isRotate boolean). The state machine maps mode → state (e.g., `'atom'` → `DRAG`). The core engineering dependency chain for adding new modes is main.js + state-machine.js + physics.js. Depending on the mode, input.js (new gesture metadata), renderer.js (visual feedback), index.html (UI controls, help panel), and docs (viewer.md, testing.md, README.md) may also need updates.
+- **Interaction mode coordination:** main.js resolves gesture intent into a mode string (`'atom'` | `'move'` | `'rotate'`) before passing it to the state machine. input.js reports raw gestures (atom index + isRotate boolean). The state machine maps mode → state (e.g., `'atom'` → `DRAG`). The core engineering dependency chain for adding new modes is main.js + state-machine.js + physics.js. Depending on the mode, input.js (new gesture metadata), renderer.js (visual feedback), index.html (UI controls, help page (inside settings sheet)), and docs (viewer.md, testing.md, README.md) may also need updates.
 - **Known v1 limitation:** In Move mode, the force line still originates from the picked atom rather than the center of mass, so the visual cue partly reads as "drag this atom." The blue color and immediate whole-molecule motion mitigate this, but a COM-origin force line or bounding indicator would be a stronger signal.
 
 ### Technology

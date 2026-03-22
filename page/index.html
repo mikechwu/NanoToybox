@@ -46,8 +46,6 @@
 [data-ui-effects="reduced"] .panel,
 [data-ui-effects="reduced"] #info,
 [data-ui-effects="reduced"] #fps,
-[data-ui-effects="reduced"] #controls,
-[data-ui-effects="reduced"] #placement-bar,
 [data-ui-effects="reduced"] .dock,
 [data-ui-effects="reduced"] .sheet {
   backdrop-filter: none;
@@ -98,58 +96,6 @@ canvas { display: block; touch-action: none; }
 }
 #hint.fade { opacity: 0; }
 
-#controls {
-  position: absolute; bottom: 0; left: 0; right: 0;
-  background: var(--panel-bg);
-  backdrop-filter: blur(var(--glass-blur));
-  padding: var(--space-sm) var(--space-lg);
-  padding-bottom: max(8px, env(safe-area-inset-bottom));
-  display: flex; align-items: center; gap: 10px;
-  flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
-  font-size: 12px; z-index: 10;
-  border-top: 1px solid var(--color-border);
-  touch-action: auto;
-}
-#controls button:not(.mode-btn), #controls select {
-  background: var(--color-btn); color: var(--color-text);
-  border: 1px solid var(--color-border);
-  padding: var(--space-sm) 14px; cursor: pointer;
-  font-family: inherit; font-size: var(--font-sm);
-  border-radius: var(--radius-sm); min-height: 36px;
-  flex-shrink: 0; white-space: nowrap;
-}
-#controls button:not(.mode-btn):hover, #controls select:hover {
-  background: var(--color-surface-hover); color: var(--color-text);
-}
-#controls label { color: var(--color-text-secondary); font-size: var(--font-xs); text-transform: uppercase; letter-spacing: 0.3px; flex-shrink: 0; white-space: nowrap; }
-#controls span { color: var(--color-text-secondary); flex-shrink: 0; }
-.ctrl-sep { width: 1px; height: 22px; background: var(--color-border); flex-shrink: 0; }
-.mode-btn {
-  padding: var(--space-sm) var(--space-md); cursor: pointer; font-size: 12px;
-  border: 1px solid var(--color-border);
-  background: var(--color-btn); color: var(--color-text-secondary);
-  border-radius: 0; min-height: 36px;
-  font-family: inherit; flex-shrink: 0;
-  touch-action: manipulation;
-}
-.mode-btn:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
-.mode-btn:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
-.mode-btn + .mode-btn { border-left: none; }
-.mode-btn.active { background: var(--color-accent-soft); color: var(--color-accent-text); }
-.mode-btn:hover:not(.active) { background: var(--color-surface-hover); color: var(--color-text); }
-.speed-btn {
-  padding: 4px 8px; font-size: var(--font-xs); cursor: pointer;
-  border: 1px solid var(--color-border);
-  background: var(--color-btn); color: var(--color-text-secondary);
-  font-family: inherit; border-radius: 0;
-  touch-action: manipulation;
-}
-.speed-btn:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
-.speed-btn:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
-.speed-btn + .speed-btn { border-left: none; }
-.speed-btn.active { background: var(--color-accent-soft); color: var(--color-accent-text); }
-.speed-btn:hover:not(.active):not(:disabled) { background: var(--color-surface-hover); color: var(--color-text); }
-.speed-btn:disabled { opacity: 0.4; cursor: default; }
 .drawer-item {
   padding: var(--space-sm) 10px; cursor: pointer; color: var(--color-text);
   border-radius: var(--radius-sm);
@@ -205,14 +151,6 @@ canvas { display: block; touch-action: none; }
 .panel-helper {
   color: var(--color-text-secondary); font-size: 9px;
 }
-#placement-bar {
-  background: var(--panel-bg);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid var(--color-accent);
-  border-radius: var(--radius-md);
-  font-size: var(--font-sm);
-}
 #atom-count {
   color: var(--color-accent-text); font-size: var(--font-xs);
   font-variant-numeric: tabular-nums; margin-left: var(--space-sm); opacity: 0.7;
@@ -231,8 +169,7 @@ canvas { display: block; touch-action: none; }
 }
 
 /* ══════════════════════════════════════════════════════════
-   Phase 2: Layout primitives (new responsive system)
-   These coexist with old #controls/#advanced-panel until Phase 3.
+   Layout primitives: dock, sheet, grouped list, segmented control
    ══════════════════════════════════════════════════════════ */
 
 /* ── Dock ── */
@@ -431,6 +368,21 @@ canvas { display: block; touch-action: none; }
   white-space: nowrap;
 }
 .segmented label.active { color: var(--color-text); }
+
+/* ── Dock extras ── */
+.dock-icon { font-size: 18px; line-height: 1; }
+.dock-label { font-size: var(--font-xs); }
+.dock-mode { max-width: 160px; }
+/* Dock placement mode: hide mode segmented, show cancel, accent the Place button */
+.dock.placement .dock-mode { display: none; }
+.dock-cancel { display: none; }
+.dock.placement .dock-cancel { display: flex; }
+.dock.placement #dock-add { color: var(--color-accent-text); }
+
+/* ── Sheet pages (drill-in navigation) ── */
+.sheet-page { /* default visible */ }
+.sheet-visible { display: block; }
+.sheet-page-hidden { display: none; }
 </style>
 </head>
 <body>
@@ -441,218 +393,175 @@ canvas { display: block; touch-action: none; }
   </div>
   <div id="fps"></div>
   <div id="hint">Click or tap an atom to interact</div>
-  <div id="help" class="panel" style="display:none; touch-action:auto;">
-    <div class="panel-heading" style="margin-bottom:8px;">Controls</div>
-    <div class="help-section-title">Interaction Modes</div>
-    <div><b>Atom</b> — drag individual atom (spring force)</div>
-    <div><b>Move</b> — translate entire molecule</div>
-    <div><b>Rotate</b> — spin molecule (torque)</div>
-    <div class="help-section-title" style="margin-top:12px;">Desktop</div>
-    <div><b>Left-drag on atom</b> — interact (depends on mode)</div>
-    <div><b>Left-drag fast + release</b> — flick / push atom (Atom mode)</div>
-    <div><b>Ctrl + click on atom</b> — rotate (shortcut, any mode)</div>
-    <div><b>Right-drag</b> — orbit camera</div>
-    <div><b>Scroll wheel</b> — zoom</div>
-    <div class="help-section-title" style="margin-top:12px;">Mobile</div>
-    <div><b>1-finger drag on atom</b> — interact (depends on mode)</div>
-    <div><b>2-finger pinch</b> — zoom</div>
-    <div><b>2-finger drag</b> — pan camera</div>
-    <div class="help-section-title" style="margin-top:12px;">Playground</div>
-    <div><b>Add Molecule</b> — place a new molecule in the scene</div>
-    <div><b>Clear</b> — remove all molecules</div>
-    <div>New molecules appear next to the molecule nearest the center of your view. Drag to adjust position before placing. Any visible part of the preview can be dragged.</div>
-  </div>
-  <div id="controls">
-    <button id="btn-add-molecule">Add Molecule</button>
-    <button id="btn-add-another" style="display:none;">Add Another</button>
-    <button id="btn-clear">Clear</button>
-    <button id="btn-reset-view">Reset View</button>
-    <button id="btn-pause">Pause</button>
-    <div class="ctrl-sep"></div>
-    <div id="interact-mode" style="display:inline-flex; gap:0;">
-      <button class="mode-btn active" data-mode="atom">Atom</button>
-      <button class="mode-btn" data-mode="move">Move</button>
-      <button class="mode-btn" data-mode="rotate">Rotate</button>
-    </div>
-    <div class="ctrl-sep"></div>
-    <button id="theme-toggle">Theme</button>
-    <button id="btn-advanced">Advanced</button>
-    <button id="btn-help-open">?</button>
-    <span id="atom-count"></span>
-  </div>
-  <!-- ── Phase 3 debt: remaining inline geometry styles ──
-       These layout-only inline styles (position, width, z-index, padding, bottom)
-       are tolerated during Phase 1-2 and will be extracted to CSS classes in Phase 3
-       when the navigation restructure replaces these panels with dock+sheet.
-       Theme-sensitive styles (colors, backgrounds, borders) are fully class-owned. -->
-  <!-- Structure drawer (opened by Add Molecule) -->
-  <div id="structure-drawer" class="panel" style="display:none; position:absolute; bottom:50px; left:12px;
-    z-index:20; touch-action:auto; width:280px; max-height:300px; overflow-y:auto;
-    padding:12px 16px;">
-    <div class="panel-heading" style="margin-bottom:8px;">Choose Structure</div>
-    <div id="structure-list"></div>
-  </div>
-  <!-- Placement mode bar -->
-  <div id="placement-bar" style="display:none; position:absolute; bottom:50px; left:50%; transform:translateX(-50%);
-    padding:8px 16px; z-index:20; touch-action:auto;
-    align-items:center; gap:12px;">
-    <button id="btn-place" class="panel-btn-accent">Place</button>
-    <button id="btn-cancel-place" class="panel-btn" style="padding:8px 16px; font-size:13px;">Cancel</button>
-  </div>
 
-  <!-- Advanced settings panel -->
-  <div id="advanced-panel" class="panel" style="display:none; position:absolute; bottom:44px; right:12px;
-    z-index:15; touch-action:auto; width:260px; padding:16px 20px;">
-    <div class="panel-heading" style="margin-bottom:12px;">Settings</div>
+  <!-- ══════════════════════════════════════════════════
+       Phase 3: Dock + Sheet navigation system
+       ══════════════════════════════════════════════════ -->
 
-    <div style="margin-bottom:12px;">
-      <label class="panel-label">Speed</label>
-      <div style="display:inline-flex; gap:0; margin-left:8px;">
-        <button class="speed-btn" data-speed="0.5">0.5x</button>
-        <button class="speed-btn active" data-speed="1">1x</button>
-        <button class="speed-btn" data-speed="2">2x</button>
-        <button class="speed-btn" data-speed="4">4x</button>
-        <button class="speed-btn" data-speed="max">Max</button>
-      </div>
-    </div>
+  <!-- Sheet backdrop — blocks canvas on phone/tablet, hidden on desktop -->
+  <div class="sheet-backdrop" id="sheet-backdrop"></div>
 
-    <div style="margin-bottom:10px;">
-      <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-        <label class="panel-label">Drag Strength</label>
-        <span id="drag-val" class="panel-value">2.0</span>
-      </div>
-      <input type="range" id="drag-strength" min="0.5" max="10" step="0.5" value="2.0" class="panel-slider">
-    </div>
-
-    <div style="margin-bottom:10px;">
-      <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-        <label class="panel-label">Rotate Strength</label>
-        <span id="rotate-val" class="panel-value">5.0</span>
-      </div>
-      <input type="range" id="rotate-strength" min="1" max="20" step="1" value="5" class="panel-slider">
-    </div>
-
-    <div style="margin-bottom:4px;">
-      <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-        <label class="panel-label">Damping</label>
-        <span id="damping-val" class="panel-value">None</span>
-      </div>
-      <input type="range" id="damping-slider" min="0" max="100" step="1" value="0" class="panel-slider">
-      <div style="display:flex; justify-content:space-between; margin-top:2px;">
-        <span class="panel-helper">NVE (conserve energy)</span>
-        <span class="panel-helper">Heavy drag</span>
-      </div>
-    </div>
-    <div style="margin-top:12px; margin-bottom:4px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-        <label class="panel-label">Boundary</label>
-        <span id="boundary-mode-val" class="panel-value">Contain</span>
-      </div>
-      <div style="display:inline-flex; gap:0;">
-        <button class="boundary-btn panel-btn active" data-boundary="contain" style="border-radius:var(--radius-sm) 0 0 var(--radius-sm);">Contain</button>
-        <button class="boundary-btn panel-btn" data-boundary="remove" style="border-radius:0 var(--radius-sm) var(--radius-sm) 0;">Remove</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ══════════════════════════════════════════════════════
-       Phase 2: Hidden test elements for new layout primitives.
-       Set display:flex/block via DevTools to preview.
-       Remove after Phase 3 migration completes.
-       ══════════════════════════════════════════════════════ -->
-  <div class="sheet-backdrop" id="test-backdrop" style="display:none;"></div>
-  <aside class="sheet" id="test-sheet" style="display:none;">
+  <!-- Settings sheet -->
+  <aside class="sheet" id="settings-sheet" aria-hidden="true" inert>
     <div class="sheet-handle"></div>
-    <div class="sheet-header">Settings</div>
-    <div style="padding:var(--space-md) var(--space-lg); padding-bottom:calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));">
-      <div class="group">
-        <div class="group-header">Scene</div>
-        <ul class="group-list">
-          <li class="group-item group-action">Add Molecule</li>
-          <li class="group-item group-action">Clear</li>
-          <li class="group-item group-action">Reset View</li>
-          <li class="group-item">
-            <span>Atoms</span>
-            <span class="group-value">60</span>
-          </li>
-        </ul>
+
+    <!-- Settings top-level (default view) -->
+    <div id="sheet-main" class="sheet-page">
+      <div class="sheet-header">Settings</div>
+      <div style="padding:var(--space-md) var(--space-lg); padding-bottom:calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));">
+
+        <div class="group">
+          <div class="group-header">Scene</div>
+          <ul class="group-list">
+            <li class="group-item group-action" id="sheet-add-molecule">Add Molecule</li>
+            <li class="group-item group-action" id="sheet-clear" style="color:var(--color-danger);">Clear</li>
+            <li class="group-item group-action" id="sheet-reset-view">Reset View</li>
+            <li class="group-item">
+              <span>Atoms</span>
+              <span class="group-value" id="sheet-atom-count">0</span>
+            </li>
+          </ul>
+        </div>
+
+        <div class="group">
+          <div class="group-header">Simulation</div>
+          <ul class="group-list">
+            <li class="group-item">
+              <span>Speed</span>
+              <div class="segmented" id="speed-seg" style="--seg-count:5; --seg-active:1;">
+                <label data-speed="0.5">0.5x</label>
+                <label data-speed="1" class="active">1x</label>
+                <label data-speed="2">2x</label>
+                <label data-speed="4">4x</label>
+                <label data-speed="max">Max</label>
+              </div>
+            </li>
+            <li class="group-item">
+              <span>Damping</span>
+              <div style="display:flex; align-items:center; gap:var(--space-sm);">
+                <input type="range" id="damping-slider" min="0" max="100" step="1" value="0" class="panel-slider" style="width:100px;">
+                <span id="damping-val" class="panel-value">None</span>
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <div class="group">
+          <div class="group-header">Interaction</div>
+          <ul class="group-list">
+            <li class="group-item">
+              <span>Drag Strength</span>
+              <div style="display:flex; align-items:center; gap:var(--space-sm);">
+                <input type="range" id="drag-strength" min="0.5" max="10" step="0.5" value="2.0" class="panel-slider" style="width:100px;">
+                <span id="drag-val" class="panel-value">2.0</span>
+              </div>
+            </li>
+            <li class="group-item">
+              <span>Rotate Strength</span>
+              <div style="display:flex; align-items:center; gap:var(--space-sm);">
+                <input type="range" id="rotate-strength" min="1" max="20" step="1" value="5" class="panel-slider" style="width:100px;">
+                <span id="rotate-val" class="panel-value">5.0</span>
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <div class="group">
+          <div class="group-header">Appearance</div>
+          <ul class="group-list">
+            <li class="group-item">
+              <span>Theme</span>
+              <div class="segmented" id="theme-seg" style="--seg-count:2; --seg-active:0;">
+                <label data-theme="dark" class="active">Dark</label>
+                <label data-theme="light">Light</label>
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <div class="group">
+          <div class="group-header">Boundary</div>
+          <ul class="group-list">
+            <li class="group-item">
+              <span>Mode</span>
+              <div class="segmented" id="boundary-seg" style="--seg-count:2; --seg-active:0;">
+                <label data-boundary="contain" class="active">Contain</label>
+                <label data-boundary="remove">Remove</label>
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <div class="group">
+          <div class="group-header">Help</div>
+          <ul class="group-list">
+            <li class="group-item" id="sheet-help-link" style="cursor:pointer;">
+              <span>Controls</span>
+              <span class="group-value">&#x203A;</span>
+            </li>
+          </ul>
+        </div>
       </div>
-      <div class="group">
-        <div class="group-header">Simulation</div>
-        <ul class="group-list">
-          <li class="group-item">
-            <span>Speed</span>
-            <div class="segmented" style="--seg-count:5; --seg-active:1;">
-              <label>0.5x</label>
-              <label class="active">1x</label>
-              <label>2x</label>
-              <label>4x</label>
-              <label>Max</label>
-            </div>
-          </li>
-          <li class="group-item">
-            <span>Damping</span>
-            <input type="range" class="panel-slider" style="width:120px;" min="0" max="100" value="0">
-          </li>
-        </ul>
+    </div>
+
+    <!-- Help drill-in page (hidden by default) -->
+    <div id="sheet-help" class="sheet-page sheet-page-hidden">
+      <div class="sheet-header" style="display:flex; align-items:center; gap:var(--space-sm);">
+        <button id="help-back" class="panel-btn" style="padding:4px 8px;">&#x2039; Back</button>
+        <span>Controls</span>
       </div>
-      <div class="group">
-        <div class="group-header">Appearance</div>
-        <ul class="group-list">
-          <li class="group-item">
-            <span>Theme</span>
-            <div class="segmented" style="--seg-count:2; --seg-active:0;">
-              <label class="active">Dark</label>
-              <label>Light</label>
-            </div>
-          </li>
-        </ul>
-      </div>
-      <div class="group">
-        <div class="group-header">Boundary</div>
-        <ul class="group-list">
-          <li class="group-item">
-            <span>Mode</span>
-            <div class="segmented" style="--seg-count:2; --seg-active:0;">
-              <label class="active">Contain</label>
-              <label>Remove</label>
-            </div>
-          </li>
-        </ul>
-      </div>
-      <div class="group">
-        <div class="group-header">Help</div>
-        <ul class="group-list">
-          <li class="group-item">
-            <span>Controls</span>
-            <span class="group-value">&#x203A;</span>
-          </li>
-          <li class="group-item">
-            <span>About</span>
-            <span class="group-value">&#x203A;</span>
-          </li>
-        </ul>
+      <div style="padding:var(--space-md) var(--space-lg); line-height:1.7; font-size:var(--font-sm);">
+        <div class="help-section-title">Interaction Modes</div>
+        <div><b>Atom</b> — drag individual atom (spring force)</div>
+        <div><b>Move</b> — translate entire molecule</div>
+        <div><b>Rotate</b> — spin molecule (torque)</div>
+        <div class="help-section-title" style="margin-top:12px;">Desktop</div>
+        <div><b>Left-drag on atom</b> — interact (depends on mode)</div>
+        <div><b>Left-drag fast + release</b> — flick / push atom (Atom mode)</div>
+        <div><b>Ctrl + click on atom</b> — rotate (shortcut, any mode)</div>
+        <div><b>Right-drag</b> — orbit camera</div>
+        <div><b>Scroll wheel</b> — zoom</div>
+        <div class="help-section-title" style="margin-top:12px;">Mobile</div>
+        <div><b>1-finger drag on atom</b> — interact (depends on mode)</div>
+        <div><b>2-finger pinch</b> — zoom</div>
+        <div><b>2-finger drag</b> — pan camera</div>
+        <div class="help-section-title" style="margin-top:12px;">Playground</div>
+        <div><b>Add</b> — place a new molecule in the scene</div>
+        <div><b>Clear</b> — remove all molecules</div>
+        <div>New molecules appear next to the molecule nearest the center of your view.</div>
       </div>
     </div>
   </aside>
 
-  <nav class="dock" id="test-dock" style="display:none;">
-    <button class="dock-item active">
-      <span style="font-size:18px;">+</span>
-      <span>Add</span>
+  <!-- Structure chooser sheet -->
+  <aside class="sheet" id="chooser-sheet" aria-hidden="true" inert>
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">Choose Structure</div>
+    <div id="structure-list" style="padding:var(--space-md) var(--space-lg); padding-bottom:calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));"></div>
+  </aside>
+
+  <!-- Primary dock -->
+  <nav class="dock" id="dock">
+    <button class="dock-item" id="dock-add">
+      <span class="dock-icon">+</span>
+      <span class="dock-label" id="dock-add-label">Add</span>
     </button>
-    <div class="segmented" style="--seg-count:3; --seg-active:0;">
-      <label class="active">Atom</label>
-      <label>Move</label>
-      <label>Rotate</label>
+    <div class="segmented dock-mode" id="mode-seg" style="--seg-count:3; --seg-active:0;">
+      <label data-mode="atom" class="active">Atom</label>
+      <label data-mode="move">Move</label>
+      <label data-mode="rotate">Rotate</label>
     </div>
-    <button class="dock-item">
-      <span style="font-size:18px;">⏸</span>
-      <span>Pause</span>
+    <button class="dock-item dock-cancel" id="dock-cancel">
+      <span class="dock-icon">&#x2715;</span>
+      <span class="dock-label">Cancel</span>
     </button>
-    <button class="dock-item">
-      <span style="font-size:18px;">⚙</span>
-      <span>Settings</span>
+    <button class="dock-item" id="dock-pause">
+      <span class="dock-icon">&#x23F8;</span>
+      <span class="dock-label">Pause</span>
+    </button>
+    <button class="dock-item" id="dock-settings">
+      <span class="dock-icon">&#x2699;</span>
+      <span class="dock-label">Settings</span>
     </button>
   </nav>
 </div>

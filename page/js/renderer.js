@@ -775,6 +775,11 @@ export class Renderer {
     }
   }
 
+  /** Set overlay insets so axis triad and other overlays avoid UI chrome. */
+  setOverlayInsets(insets) {
+    this._overlayInsets = insets; // { bottom, left, right, top }
+  }
+
   /** Debug info for instanced capacity monitoring. */
   getCapacityInfo() {
     return {
@@ -875,7 +880,7 @@ export class Renderer {
     // when setPixelRatio() has been called before setSize().
     const size = this._axisSize;
     const offsetX = 6;
-    const offsetY = 50; // above controls bar
+    const offsetY = this._overlayInsets ? this._overlayInsets.bottom : 50;
 
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;

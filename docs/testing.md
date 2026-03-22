@@ -117,7 +117,7 @@ python3 -m http.server 8000
 | 8 | Reset button | Structure returns to initial relaxed geometry |
 | 9 | Reset View button | Camera returns to default front view |
 | 10 | Theme toggle | Dark/light switch — all UI elements adapt |
-| 11 | Advanced panel | Sliders adjust drag strength, rotation strength, and damping in real-time |
+| 11 | Settings sheet | Sliders in Simulation/Interaction sections adjust drag strength, rotation strength, and damping in real-time |
 | 11a | Damping at 0 | After drag/rotate, molecule vibrates indefinitely (NVE) |
 | 11b | Damping raised | Vibration decays visibly; at max, motion stops almost instantly |
 | 12 | Large structure (C720) | Loads without crash, interaction works at reduced FPS |
@@ -155,9 +155,9 @@ python3 -m http.server 8000
 | 42 | Clear playground, then orbit camera | Camera orbits around origin (0,0,0), not stale scene center |
 | 43 | Clear playground, then Add Molecule | Preview appears centered in viewport at molecule-appropriate depth |
 | 44 | Clear + Add + Atom drag | First molecule after Clear responds to all interaction modes correctly |
-| 45 | Switch structure during placement | Click different molecule in drawer while preview is active — old preview replaced cleanly, new preview appears |
+| 45 | Switch structure during placement | Select different structure in chooser sheet while preview is active — old preview replaced cleanly, new preview appears |
 | 46 | Add Another during placement | Add Another while preview active — old preview replaced, new preview of same structure appears |
-| 47 | Rapid structure switching in drawer | Click two different structures quickly — only the last-clicked preview appears, first is discarded |
+| 47 | Rapid structure switching in chooser sheet | Click two different structures quickly — only the last-clicked preview appears, first is discarded |
 | 48 | Stale load failure during switching | If first structure fails to load after second was selected, error does not corrupt the active preview |
 | 49 | Clear during pending preview load | Click Add Molecule, select structure, then Clear before preview appears — no preview appears after Clear |
 | 50 | Escape during pending preview load (desktop) | Press Escape while structure is loading — load is cancelled, no preview appears |
@@ -188,7 +188,7 @@ python3 -m http.server 8000
 | 75 | Atom count display | Shows "N: 58 (2 removed)" after removal events |
 | 76 | Add molecule after Remove empties scene | Wall resets, new molecule gets fresh boundary |
 | 77 | Switch Contain → Remove during flight | Atom that was bouncing back now flies freely and gets deleted |
-| 78 | Boundary toggle in Advanced panel | Contain/Remove buttons toggle correctly, visual feedback |
+| 78 | Boundary toggle in Settings sheet (Boundary section) | Contain/Remove buttons toggle correctly, visual feedback |
 
 **Transaction rollback verification:**
 
