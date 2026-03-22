@@ -35,7 +35,7 @@ NanoToybox/
 ├── structures/
 │   └── library/                  # 15 canonical relaxed 0K structures (XYZ + manifest.json)
 ├── page/                         # Interactive carbon playground (real-time simulation)
-│   ├── index.html                # HTML shell, UI controls, advanced settings panel
+│   ├── index.html                # HTML shell, UI controls, settings sheet
 │   ├── bench/                    # Performance benchmarks
 │   │   ├── bench-physics.html    # Physics-only microbench (per-stage timing)
 │   │   ├── bench-render.html     # Raw Three.js renderer microbench (3 modes)
@@ -49,23 +49,33 @@ NanoToybox/
 │   ├── wasm/                     # Pre-built Wasm kernel (committed binaries)
 │   │   ├── tersoff.wasm          # Compiled C Tersoff kernel
 │   │   └── tersoff.js            # Emscripten glue code
-│   └── js/
-│       ├── config.js             # Centralized page configuration (single source of truth)
-│       ├── main.js               # Entry point, session state, lifecycle, command dispatch
-│       ├── physics.js            # Tersoff force engine + interaction forces
-│       ├── renderer.js           # Three.js scene, PBR materials, axis triad
-│       ├── input.js              # Mouse/touch input, raycasting, camera-plane projection
-│       ├── state-machine.js      # Interaction states (idle/hover/drag/rotate/camera)
-│       ├── loader.js             # Structure library loader + bond topology
-│       ├── fps-monitor.js        # Frame time measurement + degradation tiers
-│       ├── themes.js             # Dark/light theme definitions
-│       └── tersoff-wasm.js       # Wasm kernel bridge (lazy-load, buffer mgmt, CSR marshaling, JS fallback)
+│   ├── js/
+│   │   ├── main.js               # Composition root + runtime orchestration
+│   │   ├── scene.js              # Scene commit/clear/load (transaction-safe)
+│   │   ├── placement.js          # Placement lifecycle, tangent computation, canvas listeners
+│   │   ├── interaction.js        # Command dispatch, screen-to-physics projection
+│   │   ├── status.js             # Status text, hint fade
+│   │   ├── ui/
+│   │   │   ├── overlay.js        # Sheet open/close, backdrop, help drill-in
+│   │   │   ├── dock.js           # Buttons, placement mode, mode segmented
+│   │   │   └── settings-sheet.js # Sliders, segmented controls, stat rows
+│   │   ├── shared/
+│   │   │   ├── segmented.js      # Segmented control wiring utility (returns disposer)
+│   │   │   └── require-el.js     # Fail-fast DOM ref validation
+│   │   ├── config.js             # Centralized page configuration
+│   │   ├── physics.js            # Tersoff force engine + interaction forces
+│   │   ├── renderer.js           # Three.js scene, InstancedMesh, PBR materials
+│   │   ├── input.js              # Mouse/touch input, raycasting
+│   │   ├── state-machine.js      # Interaction state transitions
+│   │   ├── loader.js             # Structure library loader + bond topology
+│   │   ├── fps-monitor.js        # Frame time measurement
+│   │   ├── themes.js             # Theme definitions + CSS token bridge
+│   │   └── tersoff-wasm.js       # Wasm kernel bridge
 ├── viewer/
 │   └── index.html                # Three.js pre-computed trajectory viewer
 ├── data/                         # ML training/test datasets (NPY + metadata)
 ├── ml/                           # ML surrogate code (deferred — see ml-surrogate.md)
 ├── outputs/                      # Test output artifacts (energy CSVs, trajectories, plots)
-├── .reports/                     # Research proposals + dev reports (history)
 └── docs/                         # This documentation
 ```
 
@@ -115,6 +125,33 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 4. **XYZ format throughout** — human-readable, viewer-compatible, ASE-compatible
 5. **Analytical first, ML later** — ML explored and deferred; analytical is faster for <1000 atoms
 6. **Centralized page config** — all tuning constants, thresholds, and defaults in `page/js/config.js`; no scattered magic numbers
+
+### Composition Root Pattern
+
+`main.js` creates all subsystems (renderer, physics, stateMachine) and all UI controllers (overlay, dock, settingsSheet, placement, statusCtrl). Controllers receive dependencies at construction time — they do not import session, physics, or renderer directly.
+
+Cross-controller communication uses callbacks wired by main.js. Controllers may import shared utilities (`segmented.js`, `require-el.js`) and domain modules (`loader.js`, `config.js`, `themes.js`) directly.
+
+### State Ownership
+
+Each state slice has one authoritative writer. Other modules emit intents via callbacks; the authoritative writer applies mutations.
+
+| State slice | Authoritative writer | Intent sources |
+|-------------|---------------------|---------------|
+| `session.scene` | scene.js (commit/clear) | settings-sheet (clear button), placement (commit) |
+| `session.playback` | main.js (frame loop) | dock (pause intent), settings-sheet (speed intent) |
+| `session.interactionMode` | main.js (via dock intent) | dock (mode segmented) |
+| `session.theme` | main.js (via settings intent) | settings-sheet (theme segmented) |
+| placement state | placement.js (`_state`) | dock (add/cancel intents) |
+| scheduler / effectsGate | main.js (frame loop only) | — |
+
+### App Lifecycle
+
+- **Construction:** `init()` creates all subsystems and controllers
+- **Runtime:** `frameLoop()` gated by `_appRunning` flag
+- **Teardown:** `destroyApp()` stops the frame loop, removes all global listeners, destroys all controllers and subsystems, nulls refs, and resets session/scheduler/effectsGate state
+- All controllers expose `destroy()` for listener cleanup
+- Renderer GPU disposal is intentionally deferred (browser reclaims on page unload)
 
 ## External Dependencies
 

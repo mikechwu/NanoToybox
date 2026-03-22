@@ -114,8 +114,8 @@ python3 -m http.server 8000
 | 5 | Ctrl+click on atom (any mode) | Molecule rotates, spring line visible |
 | 6 | Right-drag | Camera orbits around structure |
 | 7 | Scroll wheel | Camera zooms in/out |
-| 8 | Reset button | Structure returns to initial relaxed geometry |
-| 9 | Reset View button | Camera returns to default front view |
+| 8 | Reset View (in Settings sheet Scene section) | Camera returns to default front view |
+| 9 | Help drill-in | Tap Help in settings → help page appears. Tap Back → returns to settings. |
 | 10 | Theme toggle | Dark/light switch — all UI elements adapt |
 | 11 | Settings sheet | Sliders in Simulation/Interaction sections adjust drag strength, rotation strength, and damping in real-time |
 | 11a | Damping at 0 | After drag/rotate, molecule vibrates indefinitely (NVE) |
@@ -185,7 +185,7 @@ python3 -m http.server 8000
 | 72 | Contain mode: fling atom outward | Atom bounces back from invisible boundary, stays in scene |
 | 73 | Remove mode: fling atom outward | Atom deleted when it crosses boundary, atom count decreases |
 | 74 | Remove mode: fling fragment (bonded pair) | Both atoms in fragment deleted when past boundary |
-| 75 | Atom count display | Shows "N: 58 (2 removed)" after removal events |
+| 75 | Atom count in Settings sheet | Placed row shows historical total. Active row appears after boundary removal showing e.g. "57 (3 removed)" |
 | 76 | Add molecule after Remove empties scene | Wall resets, new molecule gets fresh boundary |
 | 77 | Switch Contain → Remove during flight | Atom that was bouncing back now flies freely and gets deleted |
 | 78 | Boundary toggle in Settings sheet (Boundary section) | Contain/Remove buttons toggle correctly, visual feedback |
@@ -196,3 +196,27 @@ python3 -m http.server 8000
 - **Manual commit-path testing:** set `CONFIG.debug.failAfterPhysicsAppend = true` or `CONFIG.debug.failRendererAppend = true` in config.js, then place a molecule via the UI. Verify: placement fails gracefully, no orphan meshes, physics atom count restored, scene molecule list unchanged. Set `CONFIG.debug.assertions = true` to enable post-append invariant checks inside the rollback-protected block.
 - **Coverage summary:** physics-level transaction safety is automated; full commit-path rollback (physics + renderer + session) requires manual flag toggling and UI interaction. Both complement manual smoke tests for interaction flow.
 - **Future milestone — full integration test harness:** automate commitMolecule transaction path (physics + renderer + session coordination), preview hit-preference threshold tests (atom-vs-bond within/outside CONFIG.picker.previewAtomPreference), and remove CDN dependency from test page. Tracked as a separate infrastructure investment.
+
+### Manual Runtime Checks
+
+After changes to UI controllers or main.js composition:
+
+| # | Check | How to verify |
+|---|-------|--------------|
+| A1 | Overlay exclusivity | Open settings → tap Add → settings closes, chooser opens |
+| A2 | Dock placement mode | Start placement → Place/Cancel in dock, Mode hidden, Pause/Settings disabled |
+| A3 | Device-mode switch | Switch between device modes (responsive emulation or window resize) → overlays close on mode change, dock/sheet layout adapts |
+| A4 | Theme across all panels | Toggle theme in settings → all panels adapt |
+| A5 | Sheet close transition | Close sheet → no stale `sheet-visible` class after transition |
+
+### Code Review Invariants
+
+Check during PRs that modify controller modules:
+
+| # | Invariant | What to check |
+|---|-----------|--------------|
+| R1 | No duplicate listeners | Each DOM element has one event handler per event type |
+| R2 | Controller destroy() complete | Every addEventListener has matching removeEventListener in destroy() |
+| R3 | State ownership respected | New state writes go through the authoritative writer (see architecture.md) |
+| R4 | No controller cross-imports | Controllers don't import each other — use callbacks via main.js |
+| R5 | New globals tracked | Any new window/document listener uses addGlobalListener() |

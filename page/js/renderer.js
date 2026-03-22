@@ -94,13 +94,13 @@ export class Renderer {
     this._initAxisTriad();
 
     // Resize handling — use visualViewport on mobile for accurate sizing
-    const resizeHandler = () => this._syncSize();
-    window.addEventListener('resize', resizeHandler);
+    this._resizeHandler = () => this._syncSize();
+    window.addEventListener('resize', this._resizeHandler);
     if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', resizeHandler);
+      window.visualViewport.addEventListener('resize', this._resizeHandler);
     }
     // Deferred resize to catch iPad Safari layout settling after load
-    setTimeout(resizeHandler, 100);
+    this._deferredResizeTimer = setTimeout(this._resizeHandler, 100);
   }
 
   /**
@@ -778,6 +778,24 @@ export class Renderer {
   /** Set overlay insets so axis triad and other overlays avoid UI chrome. */
   setOverlayInsets(insets) {
     this._overlayInsets = insets; // { bottom, left, right, top }
+  }
+
+  /**
+   * Remove global listeners. Call from app teardown.
+   * Note: GPU resource disposal (WebGLRenderer, geometries, materials, textures)
+   * is intentionally deferred. Full disposal requires a dedicated pass if the app
+   * ever supports remounting or embedded use. Currently the browser reclaims GPU
+   * resources on page unload.
+   */
+  destroy() {
+    window.removeEventListener('resize', this._resizeHandler);
+    if (window.visualViewport) {
+      window.visualViewport.removeEventListener('resize', this._resizeHandler);
+    }
+    if (this._deferredResizeTimer) {
+      clearTimeout(this._deferredResizeTimer);
+      this._deferredResizeTimer = null;
+    }
   }
 
   /** Debug info for instanced capacity monitoring. */

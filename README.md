@@ -73,16 +73,12 @@ NanoToybox/
 ├── page/                   # Interactive playground (main app)
 │   ├── index.html
 │   └── js/
-│       ├── config.js       # Centralized configuration
-│       ├── main.js         # Entry point, session state
+│       ├── main.js         # Composition root + runtime orchestration
+│       ├── ui/             # UI controllers
+│       ├── shared/         # Shared utilities
 │       ├── physics.js      # Tersoff force engine
-│       ├── renderer.js     # Three.js scene
-│       ├── input.js        # Mouse/touch handling
-│       ├── state-machine.js
-│       ├── loader.js       # Structure library loader
-│       ├── fps-monitor.js
-│       ├── themes.js
-│       └── tersoff-wasm.js  # Wasm kernel bridge
+│       ├── renderer.js     # Three.js visualization
+│       └── ...             # See docs/architecture.md for full module map
 ├── viewer/                 # Pre-computed trajectory viewer
 ├── sim/                    # Python simulation engine
 │   ├── potentials/         # Tersoff (Python + Numba)
@@ -131,7 +127,7 @@ Detailed docs in [`docs/`](docs/):
 - [Architecture](docs/architecture.md) — module map, data flow
 - [Physics](docs/physics.md) — Tersoff potential, units, validation
 - [Structure Library](docs/structure-library.md) — 15 canonical structures
-- [Viewer & Interactive Page](docs/viewer.md) — features, module contracts
+- [Viewer & Interactive Page](docs/viewer.md) — product behavior and usage
 - [Scaling Research](docs/scaling-research.md) — real-time limits, collision benchmarks
 - [Decisions](docs/decisions.md) — key design rationale
 - [Contributing](docs/contributing.md) — development guide

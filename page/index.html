@@ -365,6 +365,7 @@ canvas { display: block; touch-action: none; }
   white-space: nowrap;
 }
 .segmented label.active { color: var(--color-text); }
+.seg-disabled { opacity: 0.4; pointer-events: none; }
 
 /* ── Dock extras ── */
 .dock-icon { font-size: 18px; line-height: 1; }
@@ -393,7 +394,7 @@ canvas { display: block; touch-action: none; }
   <div id="hint">Click or tap an atom to interact</div>
 
   <!-- ══════════════════════════════════════════════════
-       Phase 3: Dock + Sheet navigation system
+       Navigation system (dock + sheet)
        ══════════════════════════════════════════════════ -->
 
   <!-- Sheet backdrop — blocks canvas on phone/tablet, hidden on desktop -->

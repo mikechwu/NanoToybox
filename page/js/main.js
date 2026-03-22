@@ -4,7 +4,6 @@
  * Multi-molecule playground with placement mode.
  * Wires together: loader, physics, state machine, input, renderer, FPS monitor.
  */
-import * as THREE from 'three';
 import { loadManifest, loadStructure } from './loader.js';
 import { PhysicsEngine } from './physics.js';
 import { StateMachine, State } from './state-machine.js';
@@ -13,6 +12,13 @@ import { Renderer } from './renderer.js';
 import { FPSMonitor } from './fps-monitor.js';
 import { THEMES, applyThemeTokens } from './themes.js';
 import { CONFIG } from './config.js';
+import { commitMolecule, clearPlayground, addMoleculeToScene } from './scene.js';
+import { OverlayController } from './ui/overlay.js';
+import { DockController } from './ui/dock.js';
+import { SettingsSheetController } from './ui/settings-sheet.js';
+import { handleCommand as dispatchCommand } from './interaction.js';
+import { StatusController } from './status.js';
+import { PlacementController } from './placement.js';
 
 const DEBUG_LOAD = CONFIG.debug.load;
 
@@ -20,10 +26,10 @@ const DEBUG_LOAD = CONFIG.debug.load;
 let renderer, physics, stateMachine, inputManager, fpsMonitor;
 let manifest = null;
 let overlay = null;
-
-// Dock state — initialized in init(), used by module-scoped placement functions
-let _dockEl = null, _dockAddIcon = null, _dockAddLabel = null;
-let _dockPauseEl = null, _dockSettingsEl = null;
+let dock = null;
+let settingsSheet = null;
+let statusCtrl = null;
+let placement = null;
 
 const session = {
   theme: 'dark',
@@ -40,19 +46,6 @@ const session = {
     molecules: [],
     nextId: 1,
     totalAtoms: 0,
-  },
-  placement: {
-    active: false,
-    structureFile: null,
-    structureName: null,
-    previewAtoms: null,
-    previewBonds: null,
-    previewOffset: [0, 0, 0],
-    placementPlane: null,  // { normal: Vector3, point: Vector3 }
-    isDraggingPreview: false,
-    grabOffset: [0, 0, 0],  // 3D offset projected onto placement plane
-    lastStructureFile: null,
-    lastStructureName: null,
   },
 };
 
@@ -112,16 +105,100 @@ const effectsGate = {
   EXIT_COUNT: 60,     // frames to sustain before exiting reduced
 };
 
-// Glass UI visibility — used by FPS gate to only measure when glass surfaces are active.
-// Returns true when the dock is visible or any sheet is open.
-function isGlassUiVisible() {
-  const dock = document.getElementById('dock');
-  const settingsSheet = document.getElementById('settings-sheet');
-  const chooserSheet = document.getElementById('chooser-sheet');
-  if (dock) return true; // dock is always visible
-  if (settingsSheet && settingsSheet.classList.contains('open')) return true;
-  if (chooserSheet && chooserSheet.classList.contains('open')) return true;
-  return false;
+// Glass UI visibility — true once dock is initialized (dock is always visible with glass surface).
+function isGlassUiVisible() { return dock ? dock.isGlassActive() : false; }
+
+// Global listener registry for teardown
+const _globalListeners = [];
+let _rafId = null;
+let _appRunning = false;
+let _fpsClickHandler = null;
+let _fpsClickEl = null;
+
+/** Register a global listener and track it for teardown. */
+function addGlobalListener(target, event, handler) {
+  target.addEventListener(event, handler);
+  _globalListeners.push([event, handler, target]);
+}
+
+/** Tear down all controllers, subsystems, and global listeners. Resets runtime state. */
+function destroyApp() {
+  // Stop frame loop
+  _appRunning = false;
+  if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
+  // Remove global listeners
+  for (const [event, handler, target] of _globalListeners) {
+    target.removeEventListener(event, handler);
+  }
+  _globalListeners.length = 0;
+  // Remove FPS click handler
+  if (_fpsClickEl && _fpsClickHandler) {
+    _fpsClickEl.removeEventListener('click', _fpsClickHandler);
+    _fpsClickEl = null; _fpsClickHandler = null;
+  }
+  // Clear chooser list (removes owned-node listeners via DOM removal)
+  const chooserList = document.getElementById('structure-list');
+  if (chooserList) chooserList.innerHTML = '';
+  // Clean up debug hooks
+  delete window._setUiEffectsMode;
+  // Tear down controllers
+  if (placement) placement.destroy();
+  if (statusCtrl) statusCtrl.destroy();
+  if (overlay) overlay.destroy();
+  if (dock) dock.destroy();
+  if (settingsSheet) settingsSheet.destroy();
+  // Tear down subsystems
+  if (inputManager) inputManager.destroy();
+  if (renderer) renderer.destroy();
+  // Null destroyed refs to prevent accidental reuse
+  placement = null;
+  statusCtrl = null;
+  overlay = null;
+  dock = null;
+  settingsSheet = null;
+  inputManager = null;
+  renderer = null;
+  physics = null;
+  stateMachine = null;
+  fpsMonitor = null;
+  manifest = null;
+  // Reset runtime state for potential re-init
+  effectsGate.slowCount = 0;
+  effectsGate.fastCount = 0;
+  effectsGate.reduced = false;
+  effectsGate.mode = 'auto';
+  Object.assign(scheduler, {
+    lastFrameTs: 0, simBudgetMs: 0, mode: 'normal', overloadCount: 0,
+    totalStepsProfiled: 0, forceRenderThisTick: false,
+    stableTicks: 0, prevPhysStepMs: 1, prevRenderMs: 1, warmUpComplete: false,
+    lastMaxSpeedUpdateTs: 0, skipPressure: 0, comfortTicks: 0,
+    renderSkipLevel: 1, renderSkipCounter: 0, renderCount: 0,
+    lastRenderCountTs: 0, hasRenderSample: false, lastStatusUpdateTs: 0,
+    recoveringStartMax: 0, recoveringBlendRemaining: 0,
+    effectiveSpeedWindow: [],
+  });
+  Object.assign(scheduler.prof, {
+    physStepMs: 1, updatePosMs: 0.1, renderMs: 1, otherMs: 0.1,
+    rafIntervalMs: 16.67, actualRendersPerSec: 60,
+  });
+  _fpsExpanded = false;
+  clearTimeout(_fpsExpandTimer);
+  _fpsExpandTimer = null;
+  // Reset session state (theme preserved intentionally for re-init continuity)
+  session.isLoading = false;
+  session.interactionMode = 'atom';
+  session.scene.molecules = [];
+  session.scene.nextId = 1;
+  session.scene.totalAtoms = 0;
+  Object.assign(session.playback, {
+    selectedSpeed: CONFIG.playback.defaultSpeed,
+    speedMode: 'fixed',
+    effectiveSpeed: 1.0,
+    maxSpeed: 1.0,
+    paused: false,
+  });
+  // Clear root UI effect state
+  delete document.documentElement.dataset.uiEffects;
 }
 
 // --- Initialization ---
@@ -134,6 +211,12 @@ async function init() {
 
   renderer.applyTheme(session.theme);
   applyThemeTokens(session.theme);
+
+  // Status controller
+  statusCtrl = new StatusController({
+    statusEl: document.getElementById('status'),
+    hintEl: document.getElementById('hint'),
+  });
 
   // Device mode detection — sets data-device-mode on <html> for CSS
   function updateDeviceMode() {
@@ -149,14 +232,14 @@ async function init() {
     document.documentElement.dataset.deviceMode = mode;
   }
   updateDeviceMode();
-  window.addEventListener('resize', updateDeviceMode);
-  window.addEventListener('orientationchange', updateDeviceMode);
+  addGlobalListener(window, 'resize', updateDeviceMode);
+  addGlobalListener(window, 'orientationchange', updateDeviceMode);
 
   // UI effects mode — 'auto', 'forced-reduced', or 'forced-normal'.
   // Manual override is sticky — auto gate skips when mode is forced.
   // Automatic FPS gate with hysteresis runs in frameLoop when glass surfaces are visible.
   // Dev/testing hook: _setUiEffectsMode('reduced'|'normal'|'auto') in console.
-  // Intentionally global for Phase 2 validation. Consider gating behind CONFIG.debug later.
+  // Global dev/testing hook for UI effects mode.
   window._setUiEffectsMode = function(mode) {
     if (mode === 'reduced') {
       effectsGate.mode = 'forced-reduced';
@@ -181,101 +264,39 @@ async function init() {
     if (entries.length > 0) {
       const c60 = entries.find(([k]) => k === 'c60');
       const [key, info] = c60 || entries[0];
-      await addMoleculeToScene(info.file, info.description, [0, 0, 0]);
+      await _addMoleculeToScene(info.file, info.description, [0, 0, 0]);
     }
   } catch (e) {
-    document.getElementById('status').textContent = 'Failed to load structures. Serve from repo root.';
+    updateStatus('Failed to load structures. Serve from repo root.');
     console.error(e);
+    destroyApp();
     return;
   }
 
   // ═══════════════════════════════════════════════════════
-  // Phase 3: Dock + Sheet UI wiring
+  // UI controller wiring
   // ═══════════════════════════════════════════════════════
 
   // ── Overlay controller ──
-  // One overlay at a time: 'none' | 'settings' | 'chooser'
-  overlay = {
-    current: 'none',
+  overlay = new OverlayController({
     settingsSheet: document.getElementById('settings-sheet'),
     chooserSheet: document.getElementById('chooser-sheet'),
     backdrop: document.getElementById('sheet-backdrop'),
-
-    open(name) {
-      if (this.current === name) { this.close(); return; }
-      if (this.current !== 'none') this._hide(this.current);
-      this.current = name;
-      this._show(name);
-    },
-
-    close() {
-      if (this.current === 'none') return;
-      this._hide(this.current);
-      this.current = 'none';
-    },
-
-    _show(name) {
-      const sheet = name === 'settings' ? this.settingsSheet : this.chooserSheet;
-      sheet.classList.add('sheet-visible');
-      sheet.removeAttribute('inert');
-      sheet.setAttribute('aria-hidden', 'false');
-      this.backdrop.classList.add('sheet-visible');
-      // Trigger reflow for transition
-      sheet.offsetHeight;
-      sheet.classList.add('open');
-      this.backdrop.classList.add('visible');
-    },
-
-    _hide(name) {
-      const sheet = name === 'settings' ? this.settingsSheet : this.chooserSheet;
-      sheet.classList.remove('open');
-      sheet.setAttribute('aria-hidden', 'true');
-      sheet.setAttribute('inert', '');
-      this.backdrop.classList.remove('visible');
-      // Remove sheet-visible after transition ends (fully unmount from layout).
-      // Fallback: if transition duration is 0 (prefers-reduced-motion), remove immediately.
-      const backdrop = this.backdrop;
-      const sheetDuration = parseFloat(getComputedStyle(sheet).transitionDuration);
-      if (sheetDuration === 0) {
-        sheet.classList.remove('sheet-visible');
-        backdrop.classList.remove('sheet-visible');
-      } else {
-        sheet.addEventListener('transitionend', function onEnd() {
-          sheet.removeEventListener('transitionend', onEnd);
-          if (!sheet.classList.contains('open')) {
-            sheet.classList.remove('sheet-visible');
-          }
-        });
-        backdrop.addEventListener('transitionend', function onEnd() {
-          backdrop.removeEventListener('transitionend', onEnd);
-          if (!backdrop.classList.contains('visible')) {
-            backdrop.classList.remove('sheet-visible');
-          }
-        });
-      }
-      // Reset help drill-in when closing settings
-      if (name === 'settings') {
-        document.getElementById('sheet-main').classList.remove('sheet-page-hidden');
-        document.getElementById('sheet-help').classList.add('sheet-page-hidden');
-      }
-    },
-  };
-
-  // Backdrop click closes overlay
-  overlay.backdrop.addEventListener('click', () => overlay.close());
+    sheetMain: document.getElementById('sheet-main'),
+    sheetHelp: document.getElementById('sheet-help'),
+  });
 
   // Populate structure chooser now that overlay is defined
   populateStructureDrawer(manifest);
 
   // Escape key: close overlay or cancel placement
-  document.addEventListener('keydown', (e) => {
+  function _onKeydown(e) {
     if (e.key === 'Escape') {
-      if (session.placement.active) {
-        exitPlacementMode(false);
+      if (placement.active) {
+        placement.exit(false);
         e.preventDefault();
-      } else if (_placementLoading) {
-        _placementGeneration++;
-        _placementLoading = false;
+      } else if (placement.loading) {
+        placement.invalidatePendingLoads();
         updateSceneStatus();
         e.preventDefault();
       } else if (overlay.current !== 'none') {
@@ -283,113 +304,79 @@ async function init() {
         e.preventDefault();
       }
     }
-    if (e.key === 'Enter' && session.placement.active) {
-      exitPlacementMode(true);
+    if (e.key === 'Enter' && placement.active) {
+      placement.exit(true);
       e.preventDefault();
     }
+  }
+  addGlobalListener(document, 'keydown', _onKeydown);
+
+  // ── Dock controller ──
+  const dockAddBtn = document.getElementById('dock-add');
+  dock = new DockController({
+    dockEl: document.getElementById('dock'),
+    addBtn: dockAddBtn,
+    addIcon: dockAddBtn.querySelector('.dock-icon'),
+    addLabel: document.getElementById('dock-add-label'),
+    modeSeg: document.getElementById('mode-seg'),
+    pauseBtn: document.getElementById('dock-pause'),
+    settingsBtn: document.getElementById('dock-settings'),
+    cancelBtn: document.getElementById('dock-cancel'),
   });
 
-  // ── Segmented control helper ──
-  function wireSegmented(segEl, callback) {
-    const labels = segEl.querySelectorAll('label');
-    labels.forEach((label, i) => {
-      label.addEventListener('click', () => {
-        labels.forEach(l => l.classList.remove('active'));
-        label.classList.add('active');
-        segEl.style.setProperty('--seg-active', i);
-        callback(label);
-      });
-    });
-  }
 
-  // ── Dock buttons ──
-
-  // Add button
-  const dockAdd = document.getElementById('dock-add');
-  const dockAddLabel = document.getElementById('dock-add-label');
-  dockAdd.addEventListener('click', () => {
-    if (session.placement.active) {
-      exitPlacementMode(true); // Place action during placement
+  // Wire dock action callbacks (intents → main.js applies state)
+  dock.onAdd(() => {
+    if (placement.active) {
+      placement.exit(true);
       return;
     }
-    if (session.placement.lastStructureFile && session.scene.molecules.length > 0) {
-      // Add Another shortcut: go straight to placement
-      startPlacement(session.placement.lastStructureFile, session.placement.lastStructureName);
+    if (placement.hasLastStructure() && session.scene.molecules.length > 0) {
+      placement.start(placement.getLastStructureFile(), placement.getLastStructureName());
     } else {
       overlay.open('chooser');
     }
   });
-
-  // Mode segmented control
-  wireSegmented(document.getElementById('mode-seg'), (label) => {
-    session.interactionMode = label.dataset.mode;
-  });
-
-  // Pause button
-  const dockPause = document.getElementById('dock-pause');
-  dockPause.addEventListener('click', () => {
-    if (session.placement.active) return; // blocked during placement
+  dock.onModeChange((mode) => { session.interactionMode = mode; });
+  dock.onPause(() => {
+    if (placement.active) return;
     session.playback.paused = !session.playback.paused;
-    dockPause.querySelector('.dock-label').textContent =
-      session.playback.paused ? 'Resume' : 'Pause';
+    dock.setPauseLabel(session.playback.paused);
     if (!session.playback.paused) {
       scheduler.lastFrameTs = performance.now();
       scheduler.simBudgetMs = 0;
     }
     scheduler.forceRenderThisTick = true;
   });
-
-  // Settings button
-  document.getElementById('dock-settings').addEventListener('click', () => {
-    if (session.placement.active) return; // blocked during placement
+  dock.onSettings(() => {
+    if (placement.active) return;
     overlay.open('settings');
   });
+  dock.onCancel(() => placement.exit(false));
 
-  // ── Dock placement mode ──
-  // Initialize module-scoped dock refs for use by startPlacement/exitPlacementMode
-  _dockEl = document.getElementById('dock');
-  _dockAddIcon = dockAdd.querySelector('.dock-icon');
-  _dockAddLabel = dockAddLabel;
-  _dockPauseEl = document.getElementById('dock-pause');
-  _dockSettingsEl = document.getElementById('dock-settings');
-  if (!_dockEl || !_dockAddIcon || !_dockAddLabel || !_dockPauseEl || !_dockSettingsEl) {
-    console.error('[init] Missing required dock elements — placement mode will not work');
-  }
-
-  // Cancel button (in HTML, hidden by CSS unless .dock.placement is set)
-  document.getElementById('dock-cancel').addEventListener('click', () => exitPlacementMode(false));
-
-  // ── Settings sheet actions ──
-
-  // Scene: Add Molecule (opens chooser)
-  document.getElementById('sheet-add-molecule').addEventListener('click', () => {
-    overlay.open('chooser');
+  // ── Settings sheet controller ──
+  settingsSheet = new SettingsSheetController({
+    speedSeg: document.getElementById('speed-seg'),
+    themeSeg: document.getElementById('theme-seg'),
+    boundarySeg: document.getElementById('boundary-seg'),
+    dragSlider: document.getElementById('drag-strength'),
+    dragVal: document.getElementById('drag-val'),
+    rotateSlider: document.getElementById('rotate-strength'),
+    rotateVal: document.getElementById('rotate-val'),
+    dampingSlider: document.getElementById('damping-slider'),
+    dampingVal: document.getElementById('damping-val'),
+    placedCountEl: document.getElementById('sheet-placed-count'),
+    activeRowEl: document.getElementById('sheet-active-row'),
+    activeCountEl: document.getElementById('sheet-active-count'),
+    addMoleculeBtn: document.getElementById('sheet-add-molecule'),
+    clearBtn: document.getElementById('sheet-clear'),
+    resetViewBtn: document.getElementById('sheet-reset-view'),
+    helpLink: document.getElementById('sheet-help-link'),
+    helpBackBtn: document.getElementById('help-back'),
   });
 
-  // Scene: Clear
-  document.getElementById('sheet-clear').addEventListener('click', () => {
-    overlay.close();
-    clearPlayground();
-  });
-
-  // Scene: Reset View
-  document.getElementById('sheet-reset-view').addEventListener('click', () => {
-    renderer.resetView();
-  });
-
-  // Help drill-in
-  document.getElementById('sheet-help-link').addEventListener('click', () => {
-    document.getElementById('sheet-main').classList.add('sheet-page-hidden');
-    document.getElementById('sheet-help').classList.remove('sheet-page-hidden');
-  });
-  document.getElementById('help-back').addEventListener('click', () => {
-    document.getElementById('sheet-help').classList.add('sheet-page-hidden');
-    document.getElementById('sheet-main').classList.remove('sheet-page-hidden');
-  });
-
-  // Speed segmented
-  wireSegmented(document.getElementById('speed-seg'), (label) => {
-    const val = label.dataset.speed;
+  // Wire settings sheet callbacks (intents → main.js applies state)
+  settingsSheet.onSpeedChange((val) => {
     if (val === 'max') {
       session.playback.speedMode = 'max';
     } else {
@@ -397,86 +384,74 @@ async function init() {
       session.playback.selectedSpeed = parseFloat(val);
     }
     scheduler.forceRenderThisTick = true;
-    updateSpeedControls();
+    settingsSheet.updateSpeedButtons(session.playback.maxSpeed, scheduler.warmUpComplete);
   });
-
-  // Theme segmented
-  wireSegmented(document.getElementById('theme-seg'), (label) => {
-    session.theme = label.dataset.theme;
+  settingsSheet.onThemeChange((theme) => {
+    session.theme = theme;
     renderer.applyTheme(session.theme);
     applyThemeTokens(session.theme);
   });
-
-  // Boundary segmented
-  wireSegmented(document.getElementById('boundary-seg'), (label) => {
-    physics.setWallMode(label.dataset.boundary);
-  });
-
-  // Sliders
-  function bindSlider(id, handler) {
-    const el = document.getElementById(id);
-    el.addEventListener('input', handler);
-    el.addEventListener('change', handler);
-    return el;
-  }
-  const dragVal = document.getElementById('drag-val');
-  bindSlider('drag-strength', (e) => {
-    const v = parseFloat(e.target.value);
-    physics.setDragStrength(v);
-    dragVal.textContent = v.toFixed(1);
-  });
-  const rotVal = document.getElementById('rotate-val');
-  bindSlider('rotate-strength', (e) => {
-    const v = parseFloat(e.target.value);
-    physics.setRotateStrength(v);
-    rotVal.textContent = v.toFixed(0);
-  });
-  const dampVal = document.getElementById('damping-val');
-  bindSlider('damping-slider', (e) => {
-    const t = parseFloat(e.target.value) / 100;
-    const damping = t === 0 ? 0 : 0.5 * t * t * t;
-    physics.setDamping(damping);
-    if (damping === 0) dampVal.textContent = 'None';
-    else if (damping < 0.001) dampVal.textContent = damping.toExponential(0);
-    else dampVal.textContent = damping.toFixed(3);
-  });
-
-  // ── Structure chooser wiring ──
-  // Structure items close the chooser and start placement
-  // (populateStructureDrawer already sets up click handlers)
+  settingsSheet.onBoundaryChange((mode) => { physics.setWallMode(mode); });
+  settingsSheet.onDragChange((v) => { physics.setDragStrength(v); });
+  settingsSheet.onRotateChange((v) => { physics.setRotateStrength(v); });
+  settingsSheet.onDampingChange((d) => { physics.setDamping(d); });
+  settingsSheet.onAddMolecule(() => { overlay.open('chooser'); });
+  settingsSheet.onClear(() => { overlay.close(); _clearPlayground(); });
+  settingsSheet.onResetView(() => { renderer.resetView(); });
+  settingsSheet.onHelpOpen(() => { overlay.showHelpPage(); });
+  settingsSheet.onHelpBack(() => { overlay.showMainPage(); });
 
   // Initial speed button state
-  updateSpeedControls();
+  settingsSheet.updateSpeedButtons(session.playback.maxSpeed, scheduler.warmUpComplete);
+
+  // ── Placement controller ──
+  placement = new PlacementController({
+    renderer, physics, stateMachine, inputManager, loadStructure,
+    commands: {
+      setDockPlacementMode: (active) => setDockPlacementMode(active),
+      commitToScene: (file, name, atoms, bonds, offset) => _commitMolecule(file, name, atoms, bonds, offset),
+      updateStatus,
+      updateSceneStatus,
+      updateDockAddLabel,
+      forceIdle: () => handleCommand(stateMachine.forceIdle()),
+      syncInput: syncInputManager,
+      forceRender: () => { scheduler.forceRenderThisTick = true; },
+      buildAtomSource,
+      getSceneMolecules: () => session.scene.molecules,
+    },
+  });
 
   // Notify renderer of dock height for overlay positioning (axis triad)
   function updateDockInsets() {
-    const dock = document.getElementById('dock');
     if (dock && renderer) {
-      renderer.setOverlayInsets({ bottom: dock.offsetHeight + 8 });
+      renderer.setOverlayInsets({ bottom: dock.getHeight() + 8 });
     }
   }
   updateDockInsets();
-  window.addEventListener('resize', updateDockInsets);
+  addGlobalListener(window, 'resize', updateDockInsets);
 
   // Mobile: tap FPS area to expand diagnostics for 5s
-  const fpsEl = document.getElementById('fps');
-  if (fpsEl) {
-    fpsEl.addEventListener('click', () => {
+  _fpsClickEl = document.getElementById('fps');
+  if (_fpsClickEl) {
+    _fpsClickHandler = () => {
       _fpsExpanded = true;
       clearTimeout(_fpsExpandTimer);
       _fpsExpandTimer = setTimeout(() => { _fpsExpanded = false; }, 5000);
-    });
+    };
+    _fpsClickEl.addEventListener('click', _fpsClickHandler);
   }
 
   // Tab visibility: prevent catch-up burst
-  document.addEventListener('visibilitychange', () => {
+  function _onVisibilityChange() {
     if (!document.hidden) {
       scheduler.lastFrameTs = performance.now();
       scheduler.simBudgetMs = 0;
     }
-  });
+  }
+  addGlobalListener(document, 'visibilitychange', _onVisibilityChange);
 
-  requestAnimationFrame(frameLoop);
+  _appRunning = true;
+  _rafId = requestAnimationFrame(frameLoop);
 }
 
 // --- Structure drawer ---
@@ -487,613 +462,83 @@ function populateStructureDrawer(manifest) {
     const item = document.createElement('div');
     item.className = 'drawer-item';
     item.textContent = `${info.description} (${info.n_atoms} atoms)`;
+    // Listener on owned DOM node — GC'd when list is cleared. Not in _globalListeners.
     item.addEventListener('click', () => {
       overlay.close();
-      startPlacement(info.file, info.description);
+      placement.start(info.file, info.description);
     });
     list.appendChild(item);
   }
 }
 
 // --- Scene management ---
-/** Load a structure from the library and add it to the scene. Used for initial auto-load. */
-async function addMoleculeToScene(filename, name, offset) {
-  session.isLoading = true;
-  updateStatus('Loading...');
-  try {
-    const { atoms, bonds } = await loadStructure(filename);
-    if (DEBUG_LOAD) console.log(`[add] ${name}: ${atoms.length} atoms, ${bonds.length} bonds`);
-    commitMolecule(filename, name, atoms, bonds, offset);
-  } catch (e) {
-    updateStatus(`Error: ${e.message}`);
-    console.error(e);
-  }
-  session.isLoading = false;
-}
 
-// ── Dock placement mode (module-scoped for access by startPlacement/exitPlacementMode) ──
+// ── Dock helpers (delegate to dock controller) ──
 function setDockPlacementMode(active) {
-  if (!_dockEl || !_dockAddIcon || !_dockAddLabel || !_dockPauseEl || !_dockSettingsEl) return;
-  if (active) {
-    _dockAddIcon.textContent = '✓';
-    _dockAddLabel.textContent = 'Place';
-    _dockEl.classList.add('placement');
-    _dockPauseEl.disabled = true;
-    _dockSettingsEl.disabled = true;
-  } else {
-    _dockAddIcon.textContent = '+';
-    updateDockAddLabel();
-    _dockEl.classList.remove('placement');
-    _dockPauseEl.disabled = false;
-    _dockSettingsEl.disabled = false;
-  }
+  if (!dock) return;
+  dock.setPlacementMode(active);
+  if (!active) updateDockAddLabel();
 }
 
 function updateDockAddLabel() {
-  if (!_dockAddLabel) return;
-  if (session.placement.lastStructureFile && session.scene.molecules.length > 0) {
-    _dockAddLabel.textContent = 'Add Another';
-  } else {
-    _dockAddLabel.textContent = 'Add';
-  }
+  if (!dock) return;
+  dock.updateAddLabel(
+    !!(placement && placement.hasLastStructure()),
+    session.scene.molecules.length > 0,
+  );
 }
 
-function clearPlayground() {
-  _placementGeneration++;  // invalidate any pending preview loads
-  _placementLoading = false; // clear transient loading state immediately
-  exitPlacementMode(false);
-  handleCommand(stateMachine.forceIdle());
-  renderer.clearFeedback();
-  renderer.clearAllMeshes();
-  physics.clearScene();
-  session.scene.molecules = [];
-  session.scene.nextId = 1;
-  session.scene.totalAtoms = 0;
-  syncInputManager();
-  renderer.resetCamera();
-  fullSchedulerReset();
-  updateSceneStatus();
-  updateDockAddLabel();
-}
 
 function updateSceneStatus() {
-  const n = session.scene.molecules.length;
-  const a = session.scene.totalAtoms;
-  if (n === 0) {
-    updateStatus('Empty playground — add a molecule');
-  } else {
-    updateStatus(`${n} molecule${n > 1 ? 's' : ''} · ${a} atoms`);
-  }
+  if (statusCtrl) statusCtrl.updateSceneStatus(session.scene.molecules.length, session.scene.totalAtoms);
   updatePlacedCount();
   updateActiveCountRow();
 }
 
-/** Update Placed count in settings sheet. Called on scene mutations only (not per-frame). */
+// Placed/Active count helpers — delegate to settingsSheet controller
 function updatePlacedCount() {
-  const el = document.getElementById('sheet-placed-count');
-  if (el) el.textContent = session.scene.totalAtoms || '0';
+  if (settingsSheet) settingsSheet.updatePlacedCount(session.scene.totalAtoms);
 }
 
-/** Update Active row in settings sheet. Called from both updateSceneStatus() (for immediate
- *  refresh after discrete scene changes) and the frame loop (for live boundary removal tracking).
- *  Dual ownership is intentional — mutation paths need immediate response, frame loop needs live updates. */
 function updateActiveCountRow() {
-  const row = document.getElementById('sheet-active-row');
-  const el = document.getElementById('sheet-active-count');
-  if (!row || !el) return;
-  const removed = physics.getWallRemovedCount();
-  if (removed > 0) {
-    const text = `${physics.getActiveAtomCount()} (${removed} removed)`;
-    if (el.textContent !== text) el.textContent = text;
-    row.classList.remove('row-hidden');
-  } else {
-    if (!row.classList.contains('row-hidden')) {
-      row.classList.add('row-hidden');
-      el.textContent = '';
-    }
-  }
+  if (settingsSheet) settingsSheet.updateActiveCount(physics.getActiveAtomCount(), physics.getWallRemovedCount());
 }
 
-// --- Placement mode ---
-let _placementGeneration = 0;  // guards against stale async loads
-let _placementLoading = false; // true while a preview structure is being fetched
-
-async function startPlacement(filename, name) {
-  // Fully clean up any existing placement before starting a new one
-  if (session.placement.active) {
-    exitPlacementMode(false);
-  }
-
-  // Increment generation before async load — any load that resolves
-  // with a stale generation is silently discarded
-  const myGeneration = ++_placementGeneration;
-
-  // Load structure for preview
-  _placementLoading = true;
-  updateStatus(`Loading ${name}...`);
-  try {
-    const { atoms, bonds } = await loadStructure(filename);
-    _placementLoading = false;
-
-    // Discard if a newer startPlacement call was made during the load
-    if (myGeneration !== _placementGeneration) {
-      if (DEBUG_LOAD) console.log(`[placement] Discarded stale load for ${name} (gen ${myGeneration} vs ${_placementGeneration})`);
-      return;
-    }
-
-    // Cleanup any active simulation interaction
-    handleCommand(stateMachine.forceIdle());
-    renderer.clearFeedback();
-    if (inputManager) inputManager.updateAtomSource(buildAtomSource());
-
-    session.placement.active = true;
-    session.placement.structureFile = filename;
-    session.placement.structureName = name;
-    session.placement.previewAtoms = atoms;
-    session.placement.previewBonds = bonds;
-    session.placement.isDraggingPreview = false;
-
-    // Compute preview bounding radius
-    let pcx = 0, pcy = 0, pcz = 0;
-    atoms.forEach(a => { pcx += a.x; pcy += a.y; pcz += a.z; });
-    pcx /= atoms.length; pcy /= atoms.length; pcz /= atoms.length;
-    let pR = 0;
-    atoms.forEach(a => {
-      const d = Math.sqrt((a.x-pcx)**2 + (a.y-pcy)**2 + (a.z-pcz)**2);
-      if (d > pR) pR = d;
-    });
-
-    // Choose placement offset via tangent placement
-    const offset = computeTangentPlacement(pR);
-    session.placement.previewOffset = offset;
-
-    // Set placement plane
-    const camDir = new THREE.Vector3();
-    renderer.camera.getWorldDirection(camDir);
-    session.placement.placementPlane = {
-      normal: camDir.clone(),
-      point: new THREE.Vector3(offset[0], offset[1], offset[2]),
-    };
-
-    // Show preview
-    renderer.showPreview(atoms, bonds, offset);
-
-    // Show placement UI
-    setDockPlacementMode(true);
-    const targetName = getTargetMoleculeName();
-    if (targetName) {
-      updateStatus(`Placing ${name} near ${targetName} · target: center of view`);
-    } else {
-      updateStatus(`Placing ${name}`);
-    }
-
-    // Register placement listeners
-    registerPlacementListeners();
-    scheduler.forceRenderThisTick = true;
-
-  } catch (e) {
-    _placementLoading = false;
-    // Only handle failure if this is still the current request.
-    if (myGeneration !== _placementGeneration) {
-      if (DEBUG_LOAD) console.log(`[placement] Ignored stale load error for ${name}`);
-      return;
-    }
-    updateStatus(`Error loading preview: ${e.message}`);
-    console.error(e);
-    session.placement.active = false;
-  }
+// ── Scene wrappers (delegate to scene.js with dependencies) ──
+function _commitMolecule(filename, name, atoms, bonds, offset) {
+  commitMolecule(physics, renderer, filename, name, atoms, bonds, offset, session.scene, {
+    syncInput: syncInputManager,
+    resetProfiler: partialProfilerReset,
+    fitCamera: () => renderer.fitCamera(),
+    updateSceneStatus,
+  });
 }
 
-function exitPlacementMode(commit) {
-  if (!session.placement.active) return;
-
-  unregisterPlacementListeners();
-  session.placement.isDraggingPreview = false;
-  scheduler.forceRenderThisTick = true;
-
-  // Capture data before clearing state — commitMolecule may throw
-  const shouldCommit = commit && session.placement.previewAtoms;
-  const commitData = shouldCommit ? {
-    file: session.placement.structureFile,
-    name: session.placement.structureName,
-    atoms: session.placement.previewAtoms,
-    bonds: session.placement.previewBonds,
-    offset: [...session.placement.previewOffset],
-  } : null;
-
-  // Always clean up preview and state, even if commit will fail
-  renderer.hidePreview();
-  session.placement.active = false;
-  session.placement.structureFile = null;
-  session.placement.structureName = null;
-  session.placement.previewAtoms = null;
-  session.placement.previewBonds = null;
-  session.placement.previewOffset = [0, 0, 0];
-  session.placement.placementPlane = null;
-  session.placement.grabOffset = [0, 0, 0];
-  setDockPlacementMode(false);
-
-  if (commitData) {
-    try {
-      commitMolecule(commitData.file, commitData.name, commitData.atoms, commitData.bonds, commitData.offset);
-      // Only update "last structure" after successful commit
-      session.placement.lastStructureFile = commitData.file;
-      session.placement.lastStructureName = commitData.name;
-      updateDockAddLabel();
-    } catch (e) {
-      console.error('[placement] Commit failed:', e);
-      updateStatus(`Error placing molecule: ${e.message}`);
-      return;
-    }
-  }
-  updateSceneStatus();
+function _clearPlayground() {
+  clearPlayground(physics, renderer, stateMachine, session.scene, {
+    invalidatePlacement: () => placement.invalidatePendingLoads(),
+    exitPlacement: () => placement.exit(false),
+    forceIdle: () => handleCommand(stateMachine.forceIdle()),
+    syncInput: syncInputManager,
+    resetScheduler: fullSchedulerReset,
+    updateSceneStatus,
+    updateDockLabel: updateDockAddLabel,
+  });
 }
 
-/**
- * Commit a molecule to the live scene. Transaction-safe:
- * - If physics.appendMolecule() throws (OOM during allocation), physics
- *   state is unchanged (allocate-before-commit pattern in physics.js).
- * - If renderer.appendMeshes() throws after physics append succeeds,
- *   physics is truncated back to the pre-append atom count.
- * - Session state (molecules[], totalAtoms) is only updated after both
- *   physics and renderer succeed.
- */
-function commitMolecule(filename, name, atoms, bonds, offset) {
-  const isFirstMolecule = session.scene.molecules.length === 0;
-  const oldN = physics.n;
-  const result = physics.appendMolecule(atoms, bonds, offset);
-
-  try {
-    // Debug: fault injection and invariant checks inside rollback-protected block
-    if (CONFIG.debug.failAfterPhysicsAppend) throw new Error('[debug] Injected post-append failure');
-    if (CONFIG.debug.assertions) {
-      const ok = physics.pos.length === physics.n * 3
-        && physics.vel.length === physics.n * 3
-        && physics.force.length === physics.n * 3
-        && (!physics.componentId || physics.componentId.length === physics.n);
-      if (!ok) throw new Error(`[assertion] Post-append array invariant: n=${physics.n}, pos=${physics.pos.length}`);
-      for (let b = 0; b < physics.bonds.length; b++) {
-        if (physics.bonds[b][0] >= physics.n || physics.bonds[b][1] >= physics.n) {
-          throw new Error(`[assertion] Bond ${b} index out of range: [${physics.bonds[b][0]}, ${physics.bonds[b][1]}], n=${physics.n}`);
-        }
-      }
-    }
-    const offsetAtoms = atoms.map(a => ({
-      x: a.x + offset[0], y: a.y + offset[1], z: a.z + offset[2]
-    }));
-    renderer.appendMeshes(offsetAtoms);
-    physics.updateWallCenter(atoms, offset);
-    physics.updateWallRadius();
-  } catch (e) {
-    // Rollback physics to pre-append state
-    physics.n = oldN;
-    physics.pos = physics.pos.slice(0, oldN * 3);
-    physics.vel = physics.vel.slice(0, oldN * 3);
-    physics.force = new Float64Array(oldN * 3); // zeroed — will be recomputed
-    physics.bonds.length = physics.bonds.length - bonds.length;
-    physics.neighborList = null; // force full neighbor rebuild
-    physics.computeForces(); // recompute from restored positions
-    physics.updateBondList();
-    physics.rebuildComponents();
-    throw e;
-  }
-
-  const mol = {
-    id: session.scene.nextId++,
-    name: name,
-    structureFile: filename,
-    atomCount: result.atomCount,
-    atomOffset: result.atomOffset,
-    localAtoms: atoms,
-    localBonds: bonds,
-  };
-  session.scene.molecules.push(mol);
-  session.scene.totalAtoms += result.atomCount;
-  syncInputManager();
-  if (DEBUG_LOAD) {
-    const cap = renderer.getCapacityInfo();
-    console.log(`[load] Renderer capacity: atoms=${cap.atomCount}/${cap.atomCapacity} bonds=${cap.bondActive}/${cap.bondCapacity}`);
-  }
-  // Partial profiler reset: scene cost changed
-  partialProfilerReset();
-
-  if (isFirstMolecule) {
-    renderer.fitCamera();
-  }
-  updateSceneStatus();
-}
-
-// --- Tangent placement algorithm ---
-function computeTangentPlacement(previewRadius) {
-  if (session.scene.molecules.length === 0) {
-    // Empty scene: place at center of current viewport at a default depth.
-    // Use a fixed depth (enough to frame the molecule) rather than inheriting
-    // stale camera-target distance from a cleared scene.
-    const camPos = renderer.camera.position;
-    const camDir = new THREE.Vector3();
-    renderer.camera.getWorldDirection(camDir);
-    const defaultDepth = previewRadius * 2.5 + 5; // same formula as _fitCamera
-    return [
-      camPos.x + camDir.x * defaultDepth,
-      camPos.y + camDir.y * defaultDepth,
-      camPos.z + camDir.z * defaultDepth,
-    ];
-  }
-
-  // Find target molecule: nearest projected COM to viewport center
-  const target = findTargetMolecule();
-  const tCOM = getMoleculeCOM(target);
-  const tR = getMoleculeRadius(target, tCOM);
-
-  // Gap: adaptive, proportional to smaller radius
-  const gap = Math.max(1.0, 0.3 * Math.min(tR, previewRadius));
-  const tangentDist = tR + previewRadius + gap;
-
-  // Camera-plane directions
-  const camRight = new THREE.Vector3();
-  const camUp = new THREE.Vector3();
-  const camDir = new THREE.Vector3();
-  renderer.camera.getWorldDirection(camDir);
-  camRight.crossVectors(camDir, renderer.camera.up).normalize();
-  camUp.crossVectors(camRight, camDir).normalize();
-
-  // 8 candidate directions
-  const dirs = [
-    camRight, camRight.clone().negate(),
-    camUp, camUp.clone().negate(),
-    camRight.clone().add(camUp).normalize(),
-    camRight.clone().negate().add(camUp).normalize(),
-    camRight.clone().add(camUp.clone().negate()).normalize(),
-    camRight.clone().negate().add(camUp.clone().negate()).normalize(),
-  ];
-
-  // Score each candidate
-  let bestDir = dirs[0];
-  let bestScore = Infinity;
-  for (const d of dirs) {
-    const cx = tCOM[0] + d.x * tangentDist;
-    const cy = tCOM[1] + d.y * tangentDist;
-    const cz = tCOM[2] + d.z * tangentDist;
-
-    // Project to NDC for viewport checks
-    const proj = new THREE.Vector3(cx, cy, cz).project(renderer.camera);
-    let score = 0;
-
-    // Viewport margin penalty
-    const margin = 0.8;
-    if (Math.abs(proj.x) > margin) score += (Math.abs(proj.x) - margin) * 10;
-    if (Math.abs(proj.y) > margin) score += (Math.abs(proj.y) - margin) * 10;
-
-    // Overlap penalty with existing molecules
-    for (const mol of session.scene.molecules) {
-      const mCOM = getMoleculeCOM(mol);
-      const mR = getMoleculeRadius(mol, mCOM);
-      const dx = cx - mCOM[0], dy = cy - mCOM[1], dz = cz - mCOM[2];
-      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-      const overlap = (mR + previewRadius) - dist;
-      if (overlap > 0) score += overlap * 5;
-    }
-
-    // Directional bias: prefer right/left
-    if (d === dirs[0] || d === dirs[1]) score -= 0.1;
-
-    if (score < bestScore) {
-      bestScore = score;
-      bestDir = d;
-    }
-  }
-
-  return [
-    tCOM[0] + bestDir.x * tangentDist,
-    tCOM[1] + bestDir.y * tangentDist,
-    tCOM[2] + bestDir.z * tangentDist,
-  ];
-}
-
-function findTargetMolecule() {
-  if (session.scene.molecules.length === 1) return session.scene.molecules[0];
-  // Nearest projected COM to viewport center
-  let best = session.scene.molecules[0];
-  let bestDist = Infinity;
-  for (const mol of session.scene.molecules) {
-    const com = getMoleculeCOM(mol);
-    const proj = new THREE.Vector3(com[0], com[1], com[2]).project(renderer.camera);
-    const d = proj.x * proj.x + proj.y * proj.y;
-    if (d < bestDist) { bestDist = d; best = mol; }
-  }
-  return best;
-}
-
-function getTargetMoleculeName() {
-  if (session.scene.molecules.length === 0) return null;
-  return findTargetMolecule().name;
-}
-
-function getMoleculeCOM(mol) {
-  let cx = 0, cy = 0, cz = 0;
-  for (let i = 0; i < mol.atomCount; i++) {
-    const [x, y, z] = physics.getPosition(mol.atomOffset + i);
-    cx += x; cy += y; cz += z;
-  }
-  cx /= mol.atomCount; cy /= mol.atomCount; cz /= mol.atomCount;
-  return [cx, cy, cz];
-}
-
-function getMoleculeRadius(mol, com) {
-  let maxR = 0;
-  for (let i = 0; i < mol.atomCount; i++) {
-    const [x, y, z] = physics.getPosition(mol.atomOffset + i);
-    const d = Math.sqrt((x-com[0])**2 + (y-com[1])**2 + (z-com[2])**2);
-    if (d > maxR) maxR = d;
-  }
-  return maxR;
-}
-
-// --- Placement input handling ---
-let _placementListeners = null;
-
-/** Recompute placement plane from current camera, keeping preview at same world position. */
-function _refreshPlacementPlane() {
-  const camDir = new THREE.Vector3();
-  renderer.camera.getWorldDirection(camDir);
-  const center = renderer.getPreviewWorldCenter();
-  session.placement.placementPlane = {
-    normal: camDir.clone(),
-    point: new THREE.Vector3(center[0], center[1], center[2]),
-  };
-}
-
-function registerPlacementListeners() {
-  const canvas = renderer.getCanvas();
-  const handlers = {
-    pointerdown: (e) => {
-      if (e.button !== 0) return; // primary pointer only
-      const hit = renderer.raycastPreview(e.clientX, e.clientY);
-      if (hit.hit) {
-        e.stopPropagation();
-        e.preventDefault();
-        session.placement.isDraggingPreview = true;
-        // Recompute placement plane from current camera (may have changed since placement start)
-        _refreshPlacementPlane();
-        // Compute grab offset projected onto placement plane
-        const center = renderer.getPreviewWorldCenter();
-        const pp = session.placement.placementPlane;
-        const dx = hit.worldPoint[0] - center[0];
-        const dy = hit.worldPoint[1] - center[1];
-        const dz = hit.worldPoint[2] - center[2];
-        const dot = dx * pp.normal.x + dy * pp.normal.y + dz * pp.normal.z;
-        session.placement.grabOffset = [
-          dx - dot * pp.normal.x,
-          dy - dot * pp.normal.y,
-          dz - dot * pp.normal.z,
-        ];
-      }
-      // If miss, let propagate (camera)
+async function _addMoleculeToScene(filename, name, offset) {
+  await addMoleculeToScene(filename, name, offset, {
+    loadStructure, physics, renderer,
+    sceneState: session.scene,
+    commitCallbacks: {
+      syncInput: syncInputManager,
+      resetProfiler: partialProfilerReset,
+      fitCamera: () => renderer.fitCamera(),
+      updateSceneStatus,
     },
-    pointermove: (e) => {
-      if (!session.placement.isDraggingPreview) return;
-      e.stopPropagation();
-      // Project pointer onto placement plane
-      const pp = session.placement.placementPlane;
-      const ndc = new THREE.Vector2(
-        ((e.clientX - canvas.getBoundingClientRect().left) / canvas.clientWidth) * 2 - 1,
-        -((e.clientY - canvas.getBoundingClientRect().top) / canvas.clientHeight) * 2 + 1
-      );
-      renderer.camera.updateMatrixWorld(true);
-      const rayOrigin = renderer.camera.position.clone();
-      const rayDir = new THREE.Vector3(ndc.x, ndc.y, 0.5)
-        .unproject(renderer.camera).sub(rayOrigin).normalize();
-      const denom = rayDir.dot(pp.normal);
-      if (Math.abs(denom) < 1e-10) return;
-      const diff = pp.point.clone().sub(rayOrigin);
-      const t = diff.dot(pp.normal) / denom;
-      const worldPos = rayOrigin.add(rayDir.multiplyScalar(t));
-      // Apply grab offset
-      const go = session.placement.grabOffset;
-      const newOffset = [worldPos.x - go[0], worldPos.y - go[1], worldPos.z - go[2]];
-      session.placement.previewOffset = newOffset;
-      renderer.updatePreviewOffset(newOffset);
-    },
-    pointerup: (e) => {
-      if (session.placement.isDraggingPreview) {
-        session.placement.isDraggingPreview = false;
-      }
-      // Always let propagate (OrbitControls needs pointerup)
-    },
-    touchstart: (e) => {
-      if (e.touches.length !== 1) {
-        // 2+ fingers: cancel preview drag, let camera handle
-        if (session.placement.isDraggingPreview) {
-          session.placement.isDraggingPreview = false;
-        }
-        return;
-      }
-      const touch = e.touches[0];
-      const hit = renderer.raycastPreview(touch.clientX, touch.clientY);
-      if (hit.hit) {
-        e.stopPropagation();
-        e.preventDefault();
-        session.placement.isDraggingPreview = true;
-        _refreshPlacementPlane();
-        const center = renderer.getPreviewWorldCenter();
-        const pp = session.placement.placementPlane;
-        const dx = hit.worldPoint[0] - center[0];
-        const dy = hit.worldPoint[1] - center[1];
-        const dz = hit.worldPoint[2] - center[2];
-        const dot = dx * pp.normal.x + dy * pp.normal.y + dz * pp.normal.z;
-        session.placement.grabOffset = [
-          dx - dot * pp.normal.x,
-          dy - dot * pp.normal.y,
-          dz - dot * pp.normal.z,
-        ];
-      }
-    },
-    touchmove: (e) => {
-      if (!session.placement.isDraggingPreview || e.touches.length !== 1) return;
-      e.stopPropagation();
-      e.preventDefault();
-      const touch = e.touches[0];
-      const pp = session.placement.placementPlane;
-      const rect = canvas.getBoundingClientRect();
-      const ndc = new THREE.Vector2(
-        ((touch.clientX - rect.left) / rect.width) * 2 - 1,
-        -((touch.clientY - rect.top) / rect.height) * 2 + 1
-      );
-      renderer.camera.updateMatrixWorld(true);
-      const rayOrigin = renderer.camera.position.clone();
-      const rayDir = new THREE.Vector3(ndc.x, ndc.y, 0.5)
-        .unproject(renderer.camera).sub(rayOrigin).normalize();
-      const denom = rayDir.dot(pp.normal);
-      if (Math.abs(denom) < 1e-10) return;
-      const diff = pp.point.clone().sub(rayOrigin);
-      const t = diff.dot(pp.normal) / denom;
-      const worldPos = rayOrigin.add(rayDir.multiplyScalar(t));
-      const go = session.placement.grabOffset;
-      const newOffset = [worldPos.x - go[0], worldPos.y - go[1], worldPos.z - go[2]];
-      session.placement.previewOffset = newOffset;
-      renderer.updatePreviewOffset(newOffset);
-    },
-    touchend: (e) => {
-      if (e.touches.length === 0 && session.placement.isDraggingPreview) {
-        session.placement.isDraggingPreview = false;
-      }
-    },
-    pointercancel: (_e) => {
-      session.placement.isDraggingPreview = false;
-    },
-    pointerleave: (_e) => {
-      session.placement.isDraggingPreview = false;
-    },
-    touchcancel: (_e) => {
-      session.placement.isDraggingPreview = false;
-    },
-  };
-  // Register in capture phase
-  canvas.addEventListener('pointerdown', handlers.pointerdown, { capture: true });
-  canvas.addEventListener('pointermove', handlers.pointermove, { capture: true });
-  canvas.addEventListener('pointerup', handlers.pointerup, { capture: true });
-  canvas.addEventListener('pointercancel', handlers.pointercancel, { capture: true });
-  canvas.addEventListener('pointerleave', handlers.pointerleave, { capture: true });
-  canvas.addEventListener('touchstart', handlers.touchstart, { capture: true, passive: false });
-  canvas.addEventListener('touchmove', handlers.touchmove, { capture: true, passive: false });
-  canvas.addEventListener('touchend', handlers.touchend, { capture: true });
-  canvas.addEventListener('touchcancel', handlers.touchcancel, { capture: true });
-  _placementListeners = handlers;
-}
-
-function unregisterPlacementListeners() {
-  if (!_placementListeners) return;
-  const canvas = renderer.getCanvas();
-  canvas.removeEventListener('pointerdown', _placementListeners.pointerdown, { capture: true });
-  canvas.removeEventListener('pointermove', _placementListeners.pointermove, { capture: true });
-  canvas.removeEventListener('pointerup', _placementListeners.pointerup, { capture: true });
-  canvas.removeEventListener('pointercancel', _placementListeners.pointercancel, { capture: true });
-  canvas.removeEventListener('pointerleave', _placementListeners.pointerleave, { capture: true });
-  canvas.removeEventListener('touchstart', _placementListeners.touchstart, { capture: true });
-  canvas.removeEventListener('touchmove', _placementListeners.touchmove, { capture: true });
-  canvas.removeEventListener('touchend', _placementListeners.touchend, { capture: true });
-  canvas.removeEventListener('touchcancel', _placementListeners.touchcancel, { capture: true });
-  _placementListeners = null;
+    updateStatus,
+    setLoading: (v) => { session.isLoading = v; },
+  });
 }
 
 // --- Input manager ---
@@ -1103,7 +548,7 @@ function syncInputManager() {
 }
 
 function updateStatus(text) {
-  document.getElementById('status').textContent = text;
+  if (statusCtrl) statusCtrl.update(text);
 }
 
 function buildAtomSource() {
@@ -1122,25 +567,25 @@ function createInputManager() {
     buildAtomSource(),
     {
       onHover: (atomIdx) => {
-        if (session.placement.active) return;
+        if (placement && placement.active) return;
         const cmd = atomIdx >= 0
           ? stateMachine.onPointerOverAtom(atomIdx)
           : stateMachine.onPointerOutAtom();
         if (cmd) handleCommand(cmd);
       },
       onPointerDown: (atomIdx, sx, sy, isRotate) => {
-        if (session.placement.active) return;
+        if (placement && placement.active) return;
         const mode = isRotate ? 'rotate' : session.interactionMode;
         const cmd = stateMachine.onPointerDown(atomIdx, sx, sy, mode);
         if (cmd) handleCommand(cmd, sx, sy);
       },
       onPointerMove: (sx, sy) => {
-        if (session.placement.active) return;
+        if (placement && placement.active) return;
         const cmd = stateMachine.onPointerMove(sx, sy);
         if (cmd) handleCommand(cmd, sx, sy);
       },
       onPointerUp: () => {
-        if (session.placement.active) return;
+        if (placement && placement.active) return;
         const cmd = stateMachine.onPointerUp();
         if (cmd) handleCommand(cmd);
       },
@@ -1148,136 +593,15 @@ function createInputManager() {
   );
 }
 
-// --- Screen-to-physics projection ---
-const _atomRenderPos = new THREE.Vector3();
-
-function screenToPhysics(atomIdx, sx, sy) {
-  const atomRenderPos = renderer.getAtomWorldPosition(atomIdx, _atomRenderPos);
-  return inputManager.screenToWorldOnAtomPlane(sx, sy, atomRenderPos);
-}
-
-// Fade out the onboarding hint on first interaction
-let hintFaded = false;
-function fadeHint() {
-  if (hintFaded) return;
-  hintFaded = true;
-  const hint = document.getElementById('hint');
-  if (hint) {
-    hint.classList.add('fade');
-    setTimeout(() => { hint.style.display = 'none'; }, 2000);
-  }
-}
+// screenToPhysics and fadeHint are now in interaction.js and status.js respectively
 
 function handleCommand(cmd, screenX, screenY) {
-  switch (cmd.action) {
-    case 'highlight':
-      renderer.setHighlight(cmd.atom);
-      break;
-
-    case 'clearHighlight':
-      renderer.setHighlight(-1);
-      break;
-
-    case 'startDrag': {
-      fadeHint();
-      const ai = cmd.atom;
-      physics.startDrag(ai);
-      renderer.setHighlight(ai);
-      if (screenX !== undefined) {
-        const target = screenToPhysics(ai, screenX, screenY);
-        renderer.showForceLine(ai, target[0], target[1], target[2]);
-      }
-      break;
-    }
-
-    case 'updateDrag': {
-      if (stateMachine.getSelectedAtom() < 0) break;
-      const atomIdx = stateMachine.getSelectedAtom();
-      const target = screenToPhysics(atomIdx, cmd.screenX, cmd.screenY);
-      physics.updateDrag(target[0], target[1], target[2]);
-      renderer.showForceLine(atomIdx, target[0], target[1], target[2]);
-      break;
-    }
-
-    case 'endDrag':
-      physics.endDrag();
-      renderer.clearFeedback();
-      break;
-
-    case 'flick': {
-      physics.endDrag();
-      const scale = 0.002;
-      physics.applyImpulse(cmd.atom, cmd.vx * scale, -cmd.vy * scale);
-      renderer.clearFeedback();
-      break;
-    }
-
-    case 'startMove': {
-      fadeHint();
-      const ai = cmd.atom;
-      physics.startTranslate(ai);
-      renderer.setHighlight(ai);
-      updateStatus('Moving molecule');
-      if (screenX !== undefined) {
-        const target = screenToPhysics(ai, screenX, screenY);
-        renderer.showForceLine(ai, target[0], target[1], target[2]);
-      }
-      break;
-    }
-
-    case 'updateMove': {
-      if (stateMachine.getSelectedAtom() < 0) break;
-      const atomIdx = stateMachine.getSelectedAtom();
-      const target = screenToPhysics(atomIdx, cmd.screenX, cmd.screenY);
-      physics.updateDrag(target[0], target[1], target[2]);
-      renderer.showForceLine(atomIdx, target[0], target[1], target[2]);
-      break;
-    }
-
-    case 'endMove':
-      physics.endDrag();
-      renderer.clearFeedback();
-      updateSceneStatus();
-      break;
-
-    case 'startRotate': {
-      fadeHint();
-      const ai = cmd.atom;
-      physics.startRotateDrag(ai);
-      renderer.setHighlight(ai);
-      updateStatus('Rotating molecule');
-      if (screenX !== undefined) {
-        const target = screenToPhysics(ai, screenX, screenY);
-        renderer.showForceLine(ai, target[0], target[1], target[2]);
-      }
-      break;
-    }
-
-    case 'updateRotate': {
-      if (stateMachine.getSelectedAtom() < 0) break;
-      const atomIdx = stateMachine.getSelectedAtom();
-      const target = screenToPhysics(atomIdx, cmd.screenX, cmd.screenY);
-      physics.updateDrag(target[0], target[1], target[2]);
-      renderer.showForceLine(atomIdx, target[0], target[1], target[2]);
-      break;
-    }
-
-    case 'endRotate':
-      physics.endDrag();
-      renderer.clearFeedback();
-      updateSceneStatus();
-      break;
-
-    case 'cancelInteraction':
-      physics.endDrag();
-      renderer.clearFeedback();
-      break;
-
-    case 'forceIdle':
-      physics.endDrag();
-      renderer.clearFeedback();
-      break;
-  }
+  dispatchCommand(cmd, screenX, screenY, {
+    physics, renderer, stateMachine, inputManager,
+    fadeHint: () => statusCtrl.fadeHint(),
+    updateStatus,
+    updateSceneStatus,
+  });
 }
 
 // --- Profiler reset helpers ---
@@ -1345,24 +669,7 @@ let _fpsExpandTimer = null;
 
 // --- Speed button state sync ---
 function updateSpeedControls() {
-  const max = session.playback.maxSpeed;
-  const warm = scheduler.warmUpComplete;
-  const seg = document.getElementById('speed-seg');
-  if (!seg) return;
-  seg.querySelectorAll('label').forEach(label => {
-    const val = label.dataset.speed;
-    if (val === 'max') {
-      label.style.opacity = '';
-      label.style.pointerEvents = '';
-    } else if (!warm) {
-      label.style.opacity = '0.4';
-      label.style.pointerEvents = 'none';
-    } else {
-      const spd = parseFloat(val);
-      label.style.opacity = spd > max ? '0.4' : '';
-      label.style.pointerEvents = spd > max ? 'none' : '';
-    }
-  });
+  if (settingsSheet) settingsSheet.updateSpeedButtons(session.playback.maxSpeed, scheduler.warmUpComplete);
 }
 
 // --- Frame Loop (accumulator-driven) ---
@@ -1381,7 +688,7 @@ function frameLoop(timestamp) {
     let substepsThisFrame = 0;
 
     // Physics: accumulator-driven stepping
-    const shouldStep = !session.playback.paused && !session.placement.active && physics.n > 0;
+    const shouldStep = !session.playback.paused && !(placement && placement.active) && physics.n > 0;
     if (shouldStep) {
       // Compute target speed
       const pb = session.playback;
@@ -1577,7 +884,7 @@ function frameLoop(timestamp) {
     if (wasForced || (statusNow - scheduler.lastStatusUpdateTs) >= statusIntervalMs) {
       scheduler.lastStatusUpdateTs = statusNow;
       const pb = session.playback;
-      const isIdle = pb.paused || session.placement.active || physics.n === 0;
+      const isIdle = pb.paused || (placement && placement.active) || physics.n === 0;
       const displaySpeed = isIdle ? 0 : pb.effectiveSpeed;
       const mdRate = displaySpeed * CONFIG.playback.baseStepsPerSecond * CONFIG.physics.dt / 1000;
       const fps = Math.round(1000 / scheduler.prof.rafIntervalMs);
@@ -1589,7 +896,7 @@ function frameLoop(timestamp) {
       let statusText;
       if (pb.paused) {
         statusText = showDetail ? `Paused · ${detail}` : 'Paused · 0 ps/s';
-      } else if (session.placement.active) {
+      } else if (placement && placement.active) {
         statusText = showDetail ? `Placing... · ${detail}` : 'Placing...';
       } else if (!scheduler.warmUpComplete) {
         statusText = 'Estimating...';
@@ -1639,7 +946,7 @@ function frameLoop(timestamp) {
   } catch (e) {
     console.error('[frameLoop] ERROR:', e);
   }
-  requestAnimationFrame(frameLoop);
+  if (_appRunning) _rafId = requestAnimationFrame(frameLoop);
 }
 
 // --- Start ---

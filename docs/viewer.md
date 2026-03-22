@@ -95,50 +95,11 @@ The page runs a full analytical Tersoff (1988) potential in JavaScript:
 
 ### Architecture
 
-```
-page/index.html
-  └── js/main.js (entry point, frame loop, atom-source abstraction)
-        ├── loader.js       → fetch manifest.json + XYZ → atoms + bonds
-        ├── physics.js      → Tersoff forces (on-the-fly distances), spatial-hash neighbor/bond,
-        │                      Verlet integration, drag/rotate, Union-Find components
-        ├── state-machine.js → interaction states (idle/hover/drag/move/rotate)
-        ├── input.js        → mouse/touch → raycasting via atom-source → state machine events
-        ├── renderer.js     → InstancedMesh atoms/bonds, highlight overlay, axis triad
-        ├── fps-monitor.js  → frame time measurement
-        ├── themes.js       → dark/light definitions
-        └── tersoff-wasm.js → Wasm kernel bridge (lazy-load, buffer mgmt, CSR marshaling, JS fallback)
-  └── bench/                → performance benchmarks and validation
-        ├── bench-physics.html      — physics-only microbench
-        ├── bench-render.html       — raw Three.js renderer test
-        ├── bench-distance.html     — Tersoff kernel benchmark
-        ├── bench-celllist.html     — spatial-hash equivalence validation
-        ├── bench-preWasm.html      — pre-Wasm evaluation suite
-        ├── bench-kernel-profile.html — kernel stage profiling
-        ├── bench-wasm.html         — Wasm kernel benchmarks
-        ├── bench-spread.html       — spread-domain sparse-grid benchmark
-        └── bench-scenes.js         — shared scene generator
-```
-
-### Module Contracts
-
-Each page module has defined ownership boundaries:
-
-| Module | Owns | Receives | Provides |
-|--------|------|----------|----------|
-| `config.js` | All tuning constants, thresholds, defaults | — | `CONFIG` object imported by all modules |
-| `physics.js` | Atom positions, velocities, forces, Tersoff computation | Drag/move/rotate targets, damping setting from main.js | Positions, bonds, KE via getter methods, wall state (radius, mode, removed count) |
-| `renderer.js` | Three.js scene, InstancedMesh atoms/bonds, lighting, axis triad, highlight overlay | Positions from physics.pos, theme from main.js | Canvas element, instancedAtoms for raycasting, getAtomWorldPosition(idx, out) API |
-| `input.js` | Event handling, raycasting, screen-to-world projection | Atom-source abstraction (count, getWorldPosition, raycastTarget) + camera from renderer | Atom index + screen coords via callbacks |
-| `state-machine.js` | Interaction state transitions (IDLE→DRAG/MOVE/ROTATE→IDLE etc.) | Pointer events + resolved mode from main.js | Commands dispatched to main.js |
-| `loader.js` | XYZ parsing, manifest fetching, bond topology | Library path from config | `{ atoms, bonds }` data |
-| `main.js` | App lifecycle, session state, command dispatch, UI wiring | Everything above | Orchestration (no direct exports) |
-| `fps-monitor.js` | Frame time measurement | begin/end calls from main.js | FPS display text |
-| `themes.js` | Color/lighting definitions | — | `THEMES` object |
-| `tersoff-wasm.js` | Wasm lifecycle, buffer management, CSR marshaling | CSR neighbor data from physics.js | `computeForces()` or null (fallback signal) |
+The interactive page uses a modular controller architecture with a composition root pattern. `main.js` creates all subsystems and wires controllers together. See `docs/architecture.md` for the full module map, state ownership model, and lifecycle details.
 
 **Key rules:**
 - Modules import from `config.js` for shared constants. They do NOT import from each other's internals. Data flows through `main.js` orchestration.
-- **Interaction mode coordination:** main.js resolves gesture intent into a mode string (`'atom'` | `'move'` | `'rotate'`) before passing it to the state machine. input.js reports raw gestures (atom index + isRotate boolean). The state machine maps mode → state (e.g., `'atom'` → `DRAG`). The core engineering dependency chain for adding new modes is main.js + state-machine.js + physics.js. Depending on the mode, input.js (new gesture metadata), renderer.js (visual feedback), index.html (UI controls, help page (inside settings sheet)), and docs (viewer.md, testing.md, README.md) may also need updates.
+- **Interaction mode coordination:** ui/dock.js (mode segmented) → main.js (applies interactionMode) → input.js (reads mode). The state machine maps mode → state (e.g., `'atom'` → `DRAG`). Depending on the mode, renderer.js (visual feedback), index.html (UI controls, help page (inside settings sheet)), and docs (viewer.md, testing.md, README.md) may also need updates.
 - **Known v1 limitation:** In Move mode, the force line still originates from the picked atom rather than the center of mass, so the visual cue partly reads as "drag this atom." The blue color and immediate whole-molecule motion mitigate this, but a COM-origin force line or bounding indicator would be a stronger signal.
 
 ### Technology

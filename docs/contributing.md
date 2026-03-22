@@ -68,6 +68,18 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - C/Wasm Tersoff kernel — ~11% faster than JS JIT, enabled by default, automatic JS fallback (`page/wasm/`, `page/js/tersoff-wasm.js`)
 - Containment boundary — dynamic soft harmonic wall (`page/js/physics.js`), Contain/Remove toggle, live atom count, auto-scaling radius with hysteresis shrinkage
 - Dock + sheet navigation — responsive two-tier UI replacing horizontal control strip (`page/index.html`, `page/js/main.js`)
+- Controller module extraction — UI controllers, domain modules, and shared utilities extracted from main.js with full lifecycle
+
+## Architecture Rules
+
+See `docs/architecture.md` for the full module map and state ownership model.
+
+- **Controllers don't import controllers.** Cross-controller communication uses callbacks wired by main.js.
+- **One owner per DOM surface.** Prefer class toggles for shared/multi-owner visibility. Localized one-shot mutations (e.g., hiding after fade) are acceptable when fully owned by a single controller.
+- **All controllers expose destroy()** that removes attached listeners.
+- **New globals require teardown.** Register via `addGlobalListener()` in main.js.
+- **Do not re-grow main.js.** Extend existing controllers or extract new ones.
+- **State writes go through authoritative writers.** See state ownership table in architecture.md.
 
 ## Next Steps (Priority Order)
 
@@ -95,7 +107,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 2. Run tests: python3 tests/test_01_dimer.py (etc.)
 3. If adding structures: python3 scripts/library_cli.py <command>
 4. If changing force engine: verify tersoff.py and tersoff_fast.py match
-5. Write dev report in .reports/ for significant milestones
+5. Document significant changes in `docs/decisions.md` for architecture decisions or in the relevant docs.
 6. Update docs/ if architecture or decisions change
 ```
 
@@ -103,7 +115,9 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 
 | If you're working on... | Read these files |
 |--------------------------|-----------------|
-| Interactive page | `page/index.html`, `page/js/main.js`, `docs/viewer.md` |
+| Interactive page | `page/index.html`, `page/js/main.js`, `page/js/ui/*`, `docs/viewer.md` |
+| UI controllers | `page/js/ui/overlay.js`, `page/js/ui/dock.js`, `page/js/ui/settings-sheet.js` |
+| Scene / placement | `page/js/scene.js`, `page/js/placement.js` |
 | Browser physics | `page/js/physics.js` (JS Tersoff) |
 | Force calculation (Python) | `sim/potentials/tersoff.py`, `tersoff_fast.py` |
 | Running simulations | `sim/integrators/velocity_verlet.py`, `sim/atoms.py` |
