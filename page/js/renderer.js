@@ -775,9 +775,17 @@ export class Renderer {
     }
   }
 
-  /** Set overlay insets so axis triad and other overlays avoid UI chrome. */
-  setOverlayInsets(insets) {
-    this._overlayInsets = insets; // { bottom, left, right, top }
+  /**
+   * Set overlay layout parameters. Called by main.js when dock geometry
+   * or device mode changes. Renderer treats these as opaque layout hints.
+   * @param {object} layout
+   * @param {number} layout.triadSize - axis triad viewport size in CSS px
+   * @param {number} layout.triadLeft - triad X offset from left edge
+   * @param {number} layout.triadBottom - triad Y offset from bottom edge
+   */
+  setOverlayLayout(layout) {
+    this._overlayLayout = layout;
+    if (layout.triadSize != null) this._axisSize = layout.triadSize;
   }
 
   /**
@@ -897,8 +905,8 @@ export class Renderer {
     // All values in CSS pixels — Three.js handles pixel ratio internally
     // when setPixelRatio() has been called before setSize().
     const size = this._axisSize;
-    const offsetX = 6;
-    const offsetY = this._overlayInsets ? this._overlayInsets.bottom : 50;
+    const offsetX = this._overlayLayout?.triadLeft ?? 6;
+    const offsetY = this._overlayLayout?.triadBottom ?? 50;
 
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;

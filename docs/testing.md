@@ -156,7 +156,8 @@ python3 -m http.server 8000
 | 43 | Clear playground, then Add Molecule | Preview appears centered in viewport at molecule-appropriate depth |
 | 44 | Clear + Add + Atom drag | First molecule after Clear responds to all interaction modes correctly |
 | 45 | Switch structure during placement | Select different structure in chooser sheet while preview is active — old preview replaced cleanly, new preview appears |
-| 46 | Add Another during placement | Add Another while preview active — old preview replaced, new preview of same structure appears |
+| 46a | Place confirms preview | Tap dock Add (shows "Place") while preview active — preview commits to scene, dock exits placement mode |
+| 46b | Chooser replaces preview | Open chooser and select a different structure while preview is active — old preview replaced, new preview appears |
 | 47 | Rapid structure switching in chooser sheet | Click two different structures quickly — only the last-clicked preview appears, first is discarded |
 | 48 | Stale load failure during switching | If first structure fails to load after second was selected, error does not corrupt the active preview |
 | 49 | Clear during pending preview load | Click Add Molecule, select structure, then Clear before preview appears — no preview appears after Clear |
@@ -208,6 +209,12 @@ After changes to UI controllers or main.js composition:
 | A3 | Device-mode switch | Switch between device modes (responsive emulation or window resize) → overlays close on mode change, dock/sheet layout adapts |
 | A4 | Theme across all panels | Toggle theme in settings → all panels adapt |
 | A5 | Sheet close transition | Close sheet → no stale `sheet-visible` class after transition |
+| A6a | Canvas dismiss (desktop) | Open settings → click canvas → sheet closes, no camera interaction starts. Click FPS/hint/info → sheet stays open |
+| A6b | Backdrop dismiss (phone/tablet) | Open settings on phone/tablet → tap dimmed backdrop outside dock → sheet closes |
+| A7 | Dock interactive with sheet open | Open settings → tap Pause → sheet stays open, pause toggles. Tap mode seg → mode changes, sheet stays |
+| A8 | Chooser Recent row | Place a molecule → tap Add → chooser opens with pinned "Recent" row at top → tap it → placement starts |
+| A9 | Hint above dock | On tablet/desktop, hint text does not overlap the floating dock pill |
+| A10 | Triad sizing | On desktop, axis triad is visibly larger (~140–200px). On tablet/desktop, triad is corner-anchored, not pushed up by dock |
 
 ### Code Review Invariants
 

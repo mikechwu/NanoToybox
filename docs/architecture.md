@@ -145,11 +145,24 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | placement state | placement.js (`_state`) | dock (add/cancel intents) |
 | scheduler / effectsGate | main.js (frame loop only) | — |
 
+### Overlay Close Policy
+
+Unified outside-click dismiss rule (all devices): a capture-phase `pointerdown` handler on `document` closes the open sheet when the primary pointer hits the backdrop or renderer canvas. Clicks inside either sheet, the dock, or HUD chrome (`#info`, `#fps`, `#hint`) do not dismiss. The event is consumed (`stopPropagation` + `preventDefault`) to prevent canvas interaction from the same gesture. The dock sits above the backdrop in z-order (z-index 205 vs 200) so dock buttons remain interactive while sheets are open.
+
+### Overlay Layout Contract
+
+`main.js` owns bottom-overlay layout arbitration via `_doOverlayLayout()` (RAF-coalesced). It measures dock geometry via `getBoundingClientRect()` and produces separate layout outputs:
+
+- **Hint** (`--hint-bottom` CSS var): always clears the dock top edge + gap
+- **Triad** (`renderer.setOverlayLayout({ triadSize, triadLeft, triadBottom })`): phone clears full-width dock; tablet/desktop uses safe-area corner margins. `triadLeft` accounts for `env(safe-area-inset-left)`. Triad sizes 80–200px depending on device.
+
+Layout updates are triggered by `window.resize` and a `ResizeObserver` on the dock element, coalesced to one computation per frame. Current code computes layout from the dock only; a registry interface for additional bottom surfaces is a future extension, not yet implemented.
+
 ### App Lifecycle
 
 - **Construction:** `init()` creates all subsystems and controllers
 - **Runtime:** `frameLoop()` gated by `_appRunning` flag
-- **Teardown:** `destroyApp()` stops the frame loop, removes all global listeners, destroys all controllers and subsystems, nulls refs, and resets session/scheduler/effectsGate state
+- **Teardown:** `destroyApp()` stops the frame loop, removes all global listeners (including capture-phase), disconnects the dock `ResizeObserver`, cancels any pending layout RAF, destroys all controllers and subsystems, nulls refs, and resets session/scheduler/effectsGate state
 - All controllers expose `destroy()` for listener cleanup
 - Renderer GPU disposal is intentionally deferred (browser reclaims on page unload)
 

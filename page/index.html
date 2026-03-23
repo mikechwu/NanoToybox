@@ -27,6 +27,8 @@
   --duration-fast: 0.15s;
   --duration-normal: 0.3s;
   --duration-sheet: 0.45s;
+  /* Safe-area insets as readable CSS vars (for JS layout computation) */
+  --safe-left: env(safe-area-inset-left, 0px);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -88,7 +90,7 @@ canvas { display: block; touch-action: none; }
   line-height: 1.4; cursor: pointer;
 }
 #hint {
-  position: absolute; bottom: 70px; left: 50%; transform: translateX(-50%);
+  position: absolute; bottom: var(--hint-bottom, 70px); left: 50%; transform: translateX(-50%);
   background: var(--color-hint-bg); color: var(--color-accent-text);
   padding: 8px 20px; border-radius: 20px; font-size: var(--font-sm);
   z-index: 10; pointer-events: none;
@@ -102,6 +104,19 @@ canvas { display: block; touch-action: none; }
   margin-bottom: 2px; touch-action: manipulation;
 }
 .drawer-item:hover { background: var(--color-surface-hover); }
+.chooser-recent {
+  display: flex; align-items: center; gap: var(--space-sm);
+  padding: var(--space-sm) 10px; margin-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--color-border);
+  cursor: pointer; border-radius: var(--radius-sm);
+  color: var(--color-text); touch-action: manipulation;
+}
+.chooser-recent:hover { background: var(--color-surface-hover); }
+.chooser-recent-label {
+  font-size: var(--font-xs); color: var(--color-text-secondary);
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.chooser-recent-name { font-weight: 500; color: var(--color-accent-text); }
 
 /* ── Panel shared styles (extracted from inline) ── */
 .panel {
@@ -182,7 +197,7 @@ canvas { display: block; touch-action: none; }
   backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   border-top: 1px solid var(--color-border);
-  z-index: 100;
+  z-index: 205; /* Above backdrop (200) so dock stays interactive while sheets are open */
 }
 .dock-item {
   display: flex;
@@ -370,6 +385,7 @@ canvas { display: block; touch-action: none; }
 /* ── Dock extras ── */
 .dock-icon { font-size: 18px; line-height: 1; }
 .dock-label { font-size: var(--font-xs); }
+.dock-item.dock-text-only { justify-content: center; }
 .dock-mode { max-width: 160px; }
 /* Dock placement mode: hide mode segmented, show cancel, accent the Place button */
 .dock.placement .dock-mode { display: none; }
@@ -558,12 +574,10 @@ canvas { display: block; touch-action: none; }
       <span class="dock-icon">&#x2715;</span>
       <span class="dock-label">Cancel</span>
     </button>
-    <button class="dock-item" id="dock-pause">
-      <span class="dock-icon">&#x23F8;</span>
+    <button class="dock-item dock-text-only" id="dock-pause">
       <span class="dock-label">Pause</span>
     </button>
-    <button class="dock-item" id="dock-settings">
-      <span class="dock-icon">&#x2699;</span>
+    <button class="dock-item dock-text-only" id="dock-settings">
       <span class="dock-label">Settings</span>
     </button>
   </nav>

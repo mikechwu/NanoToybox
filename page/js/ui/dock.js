@@ -78,17 +78,13 @@ export class DockController {
       this._dockEl.classList.remove('placement');
       this._pauseBtn.disabled = false;
       this._settingsBtn.disabled = false;
-      this.updateAddLabel(false, false); // caller should call with real state
+      this.updateAddLabel();
     }
   }
 
-  /**
-   * Update Add button label: "Add" or "Add Another".
-   * @param {boolean} hasLastStructure - session.placement.lastStructureFile exists
-   * @param {boolean} hasMolecules - session.scene.molecules.length > 0
-   */
-  updateAddLabel(hasLastStructure, hasMolecules) {
-    this._addLabel.textContent = (hasLastStructure && hasMolecules) ? 'Add Another' : 'Add';
+  /** Update Add button label. Always shows "Add" — repeat-add is via chooser Recent row. */
+  updateAddLabel() {
+    this._addLabel.textContent = 'Add';
   }
 
   /**

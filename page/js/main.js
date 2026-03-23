@@ -114,11 +114,67 @@ let _rafId = null;
 let _appRunning = false;
 let _fpsClickHandler = null;
 let _fpsClickEl = null;
+let _dockResizeObserver = null;
+let _layoutPending = false;
+let _layoutRafId = null;
 
-/** Register a global listener and track it for teardown. */
-function addGlobalListener(target, event, handler) {
-  target.addEventListener(event, handler);
-  _globalListeners.push([event, handler, target]);
+/** Register a global listener and track it for teardown. Options forwarded to both add/remove. */
+function addGlobalListener(target, event, handler, options) {
+  target.addEventListener(event, handler, options);
+  _globalListeners.push([event, handler, target, options]);
+}
+
+/**
+ * Compute and apply overlay layout (hint clearance + triad sizing/position).
+ * v1: dock-only — reads dock geometry directly. If a second persistent bottom
+ * surface is added, formalize a registry ({ id, getTopEdge(), isActive() }).
+ */
+function _doOverlayLayout() {
+  _layoutRafId = null;
+  _layoutPending = false;
+  if (!dock || !renderer) return;
+  const dockEl = document.getElementById('dock');
+  if (!dockEl) return;
+  const dockRect = dockEl.getBoundingClientRect();
+  const viewportH = window.innerHeight;
+  const viewportW = window.innerWidth;
+  const dockTopFromBottom = viewportH - dockRect.top;
+  const mode = document.documentElement.dataset.deviceMode;
+
+  // Hint clearance — always dock-relative (hint is centered like dock)
+  const hintGap = 12;
+  document.documentElement.style.setProperty(
+    '--hint-bottom', (dockTopFromBottom + hintGap) + 'px'
+  );
+
+  // Triad sizing — larger on tablet/desktop
+  let triadSize;
+  if (mode === 'phone') {
+    triadSize = Math.min(140, Math.max(80, Math.floor(viewportW * 0.12)));
+  } else {
+    triadSize = Math.min(200, Math.max(120, Math.floor(viewportW * 0.10)));
+  }
+
+  // Triad positioning — phone: clear full-width dock; tablet/desktop: safe-area corner
+  let triadBottom;
+  if (mode === 'phone') {
+    triadBottom = dockTopFromBottom + 8;
+  } else {
+    triadBottom = 12;
+  }
+
+  // Triad left offset — safe-area inset + margin
+  const safeLeft = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-left')) || 0;
+  const triadLeft = safeLeft + 6;
+
+  renderer.setOverlayLayout({ triadSize, triadLeft, triadBottom });
+}
+
+/** Request a layout update. Coalesces multiple calls into one RAF. */
+function _requestOverlayLayout() {
+  if (_layoutPending) return;
+  _layoutPending = true;
+  _layoutRafId = requestAnimationFrame(_doOverlayLayout);
 }
 
 /** Tear down all controllers, subsystems, and global listeners. Resets runtime state. */
@@ -127,8 +183,8 @@ function destroyApp() {
   _appRunning = false;
   if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
   // Remove global listeners
-  for (const [event, handler, target] of _globalListeners) {
-    target.removeEventListener(event, handler);
+  for (const [event, handler, target, options] of _globalListeners) {
+    target.removeEventListener(event, handler, options);
   }
   _globalListeners.length = 0;
   // Remove FPS click handler
@@ -141,6 +197,10 @@ function destroyApp() {
   if (chooserList) chooserList.innerHTML = '';
   // Clean up debug hooks
   delete window._setUiEffectsMode;
+  // Disconnect dock ResizeObserver and cancel pending layout RAF
+  if (_dockResizeObserver) { _dockResizeObserver.disconnect(); _dockResizeObserver = null; }
+  if (_layoutRafId) { cancelAnimationFrame(_layoutRafId); _layoutRafId = null; }
+  _layoutPending = false;
   // Tear down controllers
   if (placement) placement.destroy();
   if (statusCtrl) statusCtrl.destroy();
@@ -311,6 +371,39 @@ async function init() {
   }
   addGlobalListener(document, 'keydown', _onKeydown);
 
+  // ── Outside-click closes overlay (unified rule, all devices) ──
+  // Capture phase so this fires before bubble-phase interaction handlers.
+  addGlobalListener(document, 'pointerdown', (e) => {
+    if (overlay.current === 'none') return;
+
+    // Only primary pointer — reject second touch in multi-touch, and
+    // non-left mouse buttons (right-click, middle, stylus barrel).
+    if (!e.isPrimary) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    // Clicks inside either sheet never dismiss (ownership boundary).
+    const sSheet = document.getElementById('settings-sheet');
+    const cSheet = document.getElementById('chooser-sheet');
+    if (sSheet && sSheet.contains(e.target)) return;
+    if (cSheet && cSheet.contains(e.target)) return;
+
+    // Clicks inside the dock never dismiss.
+    const dockEl = document.getElementById('dock');
+    if (dockEl && dockEl.contains(e.target)) return;
+
+    // Only backdrop and renderer canvas dismiss.
+    const backdrop = document.getElementById('sheet-backdrop');
+    const canvas = renderer ? renderer.getCanvas() : null;
+    const isBackdrop = backdrop && (e.target === backdrop || backdrop.contains(e.target));
+    const isCanvas = canvas && (e.target === canvas || canvas.contains(e.target));
+    if (!isBackdrop && !isCanvas) return;
+
+    // Close + consume so no interaction starts from the same event.
+    overlay.close();
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+
   // ── Dock controller ──
   const dockAddBtn = document.getElementById('dock-add');
   dock = new DockController({
@@ -331,11 +424,8 @@ async function init() {
       placement.exit(true);
       return;
     }
-    if (placement.hasLastStructure() && session.scene.molecules.length > 0) {
-      placement.start(placement.getLastStructureFile(), placement.getLastStructureName());
-    } else {
-      overlay.open('chooser');
-    }
+    _updateChooserRecentRow();
+    overlay.open('chooser');
   });
   dock.onModeChange((mode) => { session.interactionMode = mode; });
   dock.onPause(() => {
@@ -395,7 +485,7 @@ async function init() {
   settingsSheet.onDragChange((v) => { physics.setDragStrength(v); });
   settingsSheet.onRotateChange((v) => { physics.setRotateStrength(v); });
   settingsSheet.onDampingChange((d) => { physics.setDamping(d); });
-  settingsSheet.onAddMolecule(() => { overlay.open('chooser'); });
+  settingsSheet.onAddMolecule(() => { _updateChooserRecentRow(); overlay.open('chooser'); });
   settingsSheet.onClear(() => { overlay.close(); _clearPlayground(); });
   settingsSheet.onResetView(() => { renderer.resetView(); });
   settingsSheet.onHelpOpen(() => { overlay.showHelpPage(); });
@@ -421,14 +511,12 @@ async function init() {
     },
   });
 
-  // Notify renderer of dock height for overlay positioning (axis triad)
-  function updateDockInsets() {
-    if (dock && renderer) {
-      renderer.setOverlayInsets({ bottom: dock.getHeight() + 8 });
-    }
-  }
-  updateDockInsets();
-  addGlobalListener(window, 'resize', updateDockInsets);
+  // ── Overlay layout: hint clearance + triad sizing/positioning ──
+  // Initial synchronous pass for first-paint correctness (dock/renderer exist).
+  _doOverlayLayout();
+  addGlobalListener(window, 'resize', _requestOverlayLayout);
+  _dockResizeObserver = new ResizeObserver(() => _requestOverlayLayout());
+  _dockResizeObserver.observe(document.getElementById('dock'));
 
   // Mobile: tap FPS area to expand diagnostics for 5s
   _fpsClickEl = document.getElementById('fps');
@@ -482,10 +570,33 @@ function setDockPlacementMode(active) {
 
 function updateDockAddLabel() {
   if (!dock) return;
-  dock.updateAddLabel(
-    !!(placement && placement.hasLastStructure()),
-    session.scene.molecules.length > 0,
-  );
+  dock.updateAddLabel();
+}
+
+/** Update the pinned "Recent" shortcut row at the top of the chooser. */
+function _updateChooserRecentRow() {
+  const list = document.getElementById('structure-list');
+  if (!list) return;
+  const prev = list.querySelector('.chooser-recent');
+  if (prev) prev.remove();
+
+  if (placement && placement.hasLastStructure()) {
+    const row = document.createElement('div');
+    row.className = 'chooser-recent';
+    const label = document.createElement('span');
+    label.className = 'chooser-recent-label';
+    label.textContent = 'Recent';
+    const name = document.createElement('span');
+    name.className = 'chooser-recent-name';
+    name.textContent = placement.getLastStructureName();
+    row.appendChild(label);
+    row.appendChild(name);
+    row.addEventListener('click', () => {
+      overlay.close();
+      placement.start(placement.getLastStructureFile(), placement.getLastStructureName());
+    });
+    list.insertBefore(row, list.firstChild);
+  }
 }
 
 

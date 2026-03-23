@@ -37,7 +37,7 @@ python3 -m http.server 8000
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
 | Pause | Primary control — freezes physics, camera/UI remain active |
 | Status | Sim speed (Nx), MD rate (ps/s), hardware-limited indicator. Tap to expand on mobile |
-| Scene controls | Add Molecule, Add Another, Clear playground, Reset View |
+| Scene controls | Add (dock) and Add Molecule (settings sheet) both open the chooser; chooser shows a pinned Recent shortcut after first placement. Clear playground, Reset View. |
 
 ### Interaction Modes
 
@@ -107,7 +107,7 @@ The interactive page uses a modular controller architecture with a composition r
 - Three.js v0.170 (CDN, ES modules via importmap)
 - InstancedMesh for atoms and bonds (2 draw calls, geometric capacity growth)
 - OrbitControls for camera (right-click orbit, scroll zoom)
-- Custom axis triad (ArrowHelper + sprites, scissor-test viewport)
+- Custom axis triad (ArrowHelper + sprites, scissor-test viewport, device-aware sizing 80–200px via `setOverlayLayout()` contract)
 - MeshStandardMaterial with roughness 0.7, metalness 0 (PBR)
 - Camera-relative 4-light rig (key/fill/rim/ambient)
 - No build step, no npm — single HTML + JS modules
