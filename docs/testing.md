@@ -215,6 +215,10 @@ After changes to UI controllers or main.js composition:
 | A8 | Chooser Recent row | Place a molecule → tap Add → chooser opens with pinned "Recent" row at top → tap it → placement starts |
 | A9 | Hint above dock | On tablet/desktop, hint text does not overlap the floating dock pill |
 | A10 | Triad sizing | On desktop, axis triad is visibly larger (~140–200px). On tablet/desktop, triad is corner-anchored, not pushed up by dock |
+| A11 | Placement coachmark | Tap Add → pick structure → "Tap Place to add it" appears in hint area → tap Place → coachmark disappears |
+| A12 | Coachmark + overlay | During placement, open Settings → coachmark hides immediately (no fade), no generic hint text visible under sheet |
+| A13 | Text Size setting | Settings → Appearance → toggle Large → all text visibly larger. Toggle Normal → text returns to baseline. Segmented indicator aligned at both sizes |
+| A14 | Info card reduced | Top-left card shows only status text (no "NanoToybox" title), smaller padding |
 
 ### Code Review Invariants
 

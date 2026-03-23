@@ -85,3 +85,11 @@ export function applyThemeTokens(name) {
   s.setProperty('--color-fps-text', t.uiFpsText);
   s.setProperty('--color-hint-bg', t.uiHintBg);
 }
+
+/**
+ * Apply text-size mode. CSS owns the token values via [data-text-size] selector
+ * in index.html — JS only sets the attribute. Session-only — resets on reload.
+ */
+export function applyTextSizeTokens(size) {
+  document.documentElement.dataset.textSize = size || 'normal';
+}

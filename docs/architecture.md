@@ -54,13 +54,14 @@ NanoToybox/
 │   │   ├── scene.js              # Scene commit/clear/load (transaction-safe)
 │   │   ├── placement.js          # Placement lifecycle, tangent computation, canvas listeners
 │   │   ├── interaction.js        # Command dispatch, screen-to-physics projection
-│   │   ├── status.js             # Status text, hint fade
+│   │   ├── status.js             # Status text, hint fade, contextual coachmarks (shared #hint surface)
 │   │   ├── ui/
 │   │   │   ├── overlay.js        # Sheet open/close, backdrop, help drill-in
 │   │   │   ├── dock.js           # Buttons, placement mode, mode segmented
-│   │   │   └── settings-sheet.js # Sliders, segmented controls, stat rows
+│   │   │   ├── settings-sheet.js # Sliders, segmented controls, stat rows
+│   │   │   └── coachmarks.js     # Onboarding copy and IDs (placement, future hints)
 │   │   ├── shared/
-│   │   │   ├── segmented.js      # Segmented control wiring utility (returns disposer)
+│   │   │   ├── segmented.js      # Segmented control wiring + programmatic selection utilities
 │   │   │   └── require-el.js     # Fail-fast DOM ref validation
 │   │   ├── config.js             # Centralized page configuration
 │   │   ├── physics.js            # Tersoff force engine + interaction forces

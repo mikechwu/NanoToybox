@@ -10,7 +10,7 @@ import { StateMachine, State } from './state-machine.js';
 import { InputManager } from './input.js';
 import { Renderer } from './renderer.js';
 import { FPSMonitor } from './fps-monitor.js';
-import { THEMES, applyThemeTokens } from './themes.js';
+import { THEMES, applyThemeTokens, applyTextSizeTokens } from './themes.js';
 import { CONFIG } from './config.js';
 import { commitMolecule, clearPlayground, addMoleculeToScene } from './scene.js';
 import { OverlayController } from './ui/overlay.js';
@@ -19,6 +19,7 @@ import { SettingsSheetController } from './ui/settings-sheet.js';
 import { handleCommand as dispatchCommand } from './interaction.js';
 import { StatusController } from './status.js';
 import { PlacementController } from './placement.js';
+import { COACHMARKS } from './ui/coachmarks.js';
 
 const DEBUG_LOAD = CONFIG.debug.load;
 
@@ -33,6 +34,7 @@ let placement = null;
 
 const session = {
   theme: 'dark',
+  textSize: 'normal',
   isLoading: false,
   interactionMode: 'atom',  // 'atom' | 'move' | 'rotate'
   playback: {
@@ -244,7 +246,7 @@ function destroyApp() {
   _fpsExpanded = false;
   clearTimeout(_fpsExpandTimer);
   _fpsExpandTimer = null;
-  // Reset session state (theme preserved intentionally for re-init continuity)
+  // Reset session state (theme + textSize preserved intentionally for re-init continuity)
   session.isLoading = false;
   session.interactionMode = 'atom';
   session.scene.molecules = [];
@@ -271,6 +273,7 @@ async function init() {
 
   renderer.applyTheme(session.theme);
   applyThemeTokens(session.theme);
+  applyTextSizeTokens(session.textSize);
 
   // Status controller
   statusCtrl = new StatusController({
@@ -425,7 +428,7 @@ async function init() {
       return;
     }
     _updateChooserRecentRow();
-    overlay.open('chooser');
+    _openOverlay('chooser');
   });
   dock.onModeChange((mode) => { session.interactionMode = mode; });
   dock.onPause(() => {
@@ -440,7 +443,7 @@ async function init() {
   });
   dock.onSettings(() => {
     if (placement.active) return;
-    overlay.open('settings');
+    _openOverlay('settings');
   });
   dock.onCancel(() => placement.exit(false));
 
@@ -449,6 +452,7 @@ async function init() {
     speedSeg: document.getElementById('speed-seg'),
     themeSeg: document.getElementById('theme-seg'),
     boundarySeg: document.getElementById('boundary-seg'),
+    textSizeSeg: document.getElementById('text-size-seg'),
     dragSlider: document.getElementById('drag-strength'),
     dragVal: document.getElementById('drag-val'),
     rotateSlider: document.getElementById('rotate-strength'),
@@ -485,14 +489,19 @@ async function init() {
   settingsSheet.onDragChange((v) => { physics.setDragStrength(v); });
   settingsSheet.onRotateChange((v) => { physics.setRotateStrength(v); });
   settingsSheet.onDampingChange((d) => { physics.setDamping(d); });
-  settingsSheet.onAddMolecule(() => { _updateChooserRecentRow(); overlay.open('chooser'); });
+  settingsSheet.onTextSizeChange((size) => {
+    session.textSize = size;
+    applyTextSizeTokens(size);
+  });
+  settingsSheet.onAddMolecule(() => { _updateChooserRecentRow(); _openOverlay('chooser'); });
   settingsSheet.onClear(() => { overlay.close(); _clearPlayground(); });
   settingsSheet.onResetView(() => { renderer.resetView(); });
   settingsSheet.onHelpOpen(() => { overlay.showHelpPage(); });
   settingsSheet.onHelpBack(() => { overlay.showMainPage(); });
 
-  // Initial speed button state
+  // Initial speed button state + text-size selection
   settingsSheet.updateSpeedButtons(session.playback.maxSpeed, scheduler.warmUpComplete);
+  settingsSheet.setTextSizeSelection(session.textSize);
 
   // ── Placement controller ──
   placement = new PlacementController({
@@ -542,6 +551,15 @@ async function init() {
   _rafId = requestAnimationFrame(frameLoop);
 }
 
+/** Single entry point for all overlay openings — clears transient state first.
+ *  Currently dismisses placement coachmark only. When dock Clear lands,
+ *  add dock.disarmClear() here. */
+function _openOverlay(name) {
+  // Dismiss (not restore) — don't show generic hint underneath a sheet
+  if (statusCtrl) statusCtrl.dismissCoachmark('placement');
+  overlay.open(name);
+}
+
 // --- Structure drawer ---
 function populateStructureDrawer(manifest) {
   const list = document.getElementById('structure-list');
@@ -565,7 +583,13 @@ function populateStructureDrawer(manifest) {
 function setDockPlacementMode(active) {
   if (!dock) return;
   dock.setPlacementMode(active);
-  if (!active) updateDockAddLabel();
+  // Coachmark policy: main.js owns the hint lifecycle, not placement.js
+  if (active) {
+    if (statusCtrl) statusCtrl.showCoachmark(COACHMARKS.placement);
+  } else {
+    if (statusCtrl) statusCtrl.hideCoachmark('placement');
+    updateDockAddLabel();
+  }
 }
 
 function updateDockAddLabel() {

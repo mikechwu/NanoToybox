@@ -116,7 +116,7 @@ See `docs/architecture.md` for the full module map and state ownership model.
 | If you're working on... | Read these files |
 |--------------------------|-----------------|
 | Interactive page | `page/index.html`, `page/js/main.js`, `page/js/ui/*`, `docs/viewer.md` |
-| UI controllers | `page/js/ui/overlay.js`, `page/js/ui/dock.js`, `page/js/ui/settings-sheet.js` |
+| UI controllers | `page/js/ui/overlay.js`, `page/js/ui/dock.js`, `page/js/ui/settings-sheet.js`, `page/js/ui/coachmarks.js` |
 | Scene / placement | `page/js/scene.js`, `page/js/placement.js` |
 | Browser physics | `page/js/physics.js` (JS Tersoff) |
 | Force calculation (Python) | `sim/potentials/tersoff.py`, `tersoff_fast.py` |

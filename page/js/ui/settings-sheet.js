@@ -7,7 +7,7 @@
  * DOM ownership: all elements inside #settings-sheet content area.
  * Lifecycle: destroy() removes all attached listeners and nulls callbacks.
  */
-import { wireSegmented } from '../shared/segmented.js';
+import { wireSegmented, setSegmentedByData } from '../shared/segmented.js';
 import { requireEl } from '../shared/require-el.js';
 
 export class SettingsSheetController {
@@ -15,7 +15,7 @@ export class SettingsSheetController {
    * @param {object} opts - DOM element refs
    */
   constructor({
-    speedSeg, themeSeg, boundarySeg,
+    speedSeg, themeSeg, boundarySeg, textSizeSeg,
     dragSlider, dragVal, rotateSlider, rotateVal, dampingSlider, dampingVal,
     placedCountEl, activeRowEl, activeCountEl,
     addMoleculeBtn, clearBtn, resetViewBtn, helpLink, helpBackBtn,
@@ -24,6 +24,7 @@ export class SettingsSheetController {
     requireEl('speed-seg', speedSeg);
     requireEl('theme-seg', themeSeg);
     requireEl('boundary-seg', boundarySeg);
+    requireEl('text-size-seg', textSizeSeg);
     requireEl('drag-strength', dragSlider);
     requireEl('drag-val', dragVal);
     requireEl('rotate-strength', rotateSlider);
@@ -37,6 +38,7 @@ export class SettingsSheetController {
     requireEl('help-back', helpBackBtn);
 
     this._speedSeg = speedSeg;
+    this._textSizeSeg = textSizeSeg;
     this._placedCountEl = placedCountEl;
     this._activeRowEl = activeRowEl;
     this._activeCountEl = activeCountEl;
@@ -53,6 +55,7 @@ export class SettingsSheetController {
     this._onDragChange = null;
     this._onRotateChange = null;
     this._onDampingChange = null;
+    this._onTextSizeChange = null;
 
     // Wire segmented controls (store disposers for destroy)
     this._disposers = [];
@@ -64,6 +67,9 @@ export class SettingsSheetController {
     }));
     this._disposers.push(wireSegmented(boundarySeg, (label) => {
       if (this._onBoundaryChange) this._onBoundaryChange(label.dataset.boundary);
+    }));
+    this._disposers.push(wireSegmented(textSizeSeg, (label) => {
+      if (this._onTextSizeChange) this._onTextSizeChange(label.dataset.textSize);
     }));
 
     // Wire sliders (store refs for destroy)
@@ -117,6 +123,7 @@ export class SettingsSheetController {
   onDragChange(cb) { this._onDragChange = cb; }
   onRotateChange(cb) { this._onRotateChange = cb; }
   onDampingChange(cb) { this._onDampingChange = cb; }
+  onTextSizeChange(cb) { this._onTextSizeChange = cb; }
 
   /** Update "Placed" count in Scene section. */
   updatePlacedCount(total) {
@@ -159,6 +166,7 @@ export class SettingsSheetController {
     this._onDragChange = null;
     this._onRotateChange = null;
     this._onDampingChange = null;
+    this._onTextSizeChange = null;
   }
 
   /** Update speed button enable/disable based on maxSpeed and warm-up state. */
@@ -175,5 +183,11 @@ export class SettingsSheetController {
         label.classList.toggle('seg-disabled', spd > maxSpeed);
       }
     });
+  }
+
+  /** Reflect the current text-size selection into the segmented control. */
+  setTextSizeSelection(size) {
+    if (!this._textSizeSeg) return;
+    setSegmentedByData(this._textSizeSeg, 'textSize', size);
   }
 }
