@@ -223,9 +223,13 @@ canvas { display: block; touch-action: none; }
   .dock {
     left: 50%; transform: translateX(-50%);
     width: auto; min-width: 320px; max-width: 480px;
-    bottom: var(--space-lg);
+    bottom: calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));
     border-radius: var(--radius-lg);
     border: 1px solid var(--color-border);
+    /* Safe-area clearance moved from internal padding to external position,
+       so the pill content stays vertically centered. */
+    height: calc(var(--tap-target) + var(--space-lg));
+    padding-bottom: 0;
   }
 }
 
