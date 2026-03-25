@@ -16,12 +16,12 @@ NanoToybox/
 │   │   ├── generate.py           # Geometry generators (CNT, graphene, C60, diamond)
 │   │   ├── generators.py         # Legacy generators (used by some tests)
 │   │   └── library.py            # Structure catalog with CATALOG dict
-│   └── io/
-│       └── output.py             # XYZ trajectory + CSV energy writers
+│   ├── io/
+│   │   └── output.py             # XYZ trajectory + CSV energy writers
 │   └── wasm/
 │       ├── tersoff.c             # C Tersoff kernel for Wasm (Emscripten)
-│       └── Makefile              # Build: emcc -O3 -ffast-math → page/wasm/
-├── tests/                        # 8 validation tests (see testing.md)
+│       └── Makefile              # Build: emcc -O3 -fno-math-errno -ffinite-math-only → page/wasm/
+├── tests/                        # Python validation + JS unit + E2E suites (see testing.md)
 ├── scripts/                      # CLI tools and analysis scripts
 │   ├── library_cli.py            # Structure library management CLI
 │   ├── plot_energy.py            # Energy curve plotting
@@ -35,7 +35,7 @@ NanoToybox/
 ├── structures/
 │   └── library/                  # 15 canonical relaxed 0K structures (XYZ + manifest.json)
 ├── page/                         # Interactive carbon playground (real-time simulation)
-│   ├── index.html                # HTML shell, UI controls, settings sheet
+│   ├── index.html                # HTML shell + #react-root mount + #hint surface
 │   ├── bench/                    # Performance benchmarks
 │   │   ├── bench-physics.html    # Physics-only microbench (per-stage timing)
 │   │   ├── bench-render.html     # Raw Three.js renderer microbench (3 modes)
@@ -45,7 +45,7 @@ NanoToybox/
 │   │   ├── bench-kernel-profile.html  # Kernel stage profiling
 │   │   ├── bench-wasm.html       # Wasm kernel benchmarks
 │   │   ├── bench-spread.html     # Spread-domain sparse-grid benchmark (9-case span sweep)
-│   │   └── bench-scenes.js       # Shared scene generator
+│   │   └── bench-scenes.ts       # Shared scene generator
 │   ├── wasm/                     # Pre-built Wasm kernel (committed binaries)
 │   │   ├── tersoff.wasm          # Compiled C Tersoff kernel
 │   │   └── tersoff.js            # Emscripten glue code
@@ -138,7 +138,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 
 ### Composition Root Pattern
 
-`main.ts` creates all subsystems (renderer, physics, stateMachine) and mounts the React UI. React components (Dock, SettingsSheet, StructureChooser, StatusBar, FPSDisplay) are authoritative for all UI surfaces. Imperative controllers remain only for placement (PlacementController) and hint/coachmark (StatusController, hint-only).
+`main.ts` creates all subsystems (renderer, physics, stateMachine) and mounts the React UI. React components (Dock, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay) are authoritative for all UI surfaces. Imperative controllers remain only for placement (PlacementController) and hint/coachmark (StatusController, hint-only).
 
 React components read state from the Zustand store (`app-store.ts`) and invoke imperative callbacks registered by `main.ts` via the store's callback slots (dockCallbacks, settingsCallbacks, chooserCallbacks).
 
@@ -152,9 +152,9 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | `session.playback` | main.ts (frame loop) | React Dock (pause), React SettingsSheet (speed) |
 | `session.interactionMode` | main.ts (via store callback) | React Dock (mode segmented) |
 | UI chrome (sheets, theme, etc.) | Zustand store (`app-store.ts`) | React components |
-| `session.theme` | main.js (via settings intent) | settings-sheet (theme segmented) |
-| placement state | placement.js (`_state`) | dock (add/cancel intents) |
-| scheduler / effectsGate | main.js (frame loop only) | — |
+| `session.theme` | main.ts (via settings callback) | React SettingsSheet (theme segmented) |
+| placement state | placement.ts (`_state`) | React Dock (add/cancel via dockCallbacks) |
+| scheduler / effectsGate | main.ts (frame loop only) | — |
 
 ### Overlay Close Policy
 
@@ -162,7 +162,7 @@ Unified outside-click dismiss rule (all devices): a capture-phase `pointerdown` 
 
 ### Overlay Layout Contract
 
-`main.js` owns bottom-overlay layout arbitration via `_doOverlayLayout()` (RAF-coalesced). It measures dock geometry via `getBoundingClientRect()` and produces separate layout outputs:
+`main.ts` owns bottom-overlay layout arbitration via `_doOverlayLayout()` (RAF-coalesced). It measures dock geometry via `getBoundingClientRect()` and produces separate layout outputs:
 
 - **Hint** (`--hint-bottom` CSS var): always clears the dock top edge + gap
 - **Triad** (`renderer.setOverlayLayout({ triadSize, triadLeft, triadBottom })`): phone clears full-width dock; tablet/desktop uses safe-area corner margins. `triadLeft` accounts for `env(safe-area-inset-left)`. Triad sizes 80–200px depending on device.

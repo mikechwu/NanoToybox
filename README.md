@@ -84,6 +84,7 @@ NanoToybox/
 │       ├── simulation-worker.ts # Off-thread physics worker
 │       ├── worker-bridge.ts    # Main↔Worker protocol bridge
 │       ├── renderer.ts         # Three.js visualization
+│       ├── ui/                 # Coachmark definitions
 │       └── ...                 # See docs/architecture.md for full module map
 ├── viewer/                     # Pre-computed trajectory viewer
 ├── sim/                        # Python simulation engine
@@ -147,6 +148,8 @@ Detailed docs in [`docs/`](docs/):
 - [Viewer & Interactive Page](docs/viewer.md) — product behavior and usage
 - [Scaling Research](docs/scaling-research.md) — real-time limits, collision benchmarks
 - [Decisions](docs/decisions.md) — key design rationale
+- [Testing & Validation](docs/testing.md) — test ladder, pass criteria, how to run
+- [ML Surrogate](docs/ml-surrogate.md) — force decomposition, training pipeline (deferred)
 - [Contributing](docs/contributing.md) — development guide
 
 ## License

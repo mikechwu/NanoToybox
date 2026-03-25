@@ -68,28 +68,23 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - C/Wasm Tersoff kernel — ~11% faster than JS JIT, enabled by default, automatic JS fallback (`sim/wasm/`, `page/js/tersoff-wasm.ts`)
 - Containment boundary — dynamic soft harmonic wall (`page/js/physics.ts`), Contain/Remove toggle, live atom count, auto-scaling radius with hysteresis shrinkage
 - Dock + sheet navigation — responsive two-tier UI with React components (`page/js/components/`)
-- React UI migration — all UI surfaces (Dock, SettingsSheet, StructureChooser, StatusBar, FPSDisplay) are React-authoritative with Zustand store
+- React UI migration — all UI surfaces (Dock, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay) are React-authoritative with Zustand store
 - Web Worker physics — off-thread simulation via `page/js/simulation-worker.ts` with automatic JS fallback
 
 ## Architecture Rules
 
 See `docs/architecture.md` for the full module map and state ownership model.
 
-- **Controllers don't import controllers.** Cross-controller communication uses callbacks wired by main.js.
-- **One owner per DOM surface.** Prefer class toggles for shared/multi-owner visibility. Localized one-shot mutations (e.g., hiding after fade) are acceptable when fully owned by a single controller.
-- **All controllers expose destroy()** that removes attached listeners.
-- **New globals require teardown.** Register via `addGlobalListener()` in main.js.
-- **Do not re-grow main.js.** Extend existing controllers or extract new ones.
+- **React components are the sole UI authority.** All UI surfaces (Dock, SettingsSheet, StructureChooser, StatusBar, FPSDisplay, SheetOverlay) are React components driven by the Zustand store.
+- **Imperative controllers** remain only for PlacementController (canvas touch listeners) and StatusController (hint/coachmark surface). Both expose `destroy()`.
+- **Callbacks flow through the store.** React components invoke imperative callbacks (dockCallbacks, settingsCallbacks, chooserCallbacks) registered by main.ts into the Zustand store.
+- **New globals require teardown.** Register via `addGlobalListener()` in main.ts.
+- **Do not re-grow main.ts.** Extract new modules or React components.
 - **State writes go through authoritative writers.** See state ownership table in architecture.md.
 
 ## Next Steps (Priority Order)
 
-### 1. Web Workers for Responsiveness
-- Move Tersoff computation off the main thread
-- Improves UI responsiveness, not raw throughput
-- SharedArrayBuffer for zero-copy position/force transfer
-
-### 2. Expand Structure Library
+### 1. Expand Structure Library
 - More CNT chiralities, larger graphene sheets
 - Multi-structure collision presets
 
@@ -103,12 +98,25 @@ See `docs/architecture.md` for the full module map and state ownership model.
 
 ## Development Workflow
 
+### TypeScript / React (interactive page)
+
+```
+1. npm run dev                    # Vite dev server with HMR
+2. Make changes to page/js/ code
+3. npm run typecheck              # TypeScript type-checking
+4. npm run test:unit              # Vitest unit tests (158 tests)
+5. npm run test:e2e               # Playwright E2E browser tests (17 tests)
+6. npm run build                  # Production build → dist/
+```
+
+### Python (simulation engine)
+
 ```
 1. Make changes to sim/ code
-2. Run tests: python3 tests/test_01_dimer.py (etc.)
-3. If adding structures: python3 scripts/library_cli.py <command>
+2. python -m pytest tests/test_*.py -v
+3. If adding structures: python scripts/library_cli.py <command>
 4. If changing force engine: verify tersoff.py and tersoff_fast.py match
-5. Document significant changes in `docs/decisions.md` for architecture decisions or in the relevant docs.
+5. Document significant changes in docs/decisions.md
 6. Update docs/ if architecture or decisions change
 ```
 
@@ -116,8 +124,9 @@ See `docs/architecture.md` for the full module map and state ownership model.
 
 | If you're working on... | Read these files |
 |--------------------------|-----------------|
-| Interactive page | `page/index.html`, `page/js/main.ts`, `page/js/components/*`, `docs/viewer.md` |
-| React UI components | `page/js/components/*.tsx`, `page/js/store/app-store.ts`, `page/js/hooks/*` |
+| Interactive page | `page/index.html`, `page/js/main.ts`, `page/js/components/*`, `page/js/store/app-store.ts`, `docs/viewer.md` |
+| React UI components | `page/js/components/*.tsx`, `page/js/store/app-store.ts`, `page/js/hooks/*`, `page/js/react-root.tsx` |
+| Web Worker / bridge | `page/js/simulation-worker.ts`, `page/js/worker-bridge.ts`, `src/types/worker-protocol.ts` |
 | Scene / placement | `page/js/scene.ts`, `page/js/placement.ts` |
 | Browser physics | `page/js/physics.ts` (JS Tersoff), `sim/wasm/tersoff.c` (Wasm kernel) |
 | Force calculation (Python) | `sim/potentials/tersoff.py`, `tersoff_fast.py` |

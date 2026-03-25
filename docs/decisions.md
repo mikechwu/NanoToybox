@@ -8,9 +8,9 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** Scaling benchmarks showed analytical Tersoff handles all target scenes (60–300 atoms) at interactive frame rates. The JavaScript implementation achieves sufficient performance for the target range without requiring Wasm. ML provided no speed advantage — descriptor computation has the same O(N·neighbors²) complexity as the analytical force. ML only becomes worthwhile for >1000 atoms with a GNN that avoids explicit descriptors.
 
-**Update:** The interactive page (`page/`) now runs the full Tersoff potential with a C/Wasm kernel enabled by default (`config.js` `useWasm: true`), providing ~11% speedup over JS JIT. Automatic fallback to JavaScript if Wasm fails to load.
+**Update:** The interactive page (`page/`) now runs the full Tersoff potential with a C/Wasm kernel enabled by default (`config.ts` `useWasm: true`), providing ~11% speedup over JS JIT. Automatic fallback to JavaScript if Wasm fails to load. Physics runs on a dedicated Web Worker (`simulation-worker.ts`).
 
-**Evidence:** dev_report_simdev9, dev_report_simdev10, page/js/physics.js
+**Evidence:** dev_report_simdev9, dev_report_simdev10, page/js/physics.ts
 
 ## D2: Python Reference + Numba Acceleration
 
@@ -90,8 +90,28 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** The old bottom strip scrolled horizontally on mobile, hiding controls. The dock provides large tap targets and no scrolling. The settings sheet organizes controls into grouped sections with drill-in navigation. One overlay at a time (settings | chooser). Placement mode swaps dock slots via CSS class.
 
+**Update:** Dock, SettingsSheet, StructureChooser, StatusBar, FPSDisplay, and SheetOverlay are now React components (`page/js/components/`). UI state is owned by the Zustand store (`page/js/store/app-store.ts`). Placement mode is communicated via `placementActive` flag in the store; the React Dock component applies the `.placement` CSS class reactively.
+
 ## D13: Controller Module Extraction
 
-**Decision:** Extract the monolithic main.js into focused controller modules with explicit state ownership, dependency injection, and full lifecycle teardown.
+**Decision:** Extract the monolithic main.ts into focused controller modules with explicit state ownership, dependency injection, and full lifecycle teardown.
 
-**Rationale:** The Phase 3 dock+sheet restructure created natural module boundaries. Controllers receive dependencies at construction, don't cross-import each other, and all expose destroy(). main.js remains the composition root and runtime orchestration layer.
+**Rationale:** The Phase 3 dock+sheet restructure created natural module boundaries. Controllers receive dependencies at construction, don't cross-import each other, and all expose destroy(). main.ts remains the composition root and runtime orchestration layer.
+
+**Update:** `DockController`, `SettingsSheetController`, and `OverlayController` have been removed — those roles are now handled by React components. Only `PlacementController` (canvas touch listeners) and `StatusController` (hint/coachmark, hint-only) remain as class-based controllers with `destroy()` lifecycles.
+
+## D14: Simulation Web Worker
+
+**Decision:** Run `PhysicsEngine` on a dedicated Web Worker thread (`simulation-worker.ts`). The main thread communicates via a typed command/event protocol managed by `WorkerBridge` (`worker-bridge.ts`).
+
+**Rationale:** Moves the O(N·neighbors²) Tersoff force computation off the main thread, preventing jank on the render/input thread. The protocol provides mutation acks with scene versioning, `requestFrame`/`frameResult` round-trip for position snapshots, and generation bumping to invalidate in-flight requests on scene clear. Automatic fallback to sync-mode physics if the worker fails or stalls (5s warning, 15s fatal).
+
+**Evidence:** `page/js/simulation-worker.ts`, `page/js/worker-bridge.ts`, `src/types/worker-protocol.ts`
+
+## D15: React + Zustand for UI Chrome
+
+**Decision:** Adopt React 19 (`createRoot`) for all UI chrome components and Zustand for shared UI state. Physics/renderer/worker state stays imperative outside the store.
+
+**Rationale:** The imperative DOM controllers required explicit sync of every state change to the DOM. React provides declarative re-renders; Zustand provides a single, typed, subscribable state surface. Diagnostics and playback metrics are throttled to 5 Hz via the frame loop's coalesced status tick, avoiding per-frame React re-renders. Imperative callbacks from main.ts are registered into the store (`dockCallbacks`, `settingsCallbacks`, `chooserCallbacks`) so React components can invoke them without importing main.ts.
+
+**Evidence:** `page/js/react-root.tsx`, `page/js/store/app-store.ts`, `page/js/components/` (Dock.tsx, SettingsSheet.tsx, StructureChooser.tsx, StatusBar.tsx, FPSDisplay.tsx, SheetOverlay.tsx)

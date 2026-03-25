@@ -104,13 +104,16 @@ The interactive page uses a composition root pattern with React-authoritative UI
 
 ### Technology
 
+- Vite (v8) build pipeline: TypeScript + React (JSX) compiled and bundled. Dev server via `npm run dev`
+- React 19 (`createRoot`) — authoritative UI: Dock, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay
+- Zustand (`app-store.ts`) — reactive UI state store; imperative callbacks from `main.ts` registered via store slots
+- Web Worker (`simulation-worker.ts`) + bridge (`worker-bridge.ts`) — physics runs off the main thread
 - Three.js v0.170 (npm, bundled by Vite)
 - InstancedMesh for atoms and bonds (2 draw calls, geometric capacity growth)
 - OrbitControls for camera (right-click orbit, scroll zoom)
 - Custom axis triad (ArrowHelper + sprites, scissor-test viewport, device-aware sizing 80–200px via `setOverlayLayout()` contract)
 - MeshStandardMaterial with roughness 0.7, metalness 0 (PBR)
 - Camera-relative 4-light rig (key/fill/rim/ambient)
-- No build step, no npm — single HTML + JS modules
 
 ---
 
@@ -160,7 +163,7 @@ For trajectory playback of large structures, use high stride values (20–100).
 | **InstancedMesh** | Done | Draw calls reduced from N+bonds to 2. Geometric capacity growth, active-instance compaction for bonds. |
 | **On-the-fly Tersoff** | Done | 45% faster kernel at 2040 atoms. Eliminates 127 MB N×N distance cache. |
 | **Spatial-hash neighbor/bond** | Done | O(N) time and memory via Teschner hash, independent of domain extent. Shared `_buildCellGrid` helper. |
-| **C/Wasm Tersoff** | Done | ~11% faster than JS JIT. Enabled by default (config.js `useWasm: true`). CSR neighbor marshaling. Automatic JS fallback on load failure. |
-| **Web Workers** | Pending | Secondary architecture direction — improves responsiveness, not throughput. |
+| **C/Wasm Tersoff** | Done | ~11% faster than JS JIT. Enabled by default (`config.ts` `useWasm: true`). CSR neighbor marshaling. Automatic JS fallback on load failure. |
+| **Web Workers** | Done | Physics runs on a dedicated Web Worker (`simulation-worker.ts`). Main thread handles rendering + React UI. `WorkerBridge` provides mutation-acked protocol with scene versioning. |
 
 Benchmark scripts are in `page/bench/`. Run via local server to collect data.

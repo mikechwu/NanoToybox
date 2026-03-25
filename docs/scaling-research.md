@@ -120,7 +120,7 @@ Collision trajectories are saved as XYZ files in `outputs/scaling_research/` and
 
 ## Practical Limits Summary
 
-> **Update (2026-03-19):** The interactive page (`page/`) now uses InstancedMesh rendering, on-the-fly Tersoff distances, and spatial-hash neighbor/bond search. The "unoptimized viewer" row below is historical. See `docs/viewer.md` for current optimization status. Browser benchmark data is in `page/bench/`.
+> **Update (2026-03-25):** The interactive page (`page/`) now uses InstancedMesh rendering, on-the-fly Tersoff distances, spatial-hash neighbor/bond search, and a dedicated Web Worker for physics (`simulation-worker.ts`). The "unoptimized viewer" row below is historical. See `docs/viewer.md` for current optimization status. Browser benchmark data is in `page/bench/`.
 
 | Configuration | Max Atoms (30 FPS) | Limiting Bottleneck |
 |---------------|-------------------:|---------------------|
@@ -135,7 +135,7 @@ Collision trajectories are saved as XYZ files in `outputs/scaling_research/` and
 
 2. **Phase 2 (720–2,400 atoms):** Achieved with current optimizations (InstancedMesh + spatial hash + on-the-fly kernel). Smooth at 30+ FPS at the physics wall (~2,400 atoms estimated).
 
-3. **Phase 3 (2,400–5,000+ atoms):** C/Wasm Tersoff kernel deployed and enabled by default (~11% faster than JS JIT). Further gains require algorithmic improvements or Web Workers.
+3. **Phase 3 (2,400–5,000+ atoms):** C/Wasm Tersoff kernel deployed and enabled by default (~11% faster than JS JIT). Physics runs on a dedicated Web Worker thread (`simulation-worker.ts`), keeping the main thread responsive. Further throughput gains require algorithmic improvements (e.g., O(N) Tersoff, GPU compute).
 
 4. **Beyond 5,000 atoms:** Not practical for real-time browser MD. Pre-computed trajectories with stride-based playback (now supported in the viewer) are the viable approach.
 

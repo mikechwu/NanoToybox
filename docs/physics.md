@@ -141,12 +141,12 @@ The simulator uses the standard cosine cutoff transition (not the exponential va
 |---------------|----------|-----|
 | Pure Python | `sim/potentials/tersoff.py` | Reference, validation, force decomposition |
 | Numba JIT | `sim/potentials/tersoff_fast.py` | Server-side relaxation, library building |
-| JavaScript | `page/js/physics.js` | Browser interactive page (fallback) |
+| TypeScript | `page/js/physics.ts` | Browser interactive page (JS fallback kernel) |
 | C/Wasm | `sim/wasm/tersoff.c` → `page/wasm/tersoff.wasm` | Browser default (~11% faster than JS JIT) |
 
 All four use identical Tersoff (1988) carbon parameters and produce consistent results.
 
-The Wasm bridge (`tersoff-wasm.js`) marshals the short neighbor list in CSR format into Wasm memory. The marshal copies exactly `totalNl` live entries, not the full allocated capacity, to avoid stale-data overhead on every step.
+The Wasm bridge (`tersoff-wasm.ts`) marshals the short neighbor list in CSR format into Wasm memory. The marshal copies exactly `totalNl` live entries, not the full allocated capacity, to avoid stale-data overhead on every step.
 
 ### Containment Boundary
 
@@ -161,7 +161,7 @@ The interactive page applies a soft containment boundary to prevent atoms from e
 | Shrink hysteresis | `wall.shrinkHysteresis` | 2.0 | Only shrink if R_wall > target × this factor |
 | Recenter threshold | `wall.recenterThreshold` | 0.25 | Recenter wall after >25% atoms removed in one event |
 
-**Contain mode:** Harmonic wall force `F = -K × (r - R_wall)` for atoms beyond R_wall. Energy conservation maintained at O(dt²).
+**Contain mode:** Harmonic wall force **F** = −K × (r − R\_wall) × **r̂** (radially inward) for atoms beyond R\_wall. Energy conservation maintained at O(dt²).
 
 **Remove mode:** No wall force. Atoms beyond R_wall + removeMargin are deleted. Post-removal: forces recomputed via JS Tersoff kernel (intentional slow-path to avoid CSR re-marshal). Wall radius shrinks with hysteresis; wall center recenters after large asymmetric removals.
 
@@ -169,10 +169,22 @@ The interactive page applies a soft containment boundary to prevent atoms from e
 
 ### JavaScript Implementation Details
 
-The browser implementation (`page/js/physics.js`) includes several optimizations beyond a direct port:
+The browser implementation (`page/js/physics.ts`) includes several optimizations beyond a direct port:
 
 - **On-the-fly distance computation** — distances and unit vectors are computed inline from the `pos` array instead of pre-cached in N×N `Float64Array` buffers. Benchmarked 45% faster than the cached approach at 2040 atoms because the `pos` array (~49 KB) fits in L1 cache while the N×N arrays (~127 MB at 2040 atoms) cause main-memory random-access traffic.
 - **Spatial hash acceleration** — `buildNeighborList()` and `updateBondList()` use a Teschner spatial hash (3-pass: count, prefix-sum, scatter) instead of O(N²) all-pairs scans. `tableSize = 2N` — O(N) time and memory regardless of domain extent. No dense grid allocation, no span-dependent costs. Neighbor hash uses 2.60 Å cells; bond hash uses 1.8 Å cells. Shared `_buildCellGrid()` helper with 27-cell stencil lookup and cell-coordinate collision filtering. Validated via `page/bench/bench-celllist.html` (equivalence against all-pairs reference) and `page/bench/bench-spread.html` (span-independence under dynamic expansion).
 - **InstancedMesh rendering** — atoms and bonds are rendered via `THREE.InstancedMesh` (2 draw calls total) instead of individual `THREE.Mesh` objects. Active-instance compaction for bonds (only visible bonds uploaded). Highlight via separate overlay mesh.
+
+### Force Safety Controls
+
+**Force clamping (`clampForces`):** After computing Tersoff and wall forces, the engine finds the maximum per-atom force magnitude. If it exceeds `F_MAX` (`CONFIG.physics.fMax`, default 50 eV/Å), all forces are scaled down by `F_MAX / maxMag` — a single global scalar applied to every component. This preserves ΣF = 0 for internal forces and keeps the relative force field shape intact. It is momentum-conserving. The clamp runs inside `computeForces()` after Tersoff+wall but before interaction (drag/rotate) forces are added, so user-applied forces are never diluted.
+
+**Velocity safety (`applySafetyControls`):** Called once per simulation tick after the scheduler-requested substep batch (both worker and sync paths). Per-atom velocity cap at `V_HARD_MAX` (0.15 Å/fs) and global KE cap at `max(KE_CAP_MULT × keInitial, n × 5.0)` eV. The KE cap uses uniform scaling (momentum-direction-preserving). Both are last-resort guards against numerical blow-up, not routine friction — typical thermal velocities are 10–30x below the cap.
+
+**Wasm compilation:** `sim/wasm/tersoff.c` compiled with `-O3 -fno-math-errno -ffinite-math-only` (not `-ffast-math`). This preserves IEEE 754 associativity rules to maintain force cancellation accuracy.
+
+### Worker Architecture
+
+`page/js/simulation-worker.ts` runs `PhysicsEngine` on a dedicated Web Worker thread. The main thread communicates via `page/js/worker-bridge.ts` using a typed `WorkerCommand` / `WorkerEvent` message protocol (`src/types/worker-protocol.ts`). If the worker fails to initialize or stalls (no progress for 5 s), the engine falls back to synchronous `PhysicsEngine` on the main thread. Both paths use identical `physics.ts` code.
 
 CNT geometry is generated via the graphene-sheet-rolling algorithm with chiral vector rotation (`sim/structures/generate.py`). Fullerene coordinates (C60, C180, C540, C720) are stored as relaxed structures in the library.
