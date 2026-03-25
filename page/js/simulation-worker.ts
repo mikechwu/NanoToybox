@@ -239,6 +239,12 @@ function handleApplyImpulse(cmd: Extract<WorkerCommand, { type: 'applyImpulse' }
   engine.applyImpulse(cmd.atomIndex, cmd.vx, cmd.vy);
 }
 
+function handleFlick(cmd: Extract<WorkerCommand, { type: 'flick' }>): void {
+  if (!engine) return;
+  engine.endDrag();
+  engine.applyImpulse(cmd.atomIndex, cmd.vx, cmd.vy);
+}
+
 // Settings commands — fire-and-forget
 function handleSetDragStrength(cmd: Extract<WorkerCommand, { type: 'setDragStrength' }>): void { if (engine) engine.setDragStrength(cmd.value); }
 function handleSetRotateStrength(cmd: Extract<WorkerCommand, { type: 'setRotateStrength' }>): void { if (engine) engine.setRotateStrength(cmd.value); }
@@ -263,6 +269,7 @@ function dispatch(cmd: WorkerCommand): void {
     case 'updateDrag':        handleUpdateDrag(cmd); break;
     case 'endDrag':           handleEndDrag(cmd); break;
     case 'applyImpulse':      handleApplyImpulse(cmd); break;
+    case 'flick':             handleFlick(cmd); break;
     case 'setDragStrength':   handleSetDragStrength(cmd); break;
     case 'setRotateStrength': handleSetRotateStrength(cmd); break;
     case 'setDamping':        handleSetDamping(cmd); break;

@@ -54,8 +54,8 @@
   --glass-blur: 0px;
 }
 [data-ui-effects="reduced"] .panel,
-[data-ui-effects="reduced"] #info,
-[data-ui-effects="reduced"] #fps,
+[data-ui-effects="reduced"] .react-info,
+[data-ui-effects="reduced"] .react-fps,
 [data-ui-effects="reduced"] .dock,
 [data-ui-effects="reduced"] .sheet {
   backdrop-filter: none;
@@ -77,26 +77,6 @@ html, body {
 }
 canvas { display: block; touch-action: none; }
 
-#info {
-  position: absolute; top: 12px; left: 12px;
-  background: var(--panel-bg);
-  backdrop-filter: blur(var(--glass-blur));
-  padding: 6px 12px; font-size: var(--font-xs); line-height: 1.7;
-  border-radius: var(--radius-sm); z-index: 10;
-  border: 1px solid var(--color-border);
-}
-#info .title { display: none; }
-#status { color: var(--color-text-secondary); font-size: var(--font-xs); }
-#fps {
-  position: absolute; top: 12px; right: 12px;
-  color: var(--color-fps-text); font-size: var(--font-sm); z-index: 10;
-  font-variant-numeric: tabular-nums;
-  background: var(--color-surface);
-  backdrop-filter: blur(var(--glass-blur));
-  padding: 6px 12px; border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
-  line-height: 1.4; cursor: pointer;
-}
 #hint {
   position: absolute; bottom: var(--hint-bottom, 70px); left: 50%; transform: translateX(-50%);
   background: var(--color-hint-bg); color: var(--color-accent-text);
@@ -404,7 +384,6 @@ canvas { display: block; touch-action: none; }
 .dock.placement .dock-mode { display: none; }
 .dock-cancel { display: none; }
 .dock.placement .dock-cancel { display: flex; }
-.dock.placement #dock-add,
 .dock.placement .dock-add-btn { color: var(--color-accent-text); }
 
 /* ── Sheet pages (drill-in navigation) ── */
@@ -436,200 +415,15 @@ canvas { display: block; touch-action: none; }
   border: 1px solid var(--color-border);
   line-height: 1.4; cursor: pointer;
 }
-/* Hide imperative elements when React is authoritative */
-.react-replaced { display: none !important; }
 </style>
 </head>
 <body>
 <div id="container">
-  <div id="info">
-    <div class="title">NanoToybox</div>
-    <div id="status">Loading structures...</div>
-  </div>
-  <div id="fps"></div>
   <!-- React mount point (Milestone D) — display:contents so children position independently -->
   <div id="react-root" style="display:contents"></div>
   <div id="hint">Click or tap an atom to interact</div>
 
-  <!-- ══════════════════════════════════════════════════
-       Navigation system (dock + sheet)
-       ══════════════════════════════════════════════════ -->
-
-  <!-- Sheet backdrop — blocks canvas on phone/tablet, hidden on desktop -->
-  <div class="sheet-backdrop" id="sheet-backdrop"></div>
-
-  <!-- Settings sheet -->
-  <aside class="sheet" id="settings-sheet" aria-hidden="true" inert>
-    <div class="sheet-handle"></div>
-
-    <!-- Settings top-level (default view) -->
-    <div id="sheet-main" class="sheet-page">
-      <div class="sheet-header">Settings</div>
-      <div style="padding:var(--space-md) var(--space-lg); padding-bottom:calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));">
-
-        <div class="group">
-          <div class="group-header">Scene</div>
-          <ul class="group-list">
-            <li class="group-item group-action" id="sheet-add-molecule">Add Molecule</li>
-            <li class="group-item group-action" id="sheet-clear" style="color:var(--color-danger);">Clear</li>
-            <li class="group-item group-action" id="sheet-reset-view">Reset View</li>
-            <li class="group-item">
-              <span>Placed</span>
-              <span class="group-value" id="sheet-placed-count">0</span>
-            </li>
-            <li class="group-item row-hidden" id="sheet-active-row">
-              <span>Active</span>
-              <span class="group-value" id="sheet-active-count">0</span>
-            </li>
-          </ul>
-        </div>
-
-        <div class="group">
-          <div class="group-header">Simulation</div>
-          <ul class="group-list">
-            <li class="group-item">
-              <span>Speed</span>
-              <div class="segmented" id="speed-seg" style="--seg-count:5; --seg-active:1;">
-                <label data-speed="0.5">0.5x</label>
-                <label data-speed="1" class="active">1x</label>
-                <label data-speed="2">2x</label>
-                <label data-speed="4">4x</label>
-                <label data-speed="max">Max</label>
-              </div>
-            </li>
-            <li class="group-item">
-              <span>Damping</span>
-              <div style="display:flex; align-items:center; gap:var(--space-sm);">
-                <input type="range" id="damping-slider" min="0" max="100" step="1" value="0" class="panel-slider" style="width:100px;">
-                <span id="damping-val" class="panel-value">None</span>
-              </div>
-            </li>
-          </ul>
-        </div>
-
-        <div class="group">
-          <div class="group-header">Interaction</div>
-          <ul class="group-list">
-            <li class="group-item">
-              <span>Drag Strength</span>
-              <div style="display:flex; align-items:center; gap:var(--space-sm);">
-                <input type="range" id="drag-strength" min="0.5" max="10" step="0.5" value="2.0" class="panel-slider" style="width:100px;">
-                <span id="drag-val" class="panel-value">2.0</span>
-              </div>
-            </li>
-            <li class="group-item">
-              <span>Rotate Strength</span>
-              <div style="display:flex; align-items:center; gap:var(--space-sm);">
-                <input type="range" id="rotate-strength" min="1" max="20" step="1" value="5" class="panel-slider" style="width:100px;">
-                <span id="rotate-val" class="panel-value">5.0</span>
-              </div>
-            </li>
-          </ul>
-        </div>
-
-        <div class="group">
-          <div class="group-header">Appearance</div>
-          <ul class="group-list">
-            <li class="group-item">
-              <span>Theme</span>
-              <div class="segmented" id="theme-seg" style="--seg-count:2; --seg-active:0;">
-                <label data-theme="dark" class="active">Dark</label>
-                <label data-theme="light">Light</label>
-              </div>
-            </li>
-            <li class="group-item">
-              <span>Text Size</span>
-              <div class="segmented" id="text-size-seg" style="--seg-count:2; --seg-active:0;">
-                <label data-text-size="normal" class="active">Normal</label>
-                <label data-text-size="large">Large</label>
-              </div>
-            </li>
-          </ul>
-        </div>
-
-        <div class="group">
-          <div class="group-header">Boundary</div>
-          <ul class="group-list">
-            <li class="group-item">
-              <span>Mode</span>
-              <div class="segmented" id="boundary-seg" style="--seg-count:2; --seg-active:0;">
-                <label data-boundary="contain" class="active">Contain</label>
-                <label data-boundary="remove">Remove</label>
-              </div>
-            </li>
-          </ul>
-        </div>
-
-        <div class="group">
-          <div class="group-header">Help</div>
-          <ul class="group-list">
-            <li class="group-item" id="sheet-help-link" style="cursor:pointer;">
-              <span>Controls</span>
-              <span class="group-value">&#x203A;</span>
-            </li>
-          </ul>
-        </div>
-      </div>
-    </div>
-
-    <!-- Help drill-in page (hidden by default) -->
-    <div id="sheet-help" class="sheet-page sheet-page-hidden">
-      <div class="sheet-header" style="display:flex; align-items:center; gap:var(--space-sm);">
-        <button id="help-back" class="panel-btn" style="padding:4px 8px;">&#x2039; Back</button>
-        <span>Controls</span>
-      </div>
-      <div style="padding:var(--space-md) var(--space-lg); line-height:1.7; font-size:var(--font-sm);">
-        <div class="help-section-title">Interaction Modes</div>
-        <div><b>Atom</b> — drag individual atom (spring force)</div>
-        <div><b>Move</b> — translate entire molecule</div>
-        <div><b>Rotate</b> — spin molecule (torque)</div>
-        <div class="help-section-title" style="margin-top:12px;">Desktop</div>
-        <div><b>Left-drag on atom</b> — interact (depends on mode)</div>
-        <div><b>Left-drag fast + release</b> — flick / push atom (Atom mode)</div>
-        <div><b>Ctrl + click on atom</b> — rotate (shortcut, any mode)</div>
-        <div><b>Right-drag</b> — orbit camera</div>
-        <div><b>Scroll wheel</b> — zoom</div>
-        <div class="help-section-title" style="margin-top:12px;">Mobile</div>
-        <div><b>1-finger drag on atom</b> — interact (depends on mode)</div>
-        <div><b>2-finger pinch</b> — zoom</div>
-        <div><b>2-finger drag</b> — pan camera</div>
-        <div class="help-section-title" style="margin-top:12px;">Playground</div>
-        <div><b>Add</b> — place a new molecule in the scene</div>
-        <div><b>Clear</b> — remove all molecules</div>
-        <div>New molecules appear next to the molecule nearest the center of your view.</div>
-      </div>
-    </div>
-  </aside>
-
-  <!-- Structure chooser sheet -->
-  <aside class="sheet" id="chooser-sheet" aria-hidden="true" inert>
-    <div class="sheet-handle"></div>
-    <div class="sheet-header">Choose Structure</div>
-    <div id="structure-list" style="padding:var(--space-md) var(--space-lg); padding-bottom:calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));"></div>
-  </aside>
-
-  <!-- Primary dock -->
-  <nav class="dock" id="dock">
-    <button class="dock-item" id="dock-add">
-      <span class="dock-icon">+</span>
-      <span class="dock-label" id="dock-add-label">Add</span>
-    </button>
-    <div class="segmented dock-mode" id="mode-seg" style="--seg-count:3; --seg-active:0;">
-      <label data-mode="atom" class="active">Atom</label>
-      <label data-mode="move">Move</label>
-      <label data-mode="rotate">Rotate</label>
-    </div>
-    <button class="dock-item dock-cancel" id="dock-cancel">
-      <span class="dock-icon">&#x2715;</span>
-      <span class="dock-label">Cancel</span>
-    </button>
-    <button class="dock-item dock-text-only" id="dock-pause">
-      <span class="dock-label">Pause</span>
-    </button>
-    <button class="dock-item dock-text-only" id="dock-settings">
-      <span class="dock-label">Settings</span>
-    </button>
-  </nav>
+  <!-- Dock rendered by React Dock component -->
 </div>
 
 <script type="module" src="js/main"></script>

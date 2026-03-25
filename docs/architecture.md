@@ -50,28 +50,37 @@ NanoToybox/
 │   │   ├── tersoff.wasm          # Compiled C Tersoff kernel
 │   │   └── tersoff.js            # Emscripten glue code
 │   ├── js/
-│   │   ├── main.js               # Composition root + runtime orchestration
-│   │   ├── scene.js              # Scene commit/clear/load (transaction-safe)
-│   │   ├── placement.js          # Placement lifecycle, tangent computation, canvas listeners
-│   │   ├── interaction.js        # Command dispatch, screen-to-physics projection
-│   │   ├── status.js             # Status text, hint fade, contextual coachmarks (shared #hint surface)
+│   │   ├── main.ts               # Composition root + runtime orchestration
+│   │   ├── scene.ts              # Scene commit/clear/load (transaction-safe)
+│   │   ├── placement.ts          # Placement lifecycle, tangent computation, canvas listeners
+│   │   ├── interaction.ts        # Command dispatch, screen-to-physics projection
+│   │   ├── status.ts             # Hint fade + contextual coachmarks (hint-only)
 │   │   ├── ui/
-│   │   │   ├── overlay.js        # Sheet open/close, backdrop, help drill-in
-│   │   │   ├── dock.js           # Buttons, placement mode, mode segmented
-│   │   │   ├── settings-sheet.js # Sliders, segmented controls, stat rows
-│   │   │   └── coachmarks.js     # Onboarding copy and IDs (placement, future hints)
-│   │   ├── shared/
-│   │   │   ├── segmented.js      # Segmented control wiring + programmatic selection utilities
-│   │   │   └── require-el.js     # Fail-fast DOM ref validation
-│   │   ├── config.js             # Centralized page configuration
-│   │   ├── physics.js            # Tersoff force engine + interaction forces
-│   │   ├── renderer.js           # Three.js scene, InstancedMesh, PBR materials
-│   │   ├── input.js              # Mouse/touch input, raycasting
-│   │   ├── state-machine.js      # Interaction state transitions
-│   │   ├── loader.js             # Structure library loader + bond topology
-│   │   ├── fps-monitor.js        # Frame time measurement
-│   │   ├── themes.js             # Theme definitions + CSS token bridge
-│   │   └── tersoff-wasm.js       # Wasm kernel bridge
+│   │   │   └── coachmarks.ts     # Onboarding copy and IDs (placement, future hints)
+│   │   ├── components/           # React-authoritative UI components
+│   │   │   ├── Dock.tsx          # Navigation dock (add, pause, settings, mode)
+│   │   │   ├── SettingsSheet.tsx # Settings sheet with all controls
+│   │   │   ├── StructureChooser.tsx # Structure picker sheet
+│   │   │   ├── SheetOverlay.tsx  # Sheet backdrop
+│   │   │   ├── StatusBar.tsx     # Scene status display
+│   │   │   └── FPSDisplay.tsx    # FPS/simulation status
+│   │   ├── store/
+│   │   │   └── app-store.ts      # Zustand store for UI state
+│   │   ├── hooks/
+│   │   │   └── useSheetAnimation.ts # Sheet open/close CSS transitions
+│   │   ├── react-root.tsx        # React mount/unmount entry point
+│   │   ├── config.ts             # Centralized page configuration
+│   │   ├── physics.ts            # Tersoff force engine + interaction forces
+│   │   ├── renderer.ts           # Three.js scene, InstancedMesh, PBR materials
+│   │   ├── input.ts              # Mouse/touch input, raycasting
+│   │   ├── state-machine.ts      # Interaction state transitions
+│   │   ├── loader.ts             # Structure library loader + bond topology
+│   │   ├── format-status.ts      # Shared FPS/status text formatter
+│   │   ├── scheduler-pure.ts     # Pure-function scheduler computations
+│   │   ├── simulation-worker.ts  # Web Worker for off-thread physics
+│   │   ├── worker-bridge.ts      # Main↔Worker bridge protocol
+│   │   ├── themes.ts             # Theme definitions + CSS token bridge
+│   │   └── tersoff-wasm.ts       # Wasm kernel bridge
 ├── viewer/
 │   └── index.html                # Three.js pre-computed trajectory viewer
 ├── data/                         # ML training/test datasets (NPY + metadata)
@@ -125,13 +134,13 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 3. **No periodic boundaries** — all structures are finite/free-standing (simplifies force calculation)
 4. **XYZ format throughout** — human-readable, viewer-compatible, ASE-compatible
 5. **Analytical first, ML later** — ML explored and deferred; analytical is faster for <1000 atoms
-6. **Centralized page config** — all tuning constants, thresholds, and defaults in `page/js/config.js`; no scattered magic numbers
+6. **Centralized page config** — all tuning constants, thresholds, and defaults in `page/js/config.ts`; no scattered magic numbers
 
 ### Composition Root Pattern
 
-`main.js` creates all subsystems (renderer, physics, stateMachine) and all UI controllers (overlay, dock, settingsSheet, placement, statusCtrl). Controllers receive dependencies at construction time — they do not import session, physics, or renderer directly.
+`main.ts` creates all subsystems (renderer, physics, stateMachine) and mounts the React UI. React components (Dock, SettingsSheet, StructureChooser, StatusBar, FPSDisplay) are authoritative for all UI surfaces. Imperative controllers remain only for placement (PlacementController) and hint/coachmark (StatusController, hint-only).
 
-Cross-controller communication uses callbacks wired by main.js. Controllers may import shared utilities (`segmented.js`, `require-el.js`) and domain modules (`loader.js`, `config.js`, `themes.js`) directly.
+React components read state from the Zustand store (`app-store.ts`) and invoke imperative callbacks registered by `main.ts` via the store's callback slots (dockCallbacks, settingsCallbacks, chooserCallbacks).
 
 ### State Ownership
 
@@ -139,9 +148,10 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 
 | State slice | Authoritative writer | Intent sources |
 |-------------|---------------------|---------------|
-| `session.scene` | scene.js (commit/clear) | settings-sheet (clear button), placement (commit) |
-| `session.playback` | main.js (frame loop) | dock (pause intent), settings-sheet (speed intent) |
-| `session.interactionMode` | main.js (via dock intent) | dock (mode segmented) |
+| `session.scene` | scene.ts (commit/clear) | React SettingsSheet (clear), PlacementController (commit) |
+| `session.playback` | main.ts (frame loop) | React Dock (pause), React SettingsSheet (speed) |
+| `session.interactionMode` | main.ts (via store callback) | React Dock (mode segmented) |
+| UI chrome (sheets, theme, etc.) | Zustand store (`app-store.ts`) | React components |
 | `session.theme` | main.js (via settings intent) | settings-sheet (theme segmented) |
 | placement state | placement.js (`_state`) | dock (add/cancel intents) |
 | scheduler / effectsGate | main.js (frame loop only) | — |

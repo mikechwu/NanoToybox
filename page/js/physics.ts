@@ -792,6 +792,12 @@ export class PhysicsEngine {
       }
     }
 
+    // ── Clamp internal forces (Tersoff + wall) before adding interaction forces ──
+    // Global scaling preserves ΣF=0 for internal forces and force field shape.
+    // Must run BEFORE interaction forces so that external drag/rotate forces
+    // are not diluted by the clamp.
+    this.clampForces();
+
     // ── Interaction forces: UX layer ──
     // Drag spring, rotation torque — user-driven forces.
 
@@ -896,17 +902,16 @@ export class PhysicsEngine {
   }
 
   clampForces() {
+    let maxMag = 0;
     for (let i = 0; i < this.n; i++) {
       const ix = i * 3;
       const fx = this.force[ix], fy = this.force[ix + 1], fz = this.force[ix + 2];
-      const fMag = Math.sqrt(fx * fx + fy * fy + fz * fz);
-      if (fMag > F_MAX) {
-        const s = F_MAX / fMag;
-        this.force[ix] *= s;
-        this.force[ix + 1] *= s;
-        this.force[ix + 2] *= s;
-      }
+      const mag = Math.sqrt(fx * fx + fy * fy + fz * fz);
+      if (mag > maxMag) maxMag = mag;
     }
+    if (maxMag <= F_MAX) return;
+    const s = F_MAX / maxMag;
+    for (let i = 0; i < this.n * 3; i++) this.force[i] *= s;
   }
 
   integrate(dt) {
@@ -921,7 +926,6 @@ export class PhysicsEngine {
       this.pos[ix + 2] += this.vel[ix + 2] * dt;
     }
     this.computeForces();
-    this.clampForces();
     for (let i = 0; i < this.n; i++) {
       const ix = i * 3;
       this.vel[ix] += 0.5 * this.force[ix] * a * dt;

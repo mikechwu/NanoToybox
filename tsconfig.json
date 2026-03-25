@@ -17,6 +17,7 @@
     "page/bench/**/*.ts",
     "src/**/*.ts",
     "tests/unit/**/*.ts",
+    "tests/unit/**/*.tsx",
     "vite.config.ts"
   ]
   // Coverage: all extracted app/bench source modules are .ts/.tsx and type-checked.

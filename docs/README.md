@@ -6,7 +6,7 @@ Welcome to the NanoToybox project — a browser-based interactive carbon nanostr
 
 | Document | Purpose |
 |----------|---------|
-| [Architecture](architecture.md) | System overview, module map, data flow |
+| [Architecture](architecture.md) | System overview, module map, data flow, state ownership |
 | [Physics & Simulation](physics.md) | Tersoff potential, integrator, units, validation |
 | [Structure Library](structure-library.md) | Canonical structures, generation pipeline, CLI usage |
 | [ML Surrogate](ml-surrogate.md) | Force decomposition, training pipeline, lessons learned |
@@ -26,17 +26,14 @@ npm install
 npm run dev
 # Open http://localhost:5173/NanoToybox/page/
 
-# Run all validation tests (requires numpy, matplotlib)
-python3 tests/test_01_dimer.py
-python3 tests/test_02_angular.py
-# ... through test_08
+# Run all checks
+npm run typecheck       # TypeScript type-checking
+npm run test:unit       # Vitest unit tests (158 tests)
+npm run test:e2e        # Playwright E2E browser tests (17 tests)
+npm run build           # Production build → dist/
 
-# Generate a relaxed structure
-python3 scripts/library_cli.py c60
-python3 scripts/library_cli.py cnt 5 5 --cells 5
-
-# List the structure library
-python3 scripts/library_cli.py list
+# Python physics tests (requires numpy, numba)
+python -m pytest tests/test_*.py -v
 ```
 
 ## Pre-Deploy Manual Checklist (WebGL-dependent)
@@ -44,28 +41,55 @@ python3 scripts/library_cli.py list
 These checks require a real browser with WebGL and cannot run in headless CI. Run before merging to main or deploying:
 
 - [ ] **Main app:** Open `/page/`, click Add → select a structure → place on canvas → verify atom count in status → open Settings → Clear → verify "Empty playground"
-- [ ] **Settings:** Open/close settings sheet, switch Dark/Light theme
+- [ ] **Drag interactions:** Atom mode (drag single atom), Move mode (translate molecule), Rotate mode (spin molecule). Flick an atom — verify no ghost spring after release
+- [ ] **Settings:** Open/close settings sheet, switch Dark/Light theme, change speed, boundary mode
 - [ ] **Viewer:** Open `/viewer/`, drag-drop an `.xyz` file, verify atoms and bonds render
 
-Automated checks (typecheck, build, Playwright E2E, deploy smoke) run in CI on every push/PR.
+Automated checks (typecheck, build, unit tests, Playwright E2E, deploy smoke) run in CI on every push/PR.
+
+## Architecture Overview
+
+```
+Browser                          Web Worker
+┌─────────────────────┐          ┌──────────────────────┐
+│  React UI (Zustand)  │          │  PhysicsEngine       │
+│  ├── Dock            │          │  ├── Tersoff (JS/Wasm)│
+│  ├── SettingsSheet   │◄─snapshots──┤  ├── Velocity Verlet│
+│  ├── StructureChooser│          │  └── Safety controls  │
+│  ├── StatusBar       │──commands──►│                      │
+│  └── FPSDisplay      │          └──────────────────────┘
+│                      │
+│  Renderer (Three.js) │          Python (development)
+│  ├── InstancedMesh   │          ┌──────────────────────┐
+│  └── PBR materials   │          │  sim/ reference engine│
+│                      │          │  tests/ validation    │
+│  PlacementController │          │  scripts/ CLI tools   │
+│  StatusController    │          └──────────────────────┘
+│  (hint-only)         │
+└─────────────────────┘
+```
+
+### Key Architectural Decisions
+
+- **React-authoritative UI** — all UI surfaces (Dock, SettingsSheet, StructureChooser, StatusBar, FPSDisplay) are React components with Zustand store. Imperative controllers remain only for PlacementController (canvas touch listeners) and StatusController (hint/coachmark surface).
+- **Worker-first physics** — simulation runs off-thread via Web Worker with snapshot protocol. Automatic fallback to sync-mode if worker fails or stalls.
+- **Dual Tersoff kernels** — JS fallback + C/Wasm kernel (compiled with Emscripten). Wasm enabled by default, ~11% faster. Force via `?kernel=js` for debugging.
+- **Momentum-conserving force clamp** — global scaling (not per-atom) preserves Newton's 3rd law and force field shape. Interaction forces added after clamp.
+
+## Current Status
+
+- **Interactive page: live** — real-time Tersoff simulation with drag, rotate, multi-molecule playground, speed control, and advanced settings
+- **Web Worker physics** — off-thread simulation with snapshot sync, stall detection (5s warning / 15s fatal), automatic sync fallback
+- **React UI** — all 6 UI components are React-authoritative with Zustand store, glassmorphic CSS, responsive layout (phone/tablet/desktop)
+- **Performance optimized** — InstancedMesh rendering (2 draw calls), on-the-fly Tersoff kernel (45% faster), spatial-hash neighbor/bond search (O(N))
+- **Wasm Tersoff kernel** — deployed and enabled by default, automatic JS fallback
+- **CI/CD** — GitHub Actions: typecheck, unit tests (158), build, E2E (17), deploy smoke, Python physics tests
+- **Containment boundary** — dynamic soft wall with Contain/Remove modes, live atom count, auto-scaling radius
+- Structure library: 15 canonical relaxed structures (60–720 atoms)
+- Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)
+- Three.js trajectory viewer: functional at `viewer/index.html`
+- Performance benchmarks in `page/bench/`
 
 ## Project Goal
 
 Build an immersive, interactive, scientifically accurate browser-based playground for carbon nanostructures (C60, graphene, CNTs, diamond). Users can explore, drag, rotate, and interact with real molecular dynamics simulations in real-time.
-
-## Current Status
-
-- **Interactive page: live** (`page/index.html`) — real-time Tersoff simulation in the browser with drag, rotate, multi-molecule playground, speed control, and advanced settings
-- **Performance optimized**: InstancedMesh rendering (2 draw calls), on-the-fly Tersoff kernel (45% faster), spatial-hash neighbor/bond search (O(N) instead of O(N²))
-- Analytical Tersoff simulator: validated (8 tests pass) in Python, ported to JavaScript for browser
-- Structure library: 15 canonical relaxed structures (60–720 atoms)
-- Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)
-- Three.js trajectory viewer: functional at `viewer/index.html` (pre-computed trajectory playback)
-- Scaling research: completed — real-time limit ~2,100 atoms (Numba)
-- Collision simulations: 8 verified scenarios with relaxed structures (120–3,600 atoms)
-- ML surrogate: explored, deferred (analytical is faster for target system sizes)
-- Performance benchmarks in `page/bench/` (physics, renderer, kernel, spatial-hash equivalence validation)
-- **Wasm Tersoff kernel**: deployed and enabled by default (~11% faster than JS JIT, automatic JS fallback)
-- **Modular architecture**: UI controllers, domain modules, and shared utilities extracted from main.js with full lifecycle
-- **Containment boundary**: dynamic soft wall with Contain/Remove modes, live atom count, auto-scaling radius
-- **Next steps**: Web Workers for responsiveness, viewer modernization

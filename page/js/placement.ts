@@ -47,7 +47,6 @@ export class PlacementController {
     commitToScene: (file: string, name: string, atoms: StructureAtom[], bonds: StructureBond[], offset: number[]) => void;
     updateStatus: (text: string) => void;
     updateSceneStatus: () => void;
-    updateDockAddLabel: () => void;
     forceIdle: () => void;
     syncInput: () => void;
     forceRender: () => void;
@@ -93,7 +92,6 @@ export class PlacementController {
     // commands.commitToScene(file, name, atoms, bonds, offset)
     // commands.updateStatus(text)
     // commands.updateSceneStatus()
-    // commands.updateDockAddLabel()
     // commands.forceIdle()
     // commands.syncInput()
     // commands.forceRender()
@@ -250,7 +248,6 @@ export class PlacementController {
         // Only update "last structure" after successful commit
         this._state.lastStructureFile = commitData.file;
         this._state.lastStructureName = commitData.name;
-        this._commands.updateDockAddLabel();
       } catch (e) {
         console.error('[placement] Commit failed:', e);
         this._commands.updateStatus(`Error placing molecule: ${e.message}`);

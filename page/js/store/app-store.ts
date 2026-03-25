@@ -104,6 +104,10 @@ export interface AppStore {
   rotateStrength: number;
   dampingSliderValue: number;  // 0-100 slider position, not the computed damping
 
+  // Status channels (replaces imperative StatusController text surface)
+  statusText: string | null;   // transient UI text ("Loading...", "Placing...", etc.)
+  statusError: string | null;  // error state ("Failed to load structures...")
+
   // Sheet UI state
   boundaryMode: 'contain' | 'remove';
   helpPageActive: boolean;
@@ -157,6 +161,8 @@ export interface AppStore {
   setRotateStrength: (v: number) => void;
   setDampingSliderValue: (v: number) => void;
   setBoundaryMode: (mode: 'contain' | 'remove') => void;
+  setStatusText: (text: string | null) => void;
+  setStatusError: (error: string | null) => void;
   setHelpPageActive: (active: boolean) => void;
   setRecentStructure: (recent: { file: string; name: string } | null) => void;
 
@@ -165,6 +171,9 @@ export interface AppStore {
   setDockCallbacks: (cbs: DockCallbacks) => void;
   setSettingsCallbacks: (cbs: SettingsCallbacks) => void;
   setChooserCallbacks: (cbs: ChooserCallbacks) => void;
+
+  // Lifecycle
+  resetTransientState: () => void;
 }
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -197,6 +206,8 @@ export const useAppStore = create<AppStore>((set) => ({
   dragStrength: 2.0,
   rotateStrength: 5,
   dampingSliderValue: 0,
+  statusText: null,
+  statusError: null,
   boundaryMode: 'contain',
   helpPageActive: false,
   recentStructure: null,
@@ -234,10 +245,54 @@ export const useAppStore = create<AppStore>((set) => ({
   setRotateStrength: (v) => set({ rotateStrength: v }),
   setDampingSliderValue: (v) => set({ dampingSliderValue: v }),
   setBoundaryMode: (mode) => set({ boundaryMode: mode }),
+  setStatusText: (text) => set({ statusText: text }),
+  setStatusError: (error) => set({ statusError: error }),
   setHelpPageActive: (active) => set({ helpPageActive: active }),
   setRecentStructure: (recent) => set({ recentStructure: recent }),
   setCloseOverlay: (cb) => set({ closeOverlay: cb }),
   setDockCallbacks: (cbs) => set({ dockCallbacks: cbs }),
   setSettingsCallbacks: (cbs) => set({ settingsCallbacks: cbs }),
   setChooserCallbacks: (cbs) => set({ chooserCallbacks: cbs }),
+
+  resetTransientState: () => set({
+    // Callbacks
+    closeOverlay: null,
+    dockCallbacks: null,
+    settingsCallbacks: null,
+    chooserCallbacks: null,
+    // UI chrome
+    activeSheet: null,
+    helpPageActive: false,
+    recentStructure: null,
+    interactionMode: 'atom',
+    // Scene
+    atomCount: 0,
+    activeAtomCount: 0,
+    wallRemovedCount: 0,
+    molecules: [],
+    availableStructures: [],
+    // Playback
+    paused: false,
+    targetSpeed: 1,
+    placementActive: false,
+    // Scheduler
+    maxSpeed: 1,
+    effectiveSpeed: 0,
+    fps: 0,
+    rafIntervalMs: 16.67,
+    placementStale: false,
+    warmUpComplete: false,
+    overloaded: false,
+    workerStalled: false,
+    // Diagnostics
+    ke: 0,
+    wallRadius: 0,
+    skippedFrameCount: 0,
+    emergencyAllocCount: 0,
+    // Debug
+    reconciliationState: 'none',
+    // Status channels
+    statusText: null,
+    statusError: null,
+  }),
 }));

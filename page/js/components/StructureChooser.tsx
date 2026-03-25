@@ -40,6 +40,7 @@ export function StructureChooser() {
       ref={ref as React.RefObject<HTMLElement>}
       className={sheetClass}
       aria-hidden={!isOpen}
+      inert={!isOpen ? true : undefined}
       onTransitionEnd={onTransitionEnd}
     >
       <div className="sheet-handle" />

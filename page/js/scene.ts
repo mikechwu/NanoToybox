@@ -28,7 +28,6 @@ interface ClearCallbacks {
   syncInput: () => void;
   resetScheduler: () => void;
   updateSceneStatus: () => void;
-  updateDockLabel: () => void;
 }
 
 /** Transaction-safe molecule commit to physics + renderer. */
@@ -112,7 +111,6 @@ export function clearPlayground(
   renderer.resetCamera();
   callbacks.resetScheduler();
   callbacks.updateSceneStatus();
-  callbacks.updateDockLabel();
 }
 
 interface AddMoleculeDeps {

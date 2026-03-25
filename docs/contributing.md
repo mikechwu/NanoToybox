@@ -57,18 +57,19 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 
 ## Completed Milestones
 
-- Real-time Tersoff simulation in the browser (`page/js/physics.js`)
+- Real-time Tersoff simulation in the browser (`page/js/physics.ts`)
 - Interactive page with drag/rotate/structure presets (`page/index.html`)
 - Camera-plane force projection (forces align with user's visual perspective)
 - Inertia-normalized rotation (consistent feel across molecule sizes)
 - 3D axis triad indicator, dark/light themes, dock + sheet settings
-- InstancedMesh rendering — 2 draw calls for atoms+bonds, geometric capacity growth (`page/js/renderer.js`)
-- On-the-fly Tersoff kernel — 45% faster than cached at 2040 atoms, eliminates 127 MB N×N cache (`page/js/physics.js`)
-- Cell-list spatial acceleration — O(N) neighbor and bond detection instead of O(N²) (`page/js/physics.js`)
-- C/Wasm Tersoff kernel — ~11% faster than JS JIT, enabled by default, automatic JS fallback (`page/wasm/`, `page/js/tersoff-wasm.js`)
-- Containment boundary — dynamic soft harmonic wall (`page/js/physics.js`), Contain/Remove toggle, live atom count, auto-scaling radius with hysteresis shrinkage
-- Dock + sheet navigation — responsive two-tier UI replacing horizontal control strip (`page/index.html`, `page/js/main.js`)
-- Controller module extraction — UI controllers, domain modules, and shared utilities extracted from main.js with full lifecycle
+- InstancedMesh rendering — 2 draw calls for atoms+bonds, geometric capacity growth (`page/js/renderer.ts`)
+- On-the-fly Tersoff kernel — 45% faster than cached at 2040 atoms, eliminates 127 MB N×N cache (`page/js/physics.ts`)
+- Cell-list spatial acceleration — O(N) neighbor and bond detection instead of O(N²) (`page/js/physics.ts`)
+- C/Wasm Tersoff kernel — ~11% faster than JS JIT, enabled by default, automatic JS fallback (`sim/wasm/`, `page/js/tersoff-wasm.ts`)
+- Containment boundary — dynamic soft harmonic wall (`page/js/physics.ts`), Contain/Remove toggle, live atom count, auto-scaling radius with hysteresis shrinkage
+- Dock + sheet navigation — responsive two-tier UI with React components (`page/js/components/`)
+- React UI migration — all UI surfaces (Dock, SettingsSheet, StructureChooser, StatusBar, FPSDisplay) are React-authoritative with Zustand store
+- Web Worker physics — off-thread simulation via `page/js/simulation-worker.ts` with automatic JS fallback
 
 ## Architecture Rules
 
@@ -115,10 +116,10 @@ See `docs/architecture.md` for the full module map and state ownership model.
 
 | If you're working on... | Read these files |
 |--------------------------|-----------------|
-| Interactive page | `page/index.html`, `page/js/main.js`, `page/js/ui/*`, `docs/viewer.md` |
-| UI controllers | `page/js/ui/overlay.js`, `page/js/ui/dock.js`, `page/js/ui/settings-sheet.js`, `page/js/ui/coachmarks.js` |
-| Scene / placement | `page/js/scene.js`, `page/js/placement.js` |
-| Browser physics | `page/js/physics.js` (JS Tersoff) |
+| Interactive page | `page/index.html`, `page/js/main.ts`, `page/js/components/*`, `docs/viewer.md` |
+| React UI components | `page/js/components/*.tsx`, `page/js/store/app-store.ts`, `page/js/hooks/*` |
+| Scene / placement | `page/js/scene.ts`, `page/js/placement.ts` |
+| Browser physics | `page/js/physics.ts` (JS Tersoff), `sim/wasm/tersoff.c` (Wasm kernel) |
 | Force calculation (Python) | `sim/potentials/tersoff.py`, `tersoff_fast.py` |
 | Running simulations | `sim/integrators/velocity_verlet.py`, `sim/atoms.py` |
 | Adding structures | `sim/structures/generate.py`, `scripts/library_cli.py` |

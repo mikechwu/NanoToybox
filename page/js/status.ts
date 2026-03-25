@@ -1,51 +1,29 @@
 /**
- * Status controller — manages transient status text, hint fade, and contextual coachmarks.
+ * Status controller — manages hint fade and contextual coachmarks.
  *
- * DOM ownership: #status, #hint.
+ * DOM ownership: #hint only.
  * #hint is a shared surface: generic onboarding hint OR contextual coachmark (one at a time).
  * Lifecycle: destroy() clears pending timers, coachmark state, and restores hint DOM baseline.
+ *
+ * Status text display is handled by the Zustand store (statusText/statusError)
+ * and the React StatusBar component.
  */
 /** Time (ms) to wait after fade before setting display:none. Matches CSS transition. */
 const HINT_FADE_MS = 2000;
 
 export class StatusController {
-  _statusEl: HTMLElement;
-  _hintEl: HTMLElement;
+  _hintEl: HTMLElement | null;
   _hintFaded: boolean;
   _hintTimer: ReturnType<typeof setTimeout> | null;
   _activeCoachmark: { id: string; originalText: string } | null;
   _defaultHintText: string;
 
-  /**
-   * @param {object} opts
-   * @param {HTMLElement} opts.statusEl - #status element
-   * @param {HTMLElement} opts.hintEl - #hint element
-   */
-  constructor({ statusEl, hintEl }: { statusEl: HTMLElement; hintEl: HTMLElement }) {
-    this._statusEl = statusEl;
+  constructor({ hintEl }: { hintEl: HTMLElement | null }) {
     this._hintEl = hintEl;
     this._hintFaded = false;
     this._hintTimer = null;
     this._activeCoachmark = null;
     this._defaultHintText = hintEl ? hintEl.textContent ?? '' : '';
-  }
-
-  /** Update the status text. */
-  update(text) {
-    if (this._statusEl) this._statusEl.textContent = text;
-  }
-
-  /**
-   * Update status text based on scene state.
-   * @param {number} moleculeCount
-   * @param {number} totalAtoms
-   */
-  updateSceneStatus(moleculeCount, totalAtoms) {
-    if (moleculeCount === 0) {
-      this.update('Empty playground — add a molecule');
-    } else {
-      this.update(`${moleculeCount} molecule${moleculeCount > 1 ? 's' : ''} · ${totalAtoms} atoms`);
-    }
   }
 
   // ── Internal hint-surface helpers ──
@@ -59,11 +37,11 @@ export class StatusController {
   _fadeOutHint() {
     if (!this._hintEl) return;
     this._hintEl.classList.add('fade');
-    this._hintTimer = setTimeout(() => { this._hintEl.style.display = 'none'; }, HINT_FADE_MS);
+    this._hintTimer = setTimeout(() => { this._hintEl!.style.display = 'none'; }, HINT_FADE_MS);
   }
 
   /** @private Show the hint surface with given text (un-fade, make visible). */
-  _showHintText(text) {
+  _showHintText(text: string) {
     if (!this._hintEl) return;
     this._hintEl.textContent = text;
     this._hintEl.style.display = '';
@@ -94,16 +72,13 @@ export class StatusController {
   /**
    * Show a contextual coachmark, reusing the hint surface.
    * v1: one surface (#hint), one message at a time.
-   * @param {object} opts
-   * @param {string} opts.id - unique identifier (for targeted hide)
-   * @param {string} opts.text - message to display
    */
-  showCoachmark({ id, text }) {
+  showCoachmark({ id, text }: { id: string; text: string }) {
     if (!this._hintEl) return;
     if (this._activeCoachmark && this._activeCoachmark.id !== id) return;
     this._cancelHintTimer();
     if (!this._activeCoachmark) {
-      this._activeCoachmark = { id, originalText: this._hintEl.textContent };
+      this._activeCoachmark = { id, originalText: this._hintEl.textContent ?? '' };
     }
     this._showHintText(text);
   }
@@ -111,9 +86,8 @@ export class StatusController {
   /**
    * Hide a contextual coachmark and restore the hint surface.
    * Used when placement ends normally — may restore the generic hint.
-   * @param {string} id - must match the active coachmark's id
    */
-  hideCoachmark(id) {
+  hideCoachmark(id: string) {
     if (!this._hintEl || !this._activeCoachmark) return;
     if (this._activeCoachmark.id !== id) return;
     this._cancelHintTimer();
@@ -128,9 +102,8 @@ export class StatusController {
   /**
    * Dismiss a coachmark without restoring the generic hint.
    * Used when an overlay opens — immediate hide, no transition.
-   * @param {string} id - must match the active coachmark's id
    */
-  dismissCoachmark(id) {
+  dismissCoachmark(id: string) {
     if (!this._hintEl || !this._activeCoachmark) return;
     if (this._activeCoachmark.id !== id) return;
     this._cancelHintTimer();

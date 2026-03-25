@@ -1,9 +1,7 @@
 /**
  * Unit tests for the shared status text formatter.
  *
- * This is the single source of truth for both the imperative #fps element
- * and the React FPSDisplay component. Testing it here ensures both
- * surfaces produce identical text.
+ * This is the single source of truth for the React FPSDisplay component.
  */
 import { describe, it, expect } from 'vitest';
 import { formatStatusText, type StatusInputs } from '../../page/js/format-status';

@@ -33,6 +33,7 @@ export type WorkerCommand =
   | { type: 'updateDrag'; commandId: number; worldX: number; worldY: number; worldZ: number }
   | { type: 'endDrag'; commandId: number }
   | { type: 'applyImpulse'; commandId: number; atomIndex: number; vx: number; vy: number }
+  | { type: 'flick'; commandId: number; atomIndex: number; vx: number; vy: number }
   | { type: 'setDragStrength'; commandId: number; value: number }
   | { type: 'setRotateStrength'; commandId: number; value: number }
   | { type: 'setDamping'; commandId: number; value: number }

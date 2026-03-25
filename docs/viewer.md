@@ -95,11 +95,11 @@ The page runs a full analytical Tersoff (1988) potential in JavaScript:
 
 ### Architecture
 
-The interactive page uses a modular controller architecture with a composition root pattern. `main.js` creates all subsystems and wires controllers together. See `docs/architecture.md` for the full module map, state ownership model, and lifecycle details.
+The interactive page uses a composition root pattern with React-authoritative UI components. `main.ts` creates all subsystems, mounts the React UI, and registers callbacks into the Zustand store. See `docs/architecture.md` for the full module map, state ownership model, and lifecycle details.
 
 **Key rules:**
-- Modules import from `config.js` for shared constants. They do NOT import from each other's internals. Data flows through `main.js` orchestration.
-- **Interaction mode coordination:** ui/dock.js (mode segmented) → main.js (applies interactionMode) → input.js (reads mode). The state machine maps mode → state (e.g., `'atom'` → `DRAG`). Depending on the mode, renderer.js (visual feedback), index.html (UI controls, help page (inside settings sheet)), and docs (viewer.md, testing.md, README.md) may also need updates.
+- Modules import from `config.ts` for shared constants. Data flows through `main.ts` orchestration and the Zustand store.
+- **Interaction mode coordination:** React Dock (mode segmented) → store callback → main.ts (applies interactionMode) → input.ts (reads mode). The state machine maps mode → state (e.g., `'atom'` → `DRAG`).
 - **Known v1 limitation:** In Move mode, the force line still originates from the picked atom rather than the center of mass, so the visual cue partly reads as "drag this atom." The blue color and immediate whole-molecule motion mitigate this, but a COM-origin force line or bounding indicator would be a stronger signal.
 
 ### Technology

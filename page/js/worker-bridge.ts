@@ -205,6 +205,7 @@ export class WorkerBridge {
       | { type: 'updateDrag'; worldX: number; worldY: number; worldZ: number }
       | { type: 'endDrag' }
       | { type: 'applyImpulse'; atomIndex: number; vx: number; vy: number }
+      | { type: 'flick'; atomIndex: number; vx: number; vy: number }
       | { type: 'setDragStrength'; value: number }
       | { type: 'setRotateStrength'; value: number }
       | { type: 'setDamping'; value: number }

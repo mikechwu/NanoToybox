@@ -69,7 +69,7 @@ test.describe('Milestone A — Hard-Supported Pages', () => {
     await page.goto(`${baseURL}/page/`)
 
     // App initializes — core DOM present (React-authoritative components)
-    await expect(page.locator('.dock:not(.react-replaced)')).toBeAttached({ timeout: 10000 })
+    await expect(page.locator('.dock')).toBeAttached({ timeout: 10000 })
     await expect(page.locator('#container')).toBeAttached({ timeout: 5000 })
     await expect(page.locator('.react-info .status-text')).toBeAttached({ timeout: 10000 })
 
@@ -77,13 +77,13 @@ test.describe('Milestone A — Hard-Supported Pages', () => {
     await expect(page.locator('.react-info .status-text')).toContainText(/(atoms|Empty playground)/, { timeout: 15000 })
 
     // Open chooser via React dock Add button and verify structure list
-    await page.locator('.dock:not(.react-replaced) .dock-add-btn').click()
-    await expect(page.locator('.sheet:not(.react-replaced) .drawer-item').first()).toBeAttached({ timeout: 10000 })
-    const itemCount = await page.locator('.sheet:not(.react-replaced) .drawer-item').count()
+    await page.locator('.dock .dock-add-btn').click()
+    await expect(page.locator('.sheet .drawer-item').first()).toBeAttached({ timeout: 10000 })
+    const itemCount = await page.locator('.sheet .drawer-item').count()
     expect(itemCount).toBeGreaterThan(0)
 
     // Verify structure items contain atom counts (manifest loaded correctly)
-    const firstItemText = await page.locator('.sheet:not(.react-replaced) .drawer-item').first().textContent()
+    const firstItemText = await page.locator('.sheet .drawer-item').first().textContent()
     expect(firstItemText).toContain('atoms')
 
     // Note: full add/place/clear cycle requires WebGL which headless Chromium
@@ -155,14 +155,14 @@ test.describe('Milestone D — React UI Migration', () => {
     await page.goto(`${baseURL}/page/`)
 
     // Wait for app to initialize
-    await expect(page.locator('.dock:not(.react-replaced)')).toBeAttached({ timeout: 10000 })
+    await expect(page.locator('.dock')).toBeAttached({ timeout: 10000 })
     await expect(page.locator('.react-info .status-text')).toContainText(/(atoms|Empty playground)/, { timeout: 15000 })
 
     // Open settings via dock Settings button
-    await page.locator('.dock:not(.react-replaced) .dock-text-only >> text=Settings').click()
+    await page.locator('.dock .dock-text-only >> text=Settings').click()
 
     // Settings sheet should animate open (has .open class)
-    const sheet = page.locator('.sheet:not(.react-replaced)').filter({ hasText: 'Settings' })
+    const sheet = page.locator('.sheet').filter({ hasText: 'Settings' })
     await expect(sheet).toBeAttached({ timeout: 5000 })
     await expect(sheet).toHaveClass(/open/, { timeout: 3000 })
 
@@ -184,12 +184,12 @@ test.describe('Milestone D — React UI Migration', () => {
   test('settings sheet: theme switch updates CSS tokens', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
     await page.goto(`${baseURL}/page/`)
-    await expect(page.locator('.dock:not(.react-replaced)')).toBeAttached({ timeout: 10000 })
+    await expect(page.locator('.dock')).toBeAttached({ timeout: 10000 })
     await expect(page.locator('.react-info .status-text')).toContainText(/(atoms|Empty playground)/, { timeout: 15000 })
 
     // Open settings
-    await page.locator('.dock:not(.react-replaced) .dock-text-only >> text=Settings').click()
-    const sheet = page.locator('.sheet:not(.react-replaced)').filter({ hasText: 'Settings' })
+    await page.locator('.dock .dock-text-only >> text=Settings').click()
+    const sheet = page.locator('.sheet').filter({ hasText: 'Settings' })
     await expect(sheet).toHaveClass(/open/, { timeout: 3000 })
 
     // Click Light theme
@@ -214,12 +214,12 @@ test.describe('Milestone D — React UI Migration', () => {
   test('settings sheet: help drill-in and back', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
     await page.goto(`${baseURL}/page/`)
-    await expect(page.locator('.dock:not(.react-replaced)')).toBeAttached({ timeout: 10000 })
+    await expect(page.locator('.dock')).toBeAttached({ timeout: 10000 })
     await expect(page.locator('.react-info .status-text')).toContainText(/(atoms|Empty playground)/, { timeout: 15000 })
 
     // Open settings
-    await page.locator('.dock:not(.react-replaced) .dock-text-only >> text=Settings').click()
-    const sheet = page.locator('.sheet:not(.react-replaced)').filter({ hasText: 'Settings' })
+    await page.locator('.dock .dock-text-only >> text=Settings').click()
+    const sheet = page.locator('.sheet').filter({ hasText: 'Settings' })
     await expect(sheet).toHaveClass(/open/, { timeout: 3000 })
 
     // Click Controls help link
@@ -240,11 +240,11 @@ test.describe('Milestone D — React UI Migration', () => {
   test('settings sheet: help page resets on close and reopen', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
     await page.goto(`${baseURL}/page/`)
-    await expect(page.locator('.dock:not(.react-replaced)')).toBeAttached({ timeout: 10000 })
+    await expect(page.locator('.dock')).toBeAttached({ timeout: 10000 })
     await expect(page.locator('.react-info .status-text')).toContainText(/(atoms|Empty playground)/, { timeout: 15000 })
 
-    const settingsBtn = page.locator('.dock:not(.react-replaced) .dock-text-only >> text=Settings')
-    const sheet = page.locator('.sheet:not(.react-replaced)').filter({ hasText: 'Settings' })
+    const settingsBtn = page.locator('.dock .dock-text-only >> text=Settings')
+    const sheet = page.locator('.sheet').filter({ hasText: 'Settings' })
 
     // Open settings → enter help page
     await settingsBtn.click()
@@ -271,14 +271,14 @@ test.describe('Milestone D — React UI Migration', () => {
     // placement.start() may produce renderer errors in headless mode (no WebGL).
     const preClickErrors = collectErrors(page)
     await page.goto(`${baseURL}/page/`)
-    await expect(page.locator('.dock:not(.react-replaced)')).toBeAttached({ timeout: 10000 })
+    await expect(page.locator('.dock')).toBeAttached({ timeout: 10000 })
     await expect(page.locator('.react-info .status-text')).toContainText(/(atoms|Empty playground)/, { timeout: 15000 })
 
     // Open chooser via Add button
-    await page.locator('.dock:not(.react-replaced) .dock-add-btn').click()
+    await page.locator('.dock .dock-add-btn').click()
 
     // Chooser sheet should open with structure items
-    const chooser = page.locator('.sheet:not(.react-replaced)').filter({ hasText: 'Choose Structure' })
+    const chooser = page.locator('.sheet').filter({ hasText: 'Choose Structure' })
     await expect(chooser).toHaveClass(/open/, { timeout: 3000 })
     await expect(chooser.locator('.drawer-item').first()).toBeAttached({ timeout: 5000 })
 
@@ -309,7 +309,7 @@ test.describe('Milestone D — React UI Migration', () => {
   test('settings sheet: speed control updates store', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
     await page.goto(`${baseURL}/page/`)
-    await expect(page.locator('.dock:not(.react-replaced)')).toBeAttached({ timeout: 10000 })
+    await expect(page.locator('.dock')).toBeAttached({ timeout: 10000 })
     await expect(page.locator('.react-info .status-text')).toContainText(/(atoms|Empty playground)/, { timeout: 15000 })
 
     // Verify initial speed is 1x
@@ -317,8 +317,8 @@ test.describe('Milestone D — React UI Migration', () => {
     expect(ui.targetSpeed).toBe(1)
 
     // Open settings
-    await page.locator('.dock:not(.react-replaced) .dock-text-only >> text=Settings').click()
-    const sheet = page.locator('.sheet:not(.react-replaced)').filter({ hasText: 'Settings' })
+    await page.locator('.dock .dock-text-only >> text=Settings').click()
+    const sheet = page.locator('.sheet').filter({ hasText: 'Settings' })
     await expect(sheet).toHaveClass(/open/, { timeout: 3000 })
 
     // Click 2x speed
@@ -342,7 +342,7 @@ test.describe('Milestone D — React UI Migration', () => {
   test('settings sheet: boundary mode updates store', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
     await page.goto(`${baseURL}/page/`)
-    await expect(page.locator('.dock:not(.react-replaced)')).toBeAttached({ timeout: 10000 })
+    await expect(page.locator('.dock')).toBeAttached({ timeout: 10000 })
     await expect(page.locator('.react-info .status-text')).toContainText(/(atoms|Empty playground)/, { timeout: 15000 })
 
     // Verify initial boundary mode
@@ -350,8 +350,8 @@ test.describe('Milestone D — React UI Migration', () => {
     expect(ui.boundaryMode).toBe('contain')
 
     // Open settings and switch to Remove
-    await page.locator('.dock:not(.react-replaced) .dock-text-only >> text=Settings').click()
-    const sheet = page.locator('.sheet:not(.react-replaced)').filter({ hasText: 'Settings' })
+    await page.locator('.dock .dock-text-only >> text=Settings').click()
+    const sheet = page.locator('.sheet').filter({ hasText: 'Settings' })
     await expect(sheet).toHaveClass(/open/, { timeout: 3000 })
 
     await sheet.locator('label', { hasText: 'Remove' }).click()
@@ -369,10 +369,10 @@ test.describe('Milestone D — React UI Migration', () => {
   test('dock: interaction mode switching', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
     await page.goto(`${baseURL}/page/`)
-    await expect(page.locator('.dock:not(.react-replaced)')).toBeAttached({ timeout: 10000 })
+    await expect(page.locator('.dock')).toBeAttached({ timeout: 10000 })
     await expect(page.locator('.react-info .status-text')).toContainText(/(atoms|Empty playground)/, { timeout: 15000 })
 
-    const dock = page.locator('.dock:not(.react-replaced)')
+    const dock = page.locator('.dock')
 
     // Initial mode is Atom
     let ui = await page.evaluate(() => (window as any)._getUIState?.())

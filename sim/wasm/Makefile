@@ -6,7 +6,7 @@
 
 CC = emcc
 OUT_DIR = ../../page/wasm
-CFLAGS = -O3 -ffast-math \
+CFLAGS = -O3 -fno-math-errno -ffinite-math-only \
          -s WASM=1 \
          -s EXPORTED_FUNCTIONS='["_computeTersoffForces", "_malloc", "_free"]' \
          -s EXPORTED_RUNTIME_METHODS='["cwrap","HEAP32","HEAPF64"]' \

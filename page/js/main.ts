@@ -2,19 +2,16 @@
  * NanoToybox Interactive Page — Entry Point
  *
  * Multi-molecule playground with placement mode.
- * Wires together: loader, physics, state machine, input, renderer, FPS monitor.
+ * Wires together: loader, physics, state machine, input, renderer, React UI.
  */
 import { loadManifest, loadStructure } from './loader';
 import { PhysicsEngine } from './physics';
-import { StateMachine, State, type Command } from './state-machine';
+import { StateMachine, type Command } from './state-machine';
 import { InputManager } from './input';
 import { Renderer } from './renderer';
-import { THEMES, applyThemeTokens, applyTextSizeTokens } from './themes';
+import { applyThemeTokens, applyTextSizeTokens } from './themes';
 import { CONFIG } from './config';
 import { commitMolecule, clearPlayground, addMoleculeToScene } from './scene';
-import { OverlayController } from './ui/overlay';
-import { DockController } from './ui/dock';
-import { SettingsSheetController } from './ui/settings-sheet';
 import { handleCommand as dispatchInteraction } from './interaction';
 import { StatusController } from './status';
 import { PlacementController } from './placement';
@@ -30,9 +27,6 @@ const DEBUG_LOAD = CONFIG.debug.load;
 // --- Globals ---
 let renderer, physics, stateMachine, inputManager;
 let manifest: Record<string, { file: string; description: string; n_atoms: number }> | null = null;
-let overlay = null;
-let dock = null;
-let settingsSheet = null;
 let statusCtrl = null;
 let placement = null;
 
@@ -122,8 +116,7 @@ const effectsGate = {
   EXIT_COUNT: 60,     // frames to sustain before exiting reduced
 };
 
-// Glass UI visibility — true once dock is initialized (dock is always visible with glass surface).
-// Decoupled from DockController: React Dock is always visible after mount.
+// Glass UI visibility — true once React Dock mounts (dock always visible with glass surface).
 let _glassUiActive = false;
 function isGlassUiVisible() { return _glassUiActive; }
 
@@ -149,9 +142,9 @@ function addGlobalListener(target: EventTarget, event: string, handler: EventLis
 function _doOverlayLayout() {
   _layoutRafId = null;
   _layoutPending = false;
-  if (!dock || !renderer) return;
-  // Find the visible dock (React or imperative)
-  const dockEl = (document.querySelector('.dock:not(.react-replaced)') || document.getElementById('dock')) as HTMLElement;
+  if (!renderer) return;
+  // Find the React dock
+  const dockEl = document.querySelector('.dock') as HTMLElement;
   if (!dockEl) return;
   const dockRect = dockEl.getBoundingClientRect();
   const viewportH = window.innerHeight;
@@ -195,10 +188,12 @@ function _requestOverlayLayout() {
   _layoutRafId = requestAnimationFrame(_doOverlayLayout);
 }
 
-/** Tear down all controllers, subsystems, and global listeners. Resets runtime state. */
-function destroyApp() {
-  // Unmount React UI (Milestone D)
-  unmountReactUI();
+/**
+ * Tear down runtime subsystems (renderer, physics, worker, controllers, listeners).
+ * Does NOT unmount React or reset the Zustand store — the UI remains mounted
+ * so that any visible status (e.g., statusError) is preserved.
+ */
+function _teardownRuntime() {
   // Stop frame loop
   _appRunning = false;
   if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
@@ -207,9 +202,6 @@ function destroyApp() {
     target.removeEventListener(event, handler, options);
   }
   _globalListeners.length = 0;
-  // Clear chooser list (removes owned-node listeners via DOM removal)
-  const chooserList = document.getElementById('structure-list');
-  if (chooserList) chooserList.innerHTML = '';
   // Clean up debug hooks
   delete window._setUiEffectsMode;
   // Disconnect dock ResizeObserver and cancel pending layout RAF
@@ -219,9 +211,6 @@ function destroyApp() {
   // Tear down controllers
   if (placement) placement.destroy();
   if (statusCtrl) statusCtrl.destroy();
-  if (overlay) overlay.destroy();
-  if (dock) dock.destroy();
-  if (settingsSheet) settingsSheet.destroy();
   // Tear down subsystems
   if (inputManager) inputManager.destroy();
   if (renderer) renderer.destroy();
@@ -230,9 +219,6 @@ function destroyApp() {
   // Null destroyed refs to prevent accidental reuse
   placement = null;
   statusCtrl = null;
-  overlay = null;
-  dock = null;
-  settingsSheet = null;
   inputManager = null;
   renderer = null;
   physics = null;
@@ -272,6 +258,14 @@ function destroyApp() {
   });
   // Clear root UI effect state
   delete document.documentElement.dataset.uiEffects;
+  _glassUiActive = false;
+}
+
+/** Full app teardown: unmount React, reset store, and tear down runtime. */
+function destroyApp() {
+  unmountReactUI();
+  useAppStore.getState().resetTransientState();
+  _teardownRuntime();
 }
 
 // --- Initialization ---
@@ -295,9 +289,8 @@ async function init() {
   const initDamping = physics.getDamping();
   store.setDampingSliderValue(initDamping === 0 ? 0 : Math.round(Math.cbrt(2 * initDamping) * 100));
 
-  // Status controller
+  // Status controller (hint-only — status text handled by store/React StatusBar)
   statusCtrl = new StatusController({
-    statusEl: document.getElementById('status'),
     hintEl: document.getElementById('hint'),
   });
 
@@ -311,7 +304,7 @@ async function init() {
     else if (w < 1024 || (coarsePointer && !canHover)) mode = 'tablet';
     else mode = 'desktop';
     const prev = document.documentElement.dataset.deviceMode;
-    if (prev && prev !== mode && overlay) { _closeOverlay(); }
+    if (prev && prev !== mode && useAppStore.getState().activeSheet !== null) { _closeOverlay(); }
     document.documentElement.dataset.deviceMode = mode;
   }
   updateDeviceMode();
@@ -338,6 +331,9 @@ async function init() {
     }
   };
 
+  // Mount React UI early so StatusBar is available for error display
+  mountReactUI();
+
   // Load manifest
   try {
     manifest = await loadManifest();
@@ -350,9 +346,10 @@ async function init() {
       await _addMoleculeToScene(info.file, info.description, [0, 0, 0]);
     }
   } catch (e) {
-    updateStatus('Failed to load structures. Serve from repo root.');
+    useAppStore.getState().setStatusError('Failed to load structures. Serve from repo root.');
     console.error(e);
-    destroyApp();
+    // Tear down runtime only — keep React mounted so StatusBar shows the error
+    _teardownRuntime();
     return;
   }
 
@@ -453,17 +450,13 @@ async function init() {
   // UI controller wiring
   // ═══════════════════════════════════════════════════════
 
-  // ── Overlay controller ──
-  overlay = new OverlayController({
-    settingsSheet: document.getElementById('settings-sheet'),
-    chooserSheet: document.getElementById('chooser-sheet'),
-    backdrop: document.getElementById('sheet-backdrop'),
-    sheetMain: document.getElementById('sheet-main'),
-    sheetHelp: document.getElementById('sheet-help'),
-  });
-
-  // Populate structure chooser now that overlay is defined
-  populateStructureDrawer(manifest);
+  // Populate store with available structures from manifest
+  {
+    const entries = Object.entries(manifest).sort((a, b) => a[1].n_atoms - b[1].n_atoms);
+    useAppStore.getState().setAvailableStructures(entries.map(([key, info]) => ({
+      key, description: info.description, atomCount: info.n_atoms, file: info.file,
+    })));
+  }
 
   // Escape key: close overlay or cancel placement
   function _onKeydown(e) {
@@ -475,7 +468,7 @@ async function init() {
         placement.invalidatePendingLoads();
         updateSceneStatus();
         e.preventDefault();
-      } else if (overlay.current !== 'none') {
+      } else if (useAppStore.getState().activeSheet !== null) {
         _closeOverlay();
         e.preventDefault();
       }
@@ -492,7 +485,7 @@ async function init() {
   addGlobalListener(document, 'pointerdown', (e: Event) => {
     const pe = e as PointerEvent;
     const target = pe.target as Node;
-    if (overlay.current === 'none') return;
+    if (useAppStore.getState().activeSheet === null) return;
 
     // Only primary pointer — reject second touch in multi-touch, and
     // non-left mouse buttons (right-click, middle, stylus barrel).
@@ -500,18 +493,17 @@ async function init() {
     if (pe.pointerType === 'mouse' && pe.button !== 0) return;
 
     // Clicks inside any sheet never dismiss (ownership boundary).
-    // Query visible sheets (React or imperative fallback).
-    const sheets = document.querySelectorAll('.sheet:not(.react-replaced)');
+    const sheets = document.querySelectorAll('.sheet');
     for (const sheet of sheets) {
       if (sheet.contains(target)) return;
     }
 
-    // Clicks inside the dock never dismiss (visible React dock or fallback imperative).
-    const dockEl = document.querySelector('.dock:not(.react-replaced)') || document.getElementById('dock');
+    // Clicks inside the dock never dismiss.
+    const dockEl = document.querySelector('.dock');
     if (dockEl && dockEl.contains(target)) return;
 
     // Only backdrop and renderer canvas dismiss.
-    const backdrop = document.querySelector('.sheet-backdrop:not(.react-replaced)') || document.getElementById('sheet-backdrop');
+    const backdrop = document.querySelector('.sheet-backdrop');
     const canvas = renderer ? renderer.getCanvas() : null;
     const isBackdrop = backdrop && (target === backdrop || backdrop.contains(target));
     const isCanvas = canvas && (target === canvas || canvas.contains(target));
@@ -523,134 +515,8 @@ async function init() {
     e.preventDefault();
   }, true);
 
-  // ── Dock controller ──
-  const dockAddBtn = document.getElementById('dock-add');
-  dock = new DockController({
-    dockEl: document.getElementById('dock'),
-    addBtn: dockAddBtn,
-    addIcon: dockAddBtn.querySelector('.dock-icon'),
-    addLabel: document.getElementById('dock-add-label'),
-    modeSeg: document.getElementById('mode-seg'),
-    pauseBtn: document.getElementById('dock-pause'),
-    settingsBtn: document.getElementById('dock-settings'),
-    cancelBtn: document.getElementById('dock-cancel'),
-  });
-
-
-  // Wire dock action callbacks (intents → main.js applies state)
-  dock.onAdd(() => {
-    if (placement.active) {
-      placement.exit(true);
-      return;
-    }
-    _updateChooserRecentRow();
-    _openOverlay('chooser');
-  });
-  dock.onModeChange((mode) => {
-    session.interactionMode = mode;
-    if (mode) useAppStore.getState().setInteractionMode(mode as 'atom' | 'move' | 'rotate');
-  });
-  dock.onPause(() => {
-    if (placement.active) return;
-    session.playback.paused = !session.playback.paused;
-    dock.setPauseLabel(session.playback.paused);
-    // Set store to match imperative state (not togglePause — that would double-toggle)
-    if (useAppStore.getState().paused !== session.playback.paused) {
-      useAppStore.getState().togglePause();
-    }
-    if (!session.playback.paused) {
-      scheduler.lastFrameTs = performance.now();
-      scheduler.simBudgetMs = 0;
-    }
-    scheduler.forceRenderThisTick = true;
-  });
-  dock.onSettings(() => {
-    if (placement.active) return;
-    _openOverlay('settings');
-  });
-  dock.onCancel(() => placement.exit(false));
-
-  // ── Settings sheet controller ──
-  settingsSheet = new SettingsSheetController({
-    speedSeg: document.getElementById('speed-seg'),
-    themeSeg: document.getElementById('theme-seg'),
-    boundarySeg: document.getElementById('boundary-seg'),
-    textSizeSeg: document.getElementById('text-size-seg'),
-    dragSlider: document.getElementById('drag-strength'),
-    dragVal: document.getElementById('drag-val'),
-    rotateSlider: document.getElementById('rotate-strength'),
-    rotateVal: document.getElementById('rotate-val'),
-    dampingSlider: document.getElementById('damping-slider'),
-    dampingVal: document.getElementById('damping-val'),
-    placedCountEl: document.getElementById('sheet-placed-count'),
-    activeRowEl: document.getElementById('sheet-active-row'),
-    activeCountEl: document.getElementById('sheet-active-count'),
-    addMoleculeBtn: document.getElementById('sheet-add-molecule'),
-    clearBtn: document.getElementById('sheet-clear'),
-    resetViewBtn: document.getElementById('sheet-reset-view'),
-    helpLink: document.getElementById('sheet-help-link'),
-    helpBackBtn: document.getElementById('help-back'),
-  });
-
-  // Wire settings sheet callbacks (intents → main.js applies state)
-  settingsSheet.onSpeedChange((val) => {
-    if (val === 'max') {
-      session.playback.speedMode = 'max';
-    } else {
-      session.playback.speedMode = 'fixed';
-      session.playback.selectedSpeed = parseFloat(val);
-    }
-    scheduler.forceRenderThisTick = true;
-    settingsSheet.updateSpeedButtons(session.playback.maxSpeed, scheduler.warmUpComplete);
-    // Mirror user intent to Zustand store (Milestone D)
-    // Store the user's selection (0.5, 1, 2, 4, or Infinity for Max),
-    // NOT the runtime maxSpeed estimate.
-    useAppStore.getState().setTargetSpeed(val === 'max' ? Infinity : parseFloat(val));
-  });
-  settingsSheet.onThemeChange((theme) => {
-    session.theme = theme;
-    renderer.applyTheme(session.theme);
-    applyThemeTokens(session.theme);
-    useAppStore.getState().setTheme(theme);
-  });
-  settingsSheet.onBoundaryChange((mode) => {
-    physics.setWallMode(mode);
-    if (workerBridge && workerInitialized) {
-      workerBridge.sendInteraction({ type: 'setWallMode', mode });
-    }
-  });
-  settingsSheet.onDragChange((v) => {
-    physics.setDragStrength(v);
-    if (workerBridge && workerInitialized) {
-      workerBridge.sendInteraction({ type: 'setDragStrength', value: v });
-    }
-  });
-  settingsSheet.onRotateChange((v) => {
-    physics.setRotateStrength(v);
-    if (workerBridge && workerInitialized) {
-      workerBridge.sendInteraction({ type: 'setRotateStrength', value: v });
-    }
-  });
-  settingsSheet.onDampingChange((d) => {
-    physics.setDamping(d);
-    if (workerBridge && workerInitialized) {
-      workerBridge.sendInteraction({ type: 'setDamping', value: d });
-    }
-  });
-  settingsSheet.onTextSizeChange((size) => {
-    session.textSize = size;
-    applyTextSizeTokens(size);
-    useAppStore.getState().setTextSize(size);
-  });
-  settingsSheet.onAddMolecule(() => { _updateChooserRecentRow(); _openOverlay('chooser'); });
-  settingsSheet.onClear(() => { _closeOverlay(); _clearPlayground(); });
-  settingsSheet.onResetView(() => { renderer.resetView(); });
-  settingsSheet.onHelpOpen(() => { overlay.showHelpPage(); });
-  settingsSheet.onHelpBack(() => { overlay.showMainPage(); });
-
-  // Initial speed button state + text-size selection
-  settingsSheet.updateSpeedButtons(session.playback.maxSpeed, scheduler.warmUpComplete);
-  settingsSheet.setTextSizeSelection(session.textSize);
+  // DockController + SettingsSheetController removed — React components are authoritative.
+  // Callbacks registered via store.setDockCallbacks() / store.setSettingsCallbacks() below.
 
   // ── Placement controller ──
   placement = new PlacementController({
@@ -660,7 +526,6 @@ async function init() {
       commitToScene: (file, name, atoms, bonds, offset) => _commitMolecule(file, name, atoms, bonds, offset),
       updateStatus,
       updateSceneStatus,
-      updateDockAddLabel,
       forceIdle: () => dispatchToInteraction(stateMachine.forceIdle()),
       syncInput: syncInputManager,
       forceRender: () => { scheduler.forceRenderThisTick = true; },
@@ -671,13 +536,9 @@ async function init() {
   });
 
   // ── Overlay layout: hint clearance + triad sizing/positioning ──
-  // Initial synchronous pass for first-paint correctness (dock/renderer exist).
-  _doOverlayLayout();
+  // ── Overlay layout: hint clearance + triad sizing/positioning ──
   addGlobalListener(window, 'resize', _requestOverlayLayout);
   _dockResizeObserver = new ResizeObserver(() => _requestOverlayLayout());
-  _dockResizeObserver.observe(document.getElementById('dock'));
-
-  // Mobile tap-to-expand for FPS area is now handled by React FPSDisplay component.
 
   // Tab visibility: prevent catch-up burst
   function _onVisibilityChange() {
@@ -691,11 +552,21 @@ async function init() {
   _appRunning = true;
   _rafId = requestAnimationFrame(frameLoop);
 
-  // Mount React UI (Milestone D)
-  mountReactUI();
+  // Double-RAF: React 18 may need >1 frame to mount and layout
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      _doOverlayLayout();
+      // Wire ResizeObserver to the now-mounted React dock
+      const reactDock = document.querySelector('.dock') as HTMLElement;
+      if (reactDock && _dockResizeObserver) {
+        _dockResizeObserver.disconnect();
+        _dockResizeObserver.observe(reactDock);
+      }
+      _glassUiActive = true; // React dock confirmed in DOM
+    });
+  });
 
   // Narrow test hook — returns only the specific observable E2E tests need.
-  // Follows the same unconditional pattern as _getWorkerDebugState above.
   (window as unknown as Record<string, unknown>)._getUIState = () => {
     const s = useAppStore.getState();
     return {
@@ -709,21 +580,6 @@ async function init() {
       theme: s.theme,
     };
   };
-
-  // Hide imperative elements now replaced by React-authoritative components
-  document.getElementById('info')?.classList.add('react-replaced');
-  document.getElementById('fps')?.classList.add('react-replaced');
-  document.getElementById('dock')?.classList.add('react-replaced');
-
-  // Re-wire ResizeObserver to the visible React dock (imperative dock is now hidden)
-  if (_dockResizeObserver) {
-    _dockResizeObserver.disconnect();
-    const reactDock = document.querySelector('.dock:not(.react-replaced)') as HTMLElement;
-    if (reactDock) _dockResizeObserver.observe(reactDock);
-  }
-  // Layout recalculation is handled by the ResizeObserver on the React dock.
-  // It fires once the dock has its final layout dimensions.
-  _glassUiActive = true; // React dock is now visible with glass surface
 
   // Register synchronized close gateway — React components use this instead of closeSheet
   useAppStore.getState().setCloseOverlay(() => _closeOverlay());
@@ -767,6 +623,7 @@ async function init() {
         session.playback.speedMode = 'fixed';
         session.playback.selectedSpeed = parseFloat(val);
       }
+      scheduler.forceRenderThisTick = true;
       useAppStore.getState().setTargetSpeed(val === 'max' ? Infinity : parseFloat(val));
     },
     onThemeChange: (theme: string) => {
@@ -831,17 +688,9 @@ async function init() {
     },
   });
 
-  // Hide imperative sheet elements now replaced by React-authoritative components
-  document.getElementById('sheet-backdrop')?.classList.add('react-replaced');
-  document.getElementById('settings-sheet')?.classList.add('react-replaced');
-  document.getElementById('chooser-sheet')?.classList.add('react-replaced');
 }
 
-/** Single entry point for all overlay openings — clears transient state first.
- *  Currently dismisses placement coachmark only. When dock Clear lands,
- *  add dock.disarmClear() here. */
-/** Synchronized close — single gateway for all overlay close paths.
- *  Always updates both store and imperative overlay. */
+/** Synchronized close — single gateway for all overlay close paths. */
 function _closeOverlay() {
   const store = useAppStore.getState();
   // Reset help drill-in when closing settings (avoids stale helpPageActive in store)
@@ -849,7 +698,6 @@ function _closeOverlay() {
     store.setHelpPageActive(false);
   }
   store.closeSheet();
-  overlay.close();
 }
 
 function _openOverlay(name: 'settings' | 'chooser') {
@@ -864,55 +712,21 @@ function _openOverlay(name: 'settings' | 'chooser') {
     // Reset help drill-in when opening settings
     if (name === 'settings') store.setHelpPageActive(false);
     store.openSheet(name);
-    // Keep imperative overlay in sync
-    overlay.open(name);
-  }
-}
-
-// --- Structure drawer ---
-function populateStructureDrawer(manifest: Record<string, { file: string; description: string; n_atoms: number }>) {
-  const list = document.getElementById('structure-list');
-  const entries = Object.entries(manifest).sort((a, b) => a[1].n_atoms - b[1].n_atoms);
-  // Feed Zustand store with available structures from manifest
-  useAppStore.getState().setAvailableStructures(entries.map(([key, info]) => ({
-    key, description: info.description, atomCount: info.n_atoms, file: info.file,
-  })));
-
-  for (const [key, info] of entries) {
-    const item = document.createElement('div');
-    item.className = 'drawer-item';
-    item.textContent = `${info.description} (${info.n_atoms} atoms)`;
-    // Listener on owned DOM node — GC'd when list is cleared. Not in _globalListeners.
-    item.addEventListener('click', () => {
-      _closeOverlay();
-      placement.start(info.file, info.description);
-    });
-    list.appendChild(item);
   }
 }
 
 // --- Scene management ---
 
-// ── Dock helpers (delegate to dock controller) ──
+// ── Dock placement mode ──
 function setDockPlacementMode(active) {
-  // Immediately update store — React Dock reads this for Add/Place/Cancel swap
   useAppStore.getState().setPlacementActive(active);
-
-  // Legacy imperative dock (hidden, will be removed when DockController is deleted)
-  if (dock) dock.setPlacementMode(active);
 
   // Coachmark policy: main.js owns the hint lifecycle, not placement.js
   if (active) {
     if (statusCtrl) statusCtrl.showCoachmark(COACHMARKS.placement);
   } else {
     if (statusCtrl) statusCtrl.hideCoachmark('placement');
-    updateDockAddLabel();
   }
-}
-
-function updateDockAddLabel() {
-  if (!dock) return;
-  dock.updateAddLabel();
 }
 
 /** Update the recent structure in the store for the React chooser. */
@@ -929,10 +743,6 @@ function _updateChooserRecentRow() {
 
 
 function updateSceneStatus() {
-  if (statusCtrl) statusCtrl.updateSceneStatus(session.scene.molecules.length, session.scene.totalAtoms);
-  updatePlacedCount();
-  updateActiveCountRow();
-  // Feed Zustand store (Milestone D)
   const store = useAppStore.getState();
   store.updateAtomCount(session.scene.totalAtoms);
   store.setMolecules(session.scene.molecules.map(m => ({
@@ -942,26 +752,22 @@ function updateSceneStatus() {
     atomCount: m.atomCount,
     atomOffset: m.atomOffset,
   })));
-}
-
-// Placed/Active count helpers — delegate to settingsSheet controller
-function updatePlacedCount() {
-  if (settingsSheet) settingsSheet.updatePlacedCount(session.scene.totalAtoms);
+  updateActiveCountRow();
+  // Clear transient status text only if no placement load is in progress
+  if (!placement || !placement.loading) {
+    store.setStatusText(null);
+  }
 }
 
 function updateActiveCountRow() {
   let active: number, removed: number;
   if (workerBridge && workerInitialized) {
-    // Worker mode: derive from snapshot atom count vs total placed.
-    // Local physics._wallRemovedCount is always 0 in worker mode (never steps locally).
     active = physics.n;
     removed = Math.max(0, session.scene.totalAtoms - active);
   } else {
-    // Sync mode: local physics tracks removal directly.
     active = physics.getActiveAtomCount();
     removed = physics.getWallRemovedCount();
   }
-  if (settingsSheet) settingsSheet.updateActiveCount(active, removed);
   useAppStore.getState().updateActiveCount(active, removed);
 }
 
@@ -1004,7 +810,6 @@ function _clearPlayground() {
     syncInput: syncInputManager,
     resetScheduler: fullSchedulerReset,
     updateSceneStatus,
-    updateDockLabel: updateDockAddLabel,
   });
 
   // Reset diagnostics in store (ke, wallRadius, etc. are stale after clear)
@@ -1046,8 +851,8 @@ function syncInputManager() {
   inputManager.updateAtomSource(buildAtomSource());
 }
 
-function updateStatus(text) {
-  if (statusCtrl) statusCtrl.update(text);
+function updateStatus(text: string) {
+  useAppStore.getState().setStatusText(text === '' ? null : text);
 }
 
 function buildAtomSource() {
@@ -1177,7 +982,7 @@ function createInputManager() {
 function dispatchToInteraction(cmd: Command, screenX?: number, screenY?: number) {
   const result = dispatchInteraction(cmd, screenX, screenY, {
     physics, renderer, stateMachine, inputManager,
-    fadeHint: () => statusCtrl.fadeHint(),
+    fadeHint: () => { if (statusCtrl) statusCtrl.fadeHint(); },
     updateStatus,
     updateSceneStatus,
   });
@@ -1211,7 +1016,7 @@ function dispatchToInteraction(cmd: Command, screenX?: number, screenY?: number)
         workerBridge.sendInteraction({ type: 'endDrag' });
         break;
       case 'flick':
-        workerBridge.sendInteraction({ type: 'applyImpulse', atomIndex: cmd.atom, vx: cmd.vx, vy: cmd.vy });
+        workerBridge.sendInteraction({ type: 'flick', atomIndex: cmd.atom, vx: cmd.vx, vy: cmd.vy });
         break;
     }
   }
@@ -1247,7 +1052,6 @@ function fullSchedulerReset() {
   // Reset recovery blend state
   scheduler.recoveringStartMax = 0;
   scheduler.recoveringBlendRemaining = 0;
-  updateSpeedControls();
 }
 
 function partialProfilerReset() {
@@ -1273,13 +1077,8 @@ function partialProfilerReset() {
   // Force re-warm by capping the step count below the exit threshold
   scheduler.totalStepsProfiled = Math.min(scheduler.totalStepsProfiled, CONFIG.playback.partialResetStepsCap);
   scheduler.lastMaxSpeedUpdateTs = 0;
-  updateSpeedControls();
 }
 
-// --- Speed button state sync ---
-function updateSpeedControls() {
-  if (settingsSheet) settingsSheet.updateSpeedButtons(session.playback.maxSpeed, scheduler.warmUpComplete);
-}
 
 // --- Frame Loop (accumulator-driven) ---
 function frameLoop(timestamp) {
@@ -1315,8 +1114,7 @@ function frameLoop(timestamp) {
         if (physStable && renderStable) scheduler.stableTicks++; else scheduler.stableTicks = 0;
         if (scheduler.totalStepsProfiled >= CONFIG.playback.warmUpSteps || scheduler.stableTicks >= CONFIG.playback.warmUpStableTicks) {
           scheduler.warmUpComplete = true;
-          updateSpeedControls();
-        }
+                }
       }
 
       const targetSpeed = computeTargetSpeed(pb.speedMode, pb.selectedSpeed, pb.maxSpeed, scheduler.warmUpComplete);
@@ -1432,8 +1230,7 @@ function frameLoop(timestamp) {
         } else {
           pb.maxSpeed += alpha * (rawMax - pb.maxSpeed);
         }
-        updateSpeedControls();
-      }
+            }
     }
 
     // ── Stalled-worker detection ──

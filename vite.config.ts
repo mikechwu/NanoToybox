@@ -7,7 +7,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   base: '/NanoToybox/',
   test: {
-    include: ['tests/unit/**/*.test.ts'],
+    include: ['tests/unit/**/*.test.{ts,tsx}'],
   },
   build: {
     outDir: 'dist',
