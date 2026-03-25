@@ -14,22 +14,13 @@ pre { margin: 4px 0; }
 <body>
 <h2>Physics Transaction Dev Test</h2>
 <p class="info">Tests physics append/rollback/clear operations directly against PhysicsEngine.<br>
-Requires serving from repo root (python3 -m http.server). Uses the same CDN importmap as the main app.<br>
+Serve via Vite dev server (npm run dev).<br>
 Does NOT test the full commitMolecule path (renderer + session). Use CONFIG.debug flags for that.</p>
 <div id="results"></div>
 
-<!-- Same importmap as the main app -->
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
-  }
-}
-</script>
 <script type="module">
-import { PhysicsEngine } from './js/physics.js';
-import { CONFIG } from './js/config.js';
+import { PhysicsEngine } from './js/physics';
+import { CONFIG } from './js/config';
 
 const results = document.getElementById('results');
 function log(msg, cls = 'info') {

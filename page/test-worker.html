@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NanoToybox — Worker Integration Test</title>
+<style>
+body { font-family: monospace; background: #1a1a2e; color: #e8e8e8; padding: 20px; }
+.pass { color: #50c050; } .fail { color: #e05050; } .info { color: #8090b0; }
+pre { margin: 4px 0; }
+</style>
+</head>
+<body>
+<h2>Worker Integration Test</h2>
+<div id="results"></div>
+<script type="module">
+const results = document.getElementById('results');
+let passed = 0, failed = 0;
+
+function log(msg, cls = 'info') {
+  results.innerHTML += `<pre class="${cls}">${msg}</pre>`;
+}
+function assert(condition, msg) {
+  if (condition) { log(`  PASS: ${msg}`, 'pass'); passed++; }
+  else { log(`  FAIL: ${msg}`, 'fail'); failed++; }
+}
+
+// Dimer test fixture
+const DIMER_ATOMS = [{ x: 0, y: 0, z: 0 }, { x: 1.5, y: 0, z: 0 }];
+const DIMER_BONDS = [[0, 1, 1.5]];
+
+async function collectMessages(worker, count, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    const msgs = [];
+    const timer = setTimeout(() => reject(new Error(`Timeout: got ${msgs.length}/${count} messages`)), timeoutMs);
+    worker.onmessage = (e) => {
+      msgs.push(e.data);
+      if (msgs.length >= count) {
+        clearTimeout(timer);
+        resolve(msgs);
+      }
+    };
+  });
+}
+
+async function runTests() {
+  let commandId = 0;
+
+  log('Creating worker...');
+  const worker = new Worker(new URL('./js/simulation-worker', import.meta.url), { type: 'module' });
+
+  // Test 1: Worker sends 'ready' on load
+  log('\nTest 1: Worker initialization');
+  const [readyMsg] = await collectMessages(worker, 1);
+  assert(readyMsg.type === 'ready', `Worker sends ready event (got: ${readyMsg.type})`);
+
+  // Test 1b: Commands before init get typed failure responses
+  log('\nTest 1b: Commands before init');
+
+  // requestFrame before init → frameSkipped with reason: not_initialized
+  const preInitFramePromise = collectMessages(worker, 1);
+  worker.postMessage({ type: 'requestFrame', commandId: ++commandId, stepsRequested: 10 });
+  const [preInitFrame] = await preInitFramePromise;
+  assert(preInitFrame.type === 'frameSkipped', `Pre-init requestFrame returns frameSkipped (got: ${preInitFrame.type})`);
+  assert(preInitFrame.reason === 'not_initialized', `reason = not_initialized (got: ${preInitFrame.reason})`);
+
+  // appendMolecule before init → appendResult with ok: false
+  const preInitAppendPromise = collectMessages(worker, 1);
+  worker.postMessage({ type: 'appendMolecule', commandId: ++commandId, atoms: DIMER_ATOMS, bonds: DIMER_BONDS, offset: [0, 0, 0] });
+  const [preInitAppend] = await preInitAppendPromise;
+  assert(preInitAppend.type === 'appendResult', `Pre-init append returns appendResult`);
+  assert(preInitAppend.ok === false, `Pre-init append fails (ok: false)`);
+  assert(typeof preInitAppend.error === 'string', `Pre-init append has error message`);
+
+  // clearScene before init → clearSceneResult with ok: false
+  const preInitClearPromise = collectMessages(worker, 1);
+  worker.postMessage({ type: 'clearScene', commandId: ++commandId });
+  const [preInitClear] = await preInitClearPromise;
+  assert(preInitClear.type === 'clearSceneResult', `Pre-init clear returns clearSceneResult`);
+  assert(preInitClear.ok === false, `Pre-init clear fails (ok: false)`);
+  assert(typeof preInitClear.error === 'string', `Pre-init clear has error message`);
+
+  // Test 2: Init with dimer atoms
+  log('\nTest 2: Init with dimer');
+  const initPromise = collectMessages(worker, 1);
+  worker.postMessage({ type: 'init', commandId: ++commandId, config: {
+    dt: 0.5, stepsPerFrame: 4, damping: 0, kDrag: 2, kRotate: 5, wallMode: 'contain', useWasm: true
+  }, atoms: DIMER_ATOMS, bonds: DIMER_BONDS });
+  const [initResult] = await initPromise;
+  assert(initResult.type === 'initResult', `Receives initResult (got: ${initResult.type})`);
+  assert(initResult.ok === true, `Init succeeded`);
+  assert(initResult.sceneVersion === 1, `sceneVersion = 1 (got: ${initResult.sceneVersion})`);
+  assert(initResult.atomCount === 2, `atomCount = 2 (got: ${initResult.atomCount})`);
+  assert(initResult.wasmReady === true, `wasmReady = true (got: ${initResult.wasmReady})`);
+  assert(initResult.kernel === 'wasm', `kernel = wasm (got: ${initResult.kernel})`);
+
+  // Test 3: initResult is distinct from appendResult
+  log('\nTest 3: initResult vs appendResult distinction');
+  assert(initResult.type === 'initResult', `Type is 'initResult', not 'appendResult'`);
+  assert(!('atomOffset' in initResult), `initResult does not have atomOffset field`);
+
+  // Test 4: Run 100 steps via requestFrame
+  log('\nTest 4: Run 100 physics steps');
+  const framePromise = collectMessages(worker, 1);
+  worker.postMessage({ type: 'requestFrame', commandId: ++commandId, stepsRequested: 100 });
+  const [frameResult] = await framePromise;
+  assert(frameResult.type === 'frameResult', `Receives frameResult (got: ${frameResult.type})`);
+  assert(frameResult.stepsCompleted === 100, `100 steps completed (got: ${frameResult.stepsCompleted})`);
+  assert(frameResult.n === 2, `n = 2 atoms (got: ${frameResult.n})`);
+  assert(frameResult.positions instanceof Float64Array, `positions is Float64Array`);
+  assert(frameResult.positions.length === 6, `positions has 6 elements (2 atoms * 3) (got: ${frameResult.positions.length})`);
+  assert(frameResult.sceneVersion === 1, `sceneVersion = 1 (got: ${frameResult.sceneVersion})`);
+  // At least one coordinate should have changed from initial positions
+  const initPos = [0, 0, 0, 1.5, 0, 0];
+  const moved = initPos.some((v, i) => Math.abs(frameResult.positions[i] - v) > 1e-12);
+  assert(moved, `Atoms moved during simulation (positions differ from initial)`);
+
+  // Test 5: Append molecule (sceneVersion increments)
+  log('\nTest 5: Append molecule');
+  const appendPromise = collectMessages(worker, 1);
+  worker.postMessage({ type: 'appendMolecule', commandId: ++commandId,
+    atoms: [{ x: 5, y: 0, z: 0 }, { x: 6.5, y: 0, z: 0 }],
+    bonds: [[0, 1, 1.5]], offset: [0, 0, 0] });
+  const [appendResult] = await appendPromise;
+  assert(appendResult.type === 'appendResult', `Receives appendResult (got: ${appendResult.type})`);
+  assert(appendResult.ok === true, `Append succeeded`);
+  assert(appendResult.sceneVersion === 2, `sceneVersion = 2 (got: ${appendResult.sceneVersion})`);
+  assert(appendResult.atomsAppended === 2, `atomsAppended = 2 (got: ${appendResult.atomsAppended})`);
+  assert(appendResult.totalAtomCount === 4, `totalAtomCount = 4 (got: ${appendResult.totalAtomCount})`);
+  assert('atomOffset' in appendResult, `appendResult has atomOffset field`);
+
+  // Post-append: verify frame reflects 4 atoms and sceneVersion 2
+  const postAppendFramePromise = collectMessages(worker, 1);
+  worker.postMessage({ type: 'requestFrame', commandId: ++commandId, stepsRequested: 1 });
+  const [postAppendFrame] = await postAppendFramePromise;
+  assert(postAppendFrame.n === 4, `Post-append frame has n=4 (got: ${postAppendFrame.n})`);
+  assert(postAppendFrame.sceneVersion === 2, `Post-append frame sceneVersion=2 (got: ${postAppendFrame.sceneVersion})`);
+
+  // Test 6: Clear scene
+  log('\nTest 6: Clear scene');
+  const clearPromise = collectMessages(worker, 1);
+  worker.postMessage({ type: 'clearScene', commandId: ++commandId });
+  const [clearResult] = await clearPromise;
+  assert(clearResult.type === 'clearSceneResult', `Receives clearSceneResult (got: ${clearResult.type})`);
+  assert(clearResult.ok === true, `Clear succeeded`);
+  assert(clearResult.sceneVersion === 3, `sceneVersion = 3 (got: ${clearResult.sceneVersion})`);
+
+  // Post-clear: verify frame reflects empty state (n=0)
+  const postClearFramePromise = collectMessages(worker, 1);
+  worker.postMessage({ type: 'requestFrame', commandId: ++commandId, stepsRequested: 1 });
+  const [postClearFrame] = await postClearFramePromise;
+  assert(postClearFrame.n === 0, `Post-clear frame has n=0 (got: ${postClearFrame.n})`);
+
+  // Test 7: Re-init with useWasm: false — must stay on JS kernel
+  log('\nTest 7: Re-init with useWasm: false');
+  const reinitPromise = collectMessages(worker, 1);
+  worker.postMessage({ type: 'init', commandId: ++commandId, config: {
+    dt: 0.5, stepsPerFrame: 4, damping: 0.1, kDrag: 3.5, kRotate: 7, wallMode: 'remove', useWasm: false
+  }, atoms: DIMER_ATOMS, bonds: DIMER_BONDS });
+  const [reinitResult] = await reinitPromise;
+  assert(reinitResult.type === 'initResult', `Re-init produces initResult`);
+  assert(reinitResult.ok === true, `Re-init succeeded`);
+  assert(reinitResult.wasmReady === false, `wasmReady = false when useWasm: false (got: ${reinitResult.wasmReady})`);
+  assert(reinitResult.kernel === 'js', `kernel = js when useWasm: false (got: ${reinitResult.kernel})`);
+
+  // Test 8: Init serialization — commands queued during init drain after success
+  log('\nTest 8: Init serialization');
+  // Start a new worker to get a clean state
+  worker.terminate();
+  const worker2 = new Worker(new URL('./js/simulation-worker', import.meta.url), { type: 'module' });
+  const [ready2] = await collectMessages(worker2, 1);
+  assert(ready2.type === 'ready', `Worker2 ready`);
+
+  // Send init + requestFrame rapidly — the requestFrame should be queued during init
+  // and drain AFTER initResult, so we should get: initResult, then frameResult
+  const serialMsgs = collectMessages(worker2, 2);
+  worker2.postMessage({ type: 'init', commandId: 900, config: {
+    dt: 0.5, stepsPerFrame: 4, damping: 0, kDrag: 2, kRotate: 5, wallMode: 'contain', useWasm: false
+  }, atoms: DIMER_ATOMS, bonds: DIMER_BONDS });
+  worker2.postMessage({ type: 'requestFrame', commandId: 901, stepsRequested: 1 });
+
+  const [msg1, msg2] = await serialMsgs;
+  assert(msg1.type === 'initResult', `First message is initResult (got: ${msg1.type})`);
+  assert(msg1.ok === true, `Init succeeded`);
+  assert(msg2.type === 'frameResult', `Second message is frameResult (got: ${msg2.type})`);
+  assert(msg2.n === 2, `Queued requestFrame ran after init with n=2 (got: ${msg2.n})`);
+
+  worker2.terminate();
+
+  // Note: concurrent init (second init during async init) and failed-init queue discard
+  // are not tested here because they require precise timing control over the async Wasm
+  // await that is not deterministically achievable in a browser test. The implementation
+  // uses initEpoch to guard against concurrent init and discards queued commands on failure.
+  // These paths are verified by code inspection, not by automated test.
+
+  // Summary
+  log(`\nResults: ${passed} passed, ${failed} failed`, failed === 0 ? 'pass' : 'fail');
+}
+
+runTests().catch(e => {
+  log(`Error: ${e.message}`, 'fail');
+  log(`Results: 0 passed, 1 failed`, 'fail');
+});
+</script>
+</body>
+</html>

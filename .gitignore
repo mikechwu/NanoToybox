@@ -50,11 +50,16 @@ venv/
 .claude/
 .claudeprompt/
 
-# --- Node.js (if added later) ---
+# --- Node.js ---
 node_modules/
+
+# --- Playwright ---
+test-results/
+playwright-report/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+*.tsbuildinfo
 
 # --- Generated data (reproducible via scripts) ---
 # ML training datasets — large NPY arrays, regenerate with:
@@ -72,9 +77,6 @@ outputs/
 
 # --- Reports & audit artifacts (development history, not source) ---
 .reports/
-
-# --- Debug artifacts ---
-page/test.html
 
 # --- Generated plots ---
 *.png

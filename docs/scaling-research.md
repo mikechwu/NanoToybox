@@ -185,5 +185,5 @@ open viewer/index.html
 # Use Stride=20 at 30 fps for long trajectories
 
 # Or interact with structures in real-time
-# Open http://localhost:8000/page/ (requires python3 -m http.server 8000)
+# Open http://localhost:5173/NanoToybox/page/ (requires npm run dev)
 ```

@@ -99,8 +99,8 @@ Manual verification checklist for the interactive page (`page/index.html`). Run 
 
 ### Setup
 ```bash
-python3 -m http.server 8000
-# Open http://localhost:8000/page/
+npm run dev
+# Open http://localhost:5173/NanoToybox/page/
 ```
 
 ### Checklist

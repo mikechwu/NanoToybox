@@ -11,8 +11,9 @@ Serve locally and open in your browser:
 ```bash
 git clone https://github.com/mikechwu/NanoToybox.git
 cd NanoToybox
-python3 -m http.server 8000
-# Open http://localhost:8000/page/
+npm install
+npm run dev
+# Open http://localhost:5173/NanoToybox/page/
 ```
 
 Or visit the live demo at [mikechwu.github.io/NanoToybox](https://mikechwu.github.io/NanoToybox/page/).
@@ -29,7 +30,7 @@ Or visit the live demo at [mikechwu.github.io/NanoToybox](https://mikechwu.githu
 - **Dark/Light themes** — full UI adaptation
 - **Containment boundary** — soft harmonic wall prevents atoms from flying to infinity. Boundary mode toggle: Contain (atoms bounce back) or Remove (atoms deleted when they escape). Live atom count display. Wall radius scales dynamically with atom count
 - **Works on desktop and mobile** — mouse and touch interaction
-- **No build step** — pure ES modules loaded via importmap from CDN (Wasm kernel pre-built; Emscripten needed only for kernel development)
+- **Vite-powered** — ES modules bundled by Vite with npm Three.js; TypeScript type-checking via `checkJs` (Wasm kernel pre-built; Emscripten needed only for kernel development)
 
 ## How It Works
 
@@ -111,14 +112,14 @@ python3 scripts/library_cli.py cnt 5 5 --cells 5
 
 ### Interactive page
 
-No build step required. Serve from repo root:
-
 ```bash
-python3 -m http.server 8000
-# Open http://localhost:8000/page/
+npm install        # first time only
+npm run dev        # Vite dev server with HMR
+npm run build      # production build → dist/
+npm run preview    # preview built output
+npm run typecheck  # TypeScript checking (checkJs)
+npm run test:e2e   # Playwright browser smoke tests
 ```
-
-Three.js is loaded from CDN via ES module importmap.
 
 ## Documentation
 

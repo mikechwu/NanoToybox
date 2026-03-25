@@ -19,9 +19,12 @@ Welcome to the NanoToybox project — a browser-based interactive carbon nanostr
 ## Quick Start
 
 ```bash
-# Launch the interactive page (requires serving from repo root)
-python3 -m http.server 8000
-# Open http://localhost:8000/page/
+# Install dependencies (first time only)
+npm install
+
+# Launch the interactive page (Vite dev server with HMR)
+npm run dev
+# Open http://localhost:5173/NanoToybox/page/
 
 # Run all validation tests (requires numpy, matplotlib)
 python3 tests/test_01_dimer.py
@@ -35,6 +38,16 @@ python3 scripts/library_cli.py cnt 5 5 --cells 5
 # List the structure library
 python3 scripts/library_cli.py list
 ```
+
+## Pre-Deploy Manual Checklist (WebGL-dependent)
+
+These checks require a real browser with WebGL and cannot run in headless CI. Run before merging to main or deploying:
+
+- [ ] **Main app:** Open `/page/`, click Add → select a structure → place on canvas → verify atom count in status → open Settings → Clear → verify "Empty playground"
+- [ ] **Settings:** Open/close settings sheet, switch Dark/Light theme
+- [ ] **Viewer:** Open `/viewer/`, drag-drop an `.xyz` file, verify atoms and bonds render
+
+Automated checks (typecheck, build, Playwright E2E, deploy smoke) run in CI on every push/PR.
 
 ## Project Goal
 

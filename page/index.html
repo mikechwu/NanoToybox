@@ -404,13 +404,40 @@ canvas { display: block; touch-action: none; }
 .dock.placement .dock-mode { display: none; }
 .dock-cancel { display: none; }
 .dock.placement .dock-cancel { display: flex; }
-.dock.placement #dock-add { color: var(--color-accent-text); }
+.dock.placement #dock-add,
+.dock.placement .dock-add-btn { color: var(--color-accent-text); }
 
 /* ── Sheet pages (drill-in navigation) ── */
 .sheet-page { /* default visible */ }
 .sheet-visible { display: block; }
 .sheet-page-hidden { display: none; }
 .row-hidden { display: none; }
+
+/* ── React-authoritative components (Milestone D) ── */
+/* Mirror ID-based styles so React components match imperative originals */
+.react-info {
+  position: absolute; top: 12px; left: 12px;
+  background: var(--panel-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  padding: 6px 12px; font-size: var(--font-xs); line-height: 1.7;
+  border-radius: var(--radius-sm); z-index: 10;
+  border: 1px solid var(--color-border);
+}
+.react-info .title { display: none; }
+.react-info .status-text { color: var(--color-text-secondary); font-size: var(--font-xs); }
+.react-info .reconciliation-text { color: var(--color-accent-text); font-size: var(--font-xs); }
+.react-fps {
+  position: absolute; top: 12px; right: 12px;
+  color: var(--color-fps-text); font-size: var(--font-sm); z-index: 10;
+  font-variant-numeric: tabular-nums;
+  background: var(--color-surface);
+  backdrop-filter: blur(var(--glass-blur));
+  padding: 6px 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  line-height: 1.4; cursor: pointer;
+}
+/* Hide imperative elements when React is authoritative */
+.react-replaced { display: none !important; }
 </style>
 </head>
 <body>
@@ -420,6 +447,8 @@ canvas { display: block; touch-action: none; }
     <div id="status">Loading structures...</div>
   </div>
   <div id="fps"></div>
+  <!-- React mount point (Milestone D) — display:contents so children position independently -->
+  <div id="react-root" style="display:contents"></div>
   <div id="hint">Click or tap an atom to interact</div>
 
   <!-- ══════════════════════════════════════════════════
@@ -603,14 +632,6 @@ canvas { display: block; touch-action: none; }
   </nav>
 </div>
 
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
-  }
-}
-</script>
-<script type="module" src="js/main.js"></script>
+<script type="module" src="js/main"></script>
 </body>
 </html>

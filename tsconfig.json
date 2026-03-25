@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@types/*": ["./src/types/*"]
+    }
+  },
+  "include": [
+    "page/js/**/*.ts",
+    "page/js/**/*.tsx",
+    "page/bench/**/*.ts",
+    "src/**/*.ts",
+    "tests/unit/**/*.ts",
+    "vite.config.ts"
+  ]
+  // Coverage: all extracted app/bench source modules are .ts/.tsx and type-checked.
+  // Inline <script type="module"> in HTML entrypoints are sanctioned exceptions.
+  // strict: false — implicit-any deferred as non-blocker.
+}

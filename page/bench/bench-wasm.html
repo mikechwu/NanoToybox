@@ -26,9 +26,9 @@ button:disabled { opacity: 0.4; }
 <div id="results"></div>
 
 <script type="module">
-import { PhysicsEngine } from '../js/physics.js';
-import { buildScene } from './bench-scenes.js';
-import { initWasm, isReady, marshalCSR, callTersoff, csrIsCurrent } from '../js/tersoff-wasm.js';
+import { PhysicsEngine } from '../js/physics';
+import { buildScene } from './bench-scenes';
+import { initWasm, isReady, marshalCSR, callTersoff, csrIsCurrent } from '../js/tersoff-wasm';
 
 const status = document.getElementById('status');
 const results = document.getElementById('results');

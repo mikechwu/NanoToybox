@@ -13,6 +13,7 @@ CFLAGS = -O3 -ffast-math \
          -s ALLOW_MEMORY_GROWTH=1 \
          -s INITIAL_MEMORY=16777216 \
          -s MODULARIZE=1 \
+         -s EXPORT_ES6=1 \
          -s EXPORT_NAME='createTersoffModule' \
          --no-entry
 

@@ -27,8 +27,8 @@ button:disabled { opacity: 0.4; }
 <div id="results"></div>
 
 <script type="module">
-import { PhysicsEngine } from '../js/physics.js';
-import { buildScene, C60_SWEEP, GRAPHENE_SWEEP, SPARSE_SWEEP } from './bench-scenes.js';
+import { PhysicsEngine } from '../js/physics';
+import { buildScene, C60_SWEEP, GRAPHENE_SWEEP, SPARSE_SWEEP } from './bench-scenes';
 
 const ABORT_MEAN_MS = 100;
 const STEP_BUDGET_MS = 1000 / 240; // 4.17 ms at 1x

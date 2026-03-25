@@ -16,9 +16,8 @@ The interactive page is the primary user-facing application. It runs a full Ters
 ### Usage
 
 ```bash
-# Serve from repo root (required for structure library access)
-python3 -m http.server 8000
-# Open http://localhost:8000/page/
+npm run dev
+# Open http://localhost:5173/NanoToybox/page/
 ```
 
 ### Features
@@ -105,7 +104,7 @@ The interactive page uses a modular controller architecture with a composition r
 
 ### Technology
 
-- Three.js v0.170 (CDN, ES modules via importmap)
+- Three.js v0.170 (npm, bundled by Vite)
 - InstancedMesh for atoms and bonds (2 draw calls, geometric capacity growth)
 - OrbitControls for camera (right-click orbit, scroll zoom)
 - Custom axis triad (ArrowHelper + sprites, scissor-test viewport, device-aware sizing 80–200px via `setOverlayLayout()` contract)
@@ -125,9 +124,9 @@ The trajectory viewer plays back pre-computed XYZ trajectory files. It does not 
 # Open directly, then drag-drop an .xyz file
 open viewer/index.html
 
-# Or serve and auto-load example trajectories
-python3 -m http.server 8000
-# Open http://localhost:8000/viewer/
+# Or serve via Vite and auto-load example trajectories
+npm run dev
+# Open http://localhost:5173/NanoToybox/viewer/
 ```
 
 ### Features
