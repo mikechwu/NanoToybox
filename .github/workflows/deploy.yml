@@ -19,12 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -36,19 +36,20 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Verify build output (all 12 HTML entrypoints + assets)
+      - name: Verify build output (all 13 HTML entrypoints + assets)
         run: |
           # Product pages (2)
           test -f dist/page/index.html || (echo "MISSING: dist/page/index.html" && exit 1)
           test -f dist/viewer/index.html || (echo "MISSING: dist/viewer/index.html" && exit 1)
-          # Dev/diagnostic pages (10)
+          # Dev/diagnostic pages (11)
           test -f dist/page/test.html || (echo "MISSING: dist/page/test.html" && exit 1)
           test -f dist/page/test-rollback.html || (echo "MISSING: dist/page/test-rollback.html" && exit 1)
+          test -f dist/page/test-worker.html || (echo "MISSING: dist/page/test-worker.html" && exit 1)
           COUNT=$(ls dist/page/bench/bench-*.html | wc -l | tr -d ' ')
           [ "$COUNT" -eq 8 ] || (echo "Expected 8 bench pages, found $COUNT" && exit 1)
-          # Total: 2 product + 2 test + 8 bench = 12
+          # Total: 2 product + 3 test + 8 bench = 13
           TOTAL=$(find dist -name "*.html" | wc -l | tr -d ' ')
-          [ "$TOTAL" -eq 12 ] || (echo "Expected 12 HTML entrypoints, found $TOTAL" && exit 1)
+          [ "$TOTAL" -eq 13 ] || (echo "Expected 13 HTML entrypoints, found $TOTAL" && exit 1)
           # Static assets
           test -f dist/structures/library/manifest.json || (echo "MISSING: manifest.json" && exit 1)
           ls dist/assets/tersoff-*.wasm >/dev/null 2>&1 || (echo "MISSING: Wasm binary" && exit 1)
@@ -77,7 +78,7 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: 'dist'
 
