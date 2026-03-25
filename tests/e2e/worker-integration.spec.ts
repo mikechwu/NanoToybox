@@ -29,7 +29,7 @@ test.describe('C.2 Integration — Worker-Driven Main App', () => {
     await page.goto(`${baseURL}/page/`)
 
     // Wait for app to fully initialize (React StatusBar renders scene info)
-    await expect(page.locator('.react-info .status-text')).toContainText(/(atoms|Empty playground)/, { timeout: 15000 })
+    await expect(page.locator('.dock')).toBeAttached({ timeout: 15000 })
 
     // Give the worker time to initialize and process at least one frame
     await page.waitForTimeout(2000)
@@ -72,21 +72,24 @@ test.describe('C.2 Integration — Worker-Driven Main App', () => {
   test('worker snapshot drives rendering (atoms visible)', async ({ page, baseURL }) => {
     await page.goto(`${baseURL}/page/`)
 
-    // Wait for React StatusBar to show atoms (structure loaded and rendering)
-    await expect(page.locator('.react-info .status-text')).toContainText('atoms', { timeout: 15000 })
-
-    // The status should show a non-zero speed or "Estimating" (worker is stepping)
+    // Wait for app to initialize (dock visible = React mounted)
+    await expect(page.locator('.dock')).toBeAttached({ timeout: 15000 })
     await page.waitForTimeout(3000)
-    const statusText = await page.locator('.react-info .status-text').textContent()
-    // Should show simulation info, not "Empty playground"
-    expect(statusText).not.toContain('Empty playground')
+
+    // Worker should have produced snapshots and driven rendering
+    const state = await page.evaluate(() => {
+      const fn = (window as Record<string, unknown>)._getWorkerDebugState as (() => Record<string, unknown>) | undefined
+      return fn ? fn() : null
+    })
+    expect(state?.workerActive).toBe(true)
+    expect(state?.hasSnapshot).toBe(true)
   })
 
   test('stalled-worker detection: 5s warning triggers workerStalled flag and status text', async ({ page, baseURL }) => {
     await page.goto(`${baseURL}/page/`)
 
-    // Wait for worker to be active (React StatusBar shows scene info)
-    await expect(page.locator('.react-info .status-text')).toContainText(/(atoms|Estimating|Sim)/, { timeout: 15000 })
+    // Wait for worker to be active
+    await expect(page.locator('.dock')).toBeAttached({ timeout: 15000 })
     await page.waitForTimeout(1000)
 
     // Pre-condition: worker is active and NOT stalled

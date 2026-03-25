@@ -67,15 +67,24 @@ Browser                          Web Worker
 │  PlacementController │          │  scripts/ CLI tools   │
 │  StatusController    │          └──────────────────────┘
 │  (hint-only)         │
+│                      │
+│  runtime/ modules:   │
+│  ├── SceneRuntime    │
+│  ├── WorkerLifecycle │
+│  ├── SnapshotReconc. │
+│  ├── OverlayLayout   │
+│  ├── InputBindings   │
+│  └── UIBindings      │
 └─────────────────────┘
 ```
 
 ### Key Architectural Decisions
 
 - **React-authoritative UI** — all UI surfaces (Dock, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay) are React components with Zustand store. Imperative controllers remain only for PlacementController (canvas touch listeners) and StatusController (hint/coachmark surface).
-- **Worker-first physics** — simulation runs off-thread via Web Worker with snapshot protocol. Automatic fallback to sync-mode if worker fails or stalls.
+- **Worker-first physics** — simulation runs off-thread via Web Worker with snapshot protocol. Automatic fallback to sync-mode if worker fails (5s warning, 15s fatal).
 - **Dual Tersoff kernels** — JS fallback + C/Wasm kernel (compiled with Emscripten). Wasm enabled by default, ~11% faster. Force via `?kernel=js` for debugging.
 - **Momentum-conserving force clamp** — global scaling (not per-atom) preserves Newton's 3rd law and force field shape. Interaction forces added after clamp.
+- **Runtime module extraction** — main.ts delegates to 9 focused modules in `page/js/runtime/` (scene, worker lifecycle, snapshot reconciler, overlay layout/runtime, interaction dispatch, input bindings, UI bindings, atom source). main.ts is composition-root-only (~940 lines).
 
 ## Current Status
 

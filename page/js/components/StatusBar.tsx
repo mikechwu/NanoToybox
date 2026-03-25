@@ -28,21 +28,13 @@ export function StatusBar() {
     const molCount = molecules.length;
     if (atomCount === 0 || molCount === 0) {
       displayText = 'Empty playground \u2014 add a molecule';
+    } else if (molCount === 1) {
+      displayText = `${atomCount} atoms`;
     } else {
-      const molLabel = molCount === 1 ? '1 molecule' : `${molCount} molecules`;
-      displayText = `${molLabel} \u00b7 ${atomCount} atoms`;
+      displayText = `${molCount} molecules \u00b7 ${atomCount} atoms`;
     }
   }
 
-  return (
-    <div className="react-info">
-      <div className="title">NanoToybox</div>
-      <div className="status-text">{displayText}</div>
-      {reconciliationState !== 'none' && (
-        <div className="reconciliation-text">
-          Reconciling: {reconciliationState.replace('awaiting_', '')}
-        </div>
-      )}
-    </div>
-  );
+  // Info block disabled for now — kept in code for future use
+  return null;
 }

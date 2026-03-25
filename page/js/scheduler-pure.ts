@@ -211,3 +211,88 @@ export function computeWallRadius(
   const densityRadius = Math.cbrt((3 * atomCount) / (4 * Math.PI * density));
   return densityRadius + padding;
 }
+
+// ── 8. Max-speed estimation (production budget-based model) ─────────
+
+export interface MaxSpeedInputs {
+  now: number;
+  mode: 'normal' | 'overloaded' | 'recovering';
+  warmUpComplete: boolean;
+  maxSpeed: number;
+  effectiveSpeed: number;
+  lastMaxSpeedUpdateTs: number;
+  recoveringStartMax: number;
+  recoveringBlendRemaining: number;
+  profilerAlpha: number;
+  prof: {
+    physStepMs: number;
+    renderMs: number;
+    updatePosMs: number;
+    otherMs: number;
+    rafIntervalMs: number;
+    actualRendersPerSec: number;
+  };
+  config: {
+    maxSpeedUpdateNormalMs: number;
+    maxSpeedUpdateOverloadMs: number;
+    maxSpeedCap: number;
+    budgetSafety: number;
+    baseStepsPerSecond: number;
+  };
+}
+
+export interface MaxSpeedOutputs {
+  maxSpeed: number;
+  lastMaxSpeedUpdateTs: number;
+  recoveringStartMax: number;
+  recoveringBlendRemaining: number;
+}
+
+/**
+ * Update the max-speed estimate based on profiler data and scheduler mode.
+ * Returns null if the cadence gate has not been reached (no update this tick).
+ * Returns the updated mutable state fields if an update was performed.
+ */
+export function updateMaxSpeedEstimate(inputs: MaxSpeedInputs): MaxSpeedOutputs | null {
+  if (!inputs.warmUpComplete) return null;
+
+  const maxUpdateInterval = inputs.mode === 'overloaded'
+    ? inputs.config.maxSpeedUpdateOverloadMs
+    : inputs.config.maxSpeedUpdateNormalMs;
+
+  if ((inputs.now - inputs.lastMaxSpeedUpdateTs) < maxUpdateInterval) return null;
+
+  let rawMax: number;
+  if (inputs.mode === 'overloaded') {
+    rawMax = Math.min(inputs.effectiveSpeed, inputs.config.maxSpeedCap);
+  } else {
+    const budgetPerSec = 1000 * inputs.config.budgetSafety;
+    const renderBudget = inputs.prof.actualRendersPerSec * inputs.prof.renderMs;
+    const updateBudget = (1000 / inputs.prof.rafIntervalMs) * inputs.prof.updatePosMs;
+    const otherBudget = (1000 / inputs.prof.rafIntervalMs) * inputs.prof.otherMs;
+    const physicsBudget = budgetPerSec - renderBudget - updateBudget - otherBudget;
+    const safePhysMs = Math.max(inputs.prof.physStepMs, 0.001);
+    const maxSteps = Math.max(0, physicsBudget) / safePhysMs;
+    rawMax = Math.min(maxSteps / inputs.config.baseStepsPerSecond, inputs.config.maxSpeedCap);
+  }
+
+  let maxSpeed: number;
+  let recoveringStartMax = inputs.recoveringStartMax;
+  let recoveringBlendRemaining = inputs.recoveringBlendRemaining;
+
+  if (inputs.mode === 'recovering' && recoveringBlendRemaining > 0) {
+    const stepIndex = 3 - recoveringBlendRemaining;
+    const t = stepIndex / 2;
+    maxSpeed = recoveringStartMax + t * (rawMax - recoveringStartMax);
+    recoveringBlendRemaining--;
+  } else {
+    maxSpeed = inputs.maxSpeed + inputs.profilerAlpha * (rawMax - inputs.maxSpeed);
+  }
+
+  return {
+    maxSpeed,
+    lastMaxSpeedUpdateTs: inputs.now,
+    recoveringStartMax,
+    recoveringBlendRemaining,
+  };
+}

@@ -194,13 +194,13 @@ npm run dev
 **Transaction rollback verification:**
 
 - **Automated physics tests:** open `page/test-rollback.html` in a browser (requires serving from repo root). Tests physics append/rollback/clear/invariants/components directly against the real `PhysicsEngine` class. Does NOT test the full `commitMolecule` orchestration path (renderer + session state coordination).
-- **Manual commit-path testing:** set `CONFIG.debug.failAfterPhysicsAppend = true` or `CONFIG.debug.failRendererAppend = true` in config.js, then place a molecule via the UI. Verify: placement fails gracefully, no orphan meshes, physics atom count restored, scene molecule list unchanged. Set `CONFIG.debug.assertions = true` to enable post-append invariant checks inside the rollback-protected block.
+- **Manual commit-path testing:** set `CONFIG.debug.failAfterPhysicsAppend = true` or `CONFIG.debug.failRendererAppend = true` in config.ts, then place a molecule via the UI. Verify: placement fails gracefully, no orphan meshes, physics atom count restored, scene molecule list unchanged. Set `CONFIG.debug.assertions = true` to enable post-append invariant checks inside the rollback-protected block.
 - **Coverage summary:** physics-level transaction safety is automated; full commit-path rollback (physics + renderer + session) requires manual flag toggling and UI interaction. Both complement manual smoke tests for interaction flow.
 - **Future milestone — full integration test harness:** automate commitMolecule transaction path (physics + renderer + session coordination), preview hit-preference threshold tests (atom-vs-bond within/outside CONFIG.picker.previewAtomPreference), and remove CDN dependency from test page. Tracked as a separate infrastructure investment.
 
 ### Manual Runtime Checks
 
-After changes to UI controllers or main.js composition:
+After changes to UI controllers or main.ts composition:
 
 | # | Check | How to verify |
 |---|-------|--------------|
@@ -229,5 +229,5 @@ Check during PRs that modify controller modules:
 | R1 | No duplicate listeners | Each DOM element has one event handler per event type |
 | R2 | Controller destroy() complete | Every addEventListener has matching removeEventListener in destroy() |
 | R3 | State ownership respected | New state writes go through the authoritative writer (see architecture.md) |
-| R4 | No controller cross-imports | Controllers don't import each other — use callbacks via main.js |
+| R4 | No controller cross-imports | Controllers don't import each other — use callbacks via main.ts |
 | R5 | New globals tracked | Any new window/document listener uses addGlobalListener() |

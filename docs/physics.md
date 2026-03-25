@@ -89,7 +89,7 @@ Properties: symplectic, time-reversible, second-order accurate. Guarantees bound
 a (Å/fs²) = F (eV/Å) × 1.602176634×10⁻²⁹ / m (kg)
 ```
 
-This is defined as `EV_ANGSTROM_TO_ACC` in `velocity_verlet.py`.
+In the browser engine this is `ACC_FACTOR` in `page/js/physics.ts`; in the Python engine it is `EV_ANGSTROM_TO_ACC` in `sim/integrators/velocity_verlet.py`.
 
 ## Energy Minimization
 
@@ -185,6 +185,6 @@ The browser implementation (`page/js/physics.ts`) includes several optimizations
 
 ### Worker Architecture
 
-`page/js/simulation-worker.ts` runs `PhysicsEngine` on a dedicated Web Worker thread. The main thread communicates via `page/js/worker-bridge.ts` using a typed `WorkerCommand` / `WorkerEvent` message protocol (`src/types/worker-protocol.ts`). If the worker fails to initialize or stalls (no progress for 5 s), the engine falls back to synchronous `PhysicsEngine` on the main thread. Both paths use identical `physics.ts` code.
+`page/js/simulation-worker.ts` runs `PhysicsEngine` on a dedicated Web Worker thread. The main thread communicates via `page/js/worker-bridge.ts` using a typed `WorkerCommand` / `WorkerEvent` message protocol (`src/types/worker-protocol.ts`). Worker lifecycle (creation, init, stall detection, teardown) is managed by `page/js/runtime/worker-lifecycle.ts`. Worker snapshot reconciliation (position sync, atom-remap, bond refresh) is owned by `page/js/runtime/snapshot-reconciler.ts`. If the worker fails to initialize or stalls (5s warning sets stalled flag, 15s fatal triggers sync fallback), the engine falls back to synchronous `PhysicsEngine` on the main thread. Both paths use identical `physics.ts` code.
 
 CNT geometry is generated via the graphene-sheet-rolling algorithm with chiral vector rotation (`sim/structures/generate.py`). Fullerene coordinates (C60, C180, C540, C720) are stored as relaxed structures in the library.

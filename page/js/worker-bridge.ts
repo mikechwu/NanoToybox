@@ -19,6 +19,19 @@ import type {
 import type { AtomXYZ } from '../../src/types/domain';
 import type { BondTuple } from '../../src/types/interfaces';
 
+/** Fire-and-forget interaction/settings command union. */
+export type WorkerInteractionCommand =
+  | { type: 'startDrag'; atomIndex: number; mode: 'atom' | 'move' | 'rotate' }
+  | { type: 'updateDrag'; worldX: number; worldY: number; worldZ: number }
+  | { type: 'endDrag' }
+  | { type: 'applyImpulse'; atomIndex: number; vx: number; vy: number }
+  | { type: 'flick'; atomIndex: number; vx: number; vy: number }
+  | { type: 'setDragStrength'; value: number }
+  | { type: 'setRotateStrength'; value: number }
+  | { type: 'setDamping'; value: number }
+  | { type: 'setWallMode'; mode: 'contain' | 'remove' }
+  | { type: 'updateWallCenter'; atoms: AtomXYZ[]; offset: [number, number, number] };
+
 // ─── Snapshot type ──────────────────────────────────────────────────────────
 
 export interface FrameSnapshot {
@@ -199,19 +212,7 @@ export class WorkerBridge {
   }
 
   /** Fire-and-forget interaction/settings command. */
-  sendInteraction(
-    cmd:
-      | { type: 'startDrag'; atomIndex: number; mode: 'atom' | 'move' | 'rotate' }
-      | { type: 'updateDrag'; worldX: number; worldY: number; worldZ: number }
-      | { type: 'endDrag' }
-      | { type: 'applyImpulse'; atomIndex: number; vx: number; vy: number }
-      | { type: 'flick'; atomIndex: number; vx: number; vy: number }
-      | { type: 'setDragStrength'; value: number }
-      | { type: 'setRotateStrength'; value: number }
-      | { type: 'setDamping'; value: number }
-      | { type: 'setWallMode'; mode: 'contain' | 'remove' }
-      | { type: 'updateWallCenter'; atoms: AtomXYZ[]; offset: [number, number, number] },
-  ): void {
+  sendInteraction(cmd: WorkerInteractionCommand): void {
     const commandId = this._nextId();
     // Build the full WorkerCommand by spreading cmd with commandId
     this._post({ ...cmd, commandId } as WorkerCommand);

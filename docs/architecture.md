@@ -50,7 +50,17 @@ NanoToybox/
 │   │   ├── tersoff.wasm          # Compiled C Tersoff kernel
 │   │   └── tersoff.js            # Emscripten glue code
 │   ├── js/
-│   │   ├── main.ts               # Composition root + runtime orchestration
+│   │   ├── main.ts               # Composition root — wires subsystems, delegates to runtime/
+│   │   ├── runtime/              # Runtime modules extracted from main.ts
+│   │   │   ├── scene-runtime.ts      # Scene mutation wrappers + scene-to-UI projection
+│   │   │   ├── worker-lifecycle.ts   # Worker bridge creation, init, stall detection, teardown
+│   │   │   ├── snapshot-reconciler.ts # Worker snapshot → physics/renderer reconciliation
+│   │   │   ├── overlay-layout.ts     # Hint clearance + triad sizing (RAF-coalesced, ResizeObserver)
+│   │   │   ├── overlay-runtime.ts    # Overlay open/close policy (Escape, outside-click)
+│   │   │   ├── interaction-dispatch.ts # Interaction command effects + worker mirroring
+│   │   │   ├── input-bindings.ts     # InputManager construction, sync, callback wiring
+│   │   │   ├── ui-bindings.ts        # Zustand store callback registration
+│   │   │   └── atom-source.ts        # Renderer-to-input atom-picking adapter
 │   │   ├── scene.ts              # Scene commit/clear/load (transaction-safe)
 │   │   ├── placement.ts          # Placement lifecycle, tangent computation, canvas listeners
 │   │   ├── interaction.ts        # Command dispatch, screen-to-physics projection
@@ -138,9 +148,21 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 
 ### Composition Root Pattern
 
-`main.ts` creates all subsystems (renderer, physics, stateMachine) and mounts the React UI. React components (Dock, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay) are authoritative for all UI surfaces. Imperative controllers remain only for placement (PlacementController) and hint/coachmark (StatusController, hint-only).
+`main.ts` (~940 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 9 modules in `page/js/runtime/`:
 
-React components read state from the Zustand store (`app-store.ts`) and invoke imperative callbacks registered by `main.ts` via the store's callback slots (dockCallbacks, settingsCallbacks, chooserCallbacks).
+- **scene-runtime.ts** — scene mutation wrappers, scene-to-store projection, worker scene mirroring
+- **worker-lifecycle.ts** — worker bridge creation, init, stall detection (5s warning / 15s fatal), teardown
+- **snapshot-reconciler.ts** — worker snapshot → physics position sync, atom-remap handling, bond refresh
+- **overlay-layout.ts** — hint clearance and triad sizing/positioning (RAF-coalesced, ResizeObserver)
+- **overlay-runtime.ts** — overlay open/close policy (Escape, outside-click, device-mode switch)
+- **interaction-dispatch.ts** — interaction command side effects and worker mirroring (flick ordering)
+- **input-bindings.ts** — InputManager construction, sync (scene-mutation resync contract)
+- **ui-bindings.ts** — Zustand store callback registration (React intents → imperative commands)
+- **atom-source.ts** — shared renderer-to-input atom-picking adapter
+
+React components (Dock, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay) are authoritative for all UI surfaces. Imperative controllers remain only for PlacementController and StatusController (hint-only).
+
+`main.ts` must not be re-grown: new runtime logic goes into `page/js/runtime/`, new UI surfaces into `page/js/components/`.
 
 ### State Ownership
 
@@ -148,7 +170,7 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 
 | State slice | Authoritative writer | Intent sources |
 |-------------|---------------------|---------------|
-| `session.scene` | scene.ts (commit/clear) | React SettingsSheet (clear), PlacementController (commit) |
+| `session.scene` | scene-runtime.ts (commit/clear/add) | React SettingsSheet (clear), PlacementController (commit) |
 | `session.playback` | main.ts (frame loop) | React Dock (pause), React SettingsSheet (speed) |
 | `session.interactionMode` | main.ts (via store callback) | React Dock (mode segmented) |
 | UI chrome (sheets, theme, etc.) | Zustand store (`app-store.ts`) | React components |
@@ -162,7 +184,7 @@ Unified outside-click dismiss rule (all devices): a capture-phase `pointerdown` 
 
 ### Overlay Layout Contract
 
-`main.ts` owns bottom-overlay layout arbitration via `_doOverlayLayout()` (RAF-coalesced). It measures dock geometry via `getBoundingClientRect()` and produces separate layout outputs:
+`overlay-layout.ts` (`createOverlayLayout`) owns bottom-overlay layout arbitration via `_doOverlayLayout()` (RAF-coalesced). It measures dock geometry via `getBoundingClientRect()` and produces separate layout outputs:
 
 - **Hint** (`--hint-bottom` CSS var): always clears the dock top edge + gap
 - **Triad** (`renderer.setOverlayLayout({ triadSize, triadLeft, triadBottom })`): phone clears full-width dock; tablet/desktop uses safe-area corner margins. `triadLeft` accounts for `env(safe-area-inset-left)`. Triad sizes 80–200px depending on device.

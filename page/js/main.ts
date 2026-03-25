@@ -7,39 +7,35 @@
 import { loadManifest, loadStructure } from './loader';
 import { PhysicsEngine } from './physics';
 import { StateMachine, type Command } from './state-machine';
-import { InputManager } from './input';
 import { Renderer } from './renderer';
 import { applyThemeTokens, applyTextSizeTokens } from './themes';
 import { CONFIG } from './config';
-import { commitMolecule, clearPlayground, addMoleculeToScene } from './scene';
-import { handleCommand as dispatchInteraction } from './interaction';
 import { StatusController } from './status';
 import { PlacementController } from './placement';
-import { COACHMARKS } from './ui/coachmarks';
-import { computeTargetSpeed, computeSubstepCount, updateOverloadState, computeEffectiveSpeed, shouldSkipRender } from './scheduler-pure';
-import { WorkerBridge } from './worker-bridge';
-import type { PhysicsConfig } from '../../src/types/worker-protocol';
+import { computeTargetSpeed, computeSubstepCount, updateOverloadState, computeEffectiveSpeed, shouldSkipRender, updateMaxSpeedEstimate } from './scheduler-pure';
 import { mountReactUI, unmountReactUI } from './react-root';
 import { useAppStore } from './store/app-store';
-
-const DEBUG_LOAD = CONFIG.debug.load;
+import { createOverlayLayout, type OverlayLayout } from './runtime/overlay-layout';
+import { createInteractionDispatch } from './runtime/interaction-dispatch';
+import { createOverlayRuntime, type OverlayRuntime } from './runtime/overlay-runtime';
+import { createInputBindings, type InputBindings } from './runtime/input-bindings';
+import { registerStoreCallbacks } from './runtime/ui-bindings';
+import { createAtomSource } from './runtime/atom-source';
+import { createSceneRuntime, type SceneRuntime } from './runtime/scene-runtime';
+import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/snapshot-reconciler';
+import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecycle';
 
 // --- Globals ---
-let renderer, physics, stateMachine, inputManager;
+let renderer, physics, stateMachine;
 let manifest: Record<string, { file: string; description: string; n_atoms: number }> | null = null;
 let statusCtrl = null;
 let placement = null;
 
-// ── Worker bridge (Milestone C.2) ──
-// Set useWorker = false to disable the worker path for debugging.
+// ── Worker runtime (Milestone C.2) ──
 const useWorker = true;
-let workerBridge: WorkerBridge | null = null;
-let workerInitialized = false;
-let workerProgressTs = 0;   // last time the worker showed signs of life (init ack, frame, etc.)
-let workerStalled = false;   // latched stalled flag — checked by status renderer
-let _testFreezeProgress = false; // test-only: prevents frameResult from resetting workerProgressTs
-let _testStalledThresholdMs = 0; // test-only: overrides the 5s stalled threshold (0 = use default)
-let _workerBondRefreshCounter = 0; // frame counter for periodic bond refresh in worker mode
+let _workerRuntime: WorkerRuntime | null = null;
+let _snapshotReconciler: SnapshotReconciler | null = null;
+let _scene: SceneRuntime | null = null;
 
 const session = {
   theme: 'dark',
@@ -116,76 +112,27 @@ const effectsGate = {
   EXIT_COUNT: 60,     // frames to sustain before exiting reduced
 };
 
-// Glass UI visibility — true once React Dock mounts (dock always visible with glass surface).
-let _glassUiActive = false;
-function isGlassUiVisible() { return _glassUiActive; }
-
 // Global listener registry for teardown
 const _globalListeners = [];
 let _rafId = null;
 let _appRunning = false;
-let _dockResizeObserver = null;
-let _layoutPending = false;
-let _layoutRafId = null;
+
+// Overlay layout runtime (created in init, destroyed in teardown)
+let _overlayLayout: OverlayLayout | null = null;
+
+// Overlay runtime (created in init)
+let _overlay: OverlayRuntime | null = null;
+
+// Input bindings (created in init)
+let _inputBindings: InputBindings | null = null;
+
+// Interaction dispatch (created in init)
+let _dispatch: ((cmd: import('./state-machine').Command, sx?: number, sy?: number) => { dragTarget?: number[] }) | null = null;
 
 /** Register a global listener and track it for teardown. Options forwarded to both add/remove. */
 function addGlobalListener(target: EventTarget, event: string, handler: EventListener, options?: boolean | AddEventListenerOptions) {
   target.addEventListener(event, handler, options);
   _globalListeners.push([event, handler, target, options]);
-}
-
-/**
- * Compute and apply overlay layout (hint clearance + triad sizing/position).
- * v1: dock-only — reads dock geometry directly. If a second persistent bottom
- * surface is added, formalize a registry ({ id, getTopEdge(), isActive() }).
- */
-function _doOverlayLayout() {
-  _layoutRafId = null;
-  _layoutPending = false;
-  if (!renderer) return;
-  // Find the React dock
-  const dockEl = document.querySelector('.dock') as HTMLElement;
-  if (!dockEl) return;
-  const dockRect = dockEl.getBoundingClientRect();
-  const viewportH = window.innerHeight;
-  const viewportW = window.innerWidth;
-  const dockTopFromBottom = viewportH - dockRect.top;
-  const mode = document.documentElement.dataset.deviceMode;
-
-  // Hint clearance — always dock-relative (hint is centered like dock)
-  const hintGap = 12;
-  document.documentElement.style.setProperty(
-    '--hint-bottom', (dockTopFromBottom + hintGap) + 'px'
-  );
-
-  // Triad sizing — larger on tablet/desktop
-  let triadSize;
-  if (mode === 'phone') {
-    triadSize = Math.min(140, Math.max(80, Math.floor(viewportW * 0.12)));
-  } else {
-    triadSize = Math.min(200, Math.max(120, Math.floor(viewportW * 0.10)));
-  }
-
-  // Triad positioning — phone: clear full-width dock; tablet/desktop: safe-area corner
-  let triadBottom;
-  if (mode === 'phone') {
-    triadBottom = dockTopFromBottom + 8;
-  } else {
-    triadBottom = 12;
-  }
-
-  // Triad left offset — safe-area inset + margin
-  const safeLeft = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-left')) || 0;
-  const triadLeft = safeLeft + 6;
-
-  renderer.setOverlayLayout({ triadSize, triadLeft, triadBottom });
-}
-
-/** Request a layout update. Coalesces multiple calls into one RAF. */
-function _requestOverlayLayout() {
-  if (_layoutPending) return;
-  _layoutPending = true;
-  _layoutRafId = requestAnimationFrame(_doOverlayLayout);
 }
 
 /**
@@ -204,23 +151,26 @@ function _teardownRuntime() {
   _globalListeners.length = 0;
   // Clean up debug hooks
   delete window._setUiEffectsMode;
-  // Disconnect dock ResizeObserver and cancel pending layout RAF
-  if (_dockResizeObserver) { _dockResizeObserver.disconnect(); _dockResizeObserver = null; }
-  if (_layoutRafId) { cancelAnimationFrame(_layoutRafId); _layoutRafId = null; }
-  _layoutPending = false;
-  // Tear down controllers
-  if (placement) placement.destroy();
-  if (statusCtrl) statusCtrl.destroy();
+  delete (window as unknown as Record<string, unknown>)._getWorkerDebugState;
+  delete (window as unknown as Record<string, unknown>)._simulateWorkerStall;
+  delete (window as unknown as Record<string, unknown>)._setTestStalledThreshold;
+  delete (window as unknown as Record<string, unknown>)._getUIState;
+  // Destroy overlay layout runtime (observer, pending RAF)
+  if (_overlayLayout) { _overlayLayout.destroy(); _overlayLayout = null; }
+  // Tear down controllers (consumers) before input bindings (provider)
+  if (placement) { placement.destroy(); placement = null; }
+  if (statusCtrl) { statusCtrl.destroy(); statusCtrl = null; }
+  // Destroy input bindings after controllers
+  if (_inputBindings) { _inputBindings.destroy(); _inputBindings = null; }
+  // Tear down worker transport before renderer (worker callbacks may read renderer state)
+  if (_workerRuntime) { _workerRuntime.destroy(); _workerRuntime = null; }
   // Tear down subsystems
-  if (inputManager) inputManager.destroy();
-  if (renderer) renderer.destroy();
-  // Tear down worker bridge (Milestone C.2)
-  _teardownWorker();
-  // Null destroyed refs to prevent accidental reuse
-  placement = null;
-  statusCtrl = null;
-  inputManager = null;
-  renderer = null;
+  if (renderer) { renderer.destroy(); renderer = null; }
+  // Null remaining refs
+  _overlay = null;
+  _dispatch = null;
+  _snapshotReconciler = null;
+  _scene = null;
   physics = null;
   stateMachine = null;
   manifest = null;
@@ -258,7 +208,6 @@ function _teardownRuntime() {
   });
   // Clear root UI effect state
   delete document.documentElement.dataset.uiEffects;
-  _glassUiActive = false;
 }
 
 /** Full app teardown: unmount React, reset store, and tear down runtime. */
@@ -304,7 +253,7 @@ async function init() {
     else if (w < 1024 || (coarsePointer && !canHover)) mode = 'tablet';
     else mode = 'desktop';
     const prev = document.documentElement.dataset.deviceMode;
-    if (prev && prev !== mode && useAppStore.getState().activeSheet !== null) { _closeOverlay(); }
+    if (prev && prev !== mode && useAppStore.getState().activeSheet !== null) { _overlay!.close(); }
     document.documentElement.dataset.deviceMode = mode;
   }
   updateDeviceMode();
@@ -334,6 +283,24 @@ async function init() {
   // Mount React UI early so StatusBar is available for error display
   mountReactUI();
 
+  // Scene runtime — created early so addMoleculeToScene is available during manifest load.
+  // Getter deps resolve lazily; subsystems like _dispatch, _inputBindings are null during
+  // the initial load but scene-runtime guards them with null checks.
+  _scene = createSceneRuntime({
+    getPhysics: () => physics,
+    getRenderer: () => renderer,
+    getStateMachine: () => stateMachine,
+    getPlacement: () => placement,
+    getStatusCtrl: () => statusCtrl,
+    getWorkerRuntime: () => _workerRuntime,
+    getInputBindings: () => _inputBindings,
+    getSnapshotReconciler: () => _snapshotReconciler,
+    getSession: () => session,
+    dispatch: (cmd) => { if (_dispatch) _dispatch(cmd); },
+    fullSchedulerReset,
+    partialProfilerReset,
+  });
+
   // Load manifest
   try {
     manifest = await loadManifest();
@@ -343,7 +310,7 @@ async function init() {
     if (entries.length > 0) {
       const c60 = entries.find(([k]) => k === 'c60');
       const [key, info] = c60 || entries[0];
-      await _addMoleculeToScene(info.file, info.description, [0, 0, 0]);
+      await _scene!.addMoleculeToScene(info.file, info.description, [0, 0, 0]);
     }
   } catch (e) {
     useAppStore.getState().setStatusError('Failed to load structures. Serve from repo root.');
@@ -354,95 +321,35 @@ async function init() {
   }
 
   // ═══════════════════════════════════════════════════════
-  // Worker bridge (Milestone C.2) — create alongside physics
+  // Worker runtime (Milestone C.2)
   // ═══════════════════════════════════════════════════════
   if (useWorker) {
-    try {
-      workerBridge = new WorkerBridge();
+    _workerRuntime = createWorkerRuntime({
+      onSchedulerTiming: (msPerStep, stepsCompleted) => {
+        const alpha = CONFIG.playback.profilerAlpha;
+        scheduler.prof.physStepMs += alpha * (msPerStep - scheduler.prof.physStepMs);
+        scheduler.totalStepsProfiled += stepsCompleted;
+      },
+      onFailure: (reason) => recoverLocalPhysicsAfterWorkerFailure(reason),
+    });
 
-      // Debug + test hooks — registered unconditionally at bridge creation (before init)
-      (window as unknown as Record<string, unknown>)._getWorkerDebugState = () => ({
-        workerActive: !!(workerBridge && workerInitialized),
-        workerState: workerBridge ? workerBridge.getWorkerState() : null,
-        workerStalled,
-        outstandingRequests: workerBridge ? workerBridge.getOutstandingRequestCount() : -1,
-        physStepMs: scheduler.prof.physStepMs,
-        totalStepsProfiled: scheduler.totalStepsProfiled,
-        hasSnapshot: workerBridge ? workerBridge.getLatestSnapshot() !== null : false,
-        roundTripMs: workerBridge ? workerBridge.getRoundTripMs() : -1,
-        snapshotAgeMs: workerBridge ? workerBridge.getSnapshotAge() : -1,
-        timeSinceProgress: workerProgressTs > 0 ? performance.now() - workerProgressTs : -1,
-      });
-      (window as unknown as Record<string, unknown>)._simulateWorkerStall = () => {
-        _testFreezeProgress = true;
-        workerProgressTs = performance.now();
-      };
-      (window as unknown as Record<string, unknown>)._setTestStalledThreshold = (ms: number) => {
-        _testStalledThresholdMs = ms;
-      };
+    // Debug/test hooks — main.ts owns window globals, worker runtime provides data
+    (window as unknown as Record<string, unknown>)._getWorkerDebugState = () => ({
+      ...(_workerRuntime ? _workerRuntime.getDebugState() : {}),
+      physStepMs: scheduler.prof.physStepMs,
+      totalStepsProfiled: scheduler.totalStepsProfiled,
+    });
+    (window as unknown as Record<string, unknown>)._simulateWorkerStall = () => {
+      if (_workerRuntime) _workerRuntime.simulateStall();
+    };
+    (window as unknown as Record<string, unknown>)._setTestStalledThreshold = (ms: number) => {
+      if (_workerRuntime) _workerRuntime.setTestStalledThreshold(ms);
+    };
 
-      workerBridge.setOnFrameResult((snapshot) => {
-        // Worker showed progress — update stalled tracking
-        if (!_testFreezeProgress) {
-          workerProgressTs = performance.now();
-          if (workerStalled) workerStalled = false;
-        }
-
-        // Position sync to physics.pos is handled canonically by
-        // updateFromSnapshot → _physicsRef.pos.set() in the frame loop.
-        // physics.n is updated there too (on atom count change).
-        // No duplicate write here — single ownership in the frame loop.
-
-        // Feed worker timing into scheduler (replaces local profiler in worker mode)
-        if (snapshot.stepsCompleted > 0) {
-          const alpha = CONFIG.playback.profilerAlpha;
-          const msPerStep = snapshot.physStepMs / snapshot.stepsCompleted;
-          scheduler.prof.physStepMs += alpha * (msPerStep - scheduler.prof.physStepMs);
-          scheduler.totalStepsProfiled += snapshot.stepsCompleted;
-        }
-      });
-      workerBridge.setOnFrameSkipped((info) => {
-        if (!_testFreezeProgress) workerProgressTs = performance.now();
-        // No snapshot update, but feed timing into scheduler (same as frameResult
-        // except without touching render state). This keeps overload/backpressure
-        // estimates aligned with worker reality during skipped periods.
-        if (info.stepsCompleted > 0) {
-          const alpha = CONFIG.playback.profilerAlpha;
-          const msPerStep = info.physStepMs / info.stepsCompleted;
-          scheduler.prof.physStepMs += alpha * (msPerStep - scheduler.prof.physStepMs);
-          scheduler.totalStepsProfiled += info.stepsCompleted;
-        }
-      });
-      workerBridge.setOnCrash((reason) => {
-        _handleWorkerFailure(reason);
-      });
-
-      // Initialize worker with current scene state (matches first molecule load above)
-      if (physics.n > 0) {
-        const allAtoms = _collectSceneAtoms();
-        const allBonds = _collectSceneBonds();
-        const config = _buildWorkerConfig();
-        // Start the progress clock NOW so the stalled watchdog covers init hangs
-        workerProgressTs = performance.now();
-        workerBridge.init(config, allAtoms, allBonds).then((result) => {
-          if (result.ok) {
-            workerInitialized = true;
-            workerProgressTs = performance.now();
-            workerStalled = false;
-            if (CONFIG.debug.load) console.log('[worker] initialized:', result.kernel, result.atomCount, 'atoms');
-            // (debug + test hooks registered unconditionally at bridge creation)
-          } else {
-            console.warn('[worker] init failed:', result.error);
-            _teardownWorker();
-          }
-        }).catch((e) => {
-          console.warn('[worker] init error:', e);
-          _teardownWorker();
-        });
-      }
-    } catch (e) {
-      console.warn('[worker] failed to create WorkerBridge, falling back to sync physics:', e);
-      _teardownWorker();
+    // Initialize with current scene state
+    if (physics.n > 0) {
+      const config = _buildWorkerConfig();
+      _workerRuntime.init(config, _scene!.collectSceneAtoms(), _scene!.collectSceneBonds());
     }
   }
 
@@ -461,19 +368,19 @@ async function init() {
   // Escape key: close overlay or cancel placement
   function _onKeydown(e) {
     if (e.key === 'Escape') {
-      if (placement.active) {
+      if (placement && placement.active) {
         placement.exit(false);
         e.preventDefault();
-      } else if (placement.loading) {
+      } else if (placement && placement.loading) {
         placement.invalidatePendingLoads();
-        updateSceneStatus();
+        _scene!.updateSceneStatus();
         e.preventDefault();
       } else if (useAppStore.getState().activeSheet !== null) {
-        _closeOverlay();
+        _overlay!.close();
         e.preventDefault();
       }
     }
-    if (e.key === 'Enter' && placement.active) {
+    if (e.key === 'Enter' && placement && placement.active) {
       placement.exit(true);
       e.preventDefault();
     }
@@ -510,7 +417,7 @@ async function init() {
     if (!isBackdrop && !isCanvas) return;
 
     // Close + consume so no interaction starts from the same event.
-    _closeOverlay();
+    _overlay!.close();
     e.stopPropagation();
     e.preventDefault();
   }, true);
@@ -518,27 +425,62 @@ async function init() {
   // DockController + SettingsSheetController removed — React components are authoritative.
   // Callbacks registered via store.setDockCallbacks() / store.setSettingsCallbacks() below.
 
+  // ── Overlay runtime (open/close policy) ──
+  _overlay = createOverlayRuntime({
+    getStatusCtrl: () => statusCtrl,
+  });
+
+  // ── Interaction dispatch (local effects + worker mirroring) ──
+  _dispatch = createInteractionDispatch({
+    getPhysics: () => physics,
+    getRenderer: () => renderer,
+    getStateMachine: () => stateMachine,
+    getInputManager: () => _inputBindings ? _inputBindings.getManager() : null,
+    getStatusCtrl: () => statusCtrl,
+    isWorkerActive: () => !!(_workerRuntime && _workerRuntime.isActive()),
+    sendWorkerInteraction: (cmd) => { if (_workerRuntime) _workerRuntime.sendInteraction(cmd); },
+    updateStatus: (text) => _scene!.updateStatus(text),
+    updateSceneStatus: () => _scene!.updateSceneStatus(),
+  });
+
+  // ── Snapshot reconciler (worker-to-main position sync + reconciliation) ──
+  _snapshotReconciler = createSnapshotReconciler({
+    physics, renderer, stateMachine,
+    dispatch: (cmd) => _dispatch!(cmd),
+  });
+
+  // ── Input bindings ──
+  _inputBindings = createInputBindings({
+    getRenderer: () => renderer,
+    getPlacement: () => placement,
+    getStateMachine: () => stateMachine,
+    getSessionInteractionMode: () => session.interactionMode,
+    dispatch: (cmd, sx, sy) => _dispatch!(cmd, sx, sy),
+  });
+
+  // Ensure input manager exists before PlacementController (it needs the instance)
+  _inputBindings.sync();
+
   // ── Placement controller ──
   placement = new PlacementController({
-    renderer, physics, stateMachine, inputManager, loadStructure,
+    renderer, physics, stateMachine, inputManager: _inputBindings.getManager()!, loadStructure,
     commands: {
-      setDockPlacementMode: (active) => setDockPlacementMode(active),
-      commitToScene: (file, name, atoms, bonds, offset) => _commitMolecule(file, name, atoms, bonds, offset),
-      updateStatus,
-      updateSceneStatus,
-      forceIdle: () => dispatchToInteraction(stateMachine.forceIdle()),
-      syncInput: syncInputManager,
+      setDockPlacementMode: (active) => _scene!.setDockPlacementMode(active),
+      commitToScene: (file, name, atoms, bonds, offset) => _scene!.commitMolecule(file, name, atoms, bonds, offset),
+      updateStatus: (text) => _scene!.updateStatus(text),
+      updateSceneStatus: () => _scene!.updateSceneStatus(),
+      forceIdle: () => _dispatch!(stateMachine.forceIdle()),
+      syncInput: () => { if (_inputBindings) _inputBindings.sync(); },
       forceRender: () => { scheduler.forceRenderThisTick = true; },
-      buildAtomSource,
+      buildAtomSource: () => createAtomSource(renderer),
       getSceneMolecules: () => session.scene.molecules,
-      isSnapshotFresh: () => !(workerBridge && workerInitialized) || workerBridge.getSnapshotAge() < 500,
+      isSnapshotFresh: () => !(_workerRuntime && _workerRuntime.isActive()) || _workerRuntime!.getSnapshotAge() < 500,
     },
   });
 
-  // ── Overlay layout: hint clearance + triad sizing/positioning ──
-  // ── Overlay layout: hint clearance + triad sizing/positioning ──
-  addGlobalListener(window, 'resize', _requestOverlayLayout);
-  _dockResizeObserver = new ResizeObserver(() => _requestOverlayLayout());
+  // ── Overlay layout runtime ──
+  _overlayLayout = createOverlayLayout(renderer);
+  addGlobalListener(window, 'resize', _overlayLayout.onViewportResize);
 
   // Tab visibility: prevent catch-up burst
   function _onVisibilityChange() {
@@ -552,19 +494,8 @@ async function init() {
   _appRunning = true;
   _rafId = requestAnimationFrame(frameLoop);
 
-  // Double-RAF: React 18 may need >1 frame to mount and layout
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      _doOverlayLayout();
-      // Wire ResizeObserver to the now-mounted React dock
-      const reactDock = document.querySelector('.dock') as HTMLElement;
-      if (reactDock && _dockResizeObserver) {
-        _dockResizeObserver.disconnect();
-        _dockResizeObserver.observe(reactDock);
-      }
-      _glassUiActive = true; // React dock confirmed in DOM
-    });
-  });
+  // First layout after React dock mounts (double-RAF + observer wiring)
+  _overlayLayout.scheduleFirstLayout();
 
   // Narrow test hook — returns only the specific observable E2E tests need.
   (window as unknown as Record<string, unknown>)._getUIState = () => {
@@ -581,292 +512,73 @@ async function init() {
     };
   };
 
-  // Register synchronized close gateway — React components use this instead of closeSheet
-  useAppStore.getState().setCloseOverlay(() => _closeOverlay());
+  // ── Named playback/settings commands for store callback registration ──
+  function togglePlaybackPause() {
+    session.playback.paused = !session.playback.paused;
+    if (useAppStore.getState().paused !== session.playback.paused) {
+      useAppStore.getState().togglePause();
+    }
+    if (!session.playback.paused) {
+      scheduler.lastFrameTs = performance.now();
+      scheduler.simBudgetMs = 0;
+    }
+  }
 
-  // Register dock callbacks — React Dock reads these from the store
-  useAppStore.getState().setDockCallbacks({
-    onAdd: () => {
-      if (placement.active) { placement.exit(true); return; }
-      _updateChooserRecentRow();
-      _openOverlay('chooser');
-    },
-    onPause: () => {
-      if (placement.active) return;
-      session.playback.paused = !session.playback.paused;
-      if (useAppStore.getState().paused !== session.playback.paused) {
-        useAppStore.getState().togglePause();
-      }
-      if (!session.playback.paused) {
-        scheduler.lastFrameTs = performance.now();
-        scheduler.simBudgetMs = 0;
-      }
-      scheduler.forceRenderThisTick = true;
-    },
-    onSettings: () => {
-      if (placement.active) return;
-      _openOverlay('settings');
-    },
-    onCancel: () => placement.exit(false),
-    onModeChange: (mode: string) => {
+  function changePlaybackSpeed(val: string) {
+    if (val === 'max') {
+      session.playback.speedMode = 'max';
+    } else {
+      session.playback.speedMode = 'fixed';
+      session.playback.selectedSpeed = parseFloat(val);
+    }
+    useAppStore.getState().setTargetSpeed(val === 'max' ? Infinity : parseFloat(val));
+  }
+
+  function applyThemeSetting(theme: string) {
+    session.theme = theme;
+    renderer.applyTheme(session.theme);
+    applyThemeTokens(session.theme);
+    useAppStore.getState().setTheme(theme as 'dark' | 'light');
+  }
+
+  function applyTextSizeSetting(size: string) {
+    session.textSize = size;
+    applyTextSizeTokens(size);
+    useAppStore.getState().setTextSize(size as 'normal' | 'large');
+  }
+
+  // Register store callbacks — React components invoke these via the Zustand store
+  registerStoreCallbacks({
+    overlayRuntime: _overlay!,
+    togglePause: togglePlaybackPause,
+    changeSpeed: changePlaybackSpeed,
+    setInteractionMode: (mode) => {
       session.interactionMode = mode;
       if (mode) useAppStore.getState().setInteractionMode(mode as 'atom' | 'move' | 'rotate');
     },
-  });
-
-  // Register settings callbacks — React SettingsSheet reads these from the store
-  useAppStore.getState().setSettingsCallbacks({
-    onSpeedChange: (val: string) => {
-      if (val === 'max') {
-        session.playback.speedMode = 'max';
-      } else {
-        session.playback.speedMode = 'fixed';
-        session.playback.selectedSpeed = parseFloat(val);
-      }
-      scheduler.forceRenderThisTick = true;
-      useAppStore.getState().setTargetSpeed(val === 'max' ? Infinity : parseFloat(val));
-    },
-    onThemeChange: (theme: string) => {
-      session.theme = theme;
-      renderer.applyTheme(session.theme);
-      applyThemeTokens(session.theme);
-      useAppStore.getState().setTheme(theme as 'dark' | 'light');
-    },
-    onBoundaryChange: (mode: string) => {
-      physics.setWallMode(mode);
-      useAppStore.getState().setBoundaryMode(mode as 'contain' | 'remove');
-      if (workerBridge && workerInitialized) {
-        workerBridge.sendInteraction({ type: 'setWallMode', mode: mode as 'contain' | 'remove' });
-      }
-    },
-    onDragChange: (v: number) => {
-      physics.setDragStrength(v);
-      useAppStore.getState().setDragStrength(v);
-      if (workerBridge && workerInitialized) {
-        workerBridge.sendInteraction({ type: 'setDragStrength', value: v });
-      }
-    },
-    onRotateChange: (v: number) => {
-      physics.setRotateStrength(v);
-      useAppStore.getState().setRotateStrength(v);
-      if (workerBridge && workerInitialized) {
-        workerBridge.sendInteraction({ type: 'setRotateStrength', value: v });
-      }
-    },
-    onDampingChange: (d: number) => {
-      physics.setDamping(d);
-      // Store the slider position (0-100), not the computed damping
-      // Reverse: d = 0.5 * t^3, t = (2d)^(1/3), slider = t * 100
-      const sliderVal = d === 0 ? 0 : Math.round(Math.cbrt(2 * d) * 100);
-      useAppStore.getState().setDampingSliderValue(sliderVal);
-      if (workerBridge && workerInitialized) {
-        workerBridge.sendInteraction({ type: 'setDamping', value: d });
-      }
-    },
-    onTextSizeChange: (size: string) => {
-      session.textSize = size;
-      applyTextSizeTokens(size);
-      useAppStore.getState().setTextSize(size as 'normal' | 'large');
-    },
-    onAddMolecule: () => {
-      _updateChooserRecentRow();
-      _openOverlay('chooser');
-    },
-    onClear: () => {
-      _closeOverlay();
-      _clearPlayground();
-    },
-    onResetView: () => { renderer.resetView(); },
-  });
-
-  // Register chooser callbacks — React StructureChooser reads these from the store
-  useAppStore.getState().setChooserCallbacks({
-    onSelectStructure: (file: string, description: string) => {
-      // Record selection before placement.start() — observable by tests without WebGL
-      useAppStore.getState().setRecentStructure({ file, name: description });
-      placement.start(file, description);
-    },
+    forceRenderThisTick: () => { scheduler.forceRenderThisTick = true; },
+    clearPlayground: () => _scene!.clearPlayground(),
+    resetView: () => renderer.resetView(),
+    updateChooserRecentRow: () => _scene!.updateChooserRecentRow(),
+    setPhysicsWallMode: (mode) => physics.setWallMode(mode as 'contain' | 'remove'),
+    setPhysicsDragStrength: (v) => physics.setDragStrength(v),
+    setPhysicsRotateStrength: (v) => physics.setRotateStrength(v),
+    setPhysicsDamping: (d) => physics.setDamping(d),
+    applyTheme: applyThemeSetting,
+    applyTextSize: applyTextSizeSetting,
+    isWorkerActive: () => !!(_workerRuntime && _workerRuntime.isActive()),
+    sendWorkerInteraction: (cmd) => { if (_workerRuntime) _workerRuntime.sendInteraction(cmd); },
+    isPlacementActive: () => !!(placement && placement.active),
+    exitPlacement: (commit) => { if (placement) placement.exit(commit); },
+    startPlacement: (file, desc) => { if (placement) placement.start(file, desc); },
   });
 
 }
 
-/** Synchronized close — single gateway for all overlay close paths. */
-function _closeOverlay() {
-  const store = useAppStore.getState();
-  // Reset help drill-in when closing settings (avoids stale helpPageActive in store)
-  if (store.activeSheet === 'settings' && store.helpPageActive) {
-    store.setHelpPageActive(false);
-  }
-  store.closeSheet();
-}
-
-function _openOverlay(name: 'settings' | 'chooser') {
-  // Dismiss (not restore) — don't show generic hint underneath a sheet
-  if (statusCtrl) statusCtrl.dismissCoachmark('placement');
-
-  // Toggle behavior: same sheet → close, different sheet → switch
-  const store = useAppStore.getState();
-  if (store.activeSheet === name) {
-    _closeOverlay();
-  } else {
-    // Reset help drill-in when opening settings
-    if (name === 'settings') store.setHelpPageActive(false);
-    store.openSheet(name);
-  }
-}
-
-// --- Scene management ---
-
-// ── Dock placement mode ──
-function setDockPlacementMode(active) {
-  useAppStore.getState().setPlacementActive(active);
-
-  // Coachmark policy: main.js owns the hint lifecycle, not placement.js
-  if (active) {
-    if (statusCtrl) statusCtrl.showCoachmark(COACHMARKS.placement);
-  } else {
-    if (statusCtrl) statusCtrl.hideCoachmark('placement');
-  }
-}
-
-/** Update the recent structure in the store for the React chooser. */
-function _updateChooserRecentRow() {
-  if (placement && placement.hasLastStructure()) {
-    useAppStore.getState().setRecentStructure({
-      file: placement.getLastStructureFile(),
-      name: placement.getLastStructureName(),
-    });
-  } else {
-    useAppStore.getState().setRecentStructure(null);
-  }
-}
-
-
-function updateSceneStatus() {
-  const store = useAppStore.getState();
-  store.updateAtomCount(session.scene.totalAtoms);
-  store.setMolecules(session.scene.molecules.map(m => ({
-    id: m.id,
-    name: m.name,
-    structureFile: m.structureFile,
-    atomCount: m.atomCount,
-    atomOffset: m.atomOffset,
-  })));
-  updateActiveCountRow();
-  // Clear transient status text only if no placement load is in progress
-  if (!placement || !placement.loading) {
-    store.setStatusText(null);
-  }
-}
-
-function updateActiveCountRow() {
-  let active: number, removed: number;
-  if (workerBridge && workerInitialized) {
-    active = physics.n;
-    removed = Math.max(0, session.scene.totalAtoms - active);
-  } else {
-    active = physics.getActiveAtomCount();
-    removed = physics.getWallRemovedCount();
-  }
-  useAppStore.getState().updateActiveCount(active, removed);
-}
-
-// ── Scene wrappers (delegate to scene.js with dependencies) ──
-function _commitMolecule(filename, name, atoms, bonds, offset) {
-  commitMolecule(physics, renderer, filename, name, atoms, bonds, offset, session.scene, {
-    syncInput: syncInputManager,
-    resetProfiler: partialProfilerReset,
-    fitCamera: () => renderer.fitCamera(),
-    updateSceneStatus,
-  });
-  // Keep renderer's physics reference current (bonds available for worker-mode rendering)
-  renderer.setPhysicsRef(physics);
-
-  // C.2: mirror molecule append to worker + sync wall state
-  if (workerBridge && workerInitialized) {
-    workerBridge.appendMolecule(atoms, bonds, offset as [number, number, number]).then((result) => {
-      if (!result.ok) {
-        console.warn('[worker] appendMolecule failed:', result);
-        return;
-      }
-      // Sync wall center + radius to worker after append (worker needs these for contain/remove)
-      workerBridge.sendInteraction({
-        type: 'updateWallCenter',
-        atoms: atoms.map(a => ({ x: a.x, y: a.y, z: a.z })),
-        offset: offset as [number, number, number],
-      });
-    }).catch((e) => {
-      console.warn('[worker] appendMolecule error:', e);
-      _teardownWorker();
-    });
-  }
-}
-
-function _clearPlayground() {
-  clearPlayground(physics, renderer, stateMachine, session.scene, {
-    invalidatePlacement: () => placement.invalidatePendingLoads(),
-    exitPlacement: () => placement.exit(false),
-    forceIdle: () => dispatchToInteraction(stateMachine.forceIdle()),
-    syncInput: syncInputManager,
-    resetScheduler: fullSchedulerReset,
-    updateSceneStatus,
-  });
-
-  // Reset diagnostics in store (ke, wallRadius, etc. are stale after clear)
-  useAppStore.getState().resetDiagnostics();
-  _workerBondRefreshCounter = 0;
-
-  // C.2: mirror scene clear to worker and bump generation
-  if (workerBridge && workerInitialized) {
-    workerBridge.bumpGeneration();
-    workerBridge.clearScene().then((result) => {
-      if (!result.ok) {
-        console.warn('[worker] clearScene failed:', result);
-      }
-    }).catch((e) => {
-      console.warn('[worker] clearScene error:', e);
-      _teardownWorker();
-    });
-  }
-}
-
-async function _addMoleculeToScene(filename, name, offset) {
-  await addMoleculeToScene(filename, name, offset, {
-    loadStructure, physics, renderer,
-    sceneState: session.scene,
-    commitCallbacks: {
-      syncInput: syncInputManager,
-      resetProfiler: partialProfilerReset,
-      fitCamera: () => renderer.fitCamera(),
-      updateSceneStatus,
-    },
-    updateStatus,
-    setLoading: (v) => { session.isLoading = v; },
-  });
-}
-
-// --- Input manager ---
-function syncInputManager() {
-  if (!inputManager) createInputManager();
-  inputManager.updateAtomSource(buildAtomSource());
-}
-
-function updateStatus(text: string) {
-  useAppStore.getState().setStatusText(text === '' ? null : text);
-}
-
-function buildAtomSource() {
-  return {
-    get count() { return renderer.getAtomCount(); },
-    getWorldPosition(i, out) { return renderer.getAtomWorldPosition(i, out); },
-    get raycastTarget() { return renderer.instancedAtoms; },
-  };
-}
-
-// ── Worker bridge helpers (Milestone C.2) ──
+// --- Composition-root helpers (not extracted — see plan v6 refinement #1, #2) ---
 
 /** Build PhysicsConfig from current physics engine state + CONFIG. */
-function _buildWorkerConfig(): PhysicsConfig {
+function _buildWorkerConfig(): import('../../src/types/worker-protocol').PhysicsConfig {
   return {
     dt: CONFIG.physics.dt,
     stepsPerFrame: CONFIG.physics.stepsPerFrame,
@@ -878,148 +590,17 @@ function _buildWorkerConfig(): PhysicsConfig {
   };
 }
 
-/** Collect all atoms from the current scene molecules (with offsets applied). */
-function _collectSceneAtoms(): import('../../src/types/domain').AtomXYZ[] {
-  const atoms: import('../../src/types/domain').AtomXYZ[] = [];
-  for (const mol of session.scene.molecules) {
-    atoms.push(...mol.localAtoms);
-  }
-  return atoms;
-}
-
-/** Collect all bonds from the current scene molecules. */
-function _collectSceneBonds(): import('../../src/types/interfaces').BondTuple[] {
-  const bonds: import('../../src/types/interfaces').BondTuple[] = [];
-  let atomOffset = 0;
-  for (const mol of session.scene.molecules) {
-    for (const b of mol.localBonds) {
-      bonds.push([b[0] + atomOffset, b[1] + atomOffset, b[2]]);
-    }
-    atomOffset += mol.atomCount;
-  }
-  return bonds;
-}
-
-/** Tear down the worker bridge gracefully — fall back to sync physics. */
-function _teardownWorker() {
-  if (workerBridge) {
-    try { workerBridge.destroy(); } catch (_) { /* ignore */ }
-  }
-  workerBridge = null;
-  workerInitialized = false;
-  workerStalled = false;
-  workerProgressTs = 0;
-}
-
-/** Handle worker failure — tear down and rebuild local physics for sync resumption.
- *
- * Local physics has positions synced from the worker (via onFrameResult), but
- * velocities are stale (from before worker took over). To resume coherently:
- * 1. Zero all velocities (equivalent to "atoms at rest" — no explosive artifacts)
- * 2. Recompute forces from current positions
- * 3. Rebuild bond topology and components
- *
- * This produces a momentary visual "freeze" but avoids unphysical jumps.
- */
-function _handleWorkerFailure(reason: string) {
+/** Recover local physics after worker failure. Called via workerRuntime.onFailure. */
+function recoverLocalPhysicsAfterWorkerFailure(reason: string) {
   console.warn('[worker] failure:', reason, '— rebuilding local physics for sync fallback');
-  _teardownWorker();
-
-  if (physics.n > 0) {
-    // Zero stale velocities — prevents unphysical drift from pre-worker state
+  if (physics && physics.n > 0) {
     if (physics.vel) physics.vel.fill(0);
-    // Recompute forces, bonds, and components from current positions
     physics.computeForces();
     physics.updateBondList();
     physics.rebuildComponents();
     physics.updateWallRadius();
   }
-
-  // Reset scheduler to re-warm from the new sync state
   fullSchedulerReset();
-}
-
-function createInputManager() {
-  // Acknowledged dependency: InputManager receives the live camera reference
-  // for real-time raycasting and projection. This cannot be replaced by
-  // getCameraState() snapshots — InputManager needs the live THREE.Camera
-  // for Raycaster.setFromCamera() and Vector3.project()/unproject().
-  inputManager = new InputManager(
-    renderer.getCanvas(),
-    renderer.camera,
-    renderer.controls,
-    buildAtomSource(),
-    {
-      onHover: (atomIdx) => {
-        if (placement && placement.active) return;
-        const cmd = atomIdx >= 0
-          ? stateMachine.onPointerOverAtom(atomIdx)
-          : stateMachine.onPointerOutAtom();
-        if (cmd) dispatchToInteraction(cmd);
-      },
-      onPointerDown: (atomIdx, sx, sy, isRotate) => {
-        if (placement && placement.active) return;
-        const mode = isRotate ? 'rotate' : session.interactionMode;
-        const cmd = stateMachine.onPointerDown(atomIdx, sx, sy, mode);
-        if (cmd) dispatchToInteraction(cmd, sx, sy);
-      },
-      onPointerMove: (sx, sy) => {
-        if (placement && placement.active) return;
-        const cmd = stateMachine.onPointerMove(sx, sy);
-        if (cmd) dispatchToInteraction(cmd, sx, sy);
-      },
-      onPointerUp: () => {
-        if (placement && placement.active) return;
-        const cmd = stateMachine.onPointerUp();
-        if (cmd) dispatchToInteraction(cmd);
-      },
-    }
-  );
-}
-
-// screenToPhysics and fadeHint are now in interaction.js and status.js respectively
-
-function dispatchToInteraction(cmd: Command, screenX?: number, screenY?: number) {
-  const result = dispatchInteraction(cmd, screenX, screenY, {
-    physics, renderer, stateMachine, inputManager,
-    fadeHint: () => { if (statusCtrl) statusCtrl.fadeHint(); },
-    updateStatus,
-    updateSceneStatus,
-  });
-
-  // Forward interaction commands to worker to keep worker scene in sync
-  if (workerBridge && workerInitialized) {
-    switch (cmd.action) {
-      case 'startDrag':
-      case 'startMove':
-      case 'startRotate':
-        workerBridge.sendInteraction({
-          type: 'startDrag',
-          atomIndex: cmd.atom,
-          mode: cmd.action === 'startDrag' ? 'atom' : cmd.action === 'startMove' ? 'move' : 'rotate',
-        });
-        break;
-      case 'updateDrag':
-      case 'updateMove':
-      case 'updateRotate': {
-        // Use the resolved world coords returned by interaction dispatch —
-        // no dependency on concrete physics.dragTarget field.
-        const dt = result.dragTarget;
-        if (dt) {
-          workerBridge.sendInteraction({ type: 'updateDrag', worldX: dt[0], worldY: dt[1], worldZ: dt[2] });
-        }
-        break;
-      }
-      case 'endDrag':
-      case 'endMove':
-      case 'endRotate':
-        workerBridge.sendInteraction({ type: 'endDrag' });
-        break;
-      case 'flick':
-        workerBridge.sendInteraction({ type: 'flick', atomIndex: cmd.atom, vx: cmd.vx, vy: cmd.vy });
-        break;
-    }
-  }
 }
 
 // --- Profiler reset helpers ---
@@ -1133,16 +714,12 @@ function frameLoop(timestamp) {
       // Run substeps (count determined by pure function)
       substepsThisFrame = computeSubstepCount(scheduler.simBudgetMs, stepWallMs, CONFIG.playback.maxSubstepsPerTick);
 
-      if (workerBridge && workerInitialized) {
+      if (_workerRuntime && _workerRuntime.isActive()) {
         // C.2 Phase 2 — Worker mode: don't step locally; send request to worker
         // One-in-flight: only send if no outstanding request
         scheduler.simBudgetMs -= substepsThisFrame * stepWallMs;
-        if (substepsThisFrame > 0 && workerBridge.canSendRequest()) {
-          try {
-            workerBridge.sendRequestFrame(substepsThisFrame);
-          } catch (_) {
-            _handleWorkerFailure('sendRequestFrame failed');
-          }
+        if (substepsThisFrame > 0 && _workerRuntime!.canSendRequest()) {
+          _workerRuntime!.sendRequestFrame(substepsThisFrame);
         }
       } else {
         // Sync mode: step locally
@@ -1195,105 +772,38 @@ function frameLoop(timestamp) {
         pb.effectiveSpeed = speedResult.effectiveSpeed;
       }
 
-      // Max speed estimation — mode-specific source and cadence
-      // TODO(Milestone C): decide whether to unify this with scheduler-pure.computeMaxSpeed()
-      // or keep it inline. The pure version uses a simpler budget model; this version uses
-      // actualRendersPerSec, updatePosMs, otherMs, and budgetSafety for higher accuracy.
-      // Same applies to wall radius (physics.updateWallRadius vs scheduler-pure.computeWallRadius).
-      const now = performance.now();
-      const maxUpdateInterval = scheduler.mode === 'overloaded'
-        ? CONFIG.playback.maxSpeedUpdateOverloadMs
-        : CONFIG.playback.maxSpeedUpdateNormalMs;
-      if (scheduler.warmUpComplete && (now - scheduler.lastMaxSpeedUpdateTs) > maxUpdateInterval) {
-        scheduler.lastMaxSpeedUpdateTs = now;
-        let rawMax;
-        if (scheduler.mode === 'overloaded') {
-          // In overloaded mode: derive from achieved throughput, not budget estimator
-          rawMax = Math.min(pb.effectiveSpeed, CONFIG.playback.maxSpeedCap);
-        } else {
-          // Normal/recovering: use budget-based estimator
-          const budgetPerSec = 1000 * CONFIG.playback.budgetSafety;
-          const renderBudget = scheduler.prof.actualRendersPerSec * scheduler.prof.renderMs;
-          const updateBudget = (1000 / scheduler.prof.rafIntervalMs) * scheduler.prof.updatePosMs;
-          const otherBudget = (1000 / scheduler.prof.rafIntervalMs) * scheduler.prof.otherMs;
-          const physicsBudget = budgetPerSec - renderBudget - updateBudget - otherBudget;
-          const safePhysMs = Math.max(scheduler.prof.physStepMs, 0.001);
-          const maxSteps = Math.max(0, physicsBudget) / safePhysMs;
-          rawMax = Math.min(maxSteps / CONFIG.playback.baseStepsPerSecond, CONFIG.playback.maxSpeedCap);
-        }
-        // Recovering: explicit two-window blend from overloaded max to estimator max
-        if (scheduler.mode === 'recovering' && scheduler.recoveringBlendRemaining > 0) {
-          const stepIndex = 3 - scheduler.recoveringBlendRemaining; // 1, then 2
-          const t = stepIndex / 2; // 0.5, then 1.0
-          pb.maxSpeed = scheduler.recoveringStartMax + t * (rawMax - scheduler.recoveringStartMax);
-          scheduler.recoveringBlendRemaining--;
-        } else {
-          pb.maxSpeed += alpha * (rawMax - pb.maxSpeed);
-        }
-            }
-    }
-
-    // ── Stalled-worker detection ──
-    // Uses workerProgressTs which is set when init() is called, then updated on
-    // init ack, frameResult, frameSkipped. Covers both startup hangs (init never
-    // resolves) and steady-state stalls (worker stops responding).
-    if (workerBridge && workerProgressTs > 0) {
-      const timeSinceProgress = performance.now() - workerProgressTs;
-      const stalledThresholdMs = _testStalledThresholdMs > 0 ? _testStalledThresholdMs : 5000;
-      const fatalThresholdMs = stalledThresholdMs * 3; // 15s default
-      if (timeSinceProgress > fatalThresholdMs) {
-        console.warn(`[worker] stalled (no progress for ${(fatalThresholdMs/1000).toFixed(0)}s) — falling back to sync physics`);
-        _handleWorkerFailure(`Worker stalled (no progress for ${(fatalThresholdMs/1000).toFixed(0)}+ seconds)`);
-      } else if (timeSinceProgress > stalledThresholdMs && !session.playback.paused) {
-        workerStalled = true;
+      // Max speed estimation (pure function in scheduler-pure.ts)
+      const maxResult = updateMaxSpeedEstimate({
+        now: performance.now(),
+        mode: scheduler.mode as 'normal' | 'overloaded' | 'recovering',
+        warmUpComplete: scheduler.warmUpComplete,
+        maxSpeed: pb.maxSpeed,
+        effectiveSpeed: pb.effectiveSpeed,
+        lastMaxSpeedUpdateTs: scheduler.lastMaxSpeedUpdateTs,
+        recoveringStartMax: scheduler.recoveringStartMax,
+        recoveringBlendRemaining: scheduler.recoveringBlendRemaining,
+        profilerAlpha: alpha,
+        prof: scheduler.prof,
+        config: CONFIG.playback,
+      });
+      if (maxResult) {
+        pb.maxSpeed = maxResult.maxSpeed;
+        scheduler.lastMaxSpeedUpdateTs = maxResult.lastMaxSpeedUpdateTs;
+        scheduler.recoveringStartMax = maxResult.recoveringStartMax;
+        scheduler.recoveringBlendRemaining = maxResult.recoveringBlendRemaining;
       }
     }
 
+    // ── Stalled-worker detection (per-frame, not throttled) ──
+    if (_workerRuntime) _workerRuntime.checkStalled(session.playback.paused);
+
     // Update positions + feedback (every tick)
     const updateStart = performance.now();
-    if (workerBridge && workerInitialized) {
-      // C.2 Phase 2 — Worker mode: render from latest worker snapshot
-      const snapshot = workerBridge.getLatestSnapshot();
-      if (snapshot && snapshot.n > 0) {
-        // Keep physics.n in sync with worker (canonical position sync is in updateFromSnapshot)
-        physics.n = snapshot.n;
-
-        // Wall removal sync: if worker returned fewer atoms than renderer expects
-        if (snapshot.n !== renderer.getAtomCount()) {
-          renderer.setAtomCount(snapshot.n);
-          // Atom count changed (wall removal) — sync positions from THIS snapshot
-          // BEFORE recomputing bonds, so bond computation uses current positions.
-          physics.n = snapshot.n;
-          if (physics.pos) {
-            const len = Math.min(snapshot.positions.length, physics.pos.length);
-            physics.pos.set(snapshot.positions.subarray(0, len));
-          }
-          renderer.setPhysicsRef(physics);
-          physics.updateBondList();
-          // Invalidate any active drag — atom indices changed after wall removal.
-          // The user can't meaningfully continue dragging an atom whose index was remapped.
-          if (stateMachine.isInteracting()) {
-            const cmd = stateMachine.forceIdle();
-            if (cmd) dispatchToInteraction(cmd);
-          }
-        }
-        // Sync physics.pos from snapshot BEFORE bond refresh and rendering.
-        // This is the canonical position sync for worker mode.
-        if (physics.pos) {
-          const syncLen = Math.min(snapshot.positions.length, physics.pos.length);
-          physics.pos.set(snapshot.positions.subarray(0, syncLen));
-        }
-
-        // Periodic bond refresh — keeps bond list current as atoms move.
-        // Runs every 20 frames (stable counter, not accumulated physics steps).
-        // Must run AFTER position sync so bonds use current positions.
-        _workerBondRefreshCounter++;
-        if (_workerBondRefreshCounter >= 20) {
-          _workerBondRefreshCounter = 0;
-          physics.updateBondList();
-        }
-
-        renderer.updateFromSnapshot(snapshot.positions, snapshot.n);
+    if (_workerRuntime && _workerRuntime.isActive()) {
+      // Worker mode: reconcile snapshot (position sync, remap, bond refresh)
+      const snapshot = _workerRuntime.getLatestSnapshot();
+      if (snapshot && snapshot.n > 0 && _snapshotReconciler) {
+        _snapshotReconciler.apply(snapshot);
       }
     } else {
       // Sync mode: render from local physics
@@ -1373,7 +883,7 @@ function frameLoop(timestamp) {
       const displaySpeed = isIdle ? 0 : pb.effectiveSpeed;
       const fps = Math.round(1000 / scheduler.prof.rafIntervalMs);
       const isPlacementActive = !!(placement && placement.active);
-      const isPlacementStale = isPlacementActive && workerBridge != null && workerInitialized && workerBridge.getSnapshotAge() > 500;
+      const isPlacementStale = isPlacementActive && _workerRuntime != null && _workerRuntime.isActive() && _workerRuntime.getSnapshotAge() > 500;
       const isOverloaded = scheduler.mode === 'overloaded' || pb.maxSpeed < CONFIG.playback.minSpeed;
 
       // Feed Zustand store — coalesced at 5 Hz; React FPSDisplay renders via formatStatusText()
@@ -1385,14 +895,14 @@ function frameLoop(timestamp) {
         placementStale: isPlacementStale,
         warmUpComplete: scheduler.warmUpComplete,
         overloaded: isOverloaded,
-        workerStalled,
+        workerStalled: _workerRuntime ? _workerRuntime.isStalled() : false,
         rafIntervalMs: scheduler.prof.rafIntervalMs,
       });
 
     // ── Auto FPS gate for UI effects ──
     // Only runs when glass UI is visible AND mode is 'auto' (not forced by developer).
     const frameMs = scheduler.prof.rafIntervalMs;
-    const glassVisible = isGlassUiVisible();
+    const glassVisible = _overlayLayout ? _overlayLayout.isGlassActive() : false;
     if (glassVisible && effectsGate.mode === 'auto' && !effectsGate.reduced) {
       if (frameMs > effectsGate.SLOW_THRESHOLD) {
         effectsGate.slowCount++;
@@ -1418,7 +928,7 @@ function frameLoop(timestamp) {
     }
 
       // Update Active row in settings sheet (live boundary removal tracking)
-      updateActiveCountRow();
+      _scene!.updateActiveCountRow();
     }
 
   } catch (e) {
