@@ -246,13 +246,14 @@ Test on phone and iPad after changes to background orbit or coachmark v2:
 | C3 | Background orbit cue | When background orbit starts, triad brightens. When finger lifts, triad returns to normal intensity. |
 | C4 | 2nd finger cancels | During background orbit, place a second finger → orbit cancels, 2-finger zoom/pan takes over. Triad cue clears. |
 | C5 | Coachmark v2 for returning users | Clear mobile-orbit-v1 but not v2 from localStorage. Reload → v2 coachmark shows: "Drag triad anytime · Drag clear background when available". Does NOT show if v1 hasn't been dismissed yet. |
-| C6 | Parity check | Same 100px drag on triad and on empty space produces roughly the same rotation angle. Test on phone and iPad. Acceptable difference: momentum after release (OrbitControls only). |
+| C6 | Parity check | Same 100px drag on triad and on empty space produces identical rotation (both use applyOrbitDelta). Verify on phone and iPad. No momentum difference — both paths stop immediately on finger lift. |
 
-**Parity calibration note:** `CONFIG.orbit.rotateSpeed = 0.005` rad/px is the triad orbit
-speed. OrbitControls `rotateSpeed` is set to `CONFIG.orbit.rotateSpeed * 100 = 0.5` at
-init. This approximation was calibrated on typical phone/tablet viewports (375-1024px).
-If parity drift is observed on a specific device class, adjust the `* 100` factor in
-`renderer.ts` and document the tested devices.
+**Orbit parity note:** Both triad drag and background orbit use the same
+`applyOrbitDelta(dx, dy)` function with `CONFIG.orbit.rotateSpeed = 0.005` rad/px.
+They are guaranteed identical — same code path, same constant. OrbitControls is NOT
+used for mobile 1-finger orbit; it only handles desktop right-drag and 2-finger
+mobile zoom/pan. Desktop right-drag speed (`controls.rotateSpeed`) is set independently
+in `renderer.ts` and is decoupled from mobile orbit speed.
 
 ### Mobile Camera Orbit (Phase 2 — Canonical View Snaps)
 

@@ -9,7 +9,6 @@
  * The atom source provides { count, getWorldPosition(i, outVec3), raycastTarget }.
  */
 import * as THREE from 'three';
-import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CONFIG } from './config';
 
 const DEBUG_INPUT = CONFIG.debug.input;
@@ -17,7 +16,6 @@ const DEBUG_INPUT = CONFIG.debug.input;
 export class InputManager {
   canvas: HTMLCanvasElement;
   camera: THREE.Camera;
-  controls: OrbitControls;
   _atomSource: {
     count: number;
     getWorldPosition: (i: number, out: THREE.Vector3) => THREE.Vector3;
@@ -36,6 +34,9 @@ export class InputManager {
   isTriadDragging: boolean;
   _triadLastX: number;
   _triadLastY: number;
+  // Background orbit position tracking (same approach as triad drag)
+  _bgOrbitLastX: number;
+  _bgOrbitLastY: number;
   _triadSource: {
     isInsideTriad: (clientX: number, clientY: number) => boolean;
     applyOrbitDelta: (dx: number, dy: number) => void;
@@ -68,14 +69,12 @@ export class InputManager {
   /**
    * @param {HTMLCanvasElement} canvas
    * @param {THREE.Camera} camera
-   * @param {import('three/addons/controls/OrbitControls.js').OrbitControls} controls
    * @param {object} atomSource - { count: number, getWorldPosition(i, outVec3): Vector3, raycastTarget: THREE.Object3D[] | THREE.InstancedMesh }
    * @param {object} callbacks
    */
-  constructor(canvas: HTMLCanvasElement, camera: THREE.Camera, controls: OrbitControls, atomSource: InputManager['_atomSource'], callbacks: InputManager['cb']) {
+  constructor(canvas: HTMLCanvasElement, camera: THREE.Camera, atomSource: InputManager['_atomSource'], callbacks: InputManager['cb']) {
     this.canvas = canvas;
     this.camera = camera;
-    this.controls = controls;
     this._atomSource = atomSource;
     this.cb = callbacks;
 
@@ -90,6 +89,8 @@ export class InputManager {
     this._triadLastX = 0;
     this._triadLastY = 0;
     this._triadSource = null;
+    this._bgOrbitLastX = 0;
+    this._bgOrbitLastY = 0;
     this._triadTouchStartTime = 0;
     this._triadTouchStartX = 0;
     this._triadTouchStartY = 0;
@@ -385,7 +386,6 @@ export class InputManager {
         this._triadSource?.showAxisHighlight?.(null);
       }
       if (this.isCamera) {
-        this.controls.touches.ONE = null;
         this.isCamera = false;
         this._triadSource?.onBackgroundOrbitEnd?.();
       }
@@ -432,9 +432,10 @@ export class InputManager {
       return;
     }
 
-    // 3. Empty space → background orbit (Phase 1B)
-    this.controls.touches.ONE = THREE.TOUCH.ROTATE;
+    // 3. Empty space → background orbit via applyOrbitDelta (same path as triad drag)
     this.isCamera = true;
+    this._bgOrbitLastX = touch.clientX;
+    this._bgOrbitLastY = touch.clientY;
     this._triadSource?.onBackgroundOrbitStart?.();
   }
 
@@ -472,8 +473,20 @@ export class InputManager {
     if (this.isDragging) {
       e.preventDefault();
       this.cb.onPointerMove?.(touch.clientX, touch.clientY);
+      return;
     }
-    // Background orbit moves handled by OrbitControls directly
+
+    // Background orbit — apply delta directly (same applyOrbitDelta as triad drag).
+    // No drag threshold here (unlike triad which needs >5px for tap/drag discrimination).
+    // Empty-space tap has no semantic action, so immediate orbit is intentional.
+    if (this.isCamera) {
+      e.preventDefault();
+      const dx = touch.clientX - this._bgOrbitLastX;
+      const dy = touch.clientY - this._bgOrbitLastY;
+      this._bgOrbitLastX = touch.clientX;
+      this._bgOrbitLastY = touch.clientY;
+      this._triadSource?.applyOrbitDelta(dx, dy);
+    }
   }
 
   _onTouchEnd(e) {
@@ -518,7 +531,6 @@ export class InputManager {
       this.cb.onPointerUp?.();
     }
     if (this.isCamera) {
-      this.controls.touches.ONE = null;
       this.isCamera = false;
       this._triadSource?.onBackgroundOrbitEnd?.();
     }
@@ -537,7 +549,6 @@ export class InputManager {
     if (this._triadTapIntentTimer) { clearTimeout(this._triadTapIntentTimer); this._triadTapIntentTimer = null; }
     this._triadSource?.showAxisHighlight?.(null);
     if (this.isCamera) {
-      this.controls.touches.ONE = null;
       this.isCamera = false;
       this._triadSource?.onBackgroundOrbitEnd?.();
     }

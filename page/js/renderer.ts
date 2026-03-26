@@ -161,14 +161,10 @@ export class Renderer {
       TWO: THREE.TOUCH.DOLLY_PAN,
     };
     this.controls.enabled = true;
-    // Phase 1B parity calibration: OrbitControls rotateSpeed derived from the same
-    // CONFIG.orbit.rotateSpeed used by triad drag (applyOrbitDelta).
-    // OrbitControls uses screen-fraction units (~2π per full viewport drag).
-    // CONFIG.orbit.rotateSpeed is radians/pixel. The conversion factor depends on
-    // viewport width: rotateSpeed ≈ CONFIG.orbit.rotateSpeed × viewportWidth / (2π).
-    // Simplified: CONFIG.orbit.rotateSpeed × 100 is a reasonable calibration for
-    // typical phone/tablet viewports (375-1024px). Verified by Phase 1B parity test.
-    this.controls.rotateSpeed = CONFIG.orbit.rotateSpeed * 100;
+    // Desktop right-drag tuning only. Mobile 1-finger orbit (triad + background)
+    // uses applyOrbitDelta directly — does not go through OrbitControls.
+    // This value is decoupled from mobile orbit speed; change independently if needed.
+    this.controls.rotateSpeed = 1.0;
 
     this._defaultCamPos = new THREE.Vector3(0, 0, 15);
     this._defaultCamTarget = new THREE.Vector3(0, 0, 0);

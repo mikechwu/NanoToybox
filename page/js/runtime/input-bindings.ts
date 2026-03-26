@@ -44,7 +44,6 @@ export function createInputBindings(deps: InputBindingsDeps): InputBindings {
     _manager = new InputManager(
       r.getCanvas(),
       r.camera,
-      r.controls,
       buildAtomSource(),
       {
         onHover: (atomIdx) => {

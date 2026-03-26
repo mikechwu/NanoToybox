@@ -76,9 +76,9 @@ export const CONFIG = {
   },
 
   orbit: {
-    rotateSpeed: 0.005,     // radians per CSS pixel of drag — triad orbit path
-                            // OrbitControls rotateSpeed = this * 100 (see renderer.ts)
-                            // Calibrated for 375-1024px viewports. See docs/testing.md parity note.
+    rotateSpeed: 0.005,     // radians per CSS pixel of drag — used by applyOrbitDelta()
+                            // Both triad drag and background orbit share this value.
+                            // Desktop right-drag uses OrbitControls' own rotateSpeed (decoupled).
     triadHitPadding: 12,    // px — extra hit area beyond visible triad for touch tolerance
   },
 
