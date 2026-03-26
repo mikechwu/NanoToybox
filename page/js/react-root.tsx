@@ -13,6 +13,7 @@ import { StatusBar } from './components/StatusBar';
 import { FPSDisplay } from './components/FPSDisplay';
 import { DockLayout } from './components/DockLayout';
 import { DockBar } from './components/DockBar';
+import { CameraControls } from './components/CameraControls';
 import { SheetOverlay } from './components/SheetOverlay';
 import { SettingsSheet } from './components/SettingsSheet';
 import { StructureChooser } from './components/StructureChooser';
@@ -32,6 +33,7 @@ export function mountReactUI() {
     <React.StrictMode>
       <StatusBar />
       <FPSDisplay />
+      <CameraControls />
       <DockLayout>
         <DockBar />
       </DockLayout>

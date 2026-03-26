@@ -403,6 +403,117 @@ fieldset.segmented {
 /* Placement surface styling — structure handled by JSX conditional rendering */
 .dock-add-btn.dock-placement-accent { color: var(--color-accent-text); }
 
+/* ── Camera controls overlay (positioned by overlay-layout.ts) ── */
+.camera-controls {
+  position: fixed;
+  bottom: var(--cam-ctrl-bottom, 80px);
+  left: var(--cam-ctrl-left, 6px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 150;
+  pointer-events: auto;
+}
+.camera-chip {
+  display: flex;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--panel-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  border: 1px solid var(--color-border);
+}
+.camera-chip-body {
+  min-width: 36px;
+  min-height: 28px;
+  padding: 2px 8px;
+  border: none;
+  background: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
+  font-family: var(--font-family);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.camera-chip-help {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 2px 6px;
+  border: none;
+  border-left: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
+  font-family: var(--font-family);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.camera-action {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  color: var(--color-text-secondary);
+  font-size: var(--font-sm);
+  font-family: var(--font-family);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.quick-help-card {
+  position: fixed;
+  bottom: calc(var(--cam-ctrl-bottom, 80px) + 40px);
+  left: var(--cam-ctrl-left, 6px);
+  width: 220px;
+  background: var(--panel-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  z-index: 210;
+  font-size: var(--font-xs);
+  line-height: 1.6;
+}
+.quick-help-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: bold;
+  margin-bottom: var(--space-sm);
+}
+.quick-help-close {
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--font-sm);
+  padding: 2px 4px;
+}
+.quick-help-section {
+  color: var(--color-accent-text);
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: var(--space-xs);
+}
+.quick-help-row {
+  color: var(--color-text-secondary);
+}
+.quick-help-row b {
+  color: var(--color-text);
+  display: inline-block;
+  min-width: 80px;
+}
+
+.camera-action-pick {
+  color: var(--color-accent-text);
+  font-size: var(--font-xs);
+}
+
 /* ── Sheet pages (drill-in navigation) ── */
 .sheet-page { /* default visible */ }
 .sheet-visible { display: block; }

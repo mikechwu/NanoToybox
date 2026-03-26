@@ -64,6 +64,26 @@ export interface AppStore {
   activeSheet: 'settings' | 'chooser' | null;
   interactionMode: 'atom' | 'move' | 'rotate';
 
+  // Camera mode (store is sole authority — renderer/input are consumers only)
+  cameraMode: 'orbit' | 'freelook';
+  setCameraMode: (mode: 'orbit' | 'freelook') => void;
+
+  // Camera help state (participates in transient-UI mutual exclusivity)
+  cameraHelpOpen: boolean;
+  setCameraHelpOpen: (open: boolean) => void;
+
+  // Pick-focus mode (temporary: next atom tap sets camera pivot)
+  pickFocusActive: boolean;
+  setPickFocusActive: (active: boolean) => void;
+
+  // Camera control callbacks (registered by main.ts, consumed by CameraControls)
+  cameraCallbacks: { onCenterObject: () => void; onReturnToObject?: () => void } | null;
+  setCameraCallbacks: (cbs: { onCenterObject: () => void; onReturnToObject?: () => void }) => void;
+
+  // Focus handle for camera pivot (validated before use — molecule may be removed)
+  lastFocusedMoleculeId: number | null;
+  setLastFocusedMoleculeId: (id: number | null) => void;
+
   // Scene-authoritative state
   atomCount: number;
   activeAtomCount: number;
@@ -182,6 +202,11 @@ export const useAppStore = create<AppStore>((set) => ({
   textSize: 'normal',
   activeSheet: null,
   interactionMode: 'atom',
+  cameraMode: 'orbit',
+  cameraHelpOpen: false,
+  pickFocusActive: false,
+  cameraCallbacks: null,
+  lastFocusedMoleculeId: null,
   atomCount: 0,
   activeAtomCount: 0,
   wallRemovedCount: 0,
@@ -219,9 +244,18 @@ export const useAppStore = create<AppStore>((set) => ({
   // Actions
   setTheme: (theme) => set({ theme }),
   setTextSize: (size) => set({ textSize: size }),
-  openSheet: (sheet) => set({ activeSheet: sheet }),
+  openSheet: (sheet) => set({ activeSheet: sheet, cameraHelpOpen: false, pickFocusActive: false }),
   closeSheet: () => set({ activeSheet: null }),
   setInteractionMode: (mode) => set({ interactionMode: mode }),
+  setCameraMode: (mode) => set({ cameraMode: mode }),
+  setCameraHelpOpen: (open) => set((s) => {
+    // Mutual exclusivity: opening help closes sheets + cancels pick-focus
+    if (open && s.activeSheet !== null) return { cameraHelpOpen: open, activeSheet: null, pickFocusActive: false };
+    return { cameraHelpOpen: open, pickFocusActive: false };
+  }),
+  setPickFocusActive: (active) => set({ pickFocusActive: active }),
+  setCameraCallbacks: (cbs) => set({ cameraCallbacks: cbs }),
+  setLastFocusedMoleculeId: (id) => set({ lastFocusedMoleculeId: id }),
   setTargetSpeed: (speed) => set({ targetSpeed: speed }),
   togglePause: () => set((s) => ({ paused: !s.paused })),
 
@@ -265,6 +299,11 @@ export const useAppStore = create<AppStore>((set) => ({
     helpPageActive: false,
     recentStructure: null,
     interactionMode: 'atom',
+    cameraMode: 'orbit',
+    cameraHelpOpen: false,
+    pickFocusActive: false,
+    cameraCallbacks: null,
+    lastFocusedMoleculeId: null,
     // Scene
     atomCount: 0,
     activeAtomCount: 0,

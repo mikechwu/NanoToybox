@@ -123,3 +123,20 @@ Key strategic and technical decisions made during development, with rationale.
 **Rationale:** Desktop users orbit via right-drag, but touch devices had no orbit gesture. The triad is the primary mobile orbit control because it is always visible and works regardless of scene density. Background orbit (1-finger on empty space) is a secondary convenience — unreliable in dense scenes where atoms fill the viewport. Both gestures use the same rotation convention (drag-up = camera rotates down). Gesture priority: triad hit > atom raycast > background orbit. Atom hit always wins — no heuristics. Three triad gesture levels: drag=orbit, tap-axis=snap-to-canonical-view (±X/±Y/±Z), double-tap-center=reset. Dynamic `controls.touches.ONE` toggle per-gesture for background orbit. `CONFIG.isTouchInteraction()` (coarse pointer + no hover) gates mobile-only behavior — stable across resize, excludes hybrid desktops.
 
 **Evidence:** `page/js/input.ts` (triad drag/tap/double-tap, background orbit), `page/js/renderer.ts` (applyOrbitDelta, snapToAxis, animatedResetView, getNearestAxisEndpoint, showAxisHighlight, pulseTriad), `page/js/config.ts` (CONFIG.orbit, isTouchInteraction), `page/js/runtime/input-bindings.ts` (triad source wiring), `docs/testing.md` (B1-B8, C1-C6, D1-D9)
+
+## D17: Two-Mode Camera System (Orbit + Free-Look)
+
+**Decision:** Add a two-mode camera system with a near-triad control cluster: mode chip, help ("?") glyph, and action slot. Orbit is default; Free-Look is advanced. Supersedes D16's "no dedicated camera mode button" position.
+
+**Rationale:** Free-Look requires mode switching that the triad alone cannot express. The triad remains the primary orbit control; the chip adds mode awareness. The two modes have fundamentally different camera models, controls, and recovery paths:
+
+- **Orbit** (default): rotate around a focus target (pivot). Atoms are directly manipulable (drag/move/rotate). Focus-aware pivot with "Center Object" action.
+- **Free-Look** (advanced): yaw+pitch camera rotation in place, no mandatory pivot. Atoms are focus-select only (tap/click marks orbit target, no manipulation). Recovery via Return to Object, Esc, double-tap center, or mode chip.
+
+**Store is sole authority for camera mode** (`cameraMode: 'orbit' | 'freelook'`). Renderer, input, and UI are consumers only. Recovery actions write mode back through the store.
+
+**Onboarding:** Coachmark system extracted to `runtime/onboarding.ts` (Phase 4A). Achievement-triggered progressive coachmarks with max-one-per-session pacing (Phase 4B). Three distinct help layers: initial onboarding (time-delayed), progressive coachmarks (achievement-triggered), reference (QuickHelp "?" card).
+
+**Phase 5 (post-launch):** 6DOF/Roll sub-mode — opt-in via "Enable Roll" toggle, not default.
+
+**Evidence:** `page/js/components/CameraControls.tsx`, `page/js/components/QuickHelp.tsx`, `page/js/renderer.ts` (applyFreeLookDelta, resetOrientation, returnToFocusedObject, setOrbitControlsForMode), `page/js/input.ts` (mode-aware routing, WASD, wheel, keyboard guards), `page/js/runtime/onboarding.ts`, `page/js/runtime/focus-runtime.ts`, `page/js/store/app-store.ts` (cameraMode, cameraHelpOpen, pickFocusActive, cameraCallbacks), `.reports/2026-03-26-camera-ux-improvements-plan.md`

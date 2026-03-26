@@ -271,6 +271,44 @@ Test on phone and iPad after changes to axis snap, double-tap reset, or tap-inte
 | D8 | Sub-threshold jitter = tap only | Touch triad, move < 5px, release → camera does NOT orbit during the gesture. Only snap fires on release. |
 | D9 | Non-center double-tap = two snaps | Double-tap near +X tip → two snap gestures (not a reset). Only double-tap in the center zone (near home glyph) triggers reset. |
 
+### Camera Behavior (Quaternion Orbit + Parity)
+
+Test after changes to applyOrbitDelta, resetView, fitCamera, or desktop input routing:
+
+| # | Check | How to verify |
+|---|---|---|
+| E1 | Over-the-top orbit | Drag triad upward past the north pole → camera continues smoothly over the top, no wall or snap. |
+| E2 | Reset after over-the-top | After E1, call resetView (double-tap triad center) → camera returns to default front view with level horizon (up=Y). |
+| E3 | fitCamera levels camera | Load a structure while camera is in a rolled orientation → fitCamera levels the camera (up=Y) and centers on structure. |
+| E4 | Desktop/mobile orbit parity | On desktop, right-drag produces the same rotation direction and speed as mobile triad drag or background orbit. |
+| E5 | Desktop orbit at canvas edge | Right-drag orbit, move pointer outside canvas → orbit continues (pointer capture). Release mouse → orbit ends cleanly. |
+| E6 | Snap after free rotation | Orbit to an arbitrary orientation, tap axis end → snap works correctly from any starting orientation. |
+
+### Camera Control Cluster (Phases 2-4)
+
+Test after changes to CameraControls, QuickHelp, onboarding, or mode switching:
+
+| # | Check | How to verify |
+|---|---|---|
+| F1 | Mode chip toggles | Tap chip → switches between "Orbit" and "Free". Camera behavior changes immediately. |
+| F2 | "?" opens help card | Tap "?" glyph → QuickHelp card appears with mode-appropriate gestures. Tap close → card dismisses. |
+| F3 | Help + sheet mutual exclusivity | Open settings → tap "?" → settings closes, help opens. Open help → open settings → help closes. |
+| F4 | Center Object (Orbit) | Tap ⊕ → if one molecule, camera centers on it. If multiple, enters pick-focus mode ("Tap molecule" label). Tap atom → camera centers, pick-focus exits. |
+| F5 | Return to Object (Free-Look) | In Free-Look, tap ↩ → camera flies to last focused molecule, returns to Orbit mode. |
+| F6 | Free-Look look-around | In Free-Look, drag background (mobile) or right-drag (desktop) → camera yaw/pitch in place. Horizon stays stable. |
+| F7 | Free-Look focus-select | In Free-Look, tap/click atom → molecule marked as orbit target (focus indicator). No drag/move/rotate interaction starts. |
+| F8 | Free-Look WASD (desktop) | In Free-Look, WASD translates camera. Keys ignored when input/button/sheet focused. |
+| F9 | Free-Look R key (desktop) | In Free-Look, R levels the camera. Ignored when form control focused. |
+| F10 | Free-Look scroll wheel (desktop) | In Free-Look, scroll moves camera forward/back. |
+| F11 | Free-Look recovery: Esc | In Free-Look with nothing else open, Esc returns to Orbit. |
+| F12 | Free-Look recovery: double-tap center | In Free-Look, double-tap triad center → returns to Orbit + resets view. |
+| F13 | Free-Look triad drag | In Free-Look, triad drag → look-around (not orbit). Same feel as background drag. |
+| F14 | Free-Look axis-snap disabled | In Free-Look, tap axis end on triad → no snap. Only center double-tap works. |
+| F15 | First-use tutorial | First time entering Free-Look → hint shows: "drag to look · tap molecule to mark target · ↩ or double-tap to return". Only once (localStorage gated). |
+| F16 | Progressive coachmark: snap hint | After first orbit drag on mobile → "Tap an axis end on the triad to snap to that view" appears (once per session, idle-gated). |
+| F17 | Onboarding + overlay exclusivity | Coachmark visible → open settings → coachmark dismissed immediately (no hint text restored underneath). |
+| F18 | Keyboard guard | In Free-Look, focus a settings slider → type WASD → camera does NOT move. |
+
 ### Code Review Invariants
 
 Check during PRs that modify controller modules:

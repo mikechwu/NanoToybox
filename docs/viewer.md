@@ -27,7 +27,7 @@ npm run dev
 | Multi-molecule | Add multiple structures to the scene via Add Molecule + placement mode |
 | Placement mode | Tangent placement near target molecule, translucent preview, drag to adjust, Place/Cancel |
 | Interact modes | Atom (drag single atom), Move (translate connected component), Rotate (torque on component) |
-| Camera | Right-drag = orbit, scroll = zoom (OrbitControls, always active) |
+| Camera | Two modes: Orbit (default) and Free-Look (advanced). Mode chip near triad. See controls table below |
 | Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame, component-aware forces |
 | Rendering | InstancedMesh (2 draw calls for atoms+bonds), MeshStandardMaterial (PBR), camera-relative 4-light rig, axis triad |
 | Themes | Dark (default) / Light |
@@ -65,6 +65,8 @@ The dock has a three-way segmented mode selector: **Atom** | **Move** | **Rotate
 
 ### Interaction Model
 
+**Orbit Mode (default)** — rotate around focus target, atoms are directly manipulable.
+
 | Gesture (Desktop) | Action |
 |--------------------|--------|
 | Left-drag on atom | Interact (depends on mode: Atom/Move/Rotate) |
@@ -81,6 +83,27 @@ The dock has a three-way segmented mode selector: **Atom** | **Move** | **Rotate
 | Double-tap triad center | Reset to default front view |
 | 2-finger pinch | Zoom |
 | 2-finger drag | Pan camera |
+
+**Free-Look Mode** — yaw+pitch camera rotation in place, atoms are focus-select only.
+
+| Gesture (Desktop) | Action |
+|--------------------|--------|
+| Right-drag | Look around (yaw+pitch) |
+| Left-click on atom | Focus-select molecule (sets orbit target, no manipulation) |
+| Scroll wheel | Move forward/back along look direction |
+| WASD | Translate camera (local plane) |
+| R | Level camera (reset orientation) |
+| Esc | Return to Orbit mode |
+
+| Gesture (Mobile) | Action |
+|-------------------|--------|
+| 1-finger drag on background | Look around (yaw+pitch) |
+| Tap molecule | Focus-select molecule (sets orbit target) |
+| Drag triad | Look around (same as background) |
+| Double-tap triad center | Return to Orbit + reset view |
+| Axis-snap taps | Disabled in Free-Look |
+
+**Camera control cluster** (near triad): mode chip ("Orbit" / "Free"), "?" help glyph (opens QuickHelp gesture card), action slot (Center Object in Orbit, Return to Object in Free-Look).
 
 ### Physics Engine
 
@@ -114,8 +137,9 @@ The interactive page uses a composition root pattern with React-authoritative UI
 - Web Worker (`simulation-worker.ts`) + bridge (`worker-bridge.ts`) — physics runs off the main thread
 - Three.js v0.170 (npm, bundled by Vite)
 - InstancedMesh for atoms and bonds (2 draw calls, geometric capacity growth)
-- OrbitControls for camera (right-click orbit, scroll zoom)
-- Interactive axis triad (ArrowHelper + sprites, scissor-test viewport, device-aware sizing 96–200px via `setOverlayLayout()`; drag=orbit, tap=snap, double-tap=reset on touch devices)
+- OrbitControls for Orbit-mode camera (zoom, pan; rotation handled by custom quaternion orbit)
+- Interactive axis triad (ArrowHelper + sprites, scissor-test viewport, device-aware sizing 96–200px via `setOverlayLayout()`; drag=orbit/look, tap=snap, double-tap=reset on touch devices)
+- Camera control cluster: React CameraControls (mode chip + "?" + action slot) + QuickHelp (gesture reference card)
 - MeshStandardMaterial with roughness 0.7, metalness 0 (PBR)
 - Camera-relative 4-light rig (key/fill/rim/ambient)
 

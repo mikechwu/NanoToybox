@@ -18,6 +18,7 @@ import { CONFIG } from '../config';
 import { commitMolecule, clearPlayground, addMoleculeToScene } from '../scene';
 import { loadStructure } from '../loader';
 import { useAppStore } from '../store/app-store';
+import { focusNewestPlacedMolecule } from './focus-runtime';
 import { COACHMARKS } from '../ui/coachmarks';
 import type { PhysicsEngine } from '../physics';
 import type { Renderer } from '../renderer';
@@ -131,6 +132,11 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
       });
       renderer.setPhysicsRef(physics);
 
+      // Focus-aware pivot: if this commit was from active placement, focus the new molecule
+      if (useAppStore.getState().placementActive) {
+        focusNewestPlacedMolecule(renderer);
+      }
+
       const wr = deps.getWorkerRuntime();
       if (wr && wr.isActive()) {
         wr.appendMolecule(atoms as any, bonds as any, offset as [number, number, number]).then((result) => {
@@ -159,6 +165,7 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
       });
 
       useAppStore.getState().resetDiagnostics();
+      useAppStore.getState().setLastFocusedMoleculeId(null);
       const sr = deps.getSnapshotReconciler();
       if (sr) sr.reset();
 

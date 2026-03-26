@@ -49,9 +49,11 @@ export function handleCommand(cmd: Command, screenX: number | undefined, screenY
   fadeHint: () => void;
   updateStatus: (text: string) => void;
   updateSceneStatus: () => void;
+  /** Focus-aware pivot: update orbit pivot to the molecule containing the given atom. */
+  focusMoleculeForAtom: (atomIdx: number) => void;
 }): InteractionResult {
   let dragTarget: [number, number, number] | null = null;
-  const { physics, renderer, stateMachine, inputManager, fadeHint, updateStatus, updateSceneStatus } = deps;
+  const { physics, renderer, stateMachine, inputManager, fadeHint, updateStatus, updateSceneStatus, focusMoleculeForAtom } = deps;
 
   switch (cmd.action) {
     case 'highlight':
@@ -71,6 +73,7 @@ export function handleCommand(cmd: Command, screenX: number | undefined, screenY
         const target = screenToPhysics(renderer, inputManager, ai, screenX, screenY);
         renderer.showForceLine(ai, target[0], target[1], target[2]);
       }
+      focusMoleculeForAtom(ai);
       break;
     }
 
@@ -107,6 +110,7 @@ export function handleCommand(cmd: Command, screenX: number | undefined, screenY
         const target = screenToPhysics(renderer, inputManager, ai, screenX, screenY);
         renderer.showForceLine(ai, target[0], target[1], target[2]);
       }
+      focusMoleculeForAtom(ai);
       break;
     }
 
@@ -136,6 +140,7 @@ export function handleCommand(cmd: Command, screenX: number | undefined, screenY
         const target = screenToPhysics(renderer, inputManager, ai, screenX, screenY);
         renderer.showForceLine(ai, target[0], target[1], target[2]);
       }
+      focusMoleculeForAtom(ai);
       break;
     }
 

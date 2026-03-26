@@ -17,6 +17,8 @@ import type { Renderer } from '../renderer';
 import type { StateMachine } from '../state-machine';
 import type { InputManager } from '../input';
 import type { WorkerInteractionCommand } from '../worker-bridge';
+import { useAppStore } from '../store/app-store';
+import { focusMoleculeByAtom } from './focus-runtime';
 
 export interface InteractionDispatchDeps {
   getPhysics: () => PhysicsEngine;
@@ -34,6 +36,19 @@ export function createInteractionDispatch(deps: InteractionDispatchDeps) {
   return function dispatch(cmd: Command, screenX?: number, screenY?: number): { dragTarget?: number[] } {
     const im = deps.getInputManager();
     if (!im) throw new Error('[interaction-dispatch] InputManager is null — dispatch called before init or after teardown');
+
+    // Pick-focus interception: when pickFocusActive is true, the next atom tap
+    // sets camera focus instead of starting normal interaction.
+    // Note: Free-Look focus-select is handled earlier in InputManager — atom
+    // clicks in Free-Look never reach the state machine or dispatch.
+    if (useAppStore.getState().pickFocusActive) {
+      if (cmd.action === 'startDrag' || cmd.action === 'startMove' || cmd.action === 'startRotate') {
+        focusMoleculeByAtom(cmd.atom, deps.getRenderer());
+        useAppStore.getState().setPickFocusActive(false);
+        return { dragTarget: null };
+      }
+    }
+
     const result = dispatchInteraction(cmd, screenX, screenY, {
       physics: deps.getPhysics(),
       renderer: deps.getRenderer(),
@@ -42,6 +57,9 @@ export function createInteractionDispatch(deps: InteractionDispatchDeps) {
       fadeHint: () => { const sc = deps.getStatusCtrl(); if (sc) sc.fadeHint(); },
       updateStatus: deps.updateStatus,
       updateSceneStatus: deps.updateSceneStatus,
+      focusMoleculeForAtom: (atomIdx: number) => {
+        focusMoleculeByAtom(atomIdx, deps.getRenderer());
+      },
     });
 
     // Forward interaction commands to worker to keep worker scene in sync

@@ -12,6 +12,9 @@
 import { InputManager } from '../input';
 import type { Renderer } from '../renderer';
 import type { StateMachine, Command } from '../state-machine';
+import { useAppStore } from '../store/app-store';
+import { focusMoleculeByAtom } from './focus-runtime';
+import type { AchievementKey } from './onboarding';
 import { createAtomSource } from './atom-source';
 
 export interface InputBindings {
@@ -29,6 +32,7 @@ export interface InputBindingsDeps {
   getStateMachine: () => StateMachine;
   getSessionInteractionMode: () => string;
   dispatch: (cmd: Command, sx?: number, sy?: number) => void;
+  onAchievement?: (key: AchievementKey) => void;
 }
 
 export function createInputBindings(deps: InputBindingsDeps): InputBindings {
@@ -76,17 +80,31 @@ export function createInputBindings(deps: InputBindingsDeps): InputBindings {
         },
       }
     );
-    // Wire triad interaction source for mobile camera orbit
+    // Wire camera state getter and triad interaction source
     const renderer = deps.getRenderer();
+    _manager.setCameraStateGetter(() => useAppStore.getState().cameraMode);
     _manager.setTriadSource({
       isInsideTriad: (cx, cy) => renderer.isInsideTriad(cx, cy),
       applyOrbitDelta: (dx, dy) => renderer.applyOrbitDelta(dx, dy),
+      applyFreeLookDelta: (dx, dy) => renderer.applyFreeLookDelta(dx, dy),
+      applyFreeLookZoom: (delta) => renderer.applyFreeLookZoom(delta),
+      applyFreeLookTranslate: (dx, dy) => renderer.applyFreeLookTranslate(dx, dy),
       onBackgroundOrbitStart: () => renderer.startBackgroundOrbitCue(),
-      onBackgroundOrbitEnd: () => renderer.endBackgroundOrbitCue(),
+      onBackgroundOrbitEnd: () => {
+        renderer.endBackgroundOrbitCue();
+        // Only record orbit-drag in Orbit mode (not Free-Look background look)
+        if (useAppStore.getState().cameraMode === 'orbit') deps.onAchievement?.('orbit-drag');
+      },
       getNearestAxisEndpoint: (cx, cy) => renderer.getNearestAxisEndpoint(cx, cy),
-      snapToAxis: (dir) => renderer.snapToAxis(dir),
-      animatedResetView: () => renderer.animatedResetView(),
+      snapToAxis: (dir) => { renderer.snapToAxis(dir); deps.onAchievement?.('axis-snap'); },
+      animatedResetView: () => { renderer.animatedResetView(); deps.onAchievement?.('view-reset'); },
       showAxisHighlight: (dir) => renderer.showAxisHighlight(dir),
+      onReturnToOrbit: () => useAppStore.getState().setCameraMode('orbit'),
+      onFreeLookFocusSelect: (atomIdx) => focusMoleculeByAtom(atomIdx, deps.getRenderer()),
+      resetOrientation: () => renderer.resetOrientation(),
+      onTriadDragEnd: () => {
+        if (useAppStore.getState().cameraMode === 'orbit') deps.onAchievement?.('orbit-drag');
+      },
     });
   }
 

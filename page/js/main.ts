@@ -22,8 +22,10 @@ import { createInputBindings, type InputBindings } from './runtime/input-binding
 import { registerStoreCallbacks } from './runtime/ui-bindings';
 import { createAtomSource } from './runtime/atom-source';
 import { createSceneRuntime, type SceneRuntime } from './runtime/scene-runtime';
+import { handleCenterObject as _handleCenterObject } from './runtime/focus-runtime';
 import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/snapshot-reconciler';
 import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecycle';
+import { createOnboardingController } from './runtime/onboarding';
 
 // --- Globals ---
 let renderer, physics, stateMachine;
@@ -126,9 +128,8 @@ let _overlay: OverlayRuntime | null = null;
 // Input bindings (created in init)
 let _inputBindings: InputBindings | null = null;
 
-// Coachmark timers (cleared on teardown)
-let _coachmarkShowTimer: ReturnType<typeof setTimeout> | null = null;
-let _coachmarkHideTimer: ReturnType<typeof setTimeout> | null = null;
+// Onboarding controller (created in init, cleared on teardown)
+let _onboarding: import('./runtime/onboarding').OnboardingController | null = null;
 
 // Interaction dispatch (created in init)
 let _dispatch: ((cmd: import('./state-machine').Command, sx?: number, sy?: number) => { dragTarget?: number[] }) | null = null;
@@ -159,9 +160,8 @@ function _teardownRuntime() {
   delete (window as unknown as Record<string, unknown>)._simulateWorkerStall;
   delete (window as unknown as Record<string, unknown>)._setTestStalledThreshold;
   delete (window as unknown as Record<string, unknown>)._getUIState;
-  // Clear coachmark timers
-  if (_coachmarkShowTimer) { clearTimeout(_coachmarkShowTimer); _coachmarkShowTimer = null; }
-  if (_coachmarkHideTimer) { clearTimeout(_coachmarkHideTimer); _coachmarkHideTimer = null; }
+  // Destroy onboarding controller (clears coachmark timers + listeners)
+  if (_onboarding) { _onboarding.destroy(); _onboarding = null; }
   // Destroy overlay layout runtime (observer, pending RAF)
   if (_overlayLayout) { _overlayLayout.destroy(); _overlayLayout = null; }
   // Tear down controllers (consumers) before input bindings (provider)
@@ -382,8 +382,16 @@ async function init() {
         placement.invalidatePendingLoads();
         _scene!.updateSceneStatus();
         e.preventDefault();
-      } else if (useAppStore.getState().activeSheet !== null) {
+      } else if (
+        useAppStore.getState().activeSheet !== null ||
+        useAppStore.getState().cameraHelpOpen ||
+        useAppStore.getState().pickFocusActive
+      ) {
         _overlay!.close();
+        e.preventDefault();
+      } else if (useAppStore.getState().cameraMode === 'freelook') {
+        // Esc in Free-Look with nothing else open → return to Orbit
+        useAppStore.getState().setCameraMode('orbit');
         e.preventDefault();
       }
     }
@@ -399,7 +407,8 @@ async function init() {
   addGlobalListener(document, 'pointerdown', (e: Event) => {
     const pe = e as PointerEvent;
     const target = pe.target as Node;
-    if (useAppStore.getState().activeSheet === null) return;
+    const _s = useAppStore.getState();
+    if (_s.activeSheet === null && !_s.cameraHelpOpen && !_s.pickFocusActive) return;
 
     // Only primary pointer — reject second touch in multi-touch, and
     // non-left mouse buttons (right-click, middle, stylus barrel).
@@ -412,9 +421,11 @@ async function init() {
       if (sheet.contains(target)) return;
     }
 
-    // Clicks inside the dock region never dismiss.
+    // Clicks inside the dock region or camera controls never dismiss.
     const dockEl = document.querySelector('[data-dock-root]');
     if (dockEl && dockEl.contains(target)) return;
+    const camCtrl = document.querySelector('[data-camera-controls]');
+    if (camCtrl && camCtrl.contains(target)) return;
 
     // Only backdrop and renderer canvas dismiss.
     const backdrop = document.querySelector('.sheet-backdrop');
@@ -435,6 +446,7 @@ async function init() {
   // ── Overlay runtime (open/close policy) ──
   _overlay = createOverlayRuntime({
     getStatusCtrl: () => statusCtrl,
+    getOnboarding: () => _onboarding,
   });
 
   // ── Interaction dispatch (local effects + worker mirroring) ──
@@ -463,6 +475,7 @@ async function init() {
     getStateMachine: () => stateMachine,
     getSessionInteractionMode: () => session.interactionMode,
     dispatch: (cmd, sx, sy) => _dispatch!(cmd, sx, sy),
+    onAchievement: (key) => _onboarding?.recordAchievement(key),
   });
 
   // Ensure input manager exists before PlacementController (it needs the instance)
@@ -504,80 +517,15 @@ async function init() {
   // First layout after React dock mounts (double-RAF + observer wiring)
   _overlayLayout.scheduleFirstLayout();
 
-  // ── Mobile orbit coachmarks (Phase 1A + 1B) ──
-  // Shared lifecycle: idle-gated, cancel on interaction, tracked timers.
-  // v1: triad-only (first mobile session)
-  // v2: triad + background (returning users who dismissed v1 in a prior session)
-
-  /** Check if app is in a clean "teach now" state for any mobile coachmark. */
-  function isIdleForCoachmark(): boolean {
-    if (!_appRunning || !statusCtrl) return false;
-    if (!CONFIG.isTouchInteraction()) return false;
-    const s = useAppStore.getState();
-    if (s.activeSheet !== null) return false;
-    if (s.placementActive) return false;
-    if (s.atomCount === 0) return false;
-    return true;
-  }
-
-  /**
-   * Schedule a one-time mobile orbit coachmark with shared lifecycle:
-   * - Cancels if user interacts before display
-   * - Checks isIdleForCoachmark() before showing
-   * - Stores show/hide timer IDs in module-level vars for teardown
-   */
-  function scheduleOrbitCoachmark(opts: {
-    key: string;
-    id: string;
-    text: string;
-    delayMs: number;
-    displayMs: number;
-    pulse?: boolean;
-  }) {
-    let cancelled = false;
-    const cancel = () => { cancelled = true; };
-    document.addEventListener('pointerdown', cancel, { once: true });
-    document.addEventListener('touchstart', cancel, { once: true });
-
-    _coachmarkShowTimer = setTimeout(() => {
-      _coachmarkShowTimer = null;
-      document.removeEventListener('pointerdown', cancel);
-      document.removeEventListener('touchstart', cancel);
-      if (cancelled) return;
-      if (!isIdleForCoachmark()) return;
-
-      statusCtrl!.showCoachmark({ id: opts.id, text: opts.text });
-      localStorage.setItem(opts.key, '1');
-      if (opts.pulse) renderer.pulseTriad();
-
-      _coachmarkHideTimer = setTimeout(() => {
-        _coachmarkHideTimer = null;
-        statusCtrl?.hideCoachmark(opts.id);
-      }, opts.displayMs);
-    }, opts.delayMs);
-  }
-
-  // v1: first mobile session — teaches triad drag
-  if (!localStorage.getItem('mobile-orbit-v1')) {
-    scheduleOrbitCoachmark({
-      key: 'mobile-orbit-v1',
-      id: 'mobile-orbit',
-      text: 'Drag triad to rotate view',
-      delayMs: 3000,
-      displayMs: 4000,
-      pulse: true,
-    });
-  }
-  // v2: returning users (v1 already dismissed in a prior session) — teaches background orbit
-  else if (!localStorage.getItem('mobile-orbit-v2')) {
-    scheduleOrbitCoachmark({
-      key: 'mobile-orbit-v2',
-      id: 'mobile-orbit-v2',
-      text: 'Drag triad anytime \u00B7 Drag clear background when available',
-      delayMs: 5000,
-      displayMs: 5000,
-    });
-  }
+  // ── Onboarding controller (Phase 4A) ──
+  // Owns coachmark scheduling, pacing, and persistence.
+  // StatusController remains the rendering surface for #hint.
+  _onboarding = createOnboardingController({
+    getSurface: () => statusCtrl,
+    getRenderer: () => renderer,
+    isAppRunning: () => _appRunning,
+  });
+  _onboarding.scheduleInitialCoachmarks();
 
   // Narrow test hook — returns only the specific observable E2E tests need.
   (window as unknown as Record<string, unknown>)._getUIState = () => {
@@ -657,7 +605,51 @@ async function init() {
     startPlacement: (file, desc) => { if (placement) placement.start(file, desc); },
   });
 
-}
+  // Register camera control callbacks via store (consumed by CameraControls.tsx)
+  // Center Object logic lives in focus-runtime.ts (shared with tests)
+  useAppStore.getState().setCameraCallbacks({
+    onCenterObject: () => { _handleCenterObject(renderer); },
+    onReturnToObject: () => { renderer.returnToFocusedObject(); },
+  });
+
+  // Wire returnToFocusedObject callback (avoids renderer importing store)
+  renderer._returnToObjectCallback = () => {
+    const s = useAppStore.getState();
+    const molecules = s.molecules;
+    // Priority 1: valid last-focused molecule
+    if (s.lastFocusedMoleculeId !== null) {
+      const mol = molecules.find(m => m.id === s.lastFocusedMoleculeId);
+      if (mol) return renderer.getMoleculeCentroid(mol.atomOffset, mol.atomCount);
+    }
+    // Priority 2: nearest molecule to current camera position
+    if (molecules.length > 0) {
+      let bestMol = molecules[0];
+      let bestDist = Infinity;
+      const camPos = renderer.camera.position;
+      for (const mol of molecules) {
+        const c = renderer.getMoleculeCentroid(mol.atomOffset, mol.atomCount);
+        if (!c) continue;
+        const d = camPos.distanceToSquared(c);
+        if (d < bestDist) { bestDist = d; bestMol = mol; }
+      }
+      return renderer.getMoleculeCentroid(bestMol.atomOffset, bestMol.atomCount);
+    }
+    return null;
+  };
+
+  // Subscribe to camera mode changes → configure OrbitControls + achievement
+  let _prevCameraMode = useAppStore.getState().cameraMode;
+  useAppStore.subscribe((s) => {
+    if (s.cameraMode !== _prevCameraMode) {
+      _prevCameraMode = s.cameraMode;
+      renderer.setOrbitControlsForMode(s.cameraMode);
+      if (s.cameraMode === 'freelook') {
+        _onboarding?.recordAchievement('mode-entry');
+      }
+    }
+  });
+
+} // end init()
 
 // --- Composition-root helpers (not extracted — see plan v6 refinement #1, #2) ---
 

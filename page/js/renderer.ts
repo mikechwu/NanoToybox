@@ -63,6 +63,7 @@ export class Renderer {
   // Camera defaults
   _defaultCamPos!: THREE.Vector3;
   _defaultCamTarget!: THREE.Vector3;
+  _defaultCamUp!: THREE.Vector3;
 
   // Lighting
   ambientLight!: THREE.AmbientLight;
@@ -152,22 +153,22 @@ export class Renderer {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
+    // OrbitControls owns: scroll zoom + middle-drag dolly + 2-finger mobile zoom/pan.
+    // Orbit rotation is handled by applyOrbitDelta on all devices (quaternion trackball).
+    this.controls.enableRotate = false; // rotation via custom applyOrbitDelta
     this.controls.mouseButtons = {
       MIDDLE: THREE.MOUSE.DOLLY,
-      RIGHT: THREE.MOUSE.ROTATE,
+      RIGHT: null, // right-drag handled by InputManager → applyOrbitDelta
     };
     this.controls.touches = {
       ONE: null,
       TWO: THREE.TOUCH.DOLLY_PAN,
     };
     this.controls.enabled = true;
-    // Desktop right-drag tuning only. Mobile 1-finger orbit (triad + background)
-    // uses applyOrbitDelta directly — does not go through OrbitControls.
-    // This value is decoupled from mobile orbit speed; change independently if needed.
-    this.controls.rotateSpeed = 1.0;
 
     this._defaultCamPos = new THREE.Vector3(0, 0, 15);
     this._defaultCamTarget = new THREE.Vector3(0, 0, 0);
+    this._defaultCamUp = new THREE.Vector3(0, 1, 0);
 
     this._initAxisTriad();
 
@@ -892,12 +893,14 @@ export class Renderer {
     }
     const dist = maxR * 2.5 + 5;
     this.camera.position.set(cx, cy, cz + dist);
+    this.camera.up.set(0, 1, 0); // Level the camera on fit
     this.controls.target.set(cx, cy, cz);
     this.controls.update();
 
     // Save for resetView
     this._defaultCamPos.set(cx, cy, cz + dist);
     this._defaultCamTarget.set(cx, cy, cz);
+    this._defaultCamUp.set(0, 1, 0);
   }
 
   /** Public API: fit camera to current atom positions. */
@@ -907,10 +910,12 @@ export class Renderer {
   resetCamera() {
     this._physicsRef = null;
     this.camera.position.set(0, 0, 15);
+    this.camera.up.set(0, 1, 0);
     this.controls.target.set(0, 0, 0);
     this.controls.update();
     this._defaultCamPos.set(0, 0, 15);
     this._defaultCamTarget.set(0, 0, 0);
+    this._defaultCamUp.set(0, 1, 0);
   }
 
   /** Hard reset: reclaims instanced capacity. Reserved for debug/explicit reset only. */
@@ -1010,6 +1015,16 @@ export class Renderer {
       this._snapRafId = null;
     }
     this.showAxisHighlight(null); // clean up triad highlight
+    if (this._focusIndicator) {
+      this.scene.remove(this._focusIndicator);
+      this._focusIndicator.geometry.dispose();
+      (this._focusIndicator.material as THREE.Material).dispose();
+      this._focusIndicator = null;
+    }
+    if (this._focusIndicatorTimer) {
+      clearTimeout(this._focusIndicatorTimer);
+      this._focusIndicatorTimer = null;
+    }
   }
 
   /** Debug info for instanced capacity monitoring. */
@@ -1027,9 +1042,190 @@ export class Renderer {
    */
   resetView() {
     this.camera.position.copy(this._defaultCamPos);
-    this.camera.up.set(0, 1, 0);
+    this.camera.up.copy(this._defaultCamUp);
     this.controls.target.copy(this._defaultCamTarget);
     this.controls.update();
+  }
+
+  // ── Focus-aware pivot ──
+
+  private _focusIndicator: THREE.Mesh | null = null;
+  private _focusIndicatorTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Update orbit pivot to a new focus target.
+   * Does NOT update _defaultCamTarget — resetView still returns to scene centroid.
+   */
+  setCameraFocusTarget(target: THREE.Vector3) {
+    this.controls.target.copy(target);
+    this.controls.update();
+    this._showFocusIndicator(target);
+  }
+
+  /** Show a temporary translucent sphere at the focus point (~1 second). */
+  private _showFocusIndicator(pos: THREE.Vector3) {
+    // Remove existing indicator
+    if (this._focusIndicator) {
+      this.scene.remove(this._focusIndicator);
+      this._focusIndicator.geometry.dispose();
+      (this._focusIndicator.material as THREE.Material).dispose();
+      this._focusIndicator = null;
+    }
+    if (this._focusIndicatorTimer) {
+      clearTimeout(this._focusIndicatorTimer);
+      this._focusIndicatorTimer = null;
+    }
+
+    const geo = new THREE.SphereGeometry(0.5, 16, 12);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x4488ff,
+      transparent: true,
+      opacity: 0.25,
+      depthTest: true,
+    });
+    this._focusIndicator = new THREE.Mesh(geo, mat);
+    this._focusIndicator.position.copy(pos);
+    this.scene.add(this._focusIndicator);
+
+    // Fade out after 1 second
+    this._focusIndicatorTimer = setTimeout(() => {
+      this._focusIndicatorTimer = null;
+      if (this._focusIndicator) {
+        this.scene.remove(this._focusIndicator);
+        this._focusIndicator.geometry.dispose();
+        (this._focusIndicator.material as THREE.Material).dispose();
+        this._focusIndicator = null;
+      }
+    }, 1000);
+  }
+
+  /**
+   * Compute the centroid of a molecule given its atom offset and count.
+   * Returns null if physics ref is not available.
+   */
+  getMoleculeCentroid(atomOffset: number, atomCount: number): THREE.Vector3 | null {
+    if (!this._physicsRef || this._physicsRef.n === 0) return null;
+    const pos = this._physicsRef.pos;
+    let cx = 0, cy = 0, cz = 0;
+    for (let i = atomOffset; i < atomOffset + atomCount && i < this._physicsRef.n; i++) {
+      cx += pos[i * 3];
+      cy += pos[i * 3 + 1];
+      cz += pos[i * 3 + 2];
+    }
+    const n = Math.min(atomCount, this._physicsRef.n - atomOffset);
+    if (n <= 0) return null;
+    return new THREE.Vector3(cx / n, cy / n, cz / n);
+  }
+
+  // ── Free-Look mode (Phase 3) ──
+
+  /**
+   * Apply free-look rotation (camera rotates in place, no pivot).
+   * Yaw around world up (stable horizon), pitch around camera right.
+   * No roll.
+   */
+  applyFreeLookDelta(dx: number, dy: number) {
+    const speed = CONFIG.orbit.rotateSpeed;
+    // Yaw around world up — keeps horizon stable
+    const qYaw = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0), -dx * speed
+    );
+    // Pitch around camera-local right axis
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+    const qPitch = new THREE.Quaternion().setFromAxisAngle(right, -dy * speed);
+    this.camera.quaternion.premultiply(qYaw).premultiply(qPitch);
+  }
+
+  /**
+   * Translate camera along its look direction (forward/back zoom in Free-Look).
+   */
+  applyFreeLookZoom(delta: number) {
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    this.camera.position.add(forward.multiplyScalar(delta * 0.5));
+  }
+
+  /**
+   * Translate camera in its local plane (WASD in Free-Look).
+   */
+  applyFreeLookTranslate(dx: number, dy: number) {
+    const speed = 0.05;
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    this.camera.position.add(right.multiplyScalar(dx * speed));
+    this.camera.position.add(forward.multiplyScalar(-dy * speed));
+  }
+
+  /**
+   * Reset camera orientation to default (look along -Z, up=Y).
+   * Does NOT change position.
+   */
+  resetOrientation() {
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(
+      this.camera.position.x,
+      this.camera.position.y,
+      this.camera.position.z - 1
+    );
+  }
+
+  /**
+   * Fly-to animation: return to orbiting the last focused molecule.
+   * Animated over 500ms.
+   */
+  /**
+   * Fly-to callback: set externally by main.ts to provide store access
+   * without renderer importing the store directly.
+   */
+  _returnToObjectCallback: (() => THREE.Vector3 | null) | null = null;
+
+  returnToFocusedObject() {
+    // Get target position from callback (set by main.ts) or fall back to default
+    let targetPos = this._returnToObjectCallback?.() ?? null;
+    if (!targetPos) {
+      targetPos = this._defaultCamTarget.clone();
+    }
+
+    // Animate fly-to
+    const startPos = this.camera.position.clone();
+    const distance = 15; // comfortable viewing distance
+    const endPos = targetPos.clone().add(new THREE.Vector3(0, 0, distance));
+    const start = performance.now();
+    const duration = 500;
+
+    if (this._snapRafId != null) cancelAnimationFrame(this._snapRafId);
+
+    const animate = () => {
+      const t = Math.min(1, (performance.now() - start) / duration);
+      const ease = 1 - (1 - t) * (1 - t);
+      this.camera.position.lerpVectors(startPos, endPos, ease);
+      this.camera.up.set(0, 1, 0);
+      this.camera.lookAt(targetPos!);
+      this.controls.target.copy(targetPos!);
+      this.controls.update();
+      if (t < 1) {
+        this._snapRafId = requestAnimationFrame(animate);
+      } else {
+        this._snapRafId = null;
+      }
+    };
+    this._snapRafId = requestAnimationFrame(animate);
+  }
+
+  /**
+   * Configure OrbitControls for the given camera mode.
+   * In Free-Look: all OrbitControls interaction disabled.
+   * In Orbit: rotation disabled (handled by custom applyOrbitDelta), zoom+pan enabled.
+   */
+  setOrbitControlsForMode(mode: 'orbit' | 'freelook') {
+    if (mode === 'freelook') {
+      this.controls.enableRotate = false;
+      this.controls.enablePan = false;
+      this.controls.enableZoom = false;
+    } else {
+      this.controls.enableRotate = false; // custom quaternion orbit
+      this.controls.enablePan = true;
+      this.controls.enableZoom = true;
+    }
   }
 
   // ── Triad interaction (mobile camera orbit) ──
@@ -1072,21 +1268,29 @@ export class Renderer {
   }
 
   /**
-   * Apply an orbit rotation delta to the camera (spherical coordinates).
-   * Used by triad drag. Same rotation convention as OrbitControls:
-   * drag-up decreases phi (camera rotates down = "dragging the world").
+   * Apply an orbit rotation delta to the camera (quaternion trackball).
+   * Used by triad drag and background orbit. Rotates around camera's local
+   * axes — no phi clamp, free rotation through all orientations.
+   * Drag-up rotates camera down ("dragging the world").
    */
   applyOrbitDelta(dx: number, dy: number) {
     const speed = CONFIG.orbit.rotateSpeed;
     const offset = this.camera.position.clone().sub(this.controls.target);
-    const spherical = new THREE.Spherical().setFromVector3(offset);
-    spherical.theta -= dx * speed;
-    spherical.phi -= dy * speed;
-    // Clamp phi to avoid gimbal lock at poles
-    spherical.phi = Math.max(0.01, Math.min(Math.PI - 0.01, spherical.phi));
-    this.camera.position.copy(this.controls.target).add(
-      new THREE.Vector3().setFromSpherical(spherical)
+
+    // Quaternion trackball rotation around camera's local axes.
+    // No spherical coordinates, no phi clamp — free rotation through all orientations.
+    const qx = new THREE.Quaternion().setFromAxisAngle(
+      this.camera.up.clone().normalize(), -dx * speed
     );
+    const right = new THREE.Vector3()
+      .crossVectors(this.camera.up, offset).normalize();
+    const qy = new THREE.Quaternion().setFromAxisAngle(right, dy * speed);
+
+    const q = qx.multiply(qy);
+    offset.applyQuaternion(q);
+    this.camera.up.applyQuaternion(q);
+
+    this.camera.position.copy(this.controls.target).add(offset);
     this.camera.lookAt(this.controls.target);
     this.controls.update();
   }

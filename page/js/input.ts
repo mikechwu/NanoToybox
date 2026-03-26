@@ -37,16 +37,28 @@ export class InputManager {
   // Background orbit position tracking (same approach as triad drag)
   _bgOrbitLastX: number;
   _bgOrbitLastY: number;
+  _cameraPointerId: number; // stored for pointer capture release in blur handler
   _triadSource: {
     isInsideTriad: (clientX: number, clientY: number) => boolean;
     applyOrbitDelta: (dx: number, dy: number) => void;
+    applyFreeLookDelta?: (dx: number, dy: number) => void;
+    applyFreeLookZoom?: (delta: number) => void;
+    applyFreeLookTranslate?: (dx: number, dy: number) => void;
     onBackgroundOrbitStart?: () => void;
     onBackgroundOrbitEnd?: () => void;
     getNearestAxisEndpoint?: (clientX: number, clientY: number) => THREE.Vector3 | null;
     snapToAxis?: (dir: THREE.Vector3) => void;
     animatedResetView?: () => void;
     showAxisHighlight?: (dir: THREE.Vector3 | null) => void;
+    onReturnToOrbit?: () => void;
+    onFreeLookFocusSelect?: (atomIdx: number) => void;
+    resetOrientation?: () => void;
+    /** Fires when a committed triad drag ends (not on taps or canceled gestures). */
+    onTriadDragEnd?: () => void;
   } | null;
+
+  // Camera mode getter (injected from store, not read from triad source)
+  _getCameraMode: () => 'orbit' | 'freelook';
 
   // Triad tap/double-tap/drag discrimination
   _triadTouchStartTime: number;
@@ -89,8 +101,10 @@ export class InputManager {
     this._triadLastX = 0;
     this._triadLastY = 0;
     this._triadSource = null;
+    this._getCameraMode = () => 'orbit';
     this._bgOrbitLastX = 0;
     this._bgOrbitLastY = 0;
+    this._cameraPointerId = -1;
     this._triadTouchStartTime = 0;
     this._triadTouchStartX = 0;
     this._triadTouchStartY = 0;
@@ -123,6 +137,11 @@ export class InputManager {
   /** Connect the triad interaction source (renderer). Called once from main.ts. */
   setTriadSource(source: InputManager['_triadSource']) {
     this._triadSource = source;
+  }
+
+  /** Inject camera mode getter (reads from store). */
+  setCameraStateGetter(getter: () => 'orbit' | 'freelook') {
+    this._getCameraMode = getter;
   }
 
   _screenToNDC(x, y) {
@@ -288,9 +307,47 @@ export class InputManager {
         this.cb.onPointerUp?.();
       }
       this.isDragging = false;
+      if (this.isCamera && this._cameraPointerId >= 0) {
+        if (this.canvas.hasPointerCapture(this._cameraPointerId)) {
+          this.canvas.releasePointerCapture(this._cameraPointerId);
+        }
+        this._cameraPointerId = -1;
+      }
       this.isCamera = false;
     };
     window.addEventListener('blur', this._handlers.blur);
+
+    // WASD/R shortcuts in Free-Look mode (desktop only).
+    // Suppressed when any interactive UI element is focused or modifier keys are held.
+    this._handlers.keydown = (e) => {
+      if (this._getCameraMode() !== 'freelook') return;
+      const ke = e as KeyboardEvent;
+      if (ke.metaKey || ke.ctrlKey || ke.altKey) return;
+      const el = ke.target as HTMLElement;
+      if (!el) return;
+      const tag = el.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'A') return;
+      if (el.isContentEditable || el.getAttribute('role') === 'button') return;
+      if (el.closest('[data-camera-controls], .quick-help-card, .sheet')) return;
+      const key = ke.key.toLowerCase();
+      const step = 1.0;
+      switch (key) {
+        case 'w': this._triadSource?.applyFreeLookTranslate?.(0, step); break;
+        case 's': this._triadSource?.applyFreeLookTranslate?.(0, -step); break;
+        case 'a': this._triadSource?.applyFreeLookTranslate?.(-step, 0); break;
+        case 'd': this._triadSource?.applyFreeLookTranslate?.(step, 0); break;
+        case 'r': this._triadSource?.resetOrientation?.(); break;
+      }
+    };
+    window.addEventListener('keydown', this._handlers.keydown);
+
+    // Scroll wheel in Free-Look → forward/back zoom (desktop only)
+    this._handlers.wheel = (e) => {
+      if (this._getCameraMode() !== 'freelook') return;
+      e.preventDefault();
+      this._triadSource?.applyFreeLookZoom?.((e as WheelEvent).deltaY);
+    };
+    c.addEventListener('wheel', this._handlers.wheel, { passive: false });
   }
 
   destroy() {
@@ -313,6 +370,8 @@ export class InputManager {
       c.removeEventListener('contextmenu', this._handlers.contextmenu);
     }
     window.removeEventListener('blur', this._handlers.blur);
+    if (this._handlers.keydown) window.removeEventListener('keydown', this._handlers.keydown);
+    if (this._handlers.wheel) c.removeEventListener('wheel', this._handlers.wheel);
     this._handlers = {};
   }
 
@@ -334,19 +393,36 @@ export class InputManager {
       return;
     }
 
-    if (e.button === 2 || e.button === 1) {
-      // Right or middle click → handled by OrbitControls directly (always enabled)
+    if (e.button === 2) {
+      // Right-drag → custom orbit via applyOrbitDelta (same quaternion path as mobile)
+      e.preventDefault();
+      this.isCamera = true;
+      this._bgOrbitLastX = e.clientX;
+      this._bgOrbitLastY = e.clientY;
+      // Pointer capture: orbit continues even if pointer leaves the canvas
+      this._cameraPointerId = e.pointerId;
+      this.canvas.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (e.button === 1) {
+      // Middle click → OrbitControls dolly (unchanged)
       return;
     }
 
     if (e.button === 0) {
-      // Left click → interact with atom or do nothing
       const atomIdx = this._raycastAtom(e.clientX, e.clientY);
-
       if (atomIdx >= 0) {
-        this.isDragging = true;
-        this.isCamera = false;
-        this.cb.onPointerDown?.(atomIdx, e.clientX, e.clientY, false);
+        if (this._getCameraMode() === 'freelook') {
+          // Free-Look: focus-select only — bypass state machine entirely.
+          // No isDragging, no onPointerDown, no state machine transition.
+          this._triadSource?.onFreeLookFocusSelect?.(atomIdx);
+        } else {
+          // Orbit: normal atom interaction
+          this.isDragging = true;
+          this.isCamera = false;
+          this.cb.onPointerDown?.(atomIdx, e.clientX, e.clientY, false);
+        }
       }
     }
   }
@@ -354,11 +430,24 @@ export class InputManager {
   _onPointerMove(e) {
     if (this.isDragging) {
       this.cb.onPointerMove?.(e.clientX, e.clientY);
-    } else if (!this.isCamera) {
-      // Hover detection
-      const atomIdx = this._raycastAtom(e.clientX, e.clientY);
-      this.cb.onHover?.(atomIdx);
+      return;
     }
+    if (this.isCamera) {
+      // Desktop right-drag: mode-aware routing
+      const dx = e.clientX - this._bgOrbitLastX;
+      const dy = e.clientY - this._bgOrbitLastY;
+      this._bgOrbitLastX = e.clientX;
+      this._bgOrbitLastY = e.clientY;
+      if (this._getCameraMode() === 'freelook') {
+        this._triadSource?.applyFreeLookDelta?.(dx, dy);
+      } else {
+        this._triadSource?.applyOrbitDelta(dx, dy);
+      }
+      return;
+    }
+    // Hover detection
+    const atomIdx = this._raycastAtom(e.clientX, e.clientY);
+    this.cb.onHover?.(atomIdx);
   }
 
   _onPointerUp(e) {
@@ -366,7 +455,14 @@ export class InputManager {
       this.isDragging = false;
       this.cb.onPointerUp?.();
     }
-    // Right-click/scroll camera is handled by OrbitControls directly — no cleanup needed
+    if (this.isCamera) {
+      this.isCamera = false;
+      // Release pointer capture from right-drag orbit
+      if (this.canvas.hasPointerCapture(e.pointerId)) {
+        this.canvas.releasePointerCapture(e.pointerId);
+      }
+      this._cameraPointerId = -1;
+    }
   }
 
   // --- Mobile events ---
@@ -427,8 +523,14 @@ export class InputManager {
     // 2. Try atom interaction — atom hit always wins
     const atomIdx = this._raycastAtom(touch.clientX, touch.clientY);
     if (atomIdx >= 0) {
-      this.isDragging = true;
-      this.cb.onPointerDown?.(atomIdx, touch.clientX, touch.clientY, false);
+      if (this._getCameraMode() === 'freelook') {
+        // Free-Look: focus-select only — bypass state machine entirely.
+        // No isDragging, no onPointerDown, no state machine transition.
+        this._triadSource?.onFreeLookFocusSelect?.(atomIdx);
+      } else {
+        this.isDragging = true;
+        this.cb.onPointerDown?.(atomIdx, touch.clientX, touch.clientY, false);
+      }
       return;
     }
 
@@ -463,9 +565,13 @@ export class InputManager {
         this._triadSource?.showAxisHighlight?.(null);
       }
 
-      // Only apply orbit delta after drag threshold is exceeded
+      // Only apply camera delta after drag threshold is exceeded
       if (this._triadDragCommitted) {
-        this._triadSource?.applyOrbitDelta(dx, dy);
+        if (this._getCameraMode() === 'freelook') {
+          this._triadSource?.applyFreeLookDelta?.(dx, dy);
+        } else {
+          this._triadSource?.applyOrbitDelta(dx, dy);
+        }
       }
       return;
     }
@@ -476,16 +582,18 @@ export class InputManager {
       return;
     }
 
-    // Background orbit — apply delta directly (same applyOrbitDelta as triad drag).
-    // No drag threshold here (unlike triad which needs >5px for tap/drag discrimination).
-    // Empty-space tap has no semantic action, so immediate orbit is intentional.
+    // Background camera gesture — mode-aware routing.
     if (this.isCamera) {
       e.preventDefault();
       const dx = touch.clientX - this._bgOrbitLastX;
       const dy = touch.clientY - this._bgOrbitLastY;
       this._bgOrbitLastX = touch.clientX;
       this._bgOrbitLastY = touch.clientY;
-      this._triadSource?.applyOrbitDelta(dx, dy);
+      if (this._getCameraMode() === 'freelook') {
+        this._triadSource?.applyFreeLookDelta?.(dx, dy);
+      } else {
+        this._triadSource?.applyOrbitDelta(dx, dy);
+      }
     }
   }
 
@@ -515,15 +623,23 @@ export class InputManager {
         this._triadLastTapWasCenter = isInCenter;
 
         if (isDoubleTap) {
-          // Double-tap center → reset to default front view
+          if (this._getCameraMode() === 'freelook') {
+            // Free-Look: double-tap center → return to Orbit + reset view
+            this._triadSource?.onReturnToOrbit?.();
+          }
+          // Reset to default front view (both modes)
           this._triadSource?.animatedResetView?.();
-        } else if (nearest) {
-          // Single tap on axis endpoint → snap to that view
+        } else if (nearest && this._getCameraMode() !== 'freelook') {
+          // Single tap on axis endpoint → snap to that view (Orbit only)
           this._triadSource?.snapToAxis?.(nearest);
         }
         // Single tap on center (not double) → no action (wait for second tap)
       }
 
+      // Notify triad drag end if an actual drag occurred (not a tap)
+      if (this._triadDragCommitted) {
+        this._triadSource?.onTriadDragEnd?.();
+      }
       this.isTriadDragging = false;
     }
     if (this.isDragging) {

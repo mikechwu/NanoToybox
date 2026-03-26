@@ -81,6 +81,13 @@ export function createOverlayLayout(renderer: {
     const triadLeft = safeLeft + 6;
 
     renderer.setOverlayLayout({ triadSize, triadLeft, triadBottom });
+
+    // Camera controls positioning (above the triad, between triad and scene)
+    // triadBottom is CSS-bottom-based. Controls sit above the triad.
+    const camCtrlBottom = triadBottom + triadSize + 4; // 4px gap above triad
+    const camCtrlLeft = triadLeft;
+    document.documentElement.style.setProperty('--cam-ctrl-bottom', camCtrlBottom + 'px');
+    document.documentElement.style.setProperty('--cam-ctrl-left', camCtrlLeft + 'px');
   }
 
   function requestLayout() {

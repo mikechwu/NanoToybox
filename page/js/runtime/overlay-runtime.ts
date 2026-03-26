@@ -20,9 +20,17 @@ export interface OverlayRuntime {
 
 export function createOverlayRuntime(deps: {
   getStatusCtrl: () => { dismissCoachmark: (id: string) => void } | null;
+  getOnboarding?: () => { dismissActive: () => void } | null;
 }): OverlayRuntime {
   function close() {
     const store = useAppStore.getState();
+    // Close camera help and cancel pick-focus (transient-UI mutual exclusivity)
+    if (store.cameraHelpOpen) {
+      store.setCameraHelpOpen(false);
+    }
+    if (store.pickFocusActive) {
+      store.setPickFocusActive(false);
+    }
     if (store.activeSheet === 'settings' && store.helpPageActive) {
       store.setHelpPageActive(false);
     }
@@ -32,6 +40,7 @@ export function createOverlayRuntime(deps: {
   function open(name: 'settings' | 'chooser') {
     const sc = deps.getStatusCtrl();
     if (sc) sc.dismissCoachmark('placement');
+    deps.getOnboarding?.()?.dismissActive();
 
     const store = useAppStore.getState();
     if (store.activeSheet === name) {
