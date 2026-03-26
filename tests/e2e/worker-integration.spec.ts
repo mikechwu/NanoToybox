@@ -29,7 +29,7 @@ test.describe('C.2 Integration — Worker-Driven Main App', () => {
     await page.goto(`${baseURL}/page/`)
 
     // Wait for app to fully initialize (React StatusBar renders scene info)
-    await expect(page.locator('.dock')).toBeAttached({ timeout: 15000 })
+    await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 15000 })
 
     // Give the worker time to initialize and process at least one frame
     await page.waitForTimeout(2000)
@@ -73,7 +73,7 @@ test.describe('C.2 Integration — Worker-Driven Main App', () => {
     await page.goto(`${baseURL}/page/`)
 
     // Wait for app to initialize (dock visible = React mounted)
-    await expect(page.locator('.dock')).toBeAttached({ timeout: 15000 })
+    await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 15000 })
     await page.waitForTimeout(3000)
 
     // Worker should have produced snapshots and driven rendering
@@ -89,7 +89,7 @@ test.describe('C.2 Integration — Worker-Driven Main App', () => {
     await page.goto(`${baseURL}/page/`)
 
     // Wait for worker to be active
-    await expect(page.locator('.dock')).toBeAttached({ timeout: 15000 })
+    await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 15000 })
     await page.waitForTimeout(1000)
 
     // Pre-condition: worker is active and NOT stalled

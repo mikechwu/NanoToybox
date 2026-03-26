@@ -99,13 +99,13 @@ The interactive page uses a composition root pattern with React-authoritative UI
 
 **Key rules:**
 - Modules import from `config.ts` for shared constants. Data flows through `main.ts` orchestration and the Zustand store.
-- **Interaction mode coordination:** React Dock (mode segmented) → store callback → main.ts (applies interactionMode) → input.ts (reads mode). The state machine maps mode → state (e.g., `'atom'` → `DRAG`).
+- **Interaction mode coordination:** React DockBar (mode segmented via shared Segmented component) → store callback → main.ts (applies interactionMode) → input.ts (reads mode). The state machine maps mode → state (e.g., `'atom'` → `DRAG`).
 - **Known v1 limitation:** In Move mode, the force line still originates from the picked atom rather than the center of mass, so the visual cue partly reads as "drag this atom." The blue color and immediate whole-molecule motion mitigate this, but a COM-origin force line or bounding indicator would be a stronger signal.
 
 ### Technology
 
 - Vite (v8) build pipeline: TypeScript + React (JSX) compiled and bundled. Dev server via `npm run dev`
-- React 19 (`createRoot`) — authoritative UI: Dock, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay
+- React 19 (`createRoot`) — authoritative UI: DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay
 - Zustand (`app-store.ts`) — reactive UI state store; imperative callbacks from `main.ts` registered via store slots
 - Web Worker (`simulation-worker.ts`) + bridge (`worker-bridge.ts`) — physics runs off the main thread
 - Three.js v0.170 (npm, bundled by Vite)

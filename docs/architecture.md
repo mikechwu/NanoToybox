@@ -68,14 +68,18 @@ NanoToybox/
 │   │   ├── ui/
 │   │   │   └── coachmarks.ts     # Onboarding copy and IDs (placement, future hints)
 │   │   ├── components/           # React-authoritative UI components
-│   │   │   ├── Dock.tsx          # Navigation dock (add, pause, settings, mode)
+│   │   │   ├── DockLayout.tsx    # Dock positioning wrapper ([data-dock-root] measurement root)
+│   │   │   ├── DockBar.tsx       # Toolbar (add, pause, settings, mode; role="toolbar")
+│   │   │   ├── Segmented.tsx     # Shared native-radio segmented control
 │   │   │   ├── SettingsSheet.tsx # Settings sheet with all controls
 │   │   │   ├── StructureChooser.tsx # Structure picker sheet
 │   │   │   ├── SheetOverlay.tsx  # Sheet backdrop
 │   │   │   ├── StatusBar.tsx     # Scene status display
 │   │   │   └── FPSDisplay.tsx    # FPS/simulation status
 │   │   ├── store/
-│   │   │   └── app-store.ts      # Zustand store for UI state
+│   │   │   ├── app-store.ts      # Zustand store for UI state
+│   │   │   └── selectors/
+│   │   │       └── dock.ts       # selectDockSurface derived selector
 │   │   ├── hooks/
 │   │   │   └── useSheetAnimation.ts # Sheet open/close CSS transitions
 │   │   ├── react-root.tsx        # React mount/unmount entry point
@@ -160,7 +164,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 - **ui-bindings.ts** — Zustand store callback registration (React intents → imperative commands)
 - **atom-source.ts** — shared renderer-to-input atom-picking adapter
 
-React components (Dock, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay) are authoritative for all UI surfaces. Imperative controllers remain only for PlacementController and StatusController (hint-only).
+React components (DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay) are authoritative for all UI surfaces. Imperative controllers remain only for PlacementController and StatusController (hint-only).
 
 `main.ts` must not be re-grown: new runtime logic goes into `page/js/runtime/`, new UI surfaces into `page/js/components/`.
 
@@ -171,11 +175,11 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | State slice | Authoritative writer | Intent sources |
 |-------------|---------------------|---------------|
 | `session.scene` | scene-runtime.ts (commit/clear/add) | React SettingsSheet (clear), PlacementController (commit) |
-| `session.playback` | main.ts (frame loop) | React Dock (pause), React SettingsSheet (speed) |
-| `session.interactionMode` | main.ts (via store callback) | React Dock (mode segmented) |
+| `session.playback` | main.ts (frame loop) | React DockBar (pause), React SettingsSheet (speed) |
+| `session.interactionMode` | main.ts (via store callback) | React DockBar (mode segmented) |
 | UI chrome (sheets, theme, etc.) | Zustand store (`app-store.ts`) | React components |
 | `session.theme` | main.ts (via settings callback) | React SettingsSheet (theme segmented) |
-| placement state | placement.ts (`_state`) | React Dock (add/cancel via dockCallbacks) |
+| placement state | placement.ts (`_state`) | React DockBar (add/cancel via dockCallbacks) |
 | scheduler / effectsGate | main.ts (frame loop only) | — |
 
 ### Overlay Close Policy
@@ -184,12 +188,12 @@ Unified outside-click dismiss rule (all devices): a capture-phase `pointerdown` 
 
 ### Overlay Layout Contract
 
-`overlay-layout.ts` (`createOverlayLayout`) owns bottom-overlay layout arbitration via `_doOverlayLayout()` (RAF-coalesced). It measures dock geometry via `getBoundingClientRect()` and produces separate layout outputs:
+`overlay-layout.ts` (`createOverlayLayout`) owns bottom-overlay layout arbitration via `doLayout()` (RAF-coalesced). It measures the dock region via `document.querySelector(DOCK_ROOT_SELECTOR)` (`[data-dock-root]` on DockLayout's root element) and `getBoundingClientRect()`, producing separate layout outputs:
 
 - **Hint** (`--hint-bottom` CSS var): always clears the dock top edge + gap
 - **Triad** (`renderer.setOverlayLayout({ triadSize, triadLeft, triadBottom })`): phone clears full-width dock; tablet/desktop uses safe-area corner margins. `triadLeft` accounts for `env(safe-area-inset-left)`. Triad sizes 80–200px depending on device.
 
-Layout updates are triggered by `window.resize` and a `ResizeObserver` on the dock element, coalesced to one computation per frame. Current code computes layout from the dock only; a registry interface for additional bottom surfaces is a future extension, not yet implemented.
+Layout updates are triggered by `window.resize` and a `ResizeObserver` on the `[data-dock-root]` element (DockLayout's root), coalesced to one computation per frame. All dock child surfaces must be in normal document flow inside the measured root so `getBoundingClientRect()` reflects the total bottom-control footprint.
 
 ### App Lifecycle
 

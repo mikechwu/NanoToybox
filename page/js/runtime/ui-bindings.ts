@@ -23,8 +23,8 @@ export interface UIBindingsDeps {
 
   // Playback commands
   togglePause: () => void;
-  changeSpeed: (val: string) => void;
-  setInteractionMode: (mode: string) => void;
+  changeSpeed: (val: '0.5' | '1' | '2' | '4' | 'max') => void;
+  setInteractionMode: (mode: 'atom' | 'move' | 'rotate') => void;
   forceRenderThisTick: () => void;
 
   // Scene commands
@@ -33,14 +33,14 @@ export interface UIBindingsDeps {
   updateChooserRecentRow: () => void;
 
   // Physics settings
-  setPhysicsWallMode: (mode: string) => void;
+  setPhysicsWallMode: (mode: 'contain' | 'remove') => void;
   setPhysicsDragStrength: (v: number) => void;
   setPhysicsRotateStrength: (v: number) => void;
   setPhysicsDamping: (d: number) => void;
 
   // Theme/text
-  applyTheme: (theme: string) => void;
-  applyTextSize: (size: string) => void;
+  applyTheme: (theme: 'dark' | 'light') => void;
+  applyTextSize: (size: 'normal' | 'large') => void;
 
   // Worker forwarding
   isWorkerActive: () => boolean;
@@ -72,24 +72,24 @@ export function registerStoreCallbacks(deps: UIBindingsDeps): void {
       deps.overlayRuntime.open('settings');
     },
     onCancel: () => deps.exitPlacement(false),
-    onModeChange: (mode: string) => {
+    onModeChange: (mode) => {
       deps.setInteractionMode(mode);
     },
   });
 
   store.setSettingsCallbacks({
-    onSpeedChange: (val: string) => {
+    onSpeedChange: (val) => {
       deps.changeSpeed(val);
       deps.forceRenderThisTick();
     },
-    onThemeChange: (theme: string) => {
+    onThemeChange: (theme) => {
       deps.applyTheme(theme);
     },
-    onBoundaryChange: (mode: string) => {
+    onBoundaryChange: (mode) => {
       deps.setPhysicsWallMode(mode);
-      useAppStore.getState().setBoundaryMode(mode as 'contain' | 'remove');
+      useAppStore.getState().setBoundaryMode(mode);
       if (deps.isWorkerActive()) {
-        deps.sendWorkerInteraction({ type: 'setWallMode', mode: mode as 'contain' | 'remove' });
+        deps.sendWorkerInteraction({ type: 'setWallMode', mode });
       }
     },
     onDragChange: (v: number) => {
@@ -114,7 +114,7 @@ export function registerStoreCallbacks(deps: UIBindingsDeps): void {
         deps.sendWorkerInteraction({ type: 'setDamping', value: d });
       }
     },
-    onTextSizeChange: (size: string) => {
+    onTextSizeChange: (size) => {
       deps.applyTextSize(size);
     },
     onAddMolecule: () => {

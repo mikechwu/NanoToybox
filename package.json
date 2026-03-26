@@ -13,7 +13,8 @@
     "preview": "vite preview --base /NanoToybox/",
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "lint:dock-contract": "grep -q \"const DOCK_ROOT_SELECTOR = '\\[data-dock-root\\]'\" page/js/runtime/overlay-layout.ts && ! grep -q \"querySelector('.dock')\" page/js/runtime/overlay-layout.ts && echo 'dock-contract: PASS' || (echo 'dock-contract: FAIL — overlay-layout.ts must use DOCK_ROOT_SELECTOR, not hardcoded .dock' && exit 1)"
   },
   "repository": {
     "type": "git",

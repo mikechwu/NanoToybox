@@ -11,7 +11,8 @@ import React from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { StatusBar } from './components/StatusBar';
 import { FPSDisplay } from './components/FPSDisplay';
-import { Dock } from './components/Dock';
+import { DockLayout } from './components/DockLayout';
+import { DockBar } from './components/DockBar';
 import { SheetOverlay } from './components/SheetOverlay';
 import { SettingsSheet } from './components/SettingsSheet';
 import { StructureChooser } from './components/StructureChooser';
@@ -31,7 +32,9 @@ export function mountReactUI() {
     <React.StrictMode>
       <StatusBar />
       <FPSDisplay />
-      <Dock />
+      <DockLayout>
+        <DockBar />
+      </DockLayout>
       <SheetOverlay />
       <SettingsSheet />
       <StructureChooser />

@@ -1,18 +1,20 @@
 /**
  * Overlay layout runtime — owns hint clearance + triad sizing/positioning.
  *
- * Reads dock geometry directly and computes layout outputs for the renderer.
- * Owns: RAF coalescing state, ResizeObserver, double-RAF first-layout,
- * and glass-UI activation flag.
+ * Reads dock geometry via [data-dock-root] and computes layout outputs for
+ * the renderer. Owns: RAF coalescing state, ResizeObserver, double-RAF
+ * first-layout, and glass-UI activation flag.
+ *
+ * Layout contract: measures [data-dock-root] (the outermost dock container).
+ * All dock child surfaces must be in normal flow so getBoundingClientRect()
+ * reflects the total bottom-control footprint. See DockLayout.tsx guardrails.
  *
  * Does NOT attach window/document listeners — main.ts wires onViewportResize()
  * via addGlobalListener() to preserve centralized teardown.
- *
- * Sanctioned DOM access: doLayout() reads window.innerHeight/innerWidth and
- * document.querySelector('.dock') for layout measurement, and writes the
- * --hint-bottom CSS custom property. These are layout outputs, not event
- * subscriptions.
  */
+
+/** Single source of truth for the dock measurement root selector. */
+const DOCK_ROOT_SELECTOR = '[data-dock-root]';
 
 export interface OverlayLayout {
   /** Run layout computation. No-op if dock not yet in DOM. */
@@ -45,7 +47,7 @@ export function createOverlayLayout(renderer: {
     _layoutRafId = null;
     _layoutPending = false;
     if (!renderer) return;
-    const dockEl = document.querySelector('.dock') as HTMLElement;
+    const dockEl = document.querySelector(DOCK_ROOT_SELECTOR) as HTMLElement;
     if (!dockEl) return;
     const dockRect = dockEl.getBoundingClientRect();
     const viewportH = window.innerHeight;
@@ -94,12 +96,12 @@ export function createOverlayLayout(renderer: {
   }
 
   function scheduleFirstLayout() {
-    // Retry until React dock is in the DOM, then attach and activate.
+    // Retry until React dock region is in the DOM, then attach and activate.
     // Typically resolves in 1-2 RAFs; retries handle slow devices / StrictMode.
     function tryAttach() {
       if (_destroyed) return;
       doLayout();
-      const reactDock = document.querySelector('.dock') as HTMLElement;
+      const reactDock = document.querySelector(DOCK_ROOT_SELECTOR) as HTMLElement;
       if (reactDock) {
         _attachRafId = null;
         attachToDock(reactDock);

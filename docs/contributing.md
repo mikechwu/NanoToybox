@@ -68,7 +68,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - C/Wasm Tersoff kernel — ~11% faster than JS JIT, enabled by default, automatic JS fallback (`sim/wasm/`, `page/js/tersoff-wasm.ts`)
 - Containment boundary — dynamic soft harmonic wall (`page/js/physics.ts`), Contain/Remove toggle, live atom count, auto-scaling radius with hysteresis shrinkage
 - Dock + sheet navigation — responsive two-tier UI with React components (`page/js/components/`)
-- React UI migration — all UI surfaces (Dock, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay) are React-authoritative with Zustand store
+- React UI migration — all UI surfaces (DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay) are React-authoritative with Zustand store
 - Web Worker physics — off-thread simulation via `page/js/simulation-worker.ts` with automatic JS fallback
 - Runtime module extraction — 9 modules in `page/js/runtime/` (scene, worker lifecycle, snapshot reconciler, overlay layout/runtime, interaction dispatch, input bindings, UI bindings, atom source); main.ts reduced to composition-root-only
 
@@ -76,7 +76,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 
 See `docs/architecture.md` for the full module map and state ownership model.
 
-- **React components are the sole UI authority.** All UI surfaces (Dock, SettingsSheet, StructureChooser, StatusBar, FPSDisplay, SheetOverlay) are React components driven by the Zustand store.
+- **React components are the sole UI authority.** All UI surfaces (DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, StatusBar, FPSDisplay, SheetOverlay) are React components driven by the Zustand store.
 - **Imperative controllers** remain only for PlacementController (canvas touch listeners) and StatusController (hint/coachmark surface). Both expose `destroy()`.
 - **Callbacks flow through the store.** React components invoke imperative callbacks (dockCallbacks, settingsCallbacks, chooserCallbacks) registered by main.ts into the Zustand store.
 - **New globals require teardown.** Register via `addGlobalListener()` in main.ts.

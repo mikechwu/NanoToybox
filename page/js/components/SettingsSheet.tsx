@@ -12,41 +12,7 @@
 import React, { useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 import { useSheetAnimation } from '../hooks/useSheetAnimation';
-
-// ── Segmented control helper ──
-
-function Segmented({
-  items,
-  activeValue,
-  onSelect,
-  segCount,
-  activeIdx,
-  style,
-}: {
-  items: { value: string; label: string; disabled?: boolean }[];
-  activeValue: string;
-  onSelect: (value: string) => void;
-  segCount: number;
-  activeIdx: number;
-  style?: React.CSSProperties;
-}) {
-  return (
-    <div
-      className="segmented"
-      style={{ '--seg-count': segCount, '--seg-active': activeIdx, ...style } as React.CSSProperties}
-    >
-      {items.map((item) => (
-        <label
-          key={item.value}
-          className={`${item.value === activeValue ? 'active' : ''}${item.disabled ? ' seg-disabled' : ''}`}
-          onClick={() => !item.disabled && onSelect(item.value)}
-        >
-          {item.label}
-        </label>
-      ))}
-    </div>
-  );
-}
+import { Segmented } from './Segmented';
 
 // ── Slider helper ──
 
@@ -153,23 +119,19 @@ export function SettingsSheet() {
 
   // Derive active speed label + gating (matches imperative updateSpeedButtons)
   const speedValue = targetSpeed === Infinity ? 'max' : String(targetSpeed);
-  const speedIdx = SPEED_ITEMS.findIndex((i) => i.value === speedValue);
   const gatedSpeedItems = SPEED_ITEMS.map((item) => {
     if (item.value === 'max') return item; // Max never disabled
     if (!warmUpComplete) return { ...item, disabled: true };
     return { ...item, disabled: parseFloat(item.value) > maxSpeed };
   });
 
-  const themeIdx = theme === 'dark' ? 0 : 1;
-  const textSizeIdx = textSize === 'normal' ? 0 : 1;
-
   // Placed count — shows total atoms, not molecule count
   const placedCount = atomCount;
 
-  const handleSpeed = useCallback((val: string) => settingsCallbacks?.onSpeedChange(val), [settingsCallbacks]);
-  const handleTheme = useCallback((val: string) => settingsCallbacks?.onThemeChange(val), [settingsCallbacks]);
-  const handleTextSize = useCallback((val: string) => settingsCallbacks?.onTextSizeChange(val), [settingsCallbacks]);
-  const handleBoundary = useCallback((val: string) => settingsCallbacks?.onBoundaryChange(val), [settingsCallbacks]);
+  const handleSpeed = useCallback((val: '0.5' | '1' | '2' | '4' | 'max') => settingsCallbacks?.onSpeedChange(val), [settingsCallbacks]);
+  const handleTheme = useCallback((val: 'dark' | 'light') => settingsCallbacks?.onThemeChange(val), [settingsCallbacks]);
+  const handleTextSize = useCallback((val: 'normal' | 'large') => settingsCallbacks?.onTextSizeChange(val), [settingsCallbacks]);
+  const handleBoundary = useCallback((val: 'contain' | 'remove') => settingsCallbacks?.onBoundaryChange(val), [settingsCallbacks]);
   const handleDrag = useCallback((v: number) => settingsCallbacks?.onDragChange(v), [settingsCallbacks]);
   const handleRotate = useCallback((v: number) => settingsCallbacks?.onRotateChange(v), [settingsCallbacks]);
   const handleDamping = useCallback((sliderVal: number) => {
@@ -230,11 +192,11 @@ export function SettingsSheet() {
               <li className="group-item">
                 <span>Speed</span>
                 <Segmented
+                  name="speed"
+                  legend="Simulation speed"
                   items={gatedSpeedItems}
                   activeValue={speedValue}
                   onSelect={handleSpeed}
-                  segCount={5}
-                  activeIdx={speedIdx >= 0 ? speedIdx : 1}
                 />
               </li>
               <SliderRow
@@ -281,21 +243,21 @@ export function SettingsSheet() {
               <li className="group-item">
                 <span>Theme</span>
                 <Segmented
+                  name="theme"
+                  legend="Theme"
                   items={THEME_ITEMS}
                   activeValue={theme}
                   onSelect={handleTheme}
-                  segCount={2}
-                  activeIdx={themeIdx}
                 />
               </li>
               <li className="group-item">
                 <span>Text Size</span>
                 <Segmented
+                  name="text-size"
+                  legend="Text size"
                   items={TEXT_SIZE_ITEMS}
                   activeValue={textSize}
                   onSelect={handleTextSize}
-                  segCount={2}
-                  activeIdx={textSizeIdx}
                 />
               </li>
             </ul>
@@ -308,11 +270,11 @@ export function SettingsSheet() {
               <li className="group-item">
                 <span>Mode</span>
                 <Segmented
+                  name="boundary-mode"
+                  legend="Boundary mode"
                   items={BOUNDARY_ITEMS}
                   activeValue={boundaryMode}
                   onSelect={handleBoundary}
-                  segCount={2}
-                  activeIdx={boundaryMode === 'contain' ? 0 : 1}
                 />
               </li>
             </ul>

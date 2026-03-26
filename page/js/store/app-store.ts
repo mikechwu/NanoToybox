@@ -35,18 +35,18 @@ export interface DockCallbacks {
   onPause: () => void;
   onSettings: () => void;
   onCancel: () => void;
-  onModeChange: (mode: string) => void;
+  onModeChange: (mode: 'atom' | 'move' | 'rotate') => void;
 }
 
 /** Imperative callbacks registered by main.ts, invoked by React SettingsSheet. */
 export interface SettingsCallbacks {
-  onSpeedChange: (val: string) => void;
-  onThemeChange: (theme: string) => void;
-  onBoundaryChange: (mode: string) => void;
+  onSpeedChange: (val: '0.5' | '1' | '2' | '4' | 'max') => void;
+  onThemeChange: (theme: 'dark' | 'light') => void;
+  onBoundaryChange: (mode: 'contain' | 'remove') => void;
   onDragChange: (v: number) => void;
   onRotateChange: (v: number) => void;
   onDampingChange: (d: number) => void;
-  onTextSizeChange: (size: string) => void;
+  onTextSizeChange: (size: 'normal' | 'large') => void;
   onAddMolecule: () => void;
   onClear: () => void;
   onResetView: () => void;

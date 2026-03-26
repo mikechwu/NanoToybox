@@ -405,8 +405,8 @@ async function init() {
       if (sheet.contains(target)) return;
     }
 
-    // Clicks inside the dock never dismiss.
-    const dockEl = document.querySelector('.dock');
+    // Clicks inside the dock region never dismiss.
+    const dockEl = document.querySelector('[data-dock-root]');
     if (dockEl && dockEl.contains(target)) return;
 
     // Only backdrop and renderer canvas dismiss.
@@ -524,7 +524,7 @@ async function init() {
     }
   }
 
-  function changePlaybackSpeed(val: string) {
+  function changePlaybackSpeed(val: '0.5' | '1' | '2' | '4' | 'max') {
     if (val === 'max') {
       session.playback.speedMode = 'max';
     } else {
@@ -534,17 +534,22 @@ async function init() {
     useAppStore.getState().setTargetSpeed(val === 'max' ? Infinity : parseFloat(val));
   }
 
-  function applyThemeSetting(theme: string) {
+  function applyThemeSetting(theme: 'dark' | 'light') {
     session.theme = theme;
     renderer.applyTheme(session.theme);
     applyThemeTokens(session.theme);
-    useAppStore.getState().setTheme(theme as 'dark' | 'light');
+    useAppStore.getState().setTheme(theme);
   }
 
-  function applyTextSizeSetting(size: string) {
+  function applyTextSizeSetting(size: 'normal' | 'large') {
     session.textSize = size;
     applyTextSizeTokens(size);
-    useAppStore.getState().setTextSize(size as 'normal' | 'large');
+    useAppStore.getState().setTextSize(size);
+  }
+
+  function setInteractionModeSetting(mode: 'atom' | 'move' | 'rotate') {
+    session.interactionMode = mode;
+    useAppStore.getState().setInteractionMode(mode);
   }
 
   // Register store callbacks — React components invoke these via the Zustand store
@@ -552,15 +557,12 @@ async function init() {
     overlayRuntime: _overlay!,
     togglePause: togglePlaybackPause,
     changeSpeed: changePlaybackSpeed,
-    setInteractionMode: (mode) => {
-      session.interactionMode = mode;
-      if (mode) useAppStore.getState().setInteractionMode(mode as 'atom' | 'move' | 'rotate');
-    },
+    setInteractionMode: setInteractionModeSetting,
     forceRenderThisTick: () => { scheduler.forceRenderThisTick = true; },
     clearPlayground: () => _scene!.clearPlayground(),
     resetView: () => renderer.resetView(),
     updateChooserRecentRow: () => _scene!.updateChooserRecentRow(),
-    setPhysicsWallMode: (mode) => physics.setWallMode(mode as 'contain' | 'remove'),
+    setPhysicsWallMode: (mode) => physics.setWallMode(mode),
     setPhysicsDragStrength: (v) => physics.setDragStrength(v),
     setPhysicsRotateStrength: (v) => physics.setRotateStrength(v),
     setPhysicsDamping: (d) => physics.setDamping(d),

@@ -56,7 +56,7 @@
 [data-ui-effects="reduced"] .panel,
 [data-ui-effects="reduced"] .react-info,
 [data-ui-effects="reduced"] .react-fps,
-[data-ui-effects="reduced"] .dock,
+[data-ui-effects="reduced"] .dock-bar,
 [data-ui-effects="reduced"] .sheet {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -172,10 +172,14 @@ canvas { display: block; touch-action: none; }
    Layout primitives: dock, sheet, grouped list, segmented control
    ══════════════════════════════════════════════════════════ */
 
-/* ── Dock ── */
-.dock {
+/* ── Dock region (measurement root for overlay-layout.ts) ── */
+.dock-region {
   position: fixed;
   bottom: 0; left: 0; right: 0;
+  z-index: 205; /* Above backdrop (200) so dock stays interactive while sheets are open */
+}
+/* ── Dock bar (visual toolbar) ── */
+.dock-bar {
   display: flex;
   justify-content: space-around;
   align-items: center;
@@ -185,7 +189,6 @@ canvas { display: block; touch-action: none; }
   backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   border-top: 1px solid var(--color-border);
-  z-index: 205; /* Above backdrop (200) so dock stays interactive while sheets are open */
 }
 .dock-item {
   display: flex;
@@ -208,10 +211,12 @@ canvas { display: block; touch-action: none; }
 .dock-item:disabled { opacity: 0.3; cursor: default; }
 
 @media (min-width: 768px) {
-  .dock {
+  .dock-region {
     left: 50%; transform: translateX(-50%);
     width: auto; min-width: 320px; max-width: 480px;
     bottom: calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));
+  }
+  .dock-bar {
     border-radius: var(--radius-lg);
     border: 1px solid var(--color-border);
     /* Safe-area clearance moved from internal padding to external position,
@@ -330,6 +335,10 @@ canvas { display: block; touch-action: none; }
 /* Segmented control — uses CSS custom properties for positioning.
    Set --seg-count (number of segments) and --seg-active (0-indexed active segment)
    on the .segmented element. No child indicator div needed. */
+fieldset.segmented {
+  border: none;
+  margin: 0;
+}
 .segmented {
   display: flex;
   position: relative;
@@ -339,6 +348,10 @@ canvas { display: block; touch-action: none; }
   align-self: center;
   --seg-count: 3;
   --seg-active: 0;
+}
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0;
+  margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;
 }
 /* Indicator via ::before — no extra DOM element, no grid interference */
 .segmented::before {
@@ -354,9 +367,12 @@ canvas { display: block; touch-action: none; }
   z-index: 1;
 }
 .segmented input[type="radio"] {
-  position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none;
+  /* Absolute-fill inside label: invisible but actionable for accessibility/testing */
+  position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%;
+  margin: 0; cursor: pointer;
 }
 .segmented label {
+  position: relative; /* anchor for absolute-fill radio */
   flex: 1 1 0%;
   min-width: 0; /* Override intrinsic min-width so flex distributes equally regardless of text length */
   text-align: center;
@@ -373,6 +389,10 @@ canvas { display: block; touch-action: none; }
   white-space: nowrap;
 }
 .segmented label.active { color: var(--color-text); }
+.segmented label:has(input:focus-visible) {
+  outline: 2px solid var(--color-accent-text);
+  outline-offset: -2px;
+}
 .seg-disabled { opacity: 0.4; pointer-events: none; }
 
 /* ── Dock extras ── */
@@ -380,11 +400,8 @@ canvas { display: block; touch-action: none; }
 .dock-label { font-size: var(--font-xs); }
 .dock-item.dock-text-only { justify-content: center; }
 .dock-mode { max-width: var(--dock-mode-max-width); }
-/* Dock placement mode: hide mode segmented, show cancel, accent the Place button */
-.dock.placement .dock-mode { display: none; }
-.dock-cancel { display: none; }
-.dock.placement .dock-cancel { display: flex; }
-.dock.placement .dock-add-btn { color: var(--color-accent-text); }
+/* Placement surface styling — structure handled by JSX conditional rendering */
+.dock-add-btn.dock-placement-accent { color: var(--color-accent-text); }
 
 /* ── Sheet pages (drill-in navigation) ── */
 .sheet-page { /* default visible */ }
