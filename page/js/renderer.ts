@@ -82,6 +82,9 @@ export class Renderer {
   // Overlay layout
   _overlayLayout: { triadSize?: number; triadLeft?: number; triadBottom?: number } | null;
 
+  // Triad pulse animation state
+  _pulseRafId: number | null;
+
   constructor(container: HTMLElement) {
     this.container = container;
 
@@ -158,6 +161,14 @@ export class Renderer {
       TWO: THREE.TOUCH.DOLLY_PAN,
     };
     this.controls.enabled = true;
+    // Phase 1B parity calibration: OrbitControls rotateSpeed derived from the same
+    // CONFIG.orbit.rotateSpeed used by triad drag (applyOrbitDelta).
+    // OrbitControls uses screen-fraction units (~2π per full viewport drag).
+    // CONFIG.orbit.rotateSpeed is radians/pixel. The conversion factor depends on
+    // viewport width: rotateSpeed ≈ CONFIG.orbit.rotateSpeed × viewportWidth / (2π).
+    // Simplified: CONFIG.orbit.rotateSpeed × 100 is a reasonable calibration for
+    // typical phone/tablet viewports (375-1024px). Verified by Phase 1B parity test.
+    this.controls.rotateSpeed = CONFIG.orbit.rotateSpeed * 100;
 
     this._defaultCamPos = new THREE.Vector3(0, 0, 15);
     this._defaultCamTarget = new THREE.Vector3(0, 0, 0);
@@ -994,6 +1005,15 @@ export class Renderer {
       clearTimeout(this._deferredResizeTimer);
       this._deferredResizeTimer = null;
     }
+    if (this._pulseRafId != null) {
+      cancelAnimationFrame(this._pulseRafId);
+      this._pulseRafId = null;
+    }
+    if (this._snapRafId != null) {
+      cancelAnimationFrame(this._snapRafId);
+      this._snapRafId = null;
+    }
+    this.showAxisHighlight(null); // clean up triad highlight
   }
 
   /** Debug info for instanced capacity monitoring. */
@@ -1016,6 +1036,252 @@ export class Renderer {
     this.controls.update();
   }
 
+  // ── Triad interaction (mobile camera orbit) ──
+
+  /**
+   * Get the triad's screen-space hit rect in CSS pixels.
+   * Returns { left, bottom, size } — the enlarged touch target including padding.
+   */
+  getTriadRect() {
+    const size = this._axisSize;
+    const left = this._overlayLayout?.triadLeft ?? 6;
+    const bottom = this._overlayLayout?.triadBottom ?? 50;
+    const pad = CONFIG.orbit.triadHitPadding;
+    return {
+      left: left - pad,
+      bottom: bottom - pad,
+      size: size + 2 * pad,
+      visualSize: size,
+      visualLeft: left,
+      visualBottom: bottom,
+    };
+  }
+
+  /**
+   * Check if a screen point (clientX, clientY) is inside the triad hit rect.
+   * Uses getBoundingClientRect for layout-robust canvas-local coordinates.
+   */
+  isInsideTriad(clientX: number, clientY: number): boolean {
+    const triad = this.getTriadRect();
+    const canvasRect = this.renderer.domElement.getBoundingClientRect();
+    // Convert client coords to canvas-local, then to bottom-up (renderer origin)
+    const localX = clientX - canvasRect.left;
+    const localY = canvasRect.height - (clientY - canvasRect.top);
+    return (
+      localX >= triad.left &&
+      localX <= triad.left + triad.size &&
+      localY >= triad.bottom &&
+      localY <= triad.bottom + triad.size
+    );
+  }
+
+  /**
+   * Apply an orbit rotation delta to the camera (spherical coordinates).
+   * Used by triad drag. Same rotation convention as OrbitControls:
+   * drag-up decreases phi (camera rotates down = "dragging the world").
+   */
+  applyOrbitDelta(dx: number, dy: number) {
+    const speed = CONFIG.orbit.rotateSpeed;
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    const spherical = new THREE.Spherical().setFromVector3(offset);
+    spherical.theta -= dx * speed;
+    spherical.phi -= dy * speed;
+    // Clamp phi to avoid gimbal lock at poles
+    spherical.phi = Math.max(0.01, Math.min(Math.PI - 0.01, spherical.phi));
+    this.camera.position.copy(this.controls.target).add(
+      new THREE.Vector3().setFromSpherical(spherical)
+    );
+    this.camera.lookAt(this.controls.target);
+    this.controls.update();
+  }
+
+  // ── Canonical view snaps (Phase 2) ──
+
+  /** Axis endpoints in triad-scene coordinates: ±1.0 along each axis. */
+  private _axisEndpoints = [
+    { dir: new THREE.Vector3(1, 0, 0), label: '+X' },
+    { dir: new THREE.Vector3(-1, 0, 0), label: '-X' },
+    { dir: new THREE.Vector3(0, 1, 0), label: '+Y' },
+    { dir: new THREE.Vector3(0, -1, 0), label: '-Y' },
+    { dir: new THREE.Vector3(0, 0, 1), label: '+Z' },
+    { dir: new THREE.Vector3(0, 0, -1), label: '-Z' },
+  ];
+
+  /** Snap animation state */
+  private _snapRafId: number | null = null;
+
+  /** Highlight mesh for triad tap-intent preview */
+  private _triadHighlight: THREE.Mesh | null = null;
+
+  /**
+   * Find the nearest axis endpoint to a screen point within the triad viewport.
+   * Returns the axis direction vector, or null if the point is in the center zone.
+   * @param clientX, clientY — screen coordinates
+   */
+  getNearestAxisEndpoint(clientX: number, clientY: number): THREE.Vector3 | null {
+    if (!this._axisCamera || !this._axisScene) return null;
+    const rect = this.getTriadRect();
+    const canvasRect = this.renderer.domElement.getBoundingClientRect();
+    const localX = clientX - canvasRect.left;
+    const localY = canvasRect.height - (clientY - canvasRect.top);
+
+    // Center of triad viewport in canvas-local bottom-up coords
+    const cx = rect.visualLeft + rect.visualSize / 2;
+    const cy = rect.visualBottom + rect.visualSize / 2;
+
+    // Center zone — double-tap reset area (25% of visual radius)
+    const centerRadius = rect.visualSize * 0.25;
+    const distToCenter = Math.sqrt((localX - cx) ** 2 + (localY - cy) ** 2);
+    if (distToCenter < centerRadius) return null; // center zone → reset, not snap
+
+    // Project all 6 endpoints to 2D within the triad viewport
+    let nearest: THREE.Vector3 | null = null;
+    let minDist = Infinity;
+    const projVec = new THREE.Vector3();
+
+    for (const ep of this._axisEndpoints) {
+      projVec.copy(ep.dir);
+      projVec.project(this._axisCamera);
+      // NDC (-1..1) → viewport-local pixels
+      const px = cx + (projVec.x * rect.visualSize) / 2;
+      const py = cy + (projVec.y * rect.visualSize) / 2;
+      const d = Math.sqrt((localX - px) ** 2 + (localY - py) ** 2);
+      if (d < minDist) {
+        minDist = d;
+        nearest = ep.dir;
+      }
+    }
+    return nearest;
+  }
+
+  /**
+   * Animate camera to look along an axis direction over ~300ms.
+   * Preserves current camera distance from target.
+   */
+  snapToAxis(axisDir: THREE.Vector3) {
+    // Cancel any in-progress snap
+    if (this._snapRafId != null) {
+      cancelAnimationFrame(this._snapRafId);
+      this._snapRafId = null;
+    }
+
+    const distance = this.camera.position.distanceTo(this.controls.target);
+    const targetPos = this.controls.target.clone().add(
+      axisDir.clone().normalize().multiplyScalar(distance)
+    );
+    const startPos = this.camera.position.clone();
+    const startUp = this.camera.up.clone();
+    // Choose an appropriate up vector — avoid gimbal lock when looking along Y
+    const targetUp = Math.abs(axisDir.y) > 0.9
+      ? new THREE.Vector3(0, 0, axisDir.y > 0 ? -1 : 1)
+      : new THREE.Vector3(0, 1, 0);
+
+    const start = performance.now();
+    const duration = 300;
+
+    const animate = () => {
+      const t = Math.min(1, (performance.now() - start) / duration);
+      // Smooth ease-out
+      const ease = 1 - (1 - t) * (1 - t);
+      this.camera.position.lerpVectors(startPos, targetPos, ease);
+      this.camera.up.lerpVectors(startUp, targetUp, ease).normalize();
+      this.camera.lookAt(this.controls.target);
+      this.controls.update();
+      if (t < 1) {
+        this._snapRafId = requestAnimationFrame(animate);
+      } else {
+        this._snapRafId = null;
+      }
+    };
+    this._snapRafId = requestAnimationFrame(animate);
+  }
+
+  /**
+   * Animated reset to default front view over ~300ms.
+   */
+  animatedResetView() {
+    this.snapToAxis(new THREE.Vector3(0, 0, 1)); // +Z = front view = default (0,0,15)
+  }
+
+  /**
+   * Show a highlight sphere at the nearest axis endpoint in the triad scene.
+   * Used for tap-intent preview (>150ms hold). Pass null to clear.
+   */
+  showAxisHighlight(axisDir: THREE.Vector3 | null) {
+    // Remove existing triad highlight
+    if (this._triadHighlight && this._axisScene) {
+      this._axisScene.remove(this._triadHighlight);
+      this._triadHighlight.geometry.dispose();
+      (this._triadHighlight.material as THREE.Material).dispose();
+      this._triadHighlight = null;
+    }
+    if (!axisDir || !this._axisScene) return;
+
+    const geo = new THREE.SphereGeometry(0.12, 12, 8);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.5,
+      depthTest: false,
+    });
+    this._triadHighlight = new THREE.Mesh(geo, mat);
+    this._triadHighlight.position.copy(axisDir);
+    this._axisScene.add(this._triadHighlight);
+  }
+
+  // ── Background orbit engagement cue ──
+
+  /** Brighten triad while background orbit is active — confirms gesture recognition. */
+  startBackgroundOrbitCue() {
+    if (!this._axisScene) return;
+    const ambients = this._axisScene.children.filter(
+      (c) => c instanceof THREE.AmbientLight
+    ) as THREE.AmbientLight[];
+    if (ambients.length > 0) ambients[0].intensity = 3.0;
+  }
+
+  /** Restore triad brightness when background orbit ends. */
+  endBackgroundOrbitCue() {
+    if (!this._axisScene) return;
+    const ambients = this._axisScene.children.filter(
+      (c) => c instanceof THREE.AmbientLight
+    ) as THREE.AmbientLight[];
+    if (ambients.length > 0) ambients[0].intensity = 2.0;
+  }
+
+  /**
+   * Brief visual pulse on the triad to draw attention (one-time affordance).
+   * Temporarily increases triad ambient light intensity, then fades back.
+   * Lifecycle-safe: cancels any existing pulse, stores RAF id for cleanup.
+   */
+  pulseTriad() {
+    if (!this._axisScene) return;
+    // Cancel any in-progress pulse
+    if (this._pulseRafId != null) {
+      cancelAnimationFrame(this._pulseRafId);
+      this._pulseRafId = null;
+    }
+    const ambients = this._axisScene.children.filter(
+      (c) => c instanceof THREE.AmbientLight
+    ) as THREE.AmbientLight[];
+    if (ambients.length === 0) return;
+    const original = ambients[0].intensity;
+    const target = original * 2.5;
+    ambients[0].intensity = target;
+    const start = performance.now();
+    const duration = 600;
+    const fade = () => {
+      const t = Math.min(1, (performance.now() - start) / duration);
+      ambients[0].intensity = target + (original - target) * t;
+      if (t < 1) {
+        this._pulseRafId = requestAnimationFrame(fade);
+      } else {
+        this._pulseRafId = null;
+      }
+    };
+    this._pulseRafId = requestAnimationFrame(fade);
+  }
+
   /**
    * Create a professional axis triad indicator (ParaView/OVITO style).
    * Uses 3D ArrowHelpers with X/Y/Z labels in a separate orthographic
@@ -1027,9 +1293,13 @@ export class Renderer {
     this._axisCamera.position.set(0, 0, 4);
     this._axisCamera.lookAt(0, 0, 0);
 
+    // Coarse-pointer check for triad sizing — available immediately (no device-mode needed).
+    // Matches phone/tablet with imprecise primary pointer; desktop touchscreens with
+    // precise pointer stay on the desktop path.
+    const isCoarse = window.matchMedia('(pointer: coarse)').matches;
     const len = 1.0;
-    const headLen = 0.22;
-    const headW = 0.10;
+    const headLen = isCoarse ? 0.28 : 0.22;  // larger arrow heads for coarse pointers
+    const headW = isCoarse ? 0.13 : 0.10;
 
     // 3D arrows — standard convention: X=red, Y=green, Z=blue
     const axX = new THREE.ArrowHelper(
@@ -1061,7 +1331,8 @@ export class Renderer {
       const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
       const sprite = new THREE.Sprite(mat);
       sprite.position.copy(pos);
-      sprite.scale.set(0.35, 0.35, 1);
+      const labelScale = isCoarse ? 0.45 : 0.35;
+      sprite.scale.set(labelScale, labelScale, 1);
       return sprite;
     };
 
@@ -1073,6 +1344,14 @@ export class Renderer {
 
     // Ambient light for the axis scene
     this._axisScene.add(new THREE.AmbientLight(0xffffff, 2.0));
+
+    // Center home glyph — subtle dot indicating double-tap reset target
+    const homeDot = new THREE.Mesh(
+      new THREE.SphereGeometry(0.06, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.4, depthTest: false }),
+    );
+    homeDot.position.set(0, 0, 0);
+    this._axisScene.add(homeDot);
 
     // Mini-viewport size scales with screen — smaller on tablets
     this._axisSize = Math.min(100, Math.floor(window.innerWidth * 0.08));

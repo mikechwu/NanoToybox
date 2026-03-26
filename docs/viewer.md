@@ -75,6 +75,10 @@ The dock has a three-way segmented mode selector: **Atom** | **Move** | **Rotate
 | Gesture (Mobile) | Action |
 |-------------------|--------|
 | 1-finger drag on atom | Interact (depends on mode: Atom/Move/Rotate) |
+| Drag triad | Orbit camera (primary mobile orbit control) |
+| 1-finger drag on background | Orbit camera (when no atom is hit) |
+| Tap axis end on triad | Snap to canonical view (±X/±Y/±Z) |
+| Double-tap triad center | Reset to default front view |
 | 2-finger pinch | Zoom |
 | 2-finger drag | Pan camera |
 
@@ -111,7 +115,7 @@ The interactive page uses a composition root pattern with React-authoritative UI
 - Three.js v0.170 (npm, bundled by Vite)
 - InstancedMesh for atoms and bonds (2 draw calls, geometric capacity growth)
 - OrbitControls for camera (right-click orbit, scroll zoom)
-- Custom axis triad (ArrowHelper + sprites, scissor-test viewport, device-aware sizing 80–200px via `setOverlayLayout()` contract)
+- Interactive axis triad (ArrowHelper + sprites, scissor-test viewport, device-aware sizing 96–200px via `setOverlayLayout()`; drag=orbit, tap=snap, double-tap=reset on touch devices)
 - MeshStandardMaterial with roughness 0.7, metalness 0 (PBR)
 - Camera-relative 4-light rig (key/fill/rim/ambient)
 

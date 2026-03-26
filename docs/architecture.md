@@ -85,8 +85,8 @@ NanoToybox/
 │   │   ├── react-root.tsx        # React mount/unmount entry point
 │   │   ├── config.ts             # Centralized page configuration
 │   │   ├── physics.ts            # Tersoff force engine + interaction forces
-│   │   ├── renderer.ts           # Three.js scene, InstancedMesh, PBR materials
-│   │   ├── input.ts              # Mouse/touch input, raycasting
+│   │   ├── renderer.ts           # Three.js scene, InstancedMesh, PBR materials, orbit + interactive triad
+│   │   ├── input.ts              # Mouse/touch input, raycasting, triad drag/tap/snap, background orbit
 │   │   ├── state-machine.ts      # Interaction state transitions
 │   │   ├── loader.ts             # Structure library loader + bond topology
 │   │   ├── format-status.ts      # Shared FPS/status text formatter
@@ -191,7 +191,7 @@ Unified outside-click dismiss rule (all devices): a capture-phase `pointerdown` 
 `overlay-layout.ts` (`createOverlayLayout`) owns bottom-overlay layout arbitration via `doLayout()` (RAF-coalesced). It measures the dock region via `document.querySelector(DOCK_ROOT_SELECTOR)` (`[data-dock-root]` on DockLayout's root element) and `getBoundingClientRect()`, producing separate layout outputs:
 
 - **Hint** (`--hint-bottom` CSS var): always clears the dock top edge + gap
-- **Triad** (`renderer.setOverlayLayout({ triadSize, triadLeft, triadBottom })`): phone clears full-width dock; tablet/desktop uses safe-area corner margins. `triadLeft` accounts for `env(safe-area-inset-left)`. Triad sizes 80–200px depending on device.
+- **Triad** (`renderer.setOverlayLayout({ triadSize, triadLeft, triadBottom })`): interactive camera orbit control on touch devices (drag=rotate, tap=snap-to-axis, double-tap=reset). Phone clears full-width dock; tablet/desktop uses safe-area corner margins. `triadLeft` accounts for `env(safe-area-inset-left)`. Sizes 96–140px on phone, 120–200px on tablet/desktop. `CONFIG.orbit` defines `rotateSpeed` and `triadHitPadding`.
 
 Layout updates are triggered by `window.resize` and a `ResizeObserver` on the `[data-dock-root]` element (DockLayout's root), coalesced to one computation per frame. All dock child surfaces must be in normal document flow inside the measured root so `getBoundingClientRect()` reflects the total bottom-control footprint.
 

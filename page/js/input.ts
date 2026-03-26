@@ -33,6 +33,28 @@ export class InputManager {
   isMobile: boolean;
   isDragging: boolean;
   isCamera: boolean;
+  isTriadDragging: boolean;
+  _triadLastX: number;
+  _triadLastY: number;
+  _triadSource: {
+    isInsideTriad: (clientX: number, clientY: number) => boolean;
+    applyOrbitDelta: (dx: number, dy: number) => void;
+    onBackgroundOrbitStart?: () => void;
+    onBackgroundOrbitEnd?: () => void;
+    getNearestAxisEndpoint?: (clientX: number, clientY: number) => THREE.Vector3 | null;
+    snapToAxis?: (dir: THREE.Vector3) => void;
+    animatedResetView?: () => void;
+    showAxisHighlight?: (dir: THREE.Vector3 | null) => void;
+  } | null;
+
+  // Triad tap/double-tap/drag discrimination
+  _triadTouchStartTime: number;
+  _triadTouchStartX: number;
+  _triadTouchStartY: number;
+  _triadLastTapTime: number;
+  _triadLastTapWasCenter: boolean;
+  _triadDragCommitted: boolean; // true once movement exceeds 5px — enables orbit delta
+  _triadTapIntentTimer: ReturnType<typeof setTimeout> | null;
   _scratchVec3: THREE.Vector3;
   _scratchProjected: THREE.Vector3;
   _scratchNDC: THREE.Vector2;
@@ -58,9 +80,23 @@ export class InputManager {
     this.cb = callbacks;
 
     this.raycaster = new THREE.Raycaster();
-    this.isMobile = 'ontouchstart' in window;
+    // Interaction capability: coarse pointer + no hover = genuine touch device.
+    // Stable across resize — does not change with viewport width.
+    // Determines whether to bind touch or pointer events.
+    this.isMobile = CONFIG.isTouchInteraction();
     this.isDragging = false;
     this.isCamera = false;
+    this.isTriadDragging = false;
+    this._triadLastX = 0;
+    this._triadLastY = 0;
+    this._triadSource = null;
+    this._triadTouchStartTime = 0;
+    this._triadTouchStartX = 0;
+    this._triadTouchStartY = 0;
+    this._triadLastTapTime = 0;
+    this._triadLastTapWasCenter = false;
+    this._triadDragCommitted = false;
+    this._triadTapIntentTimer = null;
 
     // Pre-allocated scratch objects for picking and interaction (zero per-event allocations)
     this._scratchVec3 = new THREE.Vector3();
@@ -80,6 +116,12 @@ export class InputManager {
     this._atomSource = atomSource;
     this.isDragging = false;
     this.isCamera = false;
+    this.isTriadDragging = false;
+  }
+
+  /** Connect the triad interaction source (renderer). Called once from main.ts. */
+  setTriadSource(source: InputManager['_triadSource']) {
+    this._triadSource = source;
   }
 
   _screenToNDC(x, y) {
@@ -251,6 +293,11 @@ export class InputManager {
   }
 
   destroy() {
+    // Clear any pending triad tap-intent timer
+    if (this._triadTapIntentTimer) {
+      clearTimeout(this._triadTapIntentTimer);
+      this._triadTapIntentTimer = null;
+    }
     const c = this.canvas;
     if (this.isMobile) {
       c.removeEventListener('touchstart', this._handlers.touchstart);
@@ -322,45 +369,158 @@ export class InputManager {
   }
 
   // --- Mobile events ---
-  // Simple rule: 1 finger = interact with molecule, 2+ fingers = always camera.
-  // No multi-touch rotation — rotation is handled via the Rotate mode selector.
+  // Priority: triad hit > atom hit > background orbit (empty space).
+  // 2+ fingers = always camera (zoom/pan). Finger-count change ends any gesture.
 
   _onTouchStart(e) {
     if (e.touches.length >= 2) {
-      // 2+ fingers → cancel any active interaction, let OrbitControls handle camera
+      // 2+ fingers → cancel any active gesture, let OrbitControls handle camera
       if (this.isDragging) {
         this.isDragging = false;
         this.cb.onPointerUp?.();
+      }
+      if (this.isTriadDragging) {
+        this.isTriadDragging = false;
+        if (this._triadTapIntentTimer) { clearTimeout(this._triadTapIntentTimer); this._triadTapIntentTimer = null; }
+        this._triadSource?.showAxisHighlight?.(null);
+      }
+      if (this.isCamera) {
+        this.controls.touches.ONE = null;
+        this.isCamera = false;
+        this._triadSource?.onBackgroundOrbitEnd?.();
       }
       return;
     }
 
-    // 1 finger → try atom interaction
     e.preventDefault();
     const touch = e.touches[0];
-    const atomIdx = this._raycastAtom(touch.clientX, touch.clientY);
 
+    // 1. Check triad hit area first (primary camera control on mobile)
+    if (this._triadSource?.isInsideTriad(touch.clientX, touch.clientY)) {
+      this.isTriadDragging = true;
+      this._triadDragCommitted = false; // no orbit until movement exceeds 5px
+      this._triadLastX = touch.clientX;
+      this._triadLastY = touch.clientY;
+      this._triadTouchStartX = touch.clientX;
+      this._triadTouchStartY = touch.clientY;
+      this._triadTouchStartTime = performance.now();
+
+      // Tap-intent highlight: show nearest axis after 150ms if finger hasn't moved
+      if (this._triadTapIntentTimer) clearTimeout(this._triadTapIntentTimer);
+      this._triadTapIntentTimer = setTimeout(() => {
+        this._triadTapIntentTimer = null;
+        if (!this.isTriadDragging) return;
+        // Only show if finger stayed close to start (tap intent, not drag)
+        const dx = this._triadLastX - this._triadTouchStartX;
+        const dy = this._triadLastY - this._triadTouchStartY;
+        if (Math.sqrt(dx * dx + dy * dy) < 5) {
+          const nearest = this._triadSource?.getNearestAxisEndpoint?.(
+            this._triadLastX, this._triadLastY
+          );
+          this._triadSource?.showAxisHighlight?.(nearest ?? null);
+        }
+      }, 150);
+
+      return;
+    }
+
+    // 2. Try atom interaction — atom hit always wins
+    const atomIdx = this._raycastAtom(touch.clientX, touch.clientY);
     if (atomIdx >= 0) {
       this.isDragging = true;
       this.cb.onPointerDown?.(atomIdx, touch.clientX, touch.clientY, false);
+      return;
     }
+
+    // 3. Empty space → background orbit (Phase 1B)
+    this.controls.touches.ONE = THREE.TOUCH.ROTATE;
+    this.isCamera = true;
+    this._triadSource?.onBackgroundOrbitStart?.();
   }
 
   _onTouchMove(e) {
-    if (this.isDragging && e.touches.length === 1) {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+
+    if (this.isTriadDragging) {
       e.preventDefault();
-      const touch = e.touches[0];
+      const dx = touch.clientX - this._triadLastX;
+      const dy = touch.clientY - this._triadLastY;
+      this._triadLastX = touch.clientX;
+      this._triadLastY = touch.clientY;
+
+      // Check if movement exceeds 5px from start → commit to drag
+      const totalDx = touch.clientX - this._triadTouchStartX;
+      const totalDy = touch.clientY - this._triadTouchStartY;
+      if (!this._triadDragCommitted && Math.sqrt(totalDx * totalDx + totalDy * totalDy) > 5) {
+        this._triadDragCommitted = true;
+        // Clear tap-intent highlight — this is a drag, not a tap
+        if (this._triadTapIntentTimer) {
+          clearTimeout(this._triadTapIntentTimer);
+          this._triadTapIntentTimer = null;
+        }
+        this._triadSource?.showAxisHighlight?.(null);
+      }
+
+      // Only apply orbit delta after drag threshold is exceeded
+      if (this._triadDragCommitted) {
+        this._triadSource?.applyOrbitDelta(dx, dy);
+      }
+      return;
+    }
+
+    if (this.isDragging) {
+      e.preventDefault();
       this.cb.onPointerMove?.(touch.clientX, touch.clientY);
     }
-    // 2-finger moves handled by OrbitControls directly
+    // Background orbit moves handled by OrbitControls directly
   }
 
   _onTouchEnd(e) {
-    if (e.touches.length === 0) {
-      if (this.isDragging) {
-        this.isDragging = false;
-        this.cb.onPointerUp?.();
+    // Finger-count decrease ends current gesture (no inheritance)
+    if (this.isTriadDragging) {
+      // Tap = drag threshold never exceeded (no orbit delta was applied)
+      const isTap = !this._triadDragCommitted && (performance.now() - this._triadTouchStartTime) < 300;
+
+      if (this._triadTapIntentTimer) {
+        clearTimeout(this._triadTapIntentTimer);
+        this._triadTapIntentTimer = null;
       }
+      this._triadSource?.showAxisHighlight?.(null);
+
+      if (isTap) {
+        // Check if tap is in center zone (for double-tap reset)
+        const nearest = this._triadSource?.getNearestAxisEndpoint?.(
+          this._triadLastX, this._triadLastY
+        );
+        const isInCenter = nearest === null;
+
+        const now = performance.now();
+        const isDoubleTap = (now - this._triadLastTapTime) < 400
+          && isInCenter && this._triadLastTapWasCenter;
+        this._triadLastTapTime = now;
+        this._triadLastTapWasCenter = isInCenter;
+
+        if (isDoubleTap) {
+          // Double-tap center → reset to default front view
+          this._triadSource?.animatedResetView?.();
+        } else if (nearest) {
+          // Single tap on axis endpoint → snap to that view
+          this._triadSource?.snapToAxis?.(nearest);
+        }
+        // Single tap on center (not double) → no action (wait for second tap)
+      }
+
+      this.isTriadDragging = false;
+    }
+    if (this.isDragging) {
+      this.isDragging = false;
+      this.cb.onPointerUp?.();
+    }
+    if (this.isCamera) {
+      this.controls.touches.ONE = null;
+      this.isCamera = false;
+      this._triadSource?.onBackgroundOrbitEnd?.();
     }
   }
 
@@ -373,5 +533,13 @@ export class InputManager {
       this.cb.onPointerUp?.();
     }
     this.isDragging = false;
+    this.isTriadDragging = false;
+    if (this._triadTapIntentTimer) { clearTimeout(this._triadTapIntentTimer); this._triadTapIntentTimer = null; }
+    this._triadSource?.showAxisHighlight?.(null);
+    if (this.isCamera) {
+      this.controls.touches.ONE = null;
+      this.isCamera = false;
+      this._triadSource?.onBackgroundOrbitEnd?.();
+    }
   }
 }

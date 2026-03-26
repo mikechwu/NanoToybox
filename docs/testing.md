@@ -220,6 +220,56 @@ After changes to UI controllers or main.ts composition:
 | A13 | Text Size setting | Settings → Appearance → toggle Large → all text visibly larger. Toggle Normal → text returns to baseline. Segmented indicator aligned at both sizes |
 | A14 | Info card reduced | Top-left card shows only status text (no "NanoToybox" title), smaller padding |
 
+### Mobile Camera Orbit (Phase 1A)
+
+Test on phone and iPad after changes to triad interaction or input.ts touch handling:
+
+| # | Check | How to verify |
+|---|---|---|
+| B1 | Triad visible and touchable | On phone, triad is large enough to touch confidently (96-120px). Arrows and labels are clearly visible. |
+| B2 | Triad drag orbits camera | 1-finger drag on triad rotates the camera smoothly. Drag-up = camera rotates down ("dragging the world"). |
+| B3 | Atom interaction preserved | 1-finger drag on atom still triggers current interaction mode (Atom/Move/Rotate). No false triad captures. |
+| B4 | 2-finger unchanged | Pinch to zoom and 2-finger drag to pan still work. 2nd finger during triad drag cancels triad and hands off. |
+| B5 | Coachmark timing | On first mobile session: "Drag triad to rotate view" appears after ~3s of idle. Does NOT appear if user interacts immediately, or if sheet/placement is open. |
+| B6 | Triad pulse | When coachmark appears, triad brightens briefly then fades back (~600ms). Visual tie between text and control. |
+| B7 | First-attempt success | A first-time user can find the triad and drag it successfully on their first try without reading help text. |
+| B8 | Desktop unaffected | On desktop, right-drag still orbits via OrbitControls. Triad is smaller (desktop size). No coachmark shown. |
+
+### Mobile Camera Orbit (Phase 1B — Background Orbit)
+
+Test on phone and iPad after changes to background orbit or coachmark v2:
+
+| # | Check | How to verify |
+|---|---|---|
+| C1 | Background miss orbits | 1-finger drag on empty space (no atom) rotates the camera. Same drag direction as triad. |
+| C2 | Atom hit still wins | 1-finger drag on an atom triggers interaction (drag/move/rotate), not camera orbit. No ambiguity. |
+| C3 | Background orbit cue | When background orbit starts, triad brightens. When finger lifts, triad returns to normal intensity. |
+| C4 | 2nd finger cancels | During background orbit, place a second finger → orbit cancels, 2-finger zoom/pan takes over. Triad cue clears. |
+| C5 | Coachmark v2 for returning users | Clear mobile-orbit-v1 but not v2 from localStorage. Reload → v2 coachmark shows: "Drag triad anytime · Drag clear background when available". Does NOT show if v1 hasn't been dismissed yet. |
+| C6 | Parity check | Same 100px drag on triad and on empty space produces roughly the same rotation angle. Test on phone and iPad. Acceptable difference: momentum after release (OrbitControls only). |
+
+**Parity calibration note:** `CONFIG.orbit.rotateSpeed = 0.005` rad/px is the triad orbit
+speed. OrbitControls `rotateSpeed` is set to `CONFIG.orbit.rotateSpeed * 100 = 0.5` at
+init. This approximation was calibrated on typical phone/tablet viewports (375-1024px).
+If parity drift is observed on a specific device class, adjust the `* 100` factor in
+`renderer.ts` and document the tested devices.
+
+### Mobile Camera Orbit (Phase 2 — Canonical View Snaps)
+
+Test on phone and iPad after changes to axis snap, double-tap reset, or tap-intent highlight:
+
+| # | Check | How to verify |
+|---|---|---|
+| D1 | Single tap snaps to nearest axis | Rotate triad to show X prominently → tap near X tip → camera animates to +X view over ~300ms |
+| D2 | All 6 views reachable | Tap near each of ±X, ±Y, ±Z endpoints → camera snaps to that view. Negative tails work when visible. |
+| D3 | Double-tap center resets | Double-tap the center of the triad → camera animates to default front view (0, 0, 15) |
+| D4 | Tap-intent highlight | Touch and hold triad (>150ms, don't move) → nearest axis endpoint shows a white sphere highlight. Start dragging → highlight disappears. |
+| D5 | Drag still works | Drag on triad orbits normally. Tap-intent highlight does not interfere with drag gesture. |
+| D6 | Center home glyph | Small gray dot visible at triad center — indicates double-tap reset target. |
+| D7 | Snap preserves distance | After snap, camera distance from target is the same as before snap. |
+| D8 | Sub-threshold jitter = tap only | Touch triad, move < 5px, release → camera does NOT orbit during the gesture. Only snap fires on release. |
+| D9 | Non-center double-tap = two snaps | Double-tap near +X tip → two snap gestures (not a reset). Only double-tap in the center zone (near home glyph) triggers reset. |
+
 ### Code Review Invariants
 
 Check during PRs that modify controller modules:

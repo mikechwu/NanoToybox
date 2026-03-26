@@ -322,6 +322,10 @@ export function SettingsSheet() {
           <div><b>Scroll wheel</b> — zoom</div>
           <div className="help-section-title" style={{ marginTop: 12 }}>Mobile</div>
           <div><b>1-finger drag on atom</b> — interact (depends on mode)</div>
+          <div><b>Drag triad</b> — orbit camera</div>
+          <div><b>Tap axis end</b> — snap to that view</div>
+          <div><b>Double-tap triad</b> — reset view</div>
+          <div><b>1-finger drag on background</b> — orbit camera</div>
           <div><b>2-finger pinch</b> — zoom</div>
           <div><b>2-finger drag</b> — pan camera</div>
           <div className="help-section-title" style={{ marginTop: 12 }}>Playground</div>

@@ -26,7 +26,7 @@ Or visit the live demo at [mikechwu.github.io/NanoToybox](https://mikechwu.githu
 - **Three interaction modes** — Atom (drag single atom), Move (translate molecule), Rotate (spin via torque)
 - **Placement mode** — new molecules appear adjacent to existing ones; translucent preview with drag-to-adjust
 - **15 structure presets** — C60, C180, C540, C720, carbon nanotubes (armchair/zigzag/chiral), graphene, diamond
-- **3D rendering** — PBR materials, camera-relative lighting, XYZ orientation axes
+- **3D rendering** — PBR materials, camera-relative lighting, interactive XYZ triad (drag=orbit, tap=snap, double-tap=reset)
 - **NVE dynamics by default** — energy-conserving; adjustable damping slider (0 to heavy)
 - **Dark/Light themes** — full UI adaptation with glassmorphic panels
 - **Containment boundary** — soft harmonic wall with Contain/Remove toggle, live atom count, auto-scaling radius
@@ -66,6 +66,10 @@ Select **Atom**, **Move**, or **Rotate** in the dock's segmented control.
 | Gesture | Action |
 |---------|--------|
 | 1-finger drag on atom | Interact (depends on mode) |
+| Drag triad | Orbit camera |
+| 1-finger drag on background | Orbit camera |
+| Tap axis end on triad | Snap to that view |
+| Double-tap triad center | Reset to default view |
 | 2-finger pinch | Zoom |
 | 2-finger drag | Pan camera |
 

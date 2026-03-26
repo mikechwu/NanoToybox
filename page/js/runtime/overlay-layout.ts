@@ -61,10 +61,10 @@ export function createOverlayLayout(renderer: {
       '--hint-bottom', (dockTopFromBottom + hintGap) + 'px'
     );
 
-    // Triad sizing
+    // Triad sizing — larger on touch devices for use as primary camera orbit control
     let triadSize;
     if (mode === 'phone') {
-      triadSize = Math.min(140, Math.max(80, Math.floor(viewportW * 0.12)));
+      triadSize = Math.min(140, Math.max(96, Math.floor(viewportW * 0.15)));
     } else {
       triadSize = Math.min(200, Math.max(120, Math.floor(viewportW * 0.10)));
     }

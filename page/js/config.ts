@@ -75,6 +75,36 @@ export const CONFIG = {
     statusUpdateHz: 5,        // status text refresh rate (Hz) — no need to update faster than human can read
   },
 
+  orbit: {
+    rotateSpeed: 0.005,     // radians per CSS pixel of drag — triad orbit path
+                            // OrbitControls rotateSpeed = this * 100 (see renderer.ts)
+                            // Calibrated for 375-1024px viewports. See docs/testing.md parity note.
+    triadHitPadding: 12,    // px — extra hit area beyond visible triad for touch tolerance
+  },
+
+  /** True when device-mode is phone or tablet (responsive layout). Width-derived. */
+  isTouchDevice(): boolean {
+    const mode = document.documentElement.dataset.deviceMode;
+    return mode === 'phone' || mode === 'tablet';
+  },
+
+  /**
+   * True when the primary pointer is coarse and cannot hover — genuine touch
+   * interaction context (phone/tablet), not a narrow desktop window or a
+   * touch-capable laptop with a precise trackpad.
+   *
+   * Use this for interaction-capability decisions (input binding, coachmark gating).
+   * Use isTouchDevice() for responsive layout decisions only.
+   *
+   * Stable across resize — does not change with viewport width.
+   */
+  isTouchInteraction(): boolean {
+    return (
+      window.matchMedia('(pointer: coarse)').matches &&
+      !window.matchMedia('(hover: hover)').matches
+    );
+  },
+
   debug: {
     input: false,
     load: false,

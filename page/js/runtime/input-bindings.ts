@@ -77,6 +77,18 @@ export function createInputBindings(deps: InputBindingsDeps): InputBindings {
         },
       }
     );
+    // Wire triad interaction source for mobile camera orbit
+    const renderer = deps.getRenderer();
+    _manager.setTriadSource({
+      isInsideTriad: (cx, cy) => renderer.isInsideTriad(cx, cy),
+      applyOrbitDelta: (dx, dy) => renderer.applyOrbitDelta(dx, dy),
+      onBackgroundOrbitStart: () => renderer.startBackgroundOrbitCue(),
+      onBackgroundOrbitEnd: () => renderer.endBackgroundOrbitCue(),
+      getNearestAxisEndpoint: (cx, cy) => renderer.getNearestAxisEndpoint(cx, cy),
+      snapToAxis: (dir) => renderer.snapToAxis(dir),
+      animatedResetView: () => renderer.animatedResetView(),
+      showAxisHighlight: (dir) => renderer.showAxisHighlight(dir),
+    });
   }
 
   return {

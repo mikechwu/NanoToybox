@@ -61,7 +61,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - Interactive page with drag/rotate/structure presets (`page/index.html`)
 - Camera-plane force projection (forces align with user's visual perspective)
 - Inertia-normalized rotation (consistent feel across molecule sizes)
-- 3D axis triad indicator, dark/light themes, dock + sheet settings
+- Interactive 3D axis triad (drag=orbit, tap=snap, double-tap=reset on mobile), dark/light themes, dock + sheet settings
 - InstancedMesh rendering — 2 draw calls for atoms+bonds, geometric capacity growth (`page/js/renderer.ts`)
 - On-the-fly Tersoff kernel — 45% faster than cached at 2040 atoms, eliminates 127 MB N×N cache (`page/js/physics.ts`)
 - Cell-list spatial acceleration — O(N) neighbor and bond detection instead of O(N²) (`page/js/physics.ts`)
