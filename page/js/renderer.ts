@@ -1204,7 +1204,10 @@ export class Renderer {
     return forward.clone().negate();
   }
 
-  // ── Free-Look mode (Phase 3) ──
+  // ── Free-Look subsystem (feature-disabled when CONFIG.camera.freeLookEnabled is false) ──
+  // When disabled: store setter rejects freelook mode, config flag gates runtime
+  // callers in main.ts and input.ts, and init normalizes state to Orbit.
+  // Implementation retained for future re-enable.
 
   /**
    * Apply free-look rotation (camera rotates in place, no pivot).
@@ -1255,7 +1258,7 @@ export class Renderer {
     );
   }
 
-  // ── Flight controller (velocity-based Free-Look) ──
+  // ── Flight controller (velocity-based Free-Look, currently disabled) ──
 
   /**
    * Update flight state: apply thrust from input, drag on coast, integrate position.

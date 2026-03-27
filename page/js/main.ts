@@ -391,7 +391,7 @@ async function init() {
       ) {
         _overlay!.close();
         e.preventDefault();
-      } else if (useAppStore.getState().cameraMode === 'freelook') {
+      } else if (CONFIG.camera.freeLookEnabled && useAppStore.getState().cameraMode === 'freelook') {
         // Esc in Free-Look with nothing else open → return to Orbit
         useAppStore.getState().setCameraMode('orbit');
         e.preventDefault();
@@ -632,16 +632,28 @@ async function init() {
   useAppStore.subscribe((s) => {
     if (s.cameraMode !== _prevCameraMode) {
       _prevCameraMode = s.cameraMode;
-      renderer.setOrbitControlsForMode(s.cameraMode);
-      if (s.cameraMode === 'freelook') {
+      // Normalize: if Free-Look disabled, treat any freelook state as orbit
+      const effectiveMode = (CONFIG.camera.freeLookEnabled && s.cameraMode === 'freelook')
+        ? 'freelook' : 'orbit';
+      renderer.setOrbitControlsForMode(effectiveMode);
+      if (effectiveMode === 'freelook') {
         _onboarding?.recordAchievement('mode-entry');
       } else if (s.cameraMode === 'orbit') {
+        // Only run orbit-entry cleanup when actually transitioning to orbit
         renderer.returnToOrbitFromFreeLook();
         useAppStore.getState().setFlightActive(false);
         useAppStore.getState().setFarDrift(false);
       }
     }
   });
+
+  // Normalize: if Free-Look is disabled, force Orbit-safe state
+  if (!CONFIG.camera.freeLookEnabled) {
+    const s = useAppStore.getState();
+    if (s.cameraMode !== 'orbit') s.setCameraMode('orbit');
+    if (s.flightActive) s.setFlightActive(false);
+    if (s.farDrift) s.setFarDrift(false);
+  }
 
 } // end init()
 
@@ -926,7 +938,7 @@ function frameLoop(timestamp) {
     const shouldRender = wasForced || scheduler.renderSkipCounter >= scheduler.renderSkipLevel;
 
     // Free-Look flight update (before render, after physics)
-    if (useAppStore.getState().cameraMode === 'freelook' && _inputBindings) {
+    if (CONFIG.camera.freeLookEnabled && useAppStore.getState().cameraMode === 'freelook' && _inputBindings) {
       const dtSec = frameDtMs / 1000;
       const axes = _inputBindings.getManager()?.getFlightInput();
       if (axes) renderer.updateFlight(dtSec, axes.x, axes.z);

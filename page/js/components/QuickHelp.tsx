@@ -8,6 +8,7 @@
 
 import React from 'react';
 import { useAppStore } from '../store/app-store';
+import { CONFIG } from '../config';
 
 export function QuickHelp({ open, onClose }: { open: boolean; onClose: () => void }) {
   const cameraMode = useAppStore((s) => s.cameraMode);
@@ -36,7 +37,7 @@ export function QuickHelp({ open, onClose }: { open: boolean; onClose: () => voi
             <div className="quick-help-row"><b>Pan</b> 2-finger drag</div>
           </>
         )}
-        {cameraMode === 'freelook' && (
+        {CONFIG.camera.freeLookEnabled && cameraMode === 'freelook' && (
           <>
             <div className="quick-help-section">Free-Look Mode</div>
             <div className="quick-help-row"><b>Look Around</b> Drag background / right-drag</div>

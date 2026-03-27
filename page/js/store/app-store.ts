@@ -12,6 +12,7 @@
  */
 
 import { create } from 'zustand';
+import { CONFIG } from '../config';
 
 export interface MoleculeMetadata {
   id: number;
@@ -255,7 +256,11 @@ export const useAppStore = create<AppStore>((set) => ({
   openSheet: (sheet) => set({ activeSheet: sheet, cameraHelpOpen: false, pickFocusActive: false }),
   closeSheet: () => set({ activeSheet: null }),
   setInteractionMode: (mode) => set({ interactionMode: mode }),
-  setCameraMode: (mode) => set({ cameraMode: mode }),
+  setCameraMode: (mode) => {
+    // Guard: reject Free-Look when feature flag is off
+    if (mode === 'freelook' && !CONFIG.camera.freeLookEnabled) return;
+    set({ cameraMode: mode });
+  },
   setCameraHelpOpen: (open) => set((s) => {
     // Mutual exclusivity: opening help closes sheets + cancels pick-focus
     if (open && s.activeSheet !== null) return { cameraHelpOpen: open, activeSheet: null, pickFocusActive: false };

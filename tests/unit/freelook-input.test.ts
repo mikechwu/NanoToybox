@@ -30,6 +30,7 @@ Object.defineProperty(window, 'matchMedia', {
 });
 
 import { InputManager } from '../../page/js/input';
+import { CONFIG } from '../../page/js/config';
 
 // Minimal stubs for InputManager construction
 function makeCanvas() {
@@ -94,8 +95,10 @@ describe('Free-Look input pipeline', () => {
   let callbacks: ReturnType<typeof makeCallbacks>;
   let triadSource: ReturnType<typeof makeTriadSource>;
   let im: InputManager;
+  const savedFlag = CONFIG.camera.freeLookEnabled;
 
   beforeEach(() => {
+    (CONFIG.camera as any).freeLookEnabled = true; // enable for Free-Look tests
     canvas = makeCanvas();
     camera = makeCamera();
     callbacks = makeCallbacks();
@@ -118,6 +121,7 @@ describe('Free-Look input pipeline', () => {
 
   afterEach(() => {
     im?.destroy();
+    (CONFIG.camera as any).freeLookEnabled = savedFlag;
   });
 
   function createManager(atomCount = 0) {

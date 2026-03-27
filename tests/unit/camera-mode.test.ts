@@ -1,13 +1,21 @@
 /**
  * Unit tests for camera mode store state.
+ * Note: Free-Look is currently feature-disabled but implementation is retained.
+ * These tests temporarily enable the flag to verify internal behavior.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { useAppStore } from '../../page/js/store/app-store';
 import { selectCameraMode } from '../../page/js/store/selectors/camera';
+import { CONFIG } from '../../page/js/config';
 
 describe('Camera mode store', () => {
+  const savedFlag = CONFIG.camera.freeLookEnabled;
   beforeEach(() => {
+    (CONFIG.camera as any).freeLookEnabled = true;
     useAppStore.getState().resetTransientState();
+  });
+  afterEach(() => {
+    (CONFIG.camera as any).freeLookEnabled = savedFlag;
   });
 
   it('defaults to orbit mode', () => {

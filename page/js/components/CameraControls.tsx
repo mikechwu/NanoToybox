@@ -10,6 +10,7 @@
 
 import React, { useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
+import { CONFIG } from '../config';
 import { QuickHelp } from './QuickHelp';
 
 /** Session flag to show "Coming soon" only once. */
@@ -67,13 +68,19 @@ export function CameraControls() {
       <div className="camera-controls" data-camera-controls>
         {/* Mode chip with embedded ? */}
         <div className="camera-chip">
-          <button
-            className="camera-chip-body"
-            onClick={handleChipTap}
-            aria-label={`Camera mode: ${cameraMode === 'orbit' ? 'Orbit' : 'Free-Look'}`}
-          >
-            {cameraMode === 'orbit' ? 'Orbit' : 'Free'}
-          </button>
+          {CONFIG.camera.freeLookEnabled ? (
+            <button
+              className="camera-chip-body"
+              onClick={handleChipTap}
+              aria-label={`Camera mode: ${cameraMode === 'orbit' ? 'Orbit' : 'Free-Look'}`}
+            >
+              {cameraMode === 'orbit' ? 'Orbit' : 'Free'}
+            </button>
+          ) : (
+            <span className="camera-chip-body" aria-label="Camera mode: Orbit">
+              Orbit
+            </span>
+          )}
           <button
             className="camera-chip-help"
             onClick={handleHelpOpen}
@@ -93,7 +100,8 @@ export function CameraControls() {
             {pickFocusActive ? 'Tap molecule' : '⊕'}
           </button>
         )}
-        {cameraMode === 'freelook' && flightActive && (
+        {/* Free-Look actions (gated by feature flag) */}
+        {CONFIG.camera.freeLookEnabled && cameraMode === 'freelook' && flightActive && (
           <button
             className="camera-action"
             onClick={() => cameraCallbacks?.onFreeze?.()}
@@ -102,7 +110,7 @@ export function CameraControls() {
             ✕
           </button>
         )}
-        {cameraMode === 'freelook' && (
+        {CONFIG.camera.freeLookEnabled && cameraMode === 'freelook' && (
           <button
             className={`camera-action${farDrift ? ' camera-action-pulse' : ''}`}
             onClick={() => {

@@ -300,16 +300,23 @@ describe('onboarding controller', () => {
 // with correct mode-gating. Uses the real createInputBindings with mocked deps.
 
 import { createInputBindings } from '../../page/js/runtime/input-bindings';
+import { CONFIG } from '../../page/js/config';
 import * as THREE from 'three';
 
 describe('achievement source wiring (input-bindings)', () => {
   let achievementLog: string[];
+  const savedFlag = CONFIG.camera.freeLookEnabled;
 
   beforeEach(() => {
+    (CONFIG.camera as any).freeLookEnabled = true; // enable for Free-Look tests
     vi.useRealTimers();
     localStorage.clear();
     useAppStore.getState().resetTransientState();
     achievementLog = [];
+  });
+
+  afterEach(() => {
+    (CONFIG.camera as any).freeLookEnabled = savedFlag;
   });
 
   function makeBindingsDeps() {

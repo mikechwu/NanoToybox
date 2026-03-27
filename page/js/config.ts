@@ -83,6 +83,8 @@ export const CONFIG = {
   },
 
   camera: {
+    freeLookEnabled: false,         // Feature flag: Free-Look mode. Set true to enable mode chip toggle,
+                                    // flight controls, and Free-Look UI. Implementation retained when false.
     framingPadding: 1.25,           // [1.0–2.0] multiplier on bounding radius (1.0 = exact fit)
     animationDurationMs: 500,       // [300–800] ms for focus/snap transitions
     nearPlaneMargin: 0.5,           // [0.1–2.0] Ang beyond camera.near for framing safety

@@ -145,9 +145,12 @@ export class InputManager {
     this._triadSource = source;
   }
 
-  /** Inject camera mode getter (reads from store). */
+  /** Inject camera mode getter (reads from store, respects feature flag). */
   setCameraStateGetter(getter: () => 'orbit' | 'freelook') {
-    this._getCameraMode = getter;
+    this._getCameraMode = () => {
+      if (!CONFIG.camera.freeLookEnabled) return 'orbit';
+      return getter();
+    };
   }
 
   /** Check if a keyboard event should be suppressed (UI focus, modifier keys). */
@@ -343,10 +346,15 @@ export class InputManager {
     };
     window.addEventListener('blur', this._handlers.blur);
 
+    // ── Free-Look subsystem (feature-disabled when CONFIG.camera.freeLookEnabled is false) ──
+    // When disabled: _getCameraMode() always returns 'orbit' (config flag checked in
+    // the injected getter wrapper), so ALL mode-dependent branches in this file
+    // consistently see Orbit mode. Implementation retained for future re-enable.
+    //
     // Free-Look keyboard shortcuts (WASD flight + R level + Space freeze).
     // Uses key-tracking set for smooth per-frame polling instead of key-repeat.
     this._handlers.keydown = (e) => {
-      if (this._getCameraMode() !== 'freelook') return;
+      if (!CONFIG.camera.freeLookEnabled || this._getCameraMode() !== 'freelook') return;
       const ke = e as KeyboardEvent;
       if (this._shouldSuppressKey(ke)) return;
       const code = ke.code;
@@ -376,7 +384,7 @@ export class InputManager {
 
     // Scroll wheel in Free-Look → forward/back zoom (desktop only)
     this._handlers.wheel = (e) => {
-      if (this._getCameraMode() !== 'freelook') return;
+      if (!CONFIG.camera.freeLookEnabled || this._getCameraMode() !== 'freelook') return;
       e.preventDefault();
       this._triadSource?.cancelCameraAnimation?.();
       this._triadSource?.applyFreeLookZoom?.((e as WheelEvent).deltaY);
