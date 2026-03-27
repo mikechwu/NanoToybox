@@ -23,7 +23,64 @@ import { useAppStore, type MoleculeMetadata } from '../store/app-store';
 /** Minimal renderer surface needed for focus operations. */
 export interface FocusRendererSurface {
   getMoleculeCentroid(atomOffset: number, atomCount: number): THREE.Vector3 | null;
+  getMoleculeBounds(atomOffset: number, atomCount: number): { center: THREE.Vector3; radius: number } | null;
   setCameraFocusTarget(target: THREE.Vector3): void;
+  animateToFocusedObject(opts?: { levelUp?: boolean }): void;
+  camera: { position: THREE.Vector3 };
+}
+
+/** Typed return-target descriptor for shared recovery logic. */
+export interface ReturnTarget {
+  kind: 'molecule' | 'scene-origin';
+  position: THREE.Vector3;
+  radius: number;
+  moleculeId?: number;
+  guardrailEligible: boolean;
+}
+
+/**
+ * Resolve the best return target for ↩ Return to Object and far-drift guardrail.
+ * Single source of truth — consumed by both animation and threshold computation.
+ */
+export function resolveReturnTarget(
+  renderer: FocusRendererSurface,
+  sceneRadius: number,
+): ReturnTarget {
+  const store = useAppStore.getState();
+  const molecules = store.molecules;
+
+  // Priority 1: valid last-focused molecule
+  if (store.lastFocusedMoleculeId !== null) {
+    const mol = molecules.find(m => m.id === store.lastFocusedMoleculeId);
+    if (mol) {
+      const bounds = renderer.getMoleculeBounds(mol.atomOffset, mol.atomCount);
+      if (bounds) {
+        return { kind: 'molecule', position: bounds.center, radius: bounds.radius, moleculeId: mol.id, guardrailEligible: true };
+      }
+    }
+  }
+
+  // Priority 2: nearest molecule to camera
+  if (molecules.length > 0) {
+    let bestMol = molecules[0];
+    let bestDist = Infinity;
+    const camPos = renderer.camera.position;
+    for (const mol of molecules) {
+      const c = renderer.getMoleculeCentroid(mol.atomOffset, mol.atomCount);
+      if (!c) continue;
+      const d = camPos.distanceToSquared(c);
+      if (d < bestDist) { bestDist = d; bestMol = mol; }
+    }
+    const bounds = renderer.getMoleculeBounds(bestMol.atomOffset, bestMol.atomCount);
+    if (bounds) {
+      return { kind: 'molecule', position: bounds.center, radius: bounds.radius, moleculeId: bestMol.id, guardrailEligible: true };
+    }
+  }
+
+  // Priority 3: scene origin (no guardrail)
+  // Use the same Vector3 constructor as the renderer's camera position
+  const origin = renderer.camera.position.clone().set(0, 0, 0);
+  return { kind: 'scene-origin', position: origin, radius: sceneRadius, guardrailEligible: false };
 }
 
 /**
@@ -40,8 +97,10 @@ export function focusMoleculeByAtom(
   if (!mol) return;
   const centroid = renderer.getMoleculeCentroid(mol.atomOffset, mol.atomCount);
   if (!centroid) return;
-  renderer.setCameraFocusTarget(centroid);
+  // Set store ID first so recomputeFocusDistance (called by setCameraFocusTarget)
+  // resolves against the correct molecule, not the previous one.
   useAppStore.getState().setLastFocusedMoleculeId(mol.id);
+  renderer.setCameraFocusTarget(centroid);
 }
 
 /**
@@ -56,8 +115,8 @@ export function focusNewestPlacedMolecule(
   const newest = molecules[molecules.length - 1];
   const centroid = renderer.getMoleculeCentroid(newest.atomOffset, newest.atomCount);
   if (!centroid) return;
-  renderer.setCameraFocusTarget(centroid);
   useAppStore.getState().setLastFocusedMoleculeId(newest.id);
+  renderer.setCameraFocusTarget(centroid);
 }
 
 /**
@@ -75,22 +134,16 @@ export function handleCenterObject(renderer: FocusRendererSurface): boolean {
   if (store.lastFocusedMoleculeId !== null) {
     const mol = molecules.find(m => m.id === store.lastFocusedMoleculeId);
     if (mol) {
-      const centroid = renderer.getMoleculeCentroid(mol.atomOffset, mol.atomCount);
-      if (centroid) {
-        renderer.setCameraFocusTarget(centroid);
-        return true;
-      }
+      // Animated framing instead of instant pivot
+      renderer.animateToFocusedObject();
+      return true;
     }
   }
 
   // Priority 2: single molecule — direct center
   if (molecules.length === 1) {
-    const mol = molecules[0];
-    const centroid = renderer.getMoleculeCentroid(mol.atomOffset, mol.atomCount);
-    if (centroid) {
-      renderer.setCameraFocusTarget(centroid);
-      useAppStore.getState().setLastFocusedMoleculeId(mol.id);
-    }
+    useAppStore.getState().setLastFocusedMoleculeId(molecules[0].id);
+    renderer.animateToFocusedObject();
     return true;
   }
 

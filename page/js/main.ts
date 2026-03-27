@@ -4,6 +4,7 @@
  * Multi-molecule playground with placement mode.
  * Wires together: loader, physics, state machine, input, renderer, React UI.
  */
+import * as THREE from 'three';
 import { loadManifest, loadStructure } from './loader';
 import { PhysicsEngine } from './physics';
 import { StateMachine, type Command } from './state-machine';
@@ -22,7 +23,7 @@ import { createInputBindings, type InputBindings } from './runtime/input-binding
 import { registerStoreCallbacks } from './runtime/ui-bindings';
 import { createAtomSource } from './runtime/atom-source';
 import { createSceneRuntime, type SceneRuntime } from './runtime/scene-runtime';
-import { handleCenterObject as _handleCenterObject } from './runtime/focus-runtime';
+import { handleCenterObject as _handleCenterObject, resolveReturnTarget } from './runtime/focus-runtime';
 import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/snapshot-reconciler';
 import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecycle';
 import { createOnboardingController } from './runtime/onboarding';
@@ -609,32 +610,20 @@ async function init() {
   // Center Object logic lives in focus-runtime.ts (shared with tests)
   useAppStore.getState().setCameraCallbacks({
     onCenterObject: () => { _handleCenterObject(renderer); },
-    onReturnToObject: () => { renderer.returnToFocusedObject(); },
+    onReturnToObject: () => {
+      renderer.animateToFocusedObject({
+        levelUp: true,
+        onComplete: () => useAppStore.getState().setCameraMode('orbit'),
+      });
+    },
+    onFreeze: () => { renderer.freezeFlight(); useAppStore.getState().setFlightActive(false); },
   });
 
-  // Wire returnToFocusedObject callback (avoids renderer importing store)
+  // Wire return-target callback via shared resolveReturnTarget descriptor
+  // Wire return-target callback directly from shared resolveReturnTarget
   renderer._returnToObjectCallback = () => {
-    const s = useAppStore.getState();
-    const molecules = s.molecules;
-    // Priority 1: valid last-focused molecule
-    if (s.lastFocusedMoleculeId !== null) {
-      const mol = molecules.find(m => m.id === s.lastFocusedMoleculeId);
-      if (mol) return renderer.getMoleculeCentroid(mol.atomOffset, mol.atomCount);
-    }
-    // Priority 2: nearest molecule to current camera position
-    if (molecules.length > 0) {
-      let bestMol = molecules[0];
-      let bestDist = Infinity;
-      const camPos = renderer.camera.position;
-      for (const mol of molecules) {
-        const c = renderer.getMoleculeCentroid(mol.atomOffset, mol.atomCount);
-        if (!c) continue;
-        const d = camPos.distanceToSquared(c);
-        if (d < bestDist) { bestDist = d; bestMol = mol; }
-      }
-      return renderer.getMoleculeCentroid(bestMol.atomOffset, bestMol.atomCount);
-    }
-    return null;
+    const target = resolveReturnTarget(renderer, renderer._sceneRadius);
+    return target; // ReturnTarget has position + radius (+ kind, guardrailEligible)
   };
 
   // Subscribe to camera mode changes → configure OrbitControls + achievement
@@ -645,6 +634,10 @@ async function init() {
       renderer.setOrbitControlsForMode(s.cameraMode);
       if (s.cameraMode === 'freelook') {
         _onboarding?.recordAchievement('mode-entry');
+      } else if (s.cameraMode === 'orbit') {
+        renderer.returnToOrbitFromFreeLook();
+        useAppStore.getState().setFlightActive(false);
+        useAppStore.getState().setFarDrift(false);
       }
     }
   });
@@ -923,6 +916,32 @@ function frameLoop(timestamp) {
     const wasForced = scheduler.forceRenderThisTick;
     scheduler.forceRenderThisTick = false; // always consumed
     const shouldRender = wasForced || scheduler.renderSkipCounter >= scheduler.renderSkipLevel;
+
+    // Free-Look flight update (before render, after physics)
+    if (useAppStore.getState().cameraMode === 'freelook' && _inputBindings) {
+      const dtSec = frameDtMs / 1000;
+      const axes = _inputBindings.getManager()?.getFlightInput();
+      if (axes) renderer.updateFlight(dtSec, axes.x, axes.z);
+      // Update flightActive store flag (transition-gated)
+      const speed = renderer._flightVelocity.length();
+      const maxSpd = renderer._sceneRadius * CONFIG.freeLook.maxSpeedScale;
+      const showT = Math.min(Math.max(maxSpd * CONFIG.freeLook.freezeShowScale, CONFIG.freeLook.freezeShowMin), CONFIG.freeLook.freezeShowMax);
+      const hideT = showT * CONFIG.freeLook.freezeHideRatio;
+      const store = useAppStore.getState();
+      if (!store.flightActive && speed > showT) useAppStore.getState().setFlightActive(true);
+      else if (store.flightActive && speed < hideT) useAppStore.getState().setFlightActive(false);
+
+      // Far-drift guardrail via shared resolveReturnTarget (transition-gated)
+      const rt = resolveReturnTarget(renderer, renderer._sceneRadius);
+      if (rt.guardrailEligible) {
+        const distToTarget = renderer.camera.position.distanceTo(rt.position);
+        const threshold = Math.min(Math.max(rt.radius * CONFIG.freeLook.farDriftTargetMult, CONFIG.freeLook.farDriftMinDistance), renderer._sceneRadius * CONFIG.freeLook.farDriftSceneMult);
+        if (!store.farDrift && distToTarget > threshold) useAppStore.getState().setFarDrift(true);
+        else if (store.farDrift && distToTarget < threshold * 0.8) useAppStore.getState().setFarDrift(false);
+      } else if (store.farDrift) {
+        useAppStore.getState().setFarDrift(false);
+      }
+    }
 
     if (shouldRender) {
       scheduler.renderSkipCounter = 0;

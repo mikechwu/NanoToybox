@@ -82,6 +82,30 @@ export const CONFIG = {
     triadHitPadding: 12,    // px — extra hit area beyond visible triad for touch tolerance
   },
 
+  camera: {
+    framingPadding: 1.25,           // [1.0–2.0] multiplier on bounding radius (1.0 = exact fit)
+    animationDurationMs: 500,       // [300–800] ms for focus/snap transitions
+    nearPlaneMargin: 0.5,           // [0.1–2.0] Ang beyond camera.near for framing safety
+    verticalFallbackDot: 0.985,     // [0.95–0.999] |dot(forward, Y)| threshold (~10°)
+    atomVisualRadius: 0.4,          // [0.2–0.8] Ang — added to bounding sphere for rendered mesh
+    defaultOrbitDistance: 15,        // [8–30] Ang — fallback pivot distance for Esc-to-Orbit
+  },
+
+  freeLook: {
+    accelerationScale: 3.0,         // [1–10] thrust acceleration multiplier (× sceneRadius)
+    maxSpeedScale: 8.0,             // [3–20] max speed multiplier (× sceneRadius)
+    dragRationalScale: 1.5,         // [0.5–5] rational drag coefficient k (× sceneRadius)
+    dragCrossoverScale: 0.5,        // [0.1–2] speed below which linear replaces rational (× sceneRadius)
+    freezeShowScale: 0.03,          // [0.01–0.1] fraction of effectiveMaxSpeed for ✕ show
+    freezeShowMin: 0.1,             // [0.05–0.3] Ang/s absolute floor
+    freezeShowMax: 2.0,             // [0.5–5] Ang/s absolute cap
+    freezeHideRatio: 0.25,          // [0.1–0.5] hide = resolvedShow × ratio
+    defaultSceneRadius: 10,         // [5–30] Ang — fallback when no molecules
+    farDriftTargetMult: 10,         // [5–20] target molecule radius multiplier
+    farDriftSceneMult: 3.0,         // [2–5] scene radius multiplier (global cap)
+    farDriftMinDistance: 30,         // [10–100] Ang — absolute floor
+  },
+
   /** True when device-mode is phone or tablet (responsive layout). Width-derived. */
   isTouchDevice(): boolean {
     const mode = document.documentElement.dataset.deviceMode;

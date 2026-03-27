@@ -55,10 +55,15 @@ export class InputManager {
     resetOrientation?: () => void;
     /** Fires when a committed triad drag ends (not on taps or canceled gestures). */
     onTriadDragEnd?: () => void;
+    cancelCameraAnimation?: () => void;
+    freezeFlight?: () => void;
   } | null;
 
   // Camera mode getter (injected from store, not read from triad source)
   _getCameraMode: () => 'orbit' | 'freelook';
+
+  // Key-tracking set for Free-Look flight (replaces key-repeat approach)
+  _pressedKeys: Set<string>;
 
   // Triad tap/double-tap/drag discrimination
   _triadTouchStartTime: number;
@@ -102,6 +107,7 @@ export class InputManager {
     this._triadLastY = 0;
     this._triadSource = null;
     this._getCameraMode = () => 'orbit';
+    this._pressedKeys = new Set();
     this._bgOrbitLastX = 0;
     this._bgOrbitLastY = 0;
     this._cameraPointerId = -1;
@@ -142,6 +148,25 @@ export class InputManager {
   /** Inject camera mode getter (reads from store). */
   setCameraStateGetter(getter: () => 'orbit' | 'freelook') {
     this._getCameraMode = getter;
+  }
+
+  /** Check if a keyboard event should be suppressed (UI focus, modifier keys). */
+  _shouldSuppressKey(ke: KeyboardEvent): boolean {
+    if (ke.metaKey || ke.ctrlKey || ke.altKey) return true;
+    const el = ke.target as HTMLElement;
+    if (!el) return true;
+    const tag = el.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'A') return true;
+    if (el.isContentEditable || el.getAttribute('role') === 'button') return true;
+    if (el.closest('[data-camera-controls], .quick-help-card, .sheet')) return true;
+    return false;
+  }
+
+  /** Read current flight input axes from pressed-key set (polled per frame). */
+  getFlightInput(): { x: number; z: number } {
+    const z = (this._pressedKeys.has('KeyW') ? 1 : 0) - (this._pressedKeys.has('KeyS') ? 1 : 0);
+    const x = (this._pressedKeys.has('KeyD') ? 1 : 0) - (this._pressedKeys.has('KeyA') ? 1 : 0);
+    return { x, z };
   }
 
   _screenToNDC(x, y) {
@@ -307,6 +332,7 @@ export class InputManager {
         this.cb.onPointerUp?.();
       }
       this.isDragging = false;
+      this._pressedKeys.clear();
       if (this.isCamera && this._cameraPointerId >= 0) {
         if (this.canvas.hasPointerCapture(this._cameraPointerId)) {
           this.canvas.releasePointerCapture(this._cameraPointerId);
@@ -317,34 +343,42 @@ export class InputManager {
     };
     window.addEventListener('blur', this._handlers.blur);
 
-    // WASD/R shortcuts in Free-Look mode (desktop only).
-    // Suppressed when any interactive UI element is focused or modifier keys are held.
+    // Free-Look keyboard shortcuts (WASD flight + R level + Space freeze).
+    // Uses key-tracking set for smooth per-frame polling instead of key-repeat.
     this._handlers.keydown = (e) => {
       if (this._getCameraMode() !== 'freelook') return;
       const ke = e as KeyboardEvent;
-      if (ke.metaKey || ke.ctrlKey || ke.altKey) return;
-      const el = ke.target as HTMLElement;
-      if (!el) return;
-      const tag = el.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'A') return;
-      if (el.isContentEditable || el.getAttribute('role') === 'button') return;
-      if (el.closest('[data-camera-controls], .quick-help-card, .sheet')) return;
-      const key = ke.key.toLowerCase();
-      const step = 1.0;
-      switch (key) {
-        case 'w': this._triadSource?.applyFreeLookTranslate?.(0, step); break;
-        case 's': this._triadSource?.applyFreeLookTranslate?.(0, -step); break;
-        case 'a': this._triadSource?.applyFreeLookTranslate?.(-step, 0); break;
-        case 'd': this._triadSource?.applyFreeLookTranslate?.(step, 0); break;
-        case 'r': this._triadSource?.resetOrientation?.(); break;
+      if (this._shouldSuppressKey(ke)) return;
+      const code = ke.code;
+      // Track flight keys for per-frame polling
+      if (code === 'KeyW' || code === 'KeyA' || code === 'KeyS' || code === 'KeyD') {
+        this._pressedKeys.add(code);
+        this._triadSource?.cancelCameraAnimation?.();
+        ke.preventDefault();
+      }
+      // Instant actions (not tracked — fire once on keydown)
+      if (code === 'KeyR') {
+        this._triadSource?.resetOrientation?.();
+        this._triadSource?.cancelCameraAnimation?.();
+        ke.preventDefault();
+      }
+      if (code === 'Space') {
+        this._triadSource?.cancelCameraAnimation?.();
+        this._triadSource?.freezeFlight?.();
+        ke.preventDefault();
       }
     };
+    this._handlers.keyup = (e) => {
+      this._pressedKeys.delete((e as KeyboardEvent).code);
+    };
     window.addEventListener('keydown', this._handlers.keydown);
+    window.addEventListener('keyup', this._handlers.keyup);
 
     // Scroll wheel in Free-Look → forward/back zoom (desktop only)
     this._handlers.wheel = (e) => {
       if (this._getCameraMode() !== 'freelook') return;
       e.preventDefault();
+      this._triadSource?.cancelCameraAnimation?.();
       this._triadSource?.applyFreeLookZoom?.((e as WheelEvent).deltaY);
     };
     c.addEventListener('wheel', this._handlers.wheel, { passive: false });
@@ -371,6 +405,7 @@ export class InputManager {
     }
     window.removeEventListener('blur', this._handlers.blur);
     if (this._handlers.keydown) window.removeEventListener('keydown', this._handlers.keydown);
+    if (this._handlers.keyup) window.removeEventListener('keyup', this._handlers.keyup);
     if (this._handlers.wheel) c.removeEventListener('wheel', this._handlers.wheel);
     this._handlers = {};
   }
@@ -378,6 +413,7 @@ export class InputManager {
   // --- Desktop events ---
 
   _onPointerDown(e) {
+    this._triadSource?.cancelCameraAnimation?.();
     // Check for rotate modifier FIRST — on Mac, Ctrl+click fires as button=2
     const isRotate = e.ctrlKey || e.metaKey;
 
@@ -470,6 +506,7 @@ export class InputManager {
   // 2+ fingers = always camera (zoom/pan). Finger-count change ends any gesture.
 
   _onTouchStart(e) {
+    this._triadSource?.cancelCameraAnimation?.();
     if (e.touches.length >= 2) {
       // 2+ fingers → cancel any active gesture, let OrbitControls handle camera
       if (this.isDragging) {

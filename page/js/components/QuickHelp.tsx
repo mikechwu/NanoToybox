@@ -42,9 +42,11 @@ export function QuickHelp({ open, onClose }: { open: boolean; onClose: () => voi
             <div className="quick-help-row"><b>Look Around</b> Drag background / right-drag</div>
             <div className="quick-help-row"><b>Mark Target</b> Tap molecule / click molecule</div>
             <div className="quick-help-row"><b>Zoom</b> Scroll wheel (desktop)</div>
-            <div className="quick-help-row"><b>Translate</b> WASD (desktop)</div>
+            <div className="quick-help-row"><b>Fly</b> WASD (desktop) · momentum-based</div>
+            <div className="quick-help-row"><b>Freeze</b> ✕ button / Space (desktop)</div>
             <div className="quick-help-row"><b>Level Camera</b> R (desktop)</div>
-            <div className="quick-help-row"><b>Return</b> Double-tap center / Esc / mode chip</div>
+            <div className="quick-help-row"><b>Return to Object</b> ↩ button · fly back + enter Orbit</div>
+            <div className="quick-help-row"><b>Exit to Orbit</b> Esc / mode chip · stay in place</div>
           </>
         )}
       </div>

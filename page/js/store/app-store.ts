@@ -77,8 +77,8 @@ export interface AppStore {
   setPickFocusActive: (active: boolean) => void;
 
   // Camera control callbacks (registered by main.ts, consumed by CameraControls)
-  cameraCallbacks: { onCenterObject: () => void; onReturnToObject?: () => void } | null;
-  setCameraCallbacks: (cbs: { onCenterObject: () => void; onReturnToObject?: () => void }) => void;
+  cameraCallbacks: { onCenterObject: () => void; onReturnToObject?: () => void; onFreeze?: () => void } | null;
+  setCameraCallbacks: (cbs: { onCenterObject: () => void; onReturnToObject?: () => void; onFreeze?: () => void }) => void;
 
   // Focus handle for camera pivot (validated before use — molecule may be removed)
   lastFocusedMoleculeId: number | null;
@@ -105,6 +105,10 @@ export interface AppStore {
   overloaded: boolean;
   workerStalled: boolean;
   rafIntervalMs: number;
+
+  // Free-Look flight state (derived from renderer, transition-gated)
+  flightActive: boolean;
+  farDrift: boolean;
 
   // Reconciliation (debug-visible)
   reconciliationState: 'none' | 'awaiting_positions' | 'awaiting_bonds';
@@ -174,6 +178,8 @@ export interface AppStore {
   }) => void;
 
   // Reconciliation state
+  setFlightActive: (active: boolean) => void;
+  setFarDrift: (drift: boolean) => void;
   setReconciliationState: (state: 'none' | 'awaiting_positions' | 'awaiting_bonds') => void;
 
   // Sheet UI actions
@@ -223,6 +229,8 @@ export const useAppStore = create<AppStore>((set) => ({
   overloaded: false,
   workerStalled: false,
   rafIntervalMs: 16.67,
+  flightActive: false,
+  farDrift: false,
   reconciliationState: 'none',
   paused: false,
   targetSpeed: 1,
@@ -274,6 +282,8 @@ export const useAppStore = create<AppStore>((set) => ({
   }),
 
   updatePlaybackMetrics: (metrics) => set(metrics),
+  setFlightActive: (active) => set({ flightActive: active }),
+  setFarDrift: (drift) => set({ farDrift: drift }),
   setReconciliationState: (state) => set({ reconciliationState: state }),
   setDragStrength: (v) => set({ dragStrength: v }),
   setRotateStrength: (v) => set({ rotateStrength: v }),
@@ -328,6 +338,9 @@ export const useAppStore = create<AppStore>((set) => ({
     wallRadius: 0,
     skippedFrameCount: 0,
     emergencyAllocCount: 0,
+    // Flight
+    flightActive: false,
+    farDrift: false,
     // Debug
     reconciliationState: 'none',
     // Status channels

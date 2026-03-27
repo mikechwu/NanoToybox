@@ -58,13 +58,16 @@ describe('overlay-runtime.close() clears camera transient UI', () => {
 import { handleCenterObject } from '../../page/js/runtime/focus-runtime';
 
 describe('Center Object (handleCenterObject from focus-runtime)', () => {
-  let mockRenderer: { getMoleculeCentroid: any; setCameraFocusTarget: any };
+  let mockRenderer: { getMoleculeCentroid: any; getMoleculeBounds: any; setCameraFocusTarget: any; animateToFocusedObject: any; camera: any };
 
   beforeEach(() => {
     useAppStore.getState().resetTransientState();
     mockRenderer = {
       getMoleculeCentroid: vi.fn(() => new THREE.Vector3(1, 2, 3)),
+      getMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(1, 2, 3), radius: 3.5 })),
       setCameraFocusTarget: vi.fn(),
+      animateToFocusedObject: vi.fn(),
+      camera: { position: new THREE.Vector3(0, 0, 15) },
     };
   });
 
@@ -75,17 +78,17 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
     expect(mockRenderer.setCameraFocusTarget).not.toHaveBeenCalled();
   });
 
-  it('one molecule: direct center, no pick-focus', () => {
+  it('one molecule: animated center, no pick-focus', () => {
     useAppStore.getState().setMolecules([
       { id: 1, name: 'C60', structureFile: 'c60.xyz', atomCount: 60, atomOffset: 0 },
     ]);
     handleCenterObject(mockRenderer);
     expect(useAppStore.getState().pickFocusActive).toBe(false);
-    expect(mockRenderer.setCameraFocusTarget).toHaveBeenCalled();
+    expect(mockRenderer.animateToFocusedObject).toHaveBeenCalled();
     expect(useAppStore.getState().lastFocusedMoleculeId).toBe(1);
   });
 
-  it('valid last-focused molecule: direct center, no pick-focus', () => {
+  it('valid last-focused molecule: animated center, no pick-focus', () => {
     useAppStore.getState().setMolecules([
       { id: 1, name: 'C60', structureFile: 'c60.xyz', atomCount: 60, atomOffset: 0 },
       { id: 2, name: 'CNT', structureFile: 'cnt.xyz', atomCount: 100, atomOffset: 60 },
@@ -93,8 +96,7 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
     useAppStore.getState().setLastFocusedMoleculeId(2);
     handleCenterObject(mockRenderer);
     expect(useAppStore.getState().pickFocusActive).toBe(false);
-    expect(mockRenderer.setCameraFocusTarget).toHaveBeenCalled();
-    expect(mockRenderer.getMoleculeCentroid).toHaveBeenCalledWith(60, 100);
+    expect(mockRenderer.animateToFocusedObject).toHaveBeenCalled();
   });
 
   it('multiple molecules, no valid focus: enters pick-focus', () => {
@@ -104,7 +106,7 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
     ]);
     handleCenterObject(mockRenderer);
     expect(useAppStore.getState().pickFocusActive).toBe(true);
-    expect(mockRenderer.setCameraFocusTarget).not.toHaveBeenCalled();
+    expect(mockRenderer.animateToFocusedObject).not.toHaveBeenCalled();
   });
 
   it('multiple molecules, stale focused ID: enters pick-focus', () => {
@@ -115,7 +117,7 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
     useAppStore.getState().setLastFocusedMoleculeId(99);
     handleCenterObject(mockRenderer);
     expect(useAppStore.getState().pickFocusActive).toBe(true);
-    expect(mockRenderer.setCameraFocusTarget).not.toHaveBeenCalled();
+    expect(mockRenderer.animateToFocusedObject).not.toHaveBeenCalled();
   });
 });
 

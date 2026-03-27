@@ -83,6 +83,8 @@ function makeTriadSource() {
     onFreeLookFocusSelect: vi.fn(),
     resetOrientation: vi.fn(),
     onTriadDragEnd: vi.fn(),
+    cancelCameraAnimation: vi.fn(),
+    freezeFlight: vi.fn(),
   };
 }
 
@@ -103,6 +105,13 @@ describe('Free-Look input pipeline', () => {
   /** Create a KeyboardEvent with canvas as target (non-interactive element). */
   function canvasKey(key: string, opts: KeyboardEventInit = {}) {
     const evt = new KeyboardEvent('keydown', { key, ...opts });
+    Object.defineProperty(evt, 'target', { value: canvas });
+    return evt;
+  }
+
+  /** Create a KeyboardEvent with code + canvas target (for physical key testing). */
+  function canvasCode(code: string, opts: KeyboardEventInit = {}) {
+    const evt = new KeyboardEvent('keydown', { code, ...opts });
     Object.defineProperty(evt, 'target', { value: canvas });
     return evt;
   }
@@ -294,7 +303,7 @@ describe('Free-Look input pipeline', () => {
       createManager();
       im.setCameraStateGetter(() => 'freelook');
 
-      im._handlers.keydown(canvasKey('r'));
+      im._handlers.keydown(canvasCode('KeyR'));
 
       expect(triadSource.resetOrientation).toHaveBeenCalled();
     });
@@ -303,7 +312,7 @@ describe('Free-Look input pipeline', () => {
       createManager();
       im.setCameraStateGetter(() => 'orbit');
 
-      im._handlers.keydown(canvasKey('r'));
+      im._handlers.keydown(canvasCode('KeyR'));
 
       expect(triadSource.resetOrientation).not.toHaveBeenCalled();
     });
@@ -311,30 +320,45 @@ describe('Free-Look input pipeline', () => {
 
   // ── WASD translation ──
 
-  describe('WASD keys in Free-Look', () => {
+  describe('WASD keys in Free-Look (key-tracking set)', () => {
     it.each([
-      ['w', 0, 1],
-      ['s', 0, -1],
-      ['a', -1, 0],
-      ['d', 1, 0],
-    ])('%s calls applyFreeLookTranslate(%d, %d)', (key, dx, dy) => {
+      ['KeyW', 0, 1],
+      ['KeyS', 0, -1],
+      ['KeyA', -1, 0],
+      ['KeyD', 1, 0],
+    ])('%s adds to pressedKeys and getFlightInput returns (%d, %d)', (code, expectedX, expectedZ) => {
       createManager();
       im.setCameraStateGetter(() => 'freelook');
 
-      im._handlers.keydown(canvasKey(key as string));
+      im._handlers.keydown(canvasCode(code as string));
 
-      expect(triadSource.applyFreeLookTranslate).toHaveBeenCalledWith(dx, dy);
+      expect(im._pressedKeys.has(code as string)).toBe(true);
+      const input = im.getFlightInput();
+      expect(input.x).toBe(expectedX);
+      expect(input.z).toBe(expectedZ);
     });
 
-    it('WASD in Orbit does nothing', () => {
+    it('keyup removes from pressedKeys', () => {
+      createManager();
+      im.setCameraStateGetter(() => 'freelook');
+
+      im._handlers.keydown(canvasCode('KeyW'));
+      expect(im._pressedKeys.has('KeyW')).toBe(true);
+
+      im._handlers.keyup(new KeyboardEvent('keyup', { code: 'KeyW' }));
+      expect(im._pressedKeys.has('KeyW')).toBe(false);
+      expect(im.getFlightInput()).toEqual({ x: 0, z: 0 });
+    });
+
+    it('WASD in Orbit does not add to pressedKeys', () => {
       createManager();
       im.setCameraStateGetter(() => 'orbit');
 
-      for (const key of ['w', 'a', 's', 'd']) {
-        im._handlers.keydown(canvasKey(key));
+      for (const code of ['KeyW', 'KeyA', 'KeyS', 'KeyD']) {
+        im._handlers.keydown(canvasCode(code));
       }
 
-      expect(triadSource.applyFreeLookTranslate).not.toHaveBeenCalled();
+      expect(im._pressedKeys.size).toBe(0);
     });
   });
 
@@ -348,15 +372,15 @@ describe('Free-Look input pipeline', () => {
       document.body.appendChild(input);
 
       // Canvas-targeted key works
-      im._handlers.keydown(canvasKey('w'));
-      expect(triadSource.applyFreeLookTranslate).toHaveBeenCalledTimes(1);
+      im._handlers.keydown(canvasCode('KeyW'));
+      expect(im._pressedKeys.has('KeyW')).toBe(true);
 
-      triadSource.applyFreeLookTranslate.mockClear();
+      im._pressedKeys.clear();
       // Input-targeted key is suppressed
-      const evt = new KeyboardEvent('keydown', { key: 'w' });
+      const evt = new KeyboardEvent('keydown', { code: 'KeyW' });
       Object.defineProperty(evt, 'target', { value: input });
       im._handlers.keydown(evt);
-      expect(triadSource.applyFreeLookTranslate).not.toHaveBeenCalled();
+      expect(im._pressedKeys.has('KeyW')).toBe(false);
 
       document.body.removeChild(input);
     });
@@ -366,7 +390,7 @@ describe('Free-Look input pipeline', () => {
       im.setCameraStateGetter(() => 'freelook');
       const textarea = document.createElement('textarea');
 
-      const evt = new KeyboardEvent('keydown', { key: 'r' });
+      const evt = new KeyboardEvent('keydown', { code: 'KeyR' });
       Object.defineProperty(evt, 'target', { value: textarea });
       im._handlers.keydown(evt);
       expect(triadSource.resetOrientation).not.toHaveBeenCalled();
@@ -377,7 +401,7 @@ describe('Free-Look input pipeline', () => {
       im.setCameraStateGetter(() => 'freelook');
 
       im._handlers.keydown(canvasKey('w', { metaKey: true }));
-      expect(triadSource.applyFreeLookTranslate).not.toHaveBeenCalled();
+      expect(im._pressedKeys.size).toBe(0);
     });
 
     it('ignores WASD when ctrlKey is held', () => {
@@ -385,7 +409,7 @@ describe('Free-Look input pipeline', () => {
       im.setCameraStateGetter(() => 'freelook');
 
       im._handlers.keydown(canvasKey('a', { ctrlKey: true }));
-      expect(triadSource.applyFreeLookTranslate).not.toHaveBeenCalled();
+      expect(im._pressedKeys.size).toBe(0);
     });
 
     it('ignores WASD when altKey is held', () => {
@@ -393,7 +417,7 @@ describe('Free-Look input pipeline', () => {
       im.setCameraStateGetter(() => 'freelook');
 
       im._handlers.keydown(canvasKey('d', { altKey: true }));
-      expect(triadSource.applyFreeLookTranslate).not.toHaveBeenCalled();
+      expect(im._pressedKeys.size).toBe(0);
     });
 
     it('ignores WASD when a <select> is focused', () => {
@@ -401,10 +425,10 @@ describe('Free-Look input pipeline', () => {
       im.setCameraStateGetter(() => 'freelook');
       const select = document.createElement('select');
 
-      const evt = new KeyboardEvent('keydown', { key: 'w' });
+      const evt = new KeyboardEvent('keydown', { code: 'KeyW' });
       Object.defineProperty(evt, 'target', { value: select });
       im._handlers.keydown(evt);
-      expect(triadSource.applyFreeLookTranslate).not.toHaveBeenCalled();
+      expect(im._pressedKeys.size).toBe(0);
     });
 
     it('ignores R when target is contentEditable', () => {
@@ -416,10 +440,11 @@ describe('Free-Look input pipeline', () => {
       // jsdom may not auto-set isContentEditable, so ensure it reads correctly
       Object.defineProperty(div, 'isContentEditable', { value: true, configurable: true });
 
-      const evt = new KeyboardEvent('keydown', { key: 'r' });
+      const evt = new KeyboardEvent('keydown', { code: 'KeyR' });
       Object.defineProperty(evt, 'target', { value: div });
       im._handlers.keydown(evt);
       expect(triadSource.resetOrientation).not.toHaveBeenCalled();
+      expect(im._pressedKeys.size).toBe(0);
 
       document.body.removeChild(div);
     });
@@ -429,10 +454,10 @@ describe('Free-Look input pipeline', () => {
       im.setCameraStateGetter(() => 'freelook');
       const btn = document.createElement('button');
 
-      const evt = new KeyboardEvent('keydown', { key: 'w' });
+      const evt = new KeyboardEvent('keydown', { code: 'KeyW' });
       Object.defineProperty(evt, 'target', { value: btn });
       im._handlers.keydown(evt);
-      expect(triadSource.applyFreeLookTranslate).not.toHaveBeenCalled();
+      expect(im._pressedKeys.size).toBe(0);
     });
 
     it('ignores WASD when target has role="button"', () => {
@@ -441,10 +466,10 @@ describe('Free-Look input pipeline', () => {
       const span = document.createElement('span');
       span.setAttribute('role', 'button');
 
-      const evt = new KeyboardEvent('keydown', { key: 'a' });
+      const evt = new KeyboardEvent('keydown', { code: 'KeyA' });
       Object.defineProperty(evt, 'target', { value: span });
       im._handlers.keydown(evt);
-      expect(triadSource.applyFreeLookTranslate).not.toHaveBeenCalled();
+      expect(im._pressedKeys.size).toBe(0);
     });
 
     it('ignores WASD when target is inside [data-camera-controls]', () => {
@@ -456,10 +481,10 @@ describe('Free-Look input pipeline', () => {
       wrapper.appendChild(child);
       document.body.appendChild(wrapper);
 
-      const evt = new KeyboardEvent('keydown', { key: 's' });
+      const evt = new KeyboardEvent('keydown', { code: 'KeyS' });
       Object.defineProperty(evt, 'target', { value: child });
       im._handlers.keydown(evt);
-      expect(triadSource.applyFreeLookTranslate).not.toHaveBeenCalled();
+      expect(im._pressedKeys.size).toBe(0);
 
       document.body.removeChild(wrapper);
     });
@@ -473,10 +498,10 @@ describe('Free-Look input pipeline', () => {
       sheet.appendChild(child);
       document.body.appendChild(sheet);
 
-      const evt = new KeyboardEvent('keydown', { key: 'd' });
+      const evt = new KeyboardEvent('keydown', { code: 'KeyD' });
       Object.defineProperty(evt, 'target', { value: child });
       im._handlers.keydown(evt);
-      expect(triadSource.applyFreeLookTranslate).not.toHaveBeenCalled();
+      expect(im._pressedKeys.size).toBe(0);
 
       document.body.removeChild(sheet);
     });

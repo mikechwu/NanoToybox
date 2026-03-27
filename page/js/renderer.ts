@@ -1010,10 +1010,7 @@ export class Renderer {
       cancelAnimationFrame(this._pulseRafId);
       this._pulseRafId = null;
     }
-    if (this._snapRafId != null) {
-      cancelAnimationFrame(this._snapRafId);
-      this._snapRafId = null;
-    }
+    this.cancelCameraAnimation();
     this.showAxisHighlight(null); // clean up triad highlight
     if (this._focusIndicator) {
       this.scene.remove(this._focusIndicator);
@@ -1056,10 +1053,17 @@ export class Renderer {
    * Update orbit pivot to a new focus target.
    * Does NOT update _defaultCamTarget — resetView still returns to scene centroid.
    */
+  /**
+   * Update orbit pivot to a new focus target (instant, for interaction-time focus tracking).
+   * For animated framing, use animateToFocusedObject() instead.
+   */
   setCameraFocusTarget(target: THREE.Vector3) {
     this.controls.target.copy(target);
     this.controls.update();
     this._showFocusIndicator(target);
+    // Update Esc recovery distance: use framing distance from return-target bounds
+    // (consistent with animated framing) rather than raw camera standoff
+    this.recomputeFocusDistance();
   }
 
   /** Show a temporary translucent sphere at the focus point (~1 second). */
@@ -1117,6 +1121,85 @@ export class Renderer {
     return new THREE.Vector3(cx / n, cy / n, cz / n);
   }
 
+  /**
+   * Compute bounding sphere (centroid + radius) of a molecule.
+   * Radius includes CONFIG.camera.atomVisualRadius for rendered mesh coverage.
+   */
+  getMoleculeBounds(atomOffset: number, atomCount: number): { center: THREE.Vector3; radius: number } | null {
+    const centroid = this.getMoleculeCentroid(atomOffset, atomCount);
+    if (!centroid) return null;
+    const pos = this._physicsRef!.pos;
+    let maxDistSq = 0;
+    const end = Math.min(atomOffset + atomCount, this._physicsRef!.n);
+    for (let i = atomOffset; i < end; i++) {
+      const dx = pos[i * 3] - centroid.x;
+      const dy = pos[i * 3 + 1] - centroid.y;
+      const dz = pos[i * 3 + 2] - centroid.z;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > maxDistSq) maxDistSq = d2;
+    }
+    return { center: centroid, radius: Math.sqrt(maxDistSq) + CONFIG.camera.atomVisualRadius };
+  }
+
+  /**
+   * Compute framing camera position for a bounding sphere from the current view direction.
+   * Returns the camera position that frames the sphere at CONFIG.camera.framingPadding fill.
+   * Validates against near/far clipping planes.
+   */
+  /**
+   * Compute framing distance for a bounding sphere (not position — pure math).
+   * Returns the clamped distance that frames the sphere safely.
+   */
+  computeFramingDistance(radius: number): number {
+    const vFov = this.camera.fov * Math.PI / 180;
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * this.camera.aspect);
+    const paddedR = radius * CONFIG.camera.framingPadding;
+    const d = Math.max(paddedR / Math.tan(vFov / 2), paddedR / Math.tan(hFov / 2));
+    // Near-plane validation: ensure d - radius sits beyond camera.near + margin
+    const nearSafe = this.camera.near + radius + CONFIG.camera.nearPlaneMargin;
+    let clamped = Math.max(d, nearSafe);
+    // Far-plane validation: ensure d + radius fits within camera.far
+    const farMax = this.camera.far - radius;
+    if (clamped > farMax) {
+      if (farMax > nearSafe) {
+        clamped = farMax; // pull back to stay within far plane
+      } else {
+        // Impossible case: sphere too large for frustum depth range.
+        // Temporarily expand camera.far (restored by updateSceneRadius on next mutation).
+        this.camera.far = clamped + radius + CONFIG.camera.nearPlaneMargin;
+        this.camera.updateProjectionMatrix();
+      }
+    }
+    return clamped;
+  }
+
+  /**
+   * Compute camera position to frame a bounding sphere from the current view direction.
+   * Uses computeFramingDistance + current camera quaternion.
+   */
+  computeFramingPosition(center: THREE.Vector3, radius: number): THREE.Vector3 {
+    const d = this.computeFramingDistance(radius);
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    return center.clone().sub(forward.multiplyScalar(d));
+  }
+
+  /**
+   * Compute a stable view direction, applying near-vertical fallback if needed.
+   * Returns a unit vector pointing FROM the camera TOWARD the target (outward direction
+   * to place camera = negate this and multiply by distance).
+   */
+  getStableViewDirection(): THREE.Vector3 {
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    if (Math.abs(forward.dot(new THREE.Vector3(0, 1, 0))) > CONFIG.camera.verticalFallbackDot) {
+      const xzProj = new THREE.Vector3(forward.x, 0, forward.z);
+      if (xzProj.lengthSq() > 1e-6) {
+        return xzProj.normalize().negate(); // outward from target
+      }
+      return new THREE.Vector3(0, 0, 1); // canonical fallback
+    }
+    return forward.clone().negate();
+  }
+
   // ── Free-Look mode (Phase 3) ──
 
   /**
@@ -1168,47 +1251,150 @@ export class Renderer {
     );
   }
 
-  /**
-   * Fly-to animation: return to orbiting the last focused molecule.
-   * Animated over 500ms.
-   */
-  /**
-   * Fly-to callback: set externally by main.ts to provide store access
-   * without renderer importing the store directly.
-   */
-  _returnToObjectCallback: (() => THREE.Vector3 | null) | null = null;
+  // ── Flight controller (velocity-based Free-Look) ──
 
-  returnToFocusedObject() {
-    // Get target position from callback (set by main.ts) or fall back to default
-    let targetPos = this._returnToObjectCallback?.() ?? null;
-    if (!targetPos) {
-      targetPos = this._defaultCamTarget.clone();
+  /**
+   * Update flight state: apply thrust from input, drag on coast, integrate position.
+   * Called per frame from the main loop when in Free-Look mode.
+   */
+  updateFlight(dt: number, inputX: number, inputZ: number): void {
+    const sceneR = this._sceneRadius;
+    const accel = sceneR * CONFIG.freeLook.accelerationScale;
+    const maxSpeed = sceneR * CONFIG.freeLook.maxSpeedScale;
+    const hasThrust = (inputX !== 0 || inputZ !== 0);
+
+    // Thrust: camera-local → world-space acceleration
+    if (hasThrust) {
+      const localAccel = new THREE.Vector3(inputX, 0, -inputZ).normalize().multiplyScalar(accel * dt);
+      const worldAccel = localAccel.applyQuaternion(this.camera.quaternion);
+      this._flightVelocity.add(worldAccel);
     }
 
-    // Animate fly-to
-    const startPos = this.camera.position.clone();
-    const distance = 15; // comfortable viewing distance
-    const endPos = targetPos.clone().add(new THREE.Vector3(0, 0, distance));
-    const start = performance.now();
-    const duration = 500;
+    // Clamp to max speed
+    if (this._flightVelocity.length() > maxSpeed) {
+      this._flightVelocity.setLength(maxSpeed);
+    }
 
-    if (this._snapRafId != null) cancelAnimationFrame(this._snapRafId);
-
-    const animate = () => {
-      const t = Math.min(1, (performance.now() - start) / duration);
-      const ease = 1 - (1 - t) * (1 - t);
-      this.camera.position.lerpVectors(startPos, endPos, ease);
-      this.camera.up.set(0, 1, 0);
-      this.camera.lookAt(targetPos!);
-      this.controls.target.copy(targetPos!);
-      this.controls.update();
-      if (t < 1) {
-        this._snapRafId = requestAnimationFrame(animate);
-      } else {
-        this._snapRafId = null;
+    // Two-regime drag (coast only — no drag during thrust)
+    if (!hasThrust) {
+      const speed = this._flightVelocity.length();
+      if (speed > 0) {
+        const k = sceneR * CONFIG.freeLook.dragRationalScale;
+        const crossover = sceneR * CONFIG.freeLook.dragCrossoverScale;
+        if (speed > crossover) {
+          // High-speed: rational drag v = v / (1 + k * dt)
+          this._flightVelocity.divideScalar(1 + k * dt);
+        } else {
+          // Low-speed: linear drag, coefficient derived from rational at crossover
+          const linearDrag = k * crossover;
+          const reduced = Math.max(0, speed - linearDrag * dt);
+          if (reduced === 0) {
+            this._flightVelocity.set(0, 0, 0);
+          } else {
+            this._flightVelocity.setLength(reduced);
+          }
+        }
       }
-    };
-    this._snapRafId = requestAnimationFrame(animate);
+    }
+
+    // Integrate position in world space
+    this.camera.position.addScaledVector(this._flightVelocity, dt);
+  }
+
+  /** Zero flight velocity immediately (Freeze / Space key). */
+  freezeFlight(): void {
+    this._flightVelocity.set(0, 0, 0);
+  }
+
+  /** Update cached scene radius from atom positions. */
+  updateSceneRadius(): void {
+    // Safety net: restore baseline far on scene mutations (also restored on animation complete/cancel)
+    this._restoreBaselineFar();
+
+    if (!this._physicsRef || this._physicsRef.n === 0) {
+      this._sceneRadius = CONFIG.freeLook.defaultSceneRadius;
+      return;
+    }
+    const pos = this._physicsRef.pos;
+    const n = this._physicsRef.n;
+    let cx = 0, cy = 0, cz = 0;
+    for (let i = 0; i < n; i++) {
+      cx += pos[i * 3]; cy += pos[i * 3 + 1]; cz += pos[i * 3 + 2];
+    }
+    cx /= n; cy /= n; cz /= n;
+    let maxD2 = 0;
+    for (let i = 0; i < n; i++) {
+      const dx = pos[i * 3] - cx, dy = pos[i * 3 + 1] - cy, dz = pos[i * 3 + 2] - cz;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > maxD2) maxD2 = d2;
+    }
+    this._sceneRadius = Math.max(Math.sqrt(maxD2) + CONFIG.camera.atomVisualRadius, CONFIG.freeLook.defaultSceneRadius);
+  }
+
+  /**
+  /**
+   * Return-target callback: set externally by main.ts to provide store access
+   * without renderer importing the store directly.
+   * Returns { position, radius } for framing (from resolveReturnTarget).
+   */
+  _returnToObjectCallback: (() => { position: THREE.Vector3; radius: number } | null) | null = null;
+
+  /**
+   * Animate camera to frame the focused molecule using shared animation + framing.
+   * Used by both Center Object and Return to Object for framing parity.
+   * @param levelUp — true for Return to Object (levels camera.up to Y)
+   */
+  animateToFocusedObject(opts?: { levelUp?: boolean; onComplete?: () => void }) {
+    const bounds = this._returnToObjectCallback?.() ?? null;
+    const target = bounds?.position ?? this._defaultCamTarget.clone();
+    const radius = bounds?.radius ?? 3;
+
+    // Use shared helpers for single source of truth
+    const viewDir = this.getStableViewDirection();
+    const d = this.computeFramingDistance(radius);
+    const endCamPos = target.clone().add(viewDir.multiplyScalar(d));
+
+    this.animateCameraTo({
+      targetPos: target,
+      cameraPos: endCamPos,
+      levelUp: opts?.levelUp ?? false,
+      onComplete: () => {
+        this._currentFocusDistance = d;
+        this._showFocusIndicator(target);
+        opts?.onComplete?.();
+      },
+    });
+  }
+
+  /**
+   * Transition from Free-Look to Orbit: zero velocity, recompute controls.target
+   * from stable view direction + _currentFocusDistance, level camera.up.
+   */
+  returnToOrbitFromFreeLook() {
+    this.freezeFlight();
+    const viewDir = this.getStableViewDirection();
+    const d = this._currentFocusDistance;
+    this.controls.target.copy(this.camera.position).addScaledVector(viewDir.negate(), d);
+    this.camera.up.set(0, 1, 0);
+    this.controls.update();
+  }
+
+  /**
+   * Recompute _currentFocusDistance from the current return-target bounds.
+   * Called on scene mutations that change molecule membership or bounds.
+   */
+  recomputeFocusDistance() {
+    const bounds = this._returnToObjectCallback?.();
+    if (bounds) {
+      this._currentFocusDistance = this.computeFramingDistance(bounds.radius);
+    } else {
+      this._currentFocusDistance = CONFIG.camera.defaultOrbitDistance;
+    }
+  }
+
+  /** Reset _currentFocusDistance to config default (scene clear / empty scene). */
+  resetFocusDistance() {
+    this._currentFocusDistance = CONFIG.camera.defaultOrbitDistance;
   }
 
   /**
@@ -1307,11 +1493,122 @@ export class Renderer {
     { dir: new THREE.Vector3(0, 0, -1), label: '-Z' },
   ];
 
-  /** Snap animation state */
-  private _snapRafId: number | null = null;
+  /** Unified camera animation owner — one animation at a time */
+  private _cameraAnimRafId: number | null = null;
+  private _cameraAnimCleanup: (() => void) | null = null;
+
+  /** Desired Orbit pivot distance for Esc-to-Orbit re-entry */
+  _currentFocusDistance: number = CONFIG.camera.defaultOrbitDistance;
+
+  /** Cached scene bounding radius (updated on scene mutations). */
+  _sceneRadius: number = CONFIG.freeLook.defaultSceneRadius;
+
+  /** Baseline camera.far (restored after temporary expansion). */
+  private _baselineFar: number = 2000;
+
+  /** Restore camera.far to baseline if it was temporarily expanded. */
+  private _restoreBaselineFar(): void {
+    if (this.camera.far !== this._baselineFar) {
+      this.camera.far = this._baselineFar;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  /** World-space flight velocity (Free-Look only). */
+  _flightVelocity: THREE.Vector3 = new THREE.Vector3();
 
   /** Highlight mesh for triad tap-intent preview */
   private _triadHighlight: THREE.Mesh | null = null;
+
+  // ── Shared camera animation ──
+
+  /** Smootherstep easing (quintic Hermite, zero velocity + acceleration at endpoints). */
+  private _smootherstep(t: number): number {
+    return t * t * t * (t * (t * 6 - 15) + 10);
+  }
+
+  /**
+   * Cancel any active camera animation and run cleanup.
+   * Called by all input surfaces before taking control.
+   */
+  cancelCameraAnimation() {
+    if (this._cameraAnimRafId != null) {
+      cancelAnimationFrame(this._cameraAnimRafId);
+      this._cameraAnimRafId = null;
+    }
+    if (this._cameraAnimCleanup) {
+      this._cameraAnimCleanup();
+      this._cameraAnimCleanup = null;
+    }
+    // Restore baseline far after any animation (framing may have expanded it)
+    this._restoreBaselineFar();
+  }
+
+  /**
+   * Animate camera to a new position + target with smootherstep easing.
+   * Single animation owner — cancels any existing animation first.
+   * Optionally levels camera.up to world-up on completion.
+   */
+  animateCameraTo(opts: {
+    targetPos: THREE.Vector3;
+    cameraPos: THREE.Vector3;
+    duration?: number;
+    levelUp?: boolean;
+    onComplete?: () => void;
+  }) {
+    this.cancelCameraAnimation();
+    // S6 rule: zero flight velocity before any focus animation
+    this._flightVelocity.set(0, 0, 0);
+
+    const fromPos = this.camera.position.clone();
+    const toPos = opts.cameraPos;
+    const fromTarget = this.controls.target.clone();
+    const toTarget = opts.targetPos;
+    const duration = opts.duration ?? CONFIG.camera.animationDurationMs;
+    const startTime = performance.now();
+
+    // Disable OrbitControls during animation
+    const prevEnabled = {
+      rotate: this.controls.enableRotate,
+      pan: this.controls.enablePan,
+      zoom: this.controls.enableZoom,
+    };
+    this.controls.enableRotate = false;
+    this.controls.enablePan = false;
+    this.controls.enableZoom = false;
+
+    this._cameraAnimCleanup = () => {
+      this.controls.enableRotate = prevEnabled.rotate;
+      this.controls.enablePan = prevEnabled.pan;
+      this.controls.enableZoom = prevEnabled.zoom;
+    };
+
+    const animate = () => {
+      const elapsed = performance.now() - startTime;
+      const rawT = Math.min(elapsed / duration, 1);
+      const t = this._smootherstep(rawT);
+
+      this.camera.position.lerpVectors(fromPos, toPos, t);
+      this.controls.target.lerpVectors(fromTarget, toTarget, t);
+      if (opts.levelUp) this.camera.up.set(0, 1, 0);
+      this.camera.lookAt(this.controls.target);
+      this.controls.update();
+
+      if (rawT < 1) {
+        this._cameraAnimRafId = requestAnimationFrame(animate);
+      } else {
+        this._cameraAnimRafId = null;
+        if (this._cameraAnimCleanup) {
+          this._cameraAnimCleanup();
+          this._cameraAnimCleanup = null;
+        }
+        // Restore baseline far after framing animation completes
+        this._restoreBaselineFar();
+        opts.onComplete?.();
+      }
+    };
+    this._cameraAnimRafId = requestAnimationFrame(animate);
+  }
 
   /**
    * Find the nearest axis endpoint to a screen point within the triad viewport.
@@ -1359,41 +1656,16 @@ export class Renderer {
    * Preserves current camera distance from target.
    */
   snapToAxis(axisDir: THREE.Vector3) {
-    // Cancel any in-progress snap
-    if (this._snapRafId != null) {
-      cancelAnimationFrame(this._snapRafId);
-      this._snapRafId = null;
-    }
-
     const distance = this.camera.position.distanceTo(this.controls.target);
-    const targetPos = this.controls.target.clone().add(
+    const endCamPos = this.controls.target.clone().add(
       axisDir.clone().normalize().multiplyScalar(distance)
     );
-    const startPos = this.camera.position.clone();
-    const startUp = this.camera.up.clone();
-    // Choose an appropriate up vector — avoid gimbal lock when looking along Y
-    const targetUp = Math.abs(axisDir.y) > 0.9
-      ? new THREE.Vector3(0, 0, axisDir.y > 0 ? -1 : 1)
-      : new THREE.Vector3(0, 1, 0);
-
-    const start = performance.now();
-    const duration = 300;
-
-    const animate = () => {
-      const t = Math.min(1, (performance.now() - start) / duration);
-      // Smooth ease-out
-      const ease = 1 - (1 - t) * (1 - t);
-      this.camera.position.lerpVectors(startPos, targetPos, ease);
-      this.camera.up.lerpVectors(startUp, targetUp, ease).normalize();
-      this.camera.lookAt(this.controls.target);
-      this.controls.update();
-      if (t < 1) {
-        this._snapRafId = requestAnimationFrame(animate);
-      } else {
-        this._snapRafId = null;
-      }
-    };
-    this._snapRafId = requestAnimationFrame(animate);
+    this.animateCameraTo({
+      targetPos: this.controls.target.clone(),
+      cameraPos: endCamPos,
+      duration: 300,
+      levelUp: true,
+    });
   }
 
   /**

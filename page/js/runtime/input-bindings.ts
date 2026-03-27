@@ -102,6 +102,8 @@ export function createInputBindings(deps: InputBindingsDeps): InputBindings {
       onReturnToOrbit: () => useAppStore.getState().setCameraMode('orbit'),
       onFreeLookFocusSelect: (atomIdx) => focusMoleculeByAtom(atomIdx, deps.getRenderer()),
       resetOrientation: () => renderer.resetOrientation(),
+      cancelCameraAnimation: () => renderer.cancelCameraAnimation(),
+      freezeFlight: () => renderer.freezeFlight(),
       onTriadDragEnd: () => {
         if (useAppStore.getState().cameraMode === 'orbit') deps.onAchievement?.('orbit-drag');
       },

@@ -19,6 +19,8 @@ export function CameraControls() {
   const cameraMode = useAppStore((s) => s.cameraMode);
   const cameraHelpOpen = useAppStore((s) => s.cameraHelpOpen);
   const pickFocusActive = useAppStore((s) => s.pickFocusActive);
+  const flightActive = useAppStore((s) => s.flightActive);
+  const farDrift = useAppStore((s) => s.farDrift);
   const cameraCallbacks = useAppStore((s) => s.cameraCallbacks);
 
   // Chip body tap: toggle camera mode
@@ -31,7 +33,7 @@ export function CameraControls() {
         localStorage.setItem('freelook-tutorial-shown', '1');
         const hint = document.getElementById('hint');
         if (hint) {
-          hint.textContent = 'Free-Look: drag to look · tap molecule to mark target · ↩ or double-tap to return';
+          hint.textContent = 'Free-Look: drag to look · WASD to fly (drifts!) · tap molecule to mark target · ↩ to return';
           hint.style.display = '';
           hint.classList.remove('fade');
           setTimeout(() => {
@@ -91,12 +93,21 @@ export function CameraControls() {
             {pickFocusActive ? 'Tap molecule' : '⊕'}
           </button>
         )}
-        {cameraMode === 'freelook' && (
+        {cameraMode === 'freelook' && flightActive && (
           <button
             className="camera-action"
+            onClick={() => cameraCallbacks?.onFreeze?.()}
+            aria-label="Freeze"
+          >
+            ✕
+          </button>
+        )}
+        {cameraMode === 'freelook' && (
+          <button
+            className={`camera-action${farDrift ? ' camera-action-pulse' : ''}`}
             onClick={() => {
+              // Single-entry: onReturnToObject owns animation + mode switch
               cameraCallbacks?.onReturnToObject?.();
-              useAppStore.getState().setCameraMode('orbit');
             }}
             aria-label="Return to Object"
           >

@@ -132,9 +132,16 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
       });
       renderer.setPhysicsRef(physics);
 
+      // Update scene radius first (used by framing calculations)
+      renderer.updateSceneRadius();
+
       // Focus-aware pivot: if this commit was from active placement, focus the new molecule
+      // (setCameraFocusTarget inside will update _currentFocusDistance)
       if (useAppStore.getState().placementActive) {
         focusNewestPlacedMolecule(renderer);
+      } else {
+        // No placement → recompute focus distance from current target
+        renderer.recomputeFocusDistance();
       }
 
       const wr = deps.getWorkerRuntime();
@@ -166,6 +173,10 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
 
       useAppStore.getState().resetDiagnostics();
       useAppStore.getState().setLastFocusedMoleculeId(null);
+
+      // Reset camera scene state (scene cleared → default distance, default radius)
+      renderer.resetFocusDistance();
+      renderer.updateSceneRadius();
       const sr = deps.getSnapshotReconciler();
       if (sr) sr.reset();
 

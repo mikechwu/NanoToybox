@@ -16,7 +16,10 @@ import {
 function mockRenderer(centroid: THREE.Vector3 | null = new THREE.Vector3(1, 2, 3)) {
   return {
     getMoleculeCentroid: vi.fn(() => centroid),
+    getMoleculeBounds: vi.fn(() => centroid ? { center: centroid, radius: 3.5 } : null),
     setCameraFocusTarget: vi.fn(),
+    animateToFocusedObject: vi.fn(),
+    camera: { position: new THREE.Vector3(0, 0, 15) },
   };
 }
 
