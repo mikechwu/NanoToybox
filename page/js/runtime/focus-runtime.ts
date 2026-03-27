@@ -84,23 +84,21 @@ export function resolveReturnTarget(
 }
 
 /**
- * Find the molecule containing the given atom and focus the camera on it.
- * Updates controls.target and lastFocusedMoleculeId.
- * No-op if the atom doesn't belong to any known molecule or physics is unavailable.
+ * Track which molecule the user is interacting with (store ID only).
+ * Does NOT retarget the camera pivot — plain clicks and interaction starts
+ * should not snap the view. Camera retarget only happens via explicit
+ * Center Object / Return to Object actions.
+ *
+ * Updates lastFocusedMoleculeId for Center Object resolution.
  */
 export function focusMoleculeByAtom(
   atomIdx: number,
-  renderer: FocusRendererSurface,
+  _renderer: FocusRendererSurface,
 ): void {
   const molecules = useAppStore.getState().molecules;
   const mol = findMoleculeForAtom(atomIdx, molecules);
   if (!mol) return;
-  const centroid = renderer.getMoleculeCentroid(mol.atomOffset, mol.atomCount);
-  if (!centroid) return;
-  // Set store ID first so recomputeFocusDistance (called by setCameraFocusTarget)
-  // resolves against the correct molecule, not the previous one.
   useAppStore.getState().setLastFocusedMoleculeId(mol.id);
-  renderer.setCameraFocusTarget(centroid);
 }
 
 /**

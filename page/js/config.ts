@@ -46,7 +46,7 @@ export const CONFIG = {
   },
 
   wall: {
-    springK: 5.0,            // eV/Å² — wall spring constant (soft harmonic)
+    springK: 0.5,            // eV/Å² — wall spring constant (soft harmonic)
     density: 0.00005,        // atoms/ų — target density for wall radius calculation
     padding: 50,             // Å — minimum clearance beyond density-derived radius
     removeMargin: 10,        // Å — extra distance past R_wall before atom removal (Remove mode)

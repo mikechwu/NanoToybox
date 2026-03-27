@@ -58,24 +58,19 @@ describe('focusMoleculeByAtom', () => {
     ]);
   });
 
-  it('calls setCameraFocusTarget with molecule centroid', () => {
+  it('updates lastFocusedMoleculeId without retargeting camera', () => {
     const r = mockRenderer(new THREE.Vector3(5, 6, 7));
     focusMoleculeByAtom(30, r);
-    expect(r.getMoleculeCentroid).toHaveBeenCalledWith(0, 60);
-    expect(r.setCameraFocusTarget).toHaveBeenCalledWith(new THREE.Vector3(5, 6, 7));
-  });
-
-  it('sets lastFocusedMoleculeId to the correct molecule', () => {
-    const r = mockRenderer();
-    focusMoleculeByAtom(30, r);
     expect(useAppStore.getState().lastFocusedMoleculeId).toBe(10);
+    // Should NOT retarget camera pivot on interaction start
+    expect(r.setCameraFocusTarget).not.toHaveBeenCalled();
   });
 
   it('finds the second molecule for higher atom indices', () => {
     const r = mockRenderer();
     focusMoleculeByAtom(80, r);
-    expect(r.getMoleculeCentroid).toHaveBeenCalledWith(60, 100);
     expect(useAppStore.getState().lastFocusedMoleculeId).toBe(20);
+    expect(r.setCameraFocusTarget).not.toHaveBeenCalled();
   });
 
   it('no-ops when atom is outside any molecule range', () => {
@@ -85,10 +80,9 @@ describe('focusMoleculeByAtom', () => {
     expect(useAppStore.getState().lastFocusedMoleculeId).toBeNull();
   });
 
-  it('no-ops when centroid is null (physics unavailable)', () => {
+  it('no-ops when atom is outside range (centroid irrelevant)', () => {
     const r = mockRenderer(null);
-    focusMoleculeByAtom(30, r);
-    expect(r.setCameraFocusTarget).not.toHaveBeenCalled();
+    focusMoleculeByAtom(200, r);
     expect(useAppStore.getState().lastFocusedMoleculeId).toBeNull();
   });
 });

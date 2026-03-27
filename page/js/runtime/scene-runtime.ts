@@ -61,6 +61,7 @@ export interface SceneRuntimeDeps {
   dispatch: (cmd: import('../state-machine').Command) => void;
   fullSchedulerReset: () => void;
   partialProfilerReset: () => void;
+  recoverFromWorkerFailure: (reason: string) => void;
 }
 
 export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
@@ -147,7 +148,14 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
       const wr = deps.getWorkerRuntime();
       if (wr && wr.isActive()) {
         wr.appendMolecule(atoms as any, bonds as any, offset as [number, number, number]).then((result) => {
-          if (!result.ok) return;
+          if (!result.ok) {
+            // Worker append failed — scene divergence is unrecoverable.
+            // Tear down worker mode completely and fall back to local sync.
+            console.warn('[scene-runtime] worker append failed — tearing down worker, falling back to sync mode');
+            wr.destroy();
+            deps.recoverFromWorkerFailure('worker append failed');
+            return;
+          }
           wr.sendInteraction({
             type: 'updateWallCenter',
             atoms: (atoms as any[]).map((a: any) => ({ x: a.x, y: a.y, z: a.z })),

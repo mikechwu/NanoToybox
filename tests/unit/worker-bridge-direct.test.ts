@@ -298,3 +298,114 @@ describe('Direct WorkerBridge — #7 mutation-aware gating on real bridge', () =
     expect(results.length).toBe(1);
   });
 });
+
+describe('Direct WorkerBridge — append snapshot race regression', () => {
+  it('clears latestSnapshot when appendMolecule starts', async () => {
+    const bridge = await createBridge();
+
+    // Init
+    const initP = bridge.init({ dt: 0.001 } as any, [], []);
+    mockWorkerInstance.respond({
+      type: 'initResult', replyTo: mockWorkerInstance.posted[0].commandId, ok: true,
+      sceneVersion: 1, atomCount: 60, wasmReady: true, kernel: 'wasm',
+    });
+    await initP;
+
+    // Get a frame so latestSnapshot is populated
+    bridge.sendRequestFrame(1);
+    mockWorkerInstance.respond({
+      type: 'frameResult', replyTo: mockWorkerInstance.posted[1].commandId,
+      sceneVersion: 1, snapshotVersion: 1,
+      positions: new Float64Array(180), n: 60,
+      stepsCompleted: 1, physStepMs: 1.0,
+    });
+    expect(bridge.getLatestSnapshot()).not.toBeNull();
+    expect(bridge.getLatestSnapshot()!.n).toBe(60);
+
+    // Start append — latestSnapshot must be cleared immediately
+    bridge.appendMolecule([{ x: 0, y: 0, z: 0 }], [], [0, 0, 0]);
+    expect(bridge.getLatestSnapshot()).toBeNull();
+  });
+
+  it('rejects equal-version frame during pending append', async () => {
+    const bridge = await createBridge();
+
+    const initP = bridge.init({ dt: 0.001 } as any, [], []);
+    mockWorkerInstance.respond({
+      type: 'initResult', replyTo: mockWorkerInstance.posted[0].commandId, ok: true,
+      sceneVersion: 1, atomCount: 60, wasmReady: true, kernel: 'wasm',
+    });
+    await initP;
+
+    // Start append (pending, not yet acked)
+    const appendP = bridge.appendMolecule([{ x: 0, y: 0, z: 0 }], [], [0, 0, 0]);
+
+    // Send a request and try to deliver a pre-append frame
+    bridge.sendRequestFrame(1);
+    const frameResults: any[] = [];
+    bridge.setOnFrameResult((snap) => frameResults.push(snap));
+
+    mockWorkerInstance.respond({
+      type: 'frameResult', replyTo: mockWorkerInstance.posted[2].commandId,
+      sceneVersion: 1, snapshotVersion: 2,
+      positions: new Float64Array(180), n: 60,
+      stepsCompleted: 1, physStepMs: 1.0,
+    });
+
+    // Frame should be rejected — pending mutation blocks all scene-versioned events
+    expect(frameResults.length).toBe(0);
+    expect(bridge.getLatestSnapshot()).toBeNull();
+
+    // Now ack the append
+    mockWorkerInstance.respond({
+      type: 'appendResult', replyTo: mockWorkerInstance.posted[1].commandId, ok: true,
+      sceneVersion: 2, atomOffset: 60, atomsAppended: 1, totalAtomCount: 61,
+    });
+    await appendP;
+
+    // Post-append frame with new scene version should be accepted
+    bridge.sendRequestFrame(1);
+    mockWorkerInstance.respond({
+      type: 'frameResult', replyTo: mockWorkerInstance.posted[3].commandId,
+      sceneVersion: 2, snapshotVersion: 3,
+      positions: new Float64Array(183), n: 61,
+      stepsCompleted: 1, physStepMs: 1.0,
+    });
+
+    expect(frameResults.length).toBe(1);
+    expect(frameResults[0].n).toBe(61);
+  });
+
+  it('failed append ack: bridge destroyed becomes inactive', async () => {
+    const bridge = await createBridge();
+
+    // Init
+    const initP = bridge.init({ dt: 0.001 } as any, [{ x: 0, y: 0, z: 0 }], []);
+    mockWorkerInstance.respond({
+      type: 'initResult', replyTo: mockWorkerInstance.posted[0].commandId, ok: true,
+      sceneVersion: 1, atomCount: 1, wasmReady: true, kernel: 'wasm',
+    });
+    await initP;
+    expect(bridge.canSendRequest()).toBe(true);
+
+    // Start append
+    const appendP = bridge.appendMolecule([{ x: 1, y: 0, z: 0 }], [], [0, 0, 0]);
+
+    // Fail the append
+    mockWorkerInstance.respond({
+      type: 'appendResult', replyTo: mockWorkerInstance.posted[1].commandId, ok: false,
+      sceneVersion: 1, atomOffset: 0, atomsAppended: 0, totalAtomCount: 1,
+      error: 'capacity exceeded',
+    });
+    const result = await appendP;
+    expect(result.ok).toBe(false);
+
+    // Simulate what scene-runtime does: destroy the bridge
+    bridge.destroy();
+
+    // Bridge is now torn down — canSendRequest returns false
+    expect(bridge.canSendRequest()).toBe(false);
+    expect(bridge.getLatestSnapshot()).toBeNull();
+    expect(bridge.getWorkerState()).toBe('crashed');
+  });
+});

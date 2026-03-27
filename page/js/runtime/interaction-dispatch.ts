@@ -44,6 +44,8 @@ export function createInteractionDispatch(deps: InteractionDispatchDeps) {
     if (useAppStore.getState().pickFocusActive) {
       if (cmd.action === 'startDrag' || cmd.action === 'startMove' || cmd.action === 'startRotate') {
         focusMoleculeByAtom(cmd.atom, deps.getRenderer());
+        // Pick-focus is an explicit centering action — animate to the selected molecule
+        deps.getRenderer().animateToFocusedObject();
         useAppStore.getState().setPickFocusActive(false);
         return { dragTarget: null };
       }

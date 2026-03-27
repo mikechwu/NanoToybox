@@ -145,9 +145,11 @@ describe('interaction-dispatch pick-focus interception', () => {
     } as any;
     const renderer = {
       getMoleculeCentroid: vi.fn(() => new THREE.Vector3(5, 5, 5)),
+      getMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(5, 5, 5), radius: 3.5 })),
       setCameraFocusTarget: vi.fn(),
+      animateToFocusedObject: vi.fn(),
       getCanvas: vi.fn(() => document.createElement('canvas')),
-      camera: {},
+      camera: { position: new THREE.Vector3(0, 0, 15) },
       controls: { target: { set: vi.fn() }, update: vi.fn() },
       setHighlight: vi.fn(),
       showForceLine: vi.fn(),
@@ -184,7 +186,8 @@ describe('interaction-dispatch pick-focus interception', () => {
     // Pick-focus consumed the command
     expect(useAppStore.getState().pickFocusActive).toBe(false);
     expect(useAppStore.getState().lastFocusedMoleculeId).toBe(1);
-    expect(mockDeps.renderer.setCameraFocusTarget).toHaveBeenCalled();
+    // Pick-focus is explicit centering — animates to focused object
+    expect(mockDeps.renderer.animateToFocusedObject).toHaveBeenCalled();
     // Normal interaction did NOT start (stable mock — same instance)
     expect(mockDeps.physics.startDrag).not.toHaveBeenCalled();
     expect(result.dragTarget).toBeNull();

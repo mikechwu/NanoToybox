@@ -36,7 +36,10 @@ function acceptSceneVersionedEvent(
   state: GatingState,
 ): boolean {
   if (eventSceneVersion < state.lastAcceptedMutationVersion) return false;
-  if (state.hasPendingMutations && eventSceneVersion > state.lastAcceptedMutationVersion) return false;
+  // Coarse gate: reject ALL scene-versioned events during pending mutations.
+  // Pre-append snapshots would roll back local renderer; post-append belong
+  // to an unacknowledged scene version.
+  if (state.hasPendingMutations) return false;
   return true;
 }
 
@@ -53,15 +56,11 @@ describe('Mutation-aware gating', () => {
     expect(acceptSceneVersionedEvent(1, state)).toBe(false);
   });
 
-  it('rejects unacknowledged future scenes when mutations are pending', () => {
+  it('rejects ALL events when mutations are pending (coarse gate)', () => {
     const state: GatingState = { lastAcceptedMutationVersion: 3, hasPendingMutations: true };
-    expect(acceptSceneVersionedEvent(4, state)).toBe(false); // future = unacknowledged
-    expect(acceptSceneVersionedEvent(5, state)).toBe(false);
-  });
-
-  it('accepts current version when mutations are pending', () => {
-    const state: GatingState = { lastAcceptedMutationVersion: 3, hasPendingMutations: true };
-    expect(acceptSceneVersionedEvent(3, state)).toBe(true); // current version ok
+    expect(acceptSceneVersionedEvent(3, state)).toBe(false); // equal version rejected
+    expect(acceptSceneVersionedEvent(4, state)).toBe(false); // future version rejected
+    expect(acceptSceneVersionedEvent(5, state)).toBe(false); // far future rejected
   });
 
   it('rejects stale events even with pending mutations', () => {

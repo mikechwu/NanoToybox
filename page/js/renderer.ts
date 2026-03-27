@@ -278,6 +278,7 @@ export class Renderer {
     this._atomCapacity = Renderer._nextCapacity(atoms.length);
     this._instancedAtoms = new THREE.InstancedMesh(this._atomGeom, this._atomMat, this._atomCapacity);
     this._instancedAtoms.count = this._atomCount;
+    this._instancedAtoms.frustumCulled = false;
 
     // Write initial atom positions into instance matrices
     const dummy = this._dummyObj;
@@ -295,6 +296,7 @@ export class Renderer {
     this._bondCapacity = Renderer._nextCapacity(Math.max(bonds.length, 256));
     this._instancedBonds = new THREE.InstancedMesh(this._bondGeom, this._bondMat, this._bondCapacity);
     this._instancedBonds.count = 0; // set during _updateBondTransforms
+    this._instancedBonds.frustumCulled = false;
     this.scene.add(this._instancedBonds);
 
     this._updateBondTransformsInstanced(bonds, null, atoms);
@@ -465,6 +467,7 @@ export class Renderer {
     this._bondCapacity = newCap;
     this._instancedBonds = new THREE.InstancedMesh(this._bondGeom, this._bondMat, newCap);
     this._instancedBonds.count = 0;
+    this._instancedBonds.frustumCulled = false;
     this.scene.add(this._instancedBonds);
   }
 
@@ -683,6 +686,7 @@ export class Renderer {
         this.scene.remove(oldInstanced);
         oldInstanced.dispose();
       }
+      newInstanced.frustumCulled = false;
       this._instancedAtoms = newInstanced;
       this._atomCapacity = newCap;
       this.scene.add(newInstanced);

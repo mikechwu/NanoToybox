@@ -179,6 +179,10 @@ export class WorkerBridge {
     const commandId = this._nextId();
     this._registerMutation(commandId, 'appendMolecule');
 
+    // Clear stale snapshot immediately — prevents pre-append frames from
+    // rolling back the local renderer atom count before the worker acks.
+    this.latestSnapshot = null;
+
     const promise = new Promise<AppendResult>((resolve) => {
       this.pendingResolvers.set(commandId, resolve as (v: MutationAckEvent) => void);
     });
@@ -410,10 +414,18 @@ export class WorkerBridge {
       return; // stale — produced before latest acknowledged mutation
     }
 
-    // If mutations are pending, reject events for NEWER scene versions too —
-    // they belong to a scene we haven't acknowledged yet.
-    if (this.hasPendingMutations && event.sceneVersion > this.lastAcceptedMutationVersion) {
-      return; // unacknowledged future scene
+    // If mutations are pending, reject ALL scene-versioned events.
+    // This is an intentionally coarse gate that pauses worker frame consumption
+    // during the entire mutation window. Pre-append snapshots would roll back
+    // local renderer atom count; post-append snapshots belong to an unacknowledged
+    // scene version. Resume consuming only after the mutation ack advances
+    // lastAcceptedMutationVersion.
+    //
+    // This is safe because mutations are short (typically <50ms). A future
+    // refinement could narrow this to reject only specific event types per
+    // mutation kind, but the coarse gate is correct and simple.
+    if (this.hasPendingMutations) {
+      return;
     }
 
     // Check generation for frame-related events

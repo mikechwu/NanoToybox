@@ -307,6 +307,7 @@ async function init() {
     dispatch: (cmd) => { if (_dispatch) _dispatch(cmd); },
     fullSchedulerReset,
     partialProfilerReset,
+    recoverFromWorkerFailure: recoverLocalPhysicsAfterWorkerFailure,
   });
 
   // Load manifest
@@ -670,6 +671,13 @@ function recoverLocalPhysicsAfterWorkerFailure(reason: string) {
     physics.updateWallRadius();
   }
   fullSchedulerReset();
+  // Surface transient status so user/developer knows worker mode was lost
+  useAppStore.getState().setStatusText('Worker sync lost — running locally');
+  setTimeout(() => {
+    if (useAppStore.getState().statusText === 'Worker sync lost — running locally') {
+      useAppStore.getState().setStatusText(null);
+    }
+  }, 5000);
 }
 
 // --- Profiler reset helpers ---

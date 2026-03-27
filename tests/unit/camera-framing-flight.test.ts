@@ -483,21 +483,17 @@ describe('focus helper ordering (store ID before setCameraFocusTarget)', () => {
     useAppStore.getState().resetTransientState();
   });
 
-  it('focusMoleculeByAtom sets lastFocusedMoleculeId before calling setCameraFocusTarget', () => {
+  it('focusMoleculeByAtom updates store ID without retargeting camera', () => {
     useAppStore.getState().setMolecules([
       { id: 1, name: 'C60', structureFile: 'c60.xyz', atomCount: 60, atomOffset: 0 },
       { id: 2, name: 'CNT', structureFile: 'cnt.xyz', atomCount: 100, atomOffset: 60 },
     ]);
     useAppStore.getState().setLastFocusedMoleculeId(1);
 
-    let idAtCallTime: number | null = null;
     const r = {
       getMoleculeCentroid: vi.fn(() => new THREE.Vector3(5, 5, 5)),
       getMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(5, 5, 5), radius: 5 })),
-      setCameraFocusTarget: vi.fn(() => {
-        // Capture the store state at the moment setCameraFocusTarget is called
-        idAtCallTime = useAppStore.getState().lastFocusedMoleculeId;
-      }),
+      setCameraFocusTarget: vi.fn(),
       animateToFocusedObject: vi.fn(),
       camera: { position: new THREE.Vector3(0, 0, 15) },
     };
@@ -505,9 +501,9 @@ describe('focus helper ordering (store ID before setCameraFocusTarget)', () => {
     // Focus atom 70 (belongs to molecule 2, offset 60, count 100)
     focusMoleculeByAtom(70, r);
 
-    // The store should have been updated BEFORE setCameraFocusTarget was called
-    expect(idAtCallTime).toBe(2);
+    // Store ID updated, but camera NOT retargeted
     expect(useAppStore.getState().lastFocusedMoleculeId).toBe(2);
+    expect(r.setCameraFocusTarget).not.toHaveBeenCalled();
   });
 });
 
