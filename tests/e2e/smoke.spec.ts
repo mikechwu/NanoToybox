@@ -20,6 +20,15 @@ function collectErrors(page: import('@playwright/test').Page) {
   return errors
 }
 
+/** Wait for the _getUIState test hook to be wired (set late in init). */
+async function waitForUIState(page: import('@playwright/test').Page) {
+  await expect(async () => {
+    const state = await page.evaluate(() => (window as any)._getUIState?.())
+    expect(state).toBeDefined()
+  }).toPass({ timeout: 5000 })
+  return page.evaluate(() => (window as any)._getUIState?.())
+}
+
 /**
  * Viewer-specific error collection.
  * The viewer speculatively fetches demo trajectories from /outputs/ which are
@@ -301,13 +310,9 @@ test.describe('Milestone D — React UI Migration', () => {
     await page.goto(`${baseURL}/page/`)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
 
-    // Verify initial speed is 1x (wait for test hook to be wired)
-    await expect(async () => {
-      const state = await page.evaluate(() => (window as any)._getUIState?.())
-      expect(state).toBeDefined()
-      expect(state.targetSpeed).toBe(1)
-    }).toPass({ timeout: 5000 })
-    let ui = await page.evaluate(() => (window as any)._getUIState?.())
+    // Verify initial speed is 1x
+    let ui = await waitForUIState(page)
+    expect(ui.targetSpeed).toBe(1)
 
     // Open settings
     await page.getByRole('toolbar', { name: 'Simulation controls' }).getByRole('button', { name: 'Settings' }).click()
@@ -376,7 +381,7 @@ test.describe('Milestone D — React UI Migration', () => {
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
 
     // Verify initial boundary mode
-    let ui = await page.evaluate(() => (window as any)._getUIState?.())
+    let ui = await waitForUIState(page)
     expect(ui.boundaryMode).toBe('contain')
 
     // Open settings and switch to Remove
@@ -404,7 +409,7 @@ test.describe('Milestone D — React UI Migration', () => {
     const toolbar = page.getByRole('toolbar', { name: 'Simulation controls' })
 
     // Initial mode is Atom
-    let ui = await page.evaluate(() => (window as any)._getUIState?.())
+    let ui = await waitForUIState(page)
     expect(ui.interactionMode).toBe('atom')
 
     // Click Move (native radio via ARIA)
@@ -430,6 +435,9 @@ test.describe('Milestone D — React UI Migration', () => {
     await page.goto(`${baseURL}/page/`)
     const toolbar = page.getByRole('toolbar', { name: 'Simulation controls' })
     await expect(toolbar).toBeAttached({ timeout: 10000 })
+
+    // Wait for test hook before interacting
+    await waitForUIState(page)
 
     // Focus the Atom radio (initial checked selection)
     const atomRadio = toolbar.getByRole('radio', { name: 'Atom' })
