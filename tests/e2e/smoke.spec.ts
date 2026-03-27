@@ -301,9 +301,13 @@ test.describe('Milestone D — React UI Migration', () => {
     await page.goto(`${baseURL}/page/`)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
 
-    // Verify initial speed is 1x
+    // Verify initial speed is 1x (wait for test hook to be wired)
+    await expect(async () => {
+      const state = await page.evaluate(() => (window as any)._getUIState?.())
+      expect(state).toBeDefined()
+      expect(state.targetSpeed).toBe(1)
+    }).toPass({ timeout: 5000 })
     let ui = await page.evaluate(() => (window as any)._getUIState?.())
-    expect(ui.targetSpeed).toBe(1)
 
     // Open settings
     await page.getByRole('toolbar', { name: 'Simulation controls' }).getByRole('button', { name: 'Settings' }).click()
