@@ -1,8 +1,10 @@
 # ML Surrogate
 
-## Status: Explored, Deferred
+## Status: Exploration Only (Not Deployed)
 
-The ML surrogate was explored in development phases simdev7–simdev9. Key conclusion: **analytical Tersoff in Wasm is faster than ML for all target system sizes (<1000 atoms)**. ML work is preserved for future use.
+The ML surrogate was explored in development phases simdev7–simdev9. Key conclusion: **analytical Tersoff in Wasm is faster than ML for all target system sizes (<1000 atoms)**. ML work is preserved for future use. See decisions.md D1 for rationale.
+
+> **Note:** The code in `ml/` and training data in `data/` are archived exploration artifacts. The interactive web app uses the analytical Tersoff kernel exclusively (JS/Wasm). No ML models are integrated into the web UI.
 
 ## Force Decomposition
 

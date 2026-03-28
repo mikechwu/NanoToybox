@@ -78,11 +78,6 @@ export interface AppStore {
   orbitFollowEnabled: boolean;
   setOrbitFollowEnabled: (enabled: boolean) => void;
 
-  // Pick-focus mode (fully dormant — no active runtime code consults this.
-  // Replaced by orbitFollowEnabled. Field retained for potential future use only.)
-  pickFocusActive: boolean;
-  setPickFocusActive: (active: boolean) => void;
-
   // Camera control callbacks (registered by main.ts, consumed by CameraControls)
   cameraCallbacks: { onCenterObject: () => void; onReturnToObject?: () => void; onFreeze?: () => void } | null;
   setCameraCallbacks: (cbs: { onCenterObject: () => void; onReturnToObject?: () => void; onFreeze?: () => void }) => void;
@@ -218,7 +213,6 @@ export const useAppStore = create<AppStore>((set) => ({
   cameraMode: 'orbit',
   cameraHelpOpen: false,
   orbitFollowEnabled: false,
-  pickFocusActive: false,
   cameraCallbacks: null,
   lastFocusedMoleculeId: null,
   atomCount: 0,
@@ -269,12 +263,11 @@ export const useAppStore = create<AppStore>((set) => ({
     set({ cameraMode: mode });
   },
   setCameraHelpOpen: (open) => set((s) => {
-    // Mutual exclusivity: opening help closes sheets + cancels pick-focus
+    // Mutual exclusivity: opening help closes sheets
     if (open && s.activeSheet !== null) return { cameraHelpOpen: open, activeSheet: null };
     return { cameraHelpOpen: open };
   }),
   setOrbitFollowEnabled: (enabled) => set({ orbitFollowEnabled: enabled }),
-  setPickFocusActive: (active) => set({ pickFocusActive: active }),
   setCameraCallbacks: (cbs) => set({ cameraCallbacks: cbs }),
   setLastFocusedMoleculeId: (id) => set({ lastFocusedMoleculeId: id }),
   setTargetSpeed: (speed) => set({ targetSpeed: speed }),
@@ -325,7 +318,6 @@ export const useAppStore = create<AppStore>((set) => ({
     cameraMode: 'orbit',
     cameraHelpOpen: false,
     orbitFollowEnabled: false,
-  pickFocusActive: false,
     cameraCallbacks: null,
     lastFocusedMoleculeId: null,
     // Scene

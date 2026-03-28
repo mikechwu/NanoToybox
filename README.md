@@ -89,6 +89,7 @@ NanoToybox/
 │       ├── simulation-worker.ts # Off-thread physics worker
 │       ├── worker-bridge.ts    # Main↔Worker protocol bridge
 │       ├── renderer.ts         # Three.js visualization
+│       ├── orbit-math.ts       # Pure orbit math (arcball deltas, shared constants)
 │       ├── ui/                 # Coachmark definitions
 │       └── ...                 # See docs/architecture.md for full module map
 ├── viewer/                     # Pre-computed trajectory viewer

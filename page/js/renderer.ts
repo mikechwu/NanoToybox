@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { THEMES } from './themes';
 import { CONFIG } from './config';
+import { computeOrbitDelta, applyOrbitRotation, TRIAD_CAMERA_DISTANCE } from './orbit-math';
 
 export class Renderer {
   // Container
@@ -1484,28 +1485,35 @@ export class Renderer {
 
   /**
    * Apply an orbit rotation delta to the camera (quaternion trackball).
-   * Used by triad drag and background orbit. Rotates around camera's local
-   * axes — no phi clamp, free rotation through all orientations.
+   * Used by triad drag and background orbit.
+   * Rigid trackball orbit. Screen drag maps to one rotation quaternion (axis
+   * perpendicular to drag direction in camera-local space, transformed to world).
+   * Both offset and camera.up evolve together under the same quaternion — true
+   * SO(3) rigid body, no separate yaw/pitch, no correction, no pole singularity.
+   * First-order Shoemake arcball approximation, exact for small per-frame deltas.
+   *
+   * Tradeoff: rigid trackball allows free rotation including roll. The triad
+   * inherits this via _syncTriadFromCamera() (quaternion copy). If the user
+   * accumulates roll, both view and triad roll together. Restricting roll
+   * would require a turntable model, which conflicts with over-the-top freedom.
+   *
    * Drag-up rotates camera down ("dragging the world").
    */
   applyOrbitDelta(dx: number, dy: number) {
-    const speed = CONFIG.orbit.rotateSpeed;
-    const offset = this.camera.position.clone().sub(this.controls.target);
+    const dq = computeOrbitDelta(dx, dy, CONFIG.orbit.rotateSpeed, this.camera.quaternion);
+    if (!dq) return;
+    this._applyOrbitStep(dq);
+  }
 
-    // Quaternion trackball rotation around camera's local axes.
-    // No spherical coordinates, no phi clamp — free rotation through all orientations.
-    const qx = new THREE.Quaternion().setFromAxisAngle(
-      this.camera.up.clone().normalize(), -dx * speed
-    );
-    const right = new THREE.Vector3()
-      .crossVectors(this.camera.up, offset).normalize();
-    const qy = new THREE.Quaternion().setFromAxisAngle(right, dy * speed);
-
-    const q = qx.multiply(qy);
-    offset.applyQuaternion(q);
-    this.camera.up.applyQuaternion(q);
-
-    this.camera.position.copy(this.controls.target).add(offset);
+  /**
+   * Apply a rigid orbit rotation and sync live camera state. Single entry point
+   * for all Orbit pose updates. Ownership boundary:
+   * - orbit-math.ts: pure delta math (computeOrbitDelta, applyOrbitRotation)
+   * - _applyOrbitStep: live camera pose (lookAt + controls.update)
+   * - _syncTriadFromCamera: triad projection from live camera orientation
+   */
+  private _applyOrbitStep(dq: THREE.Quaternion) {
+    applyOrbitRotation(dq, this.camera.position, this.controls.target, this.camera.up);
     this.camera.lookAt(this.controls.target);
     this.controls.update();
   }
@@ -1788,11 +1796,22 @@ export class Renderer {
    * Uses 3D ArrowHelpers with X/Y/Z labels in a separate orthographic
    * scene, rendered via scissor test in a corner mini-viewport.
    */
+  /**
+   * Sync triad camera from main camera orientation.
+   * The triad scene has fixed world-basis arrows; copying the main camera's
+   * quaternion projects them through the current view. No lookAt() — that
+   * would recompute the quaternion from a potentially stale up vector.
+   */
+  private _syncTriadFromCamera() {
+    this._axisCamera.quaternion.copy(this.camera.quaternion);
+    this._axisCamera.position.set(0, 0, TRIAD_CAMERA_DISTANCE)
+      .applyQuaternion(this._axisCamera.quaternion);
+  }
+
   _initAxisTriad() {
     this._axisScene = new THREE.Scene();
     this._axisCamera = new THREE.OrthographicCamera(-1.8, 1.8, 1.8, -1.8, 0.1, 10);
-    this._axisCamera.position.set(0, 0, 4);
-    this._axisCamera.lookAt(0, 0, 0);
+    this._axisCamera.position.set(0, 0, TRIAD_CAMERA_DISTANCE);
 
     // Coarse-pointer check for triad sizing — available immediately (no device-mode needed).
     // Matches phone/tablet with imprecise primary pointer; desktop touchscreens with
@@ -1856,6 +1875,9 @@ export class Renderer {
 
     // Mini-viewport size scales with screen — smaller on tablets
     this._axisSize = Math.min(100, Math.floor(window.innerWidth * 0.08));
+
+    // Use the same sync path from the start — no separate bootstrap pose
+    this._syncTriadFromCamera();
   }
 
   render() {
@@ -1866,10 +1888,7 @@ export class Renderer {
     this.renderer.render(this.scene, this.camera);
 
     // ── Axis triad overlay ──
-    // Sync axis camera rotation with main camera (rotation only, no translation)
-    this._axisCamera.quaternion.copy(this.camera.quaternion);
-    this._axisCamera.position.set(0, 0, 4).applyQuaternion(this._axisCamera.quaternion);
-    this._axisCamera.lookAt(0, 0, 0);
+    this._syncTriadFromCamera();
 
     // Render axis triad in bottom-left corner via scissor test.
     // All values in CSS pixels — Three.js handles pixel ratio internally

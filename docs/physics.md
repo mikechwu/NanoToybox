@@ -154,7 +154,7 @@ The interactive page applies a soft containment boundary to prevent atoms from e
 
 | Parameter | Config key | Default | Description |
 |-----------|-----------|---------|-------------|
-| Spring constant | `wall.springK` | 5.0 eV/Å² | Harmonic restoring force in Contain mode |
+| Spring constant | `wall.springK` | 0.5 eV/Å² | Harmonic restoring force in Contain mode |
 | Target density | `wall.density` | 0.00005 atoms/ų | Determines wall radius from atom count |
 | Padding | `wall.padding` | 50 Å | Minimum clearance beyond density-derived radius |
 | Remove margin | `wall.removeMargin` | 10 Å | Extra distance past R_wall before removal |

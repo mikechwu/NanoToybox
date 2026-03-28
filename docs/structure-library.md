@@ -34,7 +34,7 @@ The CLI at `scripts/library_cli.py` handles the full generate → relax → save
 # Generate specific structures
 python3 scripts/library_cli.py c60
 python3 scripts/library_cli.py cnt 5 5 --cells 5       # Armchair (5,5)
-python3 scripts/library_cli.py cnt 10 0 --cells 3       # Zigzag (10,0)
+python3 scripts/library_cli.py cnt 10 0 --cells 5       # Zigzag (10,0)
 python3 scripts/library_cli.py cnt 8 4 --cells 2        # Chiral (8,4)
 python3 scripts/library_cli.py graphene 6 6
 python3 scripts/library_cli.py diamond 2 2 2

@@ -73,7 +73,7 @@ Measured with Numba JIT engine on desktop CPU. The force evaluation scales as t 
 
 ### Bottleneck 2: Three.js Rendering
 
-> **Update:** The interactive page now uses InstancedMesh (2 draw calls) and spatial-hash bond detection (O(N)). The estimates below apply to the **trajectory viewer** (`viewer/index.html`) which still uses individual meshes.
+> **Update:** The interactive page now uses InstancedMesh (2 draw calls) and spatial-hash bond detection (O(N)). The estimates below apply to the **trajectory viewer** (`viewer/index.html`) which currently still uses individual meshes and O(N^2) bond detection.
 
 The trajectory viewer uses individual `THREE.Mesh` per atom and an O(N²) nested loop for bond detection. Estimated costs:
 

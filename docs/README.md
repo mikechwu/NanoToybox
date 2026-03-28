@@ -28,8 +28,8 @@ npm run dev
 
 # Run all checks
 npm run typecheck       # TypeScript type-checking
-npm run test:unit       # Vitest unit tests (158 tests)
-npm run test:e2e        # Playwright E2E browser tests (17 tests)
+npm run test:unit       # Vitest unit tests (347 tests)
+npm run test:e2e        # Playwright E2E browser tests (19 tests)
 npm run build           # Production build → dist/
 
 # Python physics tests (requires numpy, numba)
@@ -68,13 +68,18 @@ Browser                          Web Worker
 │  StatusController    │          └──────────────────────┘
 │  (hint-only)         │
 │                      │
-│  runtime/ modules:   │
-│  ├── SceneRuntime    │
-│  ├── WorkerLifecycle │
-│  ├── SnapshotReconc. │
-│  ├── OverlayLayout   │
-│  ├── InputBindings   │
-│  └── UIBindings      │
+│  runtime/ (11 modules):│
+│  ├── SceneRuntime     │
+│  ├── WorkerLifecycle  │
+│  ├── SnapshotReconc.  │
+│  ├── OverlayLayout    │
+│  ├── OverlayRuntime   │
+│  ├── InteractionDisp. │
+│  ├── InputBindings    │
+│  ├── UIBindings       │
+│  ├── AtomSource       │
+│  ├── FocusRuntime     │
+│  └── Onboarding       │
 └─────────────────────┘
 ```
 
@@ -84,16 +89,16 @@ Browser                          Web Worker
 - **Worker-first physics** — simulation runs off-thread via Web Worker with snapshot protocol. Automatic fallback to sync-mode if worker fails (5s warning, 15s fatal).
 - **Dual Tersoff kernels** — JS fallback + C/Wasm kernel (compiled with Emscripten). Wasm enabled by default, ~11% faster. Force via `?kernel=js` for debugging.
 - **Momentum-conserving force clamp** — global scaling (not per-atom) preserves Newton's 3rd law and force field shape. Interaction forces added after clamp.
-- **Runtime module extraction** — main.ts delegates to 9 focused modules in `page/js/runtime/` (scene, worker lifecycle, snapshot reconciler, overlay layout/runtime, interaction dispatch, input bindings, UI bindings, atom source). main.ts is composition-root-only (~940 lines).
+- **Runtime module extraction** — main.ts delegates to 11 focused modules in `page/js/runtime/` (scene, worker lifecycle, snapshot reconciler, overlay layout/runtime, interaction dispatch, input bindings, UI bindings, atom source, focus resolution, onboarding). main.ts is composition-root-only (~1070 lines).
 
 ## Current Status
 
 - **Interactive page: live** — real-time Tersoff simulation with drag, rotate, multi-molecule playground, speed control, and advanced settings
 - **Web Worker physics** — off-thread simulation with snapshot sync, stall detection (5s warning / 15s fatal), automatic sync fallback
-- **React UI** — all 6 UI components are React-authoritative with Zustand store, glassmorphic CSS, responsive layout (phone/tablet/desktop)
+- **React UI** — all 10 UI components are React-authoritative with Zustand store, glassmorphic CSS, responsive layout (phone/tablet/desktop)
 - **Performance optimized** — InstancedMesh rendering (2 draw calls), on-the-fly Tersoff kernel (45% faster), spatial-hash neighbor/bond search (O(N))
 - **Wasm Tersoff kernel** — deployed and enabled by default, automatic JS fallback
-- **CI/CD** — GitHub Actions: typecheck, unit tests (158), build, E2E (17), deploy smoke, Python physics tests
+- **CI/CD** — GitHub Actions: typecheck, unit tests (347), build, E2E (19), deploy smoke, Python physics tests
 - **Containment boundary** — dynamic soft wall with Contain/Remove modes, live atom count, auto-scaling radius
 - Structure library: 15 canonical relaxed structures (60–720 atoms)
 - Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)

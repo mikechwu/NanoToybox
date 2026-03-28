@@ -25,15 +25,6 @@ describe('overlay-runtime.close() clears camera transient UI', () => {
     expect(useAppStore.getState().cameraHelpOpen).toBe(false);
   });
 
-  it('does not clear pickFocusActive (dormant, not managed by overlay)', () => {
-    // pickFocusActive is dormant — overlay no longer manages it
-    useAppStore.getState().setPickFocusActive(true);
-    const overlay = createOverlayRuntime({ getStatusCtrl: () => null });
-    overlay.close();
-    // pickFocusActive is NOT cleared by overlay close (dormant state)
-    expect(useAppStore.getState().pickFocusActive).toBe(true);
-    useAppStore.getState().setPickFocusActive(false); // cleanup
-  });
 
   it('also closes active sheet', () => {
     useAppStore.getState().openSheet('settings');
@@ -69,7 +60,6 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
   it('zero molecules: no-op, no pick-focus', () => {
     useAppStore.getState().setMolecules([]);
     handleCenterObject(mockRenderer);
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
     expect(mockRenderer.setCameraFocusTarget).not.toHaveBeenCalled();
   });
 
@@ -78,7 +68,6 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
       { id: 1, name: 'C60', structureFile: 'c60.xyz', atomCount: 60, atomOffset: 0 },
     ]);
     handleCenterObject(mockRenderer);
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
     expect(mockRenderer.animateToFocusedObject).toHaveBeenCalled();
     expect(useAppStore.getState().lastFocusedMoleculeId).toBe(1);
   });
@@ -90,7 +79,6 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
     ]);
     useAppStore.getState().setLastFocusedMoleculeId(2);
     handleCenterObject(mockRenderer);
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
     expect(mockRenderer.animateToFocusedObject).toHaveBeenCalled();
   });
 
@@ -101,7 +89,6 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
     ]);
     handleCenterObject(mockRenderer);
     // No pick-focus mode — centers nearest molecule directly
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
     expect(mockRenderer.animateToFocusedObject).toHaveBeenCalled();
     expect(useAppStore.getState().lastFocusedMoleculeId).not.toBeNull();
   });
@@ -113,7 +100,6 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
     ]);
     useAppStore.getState().setLastFocusedMoleculeId(99);
     handleCenterObject(mockRenderer);
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
     expect(mockRenderer.animateToFocusedObject).toHaveBeenCalled();
   });
 });
@@ -179,7 +165,6 @@ describe('interaction-dispatch normal start', () => {
     const dispatch = createInteractionDispatch(mockDeps);
     dispatch({ action: 'startDrag', atom: 5 } as any);
     expect(mockDeps.physics.startDrag).toHaveBeenCalledWith(5);
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
   });
 });
 

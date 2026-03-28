@@ -70,7 +70,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - Dock + sheet navigation — responsive two-tier UI with React components (`page/js/components/`)
 - React UI migration — all UI surfaces (DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay) are React-authoritative with Zustand store
 - Web Worker physics — off-thread simulation via `page/js/simulation-worker.ts` with automatic JS fallback
-- Runtime module extraction — 9 modules in `page/js/runtime/` (scene, worker lifecycle, snapshot reconciler, overlay layout/runtime, interaction dispatch, input bindings, UI bindings, atom source); main.ts reduced to composition-root-only
+- Runtime module extraction — 11 modules in `page/js/runtime/` (scene, worker lifecycle, snapshot reconciler, overlay layout/runtime, interaction dispatch, input bindings, UI bindings, atom source, focus resolution, onboarding); main.ts reduced to composition-root-only
 
 ## Architecture Rules
 
@@ -128,8 +128,9 @@ See `docs/architecture.md` for the full module map and state ownership model.
 | Interactive page | `page/index.html`, `page/js/main.ts`, `page/js/components/*`, `page/js/store/app-store.ts`, `docs/viewer.md` |
 | React UI components | `page/js/components/*.tsx`, `page/js/store/app-store.ts`, `page/js/hooks/*`, `page/js/react-root.tsx` |
 | Web Worker / bridge | `page/js/simulation-worker.ts`, `page/js/worker-bridge.ts`, `src/types/worker-protocol.ts` |
-| Runtime modules (scene, worker, input) | `page/js/runtime/scene-runtime.ts`, `worker-lifecycle.ts`, `snapshot-reconciler.ts`, `input-bindings.ts`, `interaction-dispatch.ts` |
-| Overlay layout & open/close policy | `page/js/runtime/overlay-layout.ts`, `overlay-runtime.ts` |
+| Runtime modules (scene, worker, input) | `page/js/runtime/scene-runtime.ts`, `page/js/runtime/worker-lifecycle.ts`, `page/js/runtime/snapshot-reconciler.ts`, `page/js/runtime/input-bindings.ts`, `page/js/runtime/interaction-dispatch.ts` |
+| Overlay layout & open/close policy | `page/js/runtime/overlay-layout.ts`, `page/js/runtime/overlay-runtime.ts` |
+| Focus resolution & onboarding | `page/js/runtime/focus-runtime.ts`, `page/js/runtime/onboarding.ts` |
 | Store callback wiring | `page/js/runtime/ui-bindings.ts`, `page/js/store/app-store.ts` |
 | Scene / placement | `page/js/scene.ts`, `page/js/placement.ts` |
 | Browser physics | `page/js/physics.ts` (JS Tersoff), `sim/wasm/tersoff.c` (Wasm kernel) |

@@ -91,6 +91,7 @@ NanoToybox/
 │   │   ├── config.ts             # Centralized page configuration
 │   │   ├── physics.ts            # Tersoff force engine + interaction forces
 │   │   ├── renderer.ts           # Three.js scene, InstancedMesh, PBR materials, orbit + interactive triad
+│   │   ├── orbit-math.ts         # Pure orbit math: arcball deltas, rigid rotation, shared constants
 │   │   ├── input.ts              # Mouse/touch input, raycasting, triad drag/tap/snap, background orbit
 │   │   ├── state-machine.ts      # Interaction state transitions
 │   │   ├── loader.ts             # Structure library loader + bond topology
@@ -157,7 +158,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 
 ### Composition Root Pattern
 
-`main.ts` (~940 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 11 modules in `page/js/runtime/`:
+`main.ts` (~1070 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 11 modules in `page/js/runtime/`:
 
 - **scene-runtime.ts** — scene mutation wrappers, scene-to-store projection, worker scene mirroring
 - **worker-lifecycle.ts** — worker bridge creation, init, stall detection (5s warning / 15s fatal), teardown

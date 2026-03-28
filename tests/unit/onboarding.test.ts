@@ -243,7 +243,7 @@ describe('onboarding controller', () => {
       expect(surface.showCoachmark).not.toHaveBeenCalled();
     });
 
-    // pickFocusActive no longer blocks coachmarks (dormant state)
+    // (focus-mode coachmark suppression removed in earlier cleanup)
   });
 
   // ── Overlay dismiss ──
