@@ -25,20 +25,14 @@ describe('overlay-runtime.close() clears camera transient UI', () => {
     expect(useAppStore.getState().cameraHelpOpen).toBe(false);
   });
 
-  it('clears pickFocusActive when pick-focus is active', () => {
+  it('does not clear pickFocusActive (dormant, not managed by overlay)', () => {
+    // pickFocusActive is dormant — overlay no longer manages it
     useAppStore.getState().setPickFocusActive(true);
     const overlay = createOverlayRuntime({ getStatusCtrl: () => null });
     overlay.close();
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
-  });
-
-  it('clears both cameraHelpOpen and pickFocusActive together', () => {
-    useAppStore.getState().setCameraHelpOpen(true);
-    useAppStore.getState().setPickFocusActive(true);
-    const overlay = createOverlayRuntime({ getStatusCtrl: () => null });
-    overlay.close();
-    expect(useAppStore.getState().cameraHelpOpen).toBe(false);
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
+    // pickFocusActive is NOT cleared by overlay close (dormant state)
+    expect(useAppStore.getState().pickFocusActive).toBe(true);
+    useAppStore.getState().setPickFocusActive(false); // cleanup
   });
 
   it('also closes active sheet', () => {
@@ -58,7 +52,7 @@ describe('overlay-runtime.close() clears camera transient UI', () => {
 import { handleCenterObject } from '../../page/js/runtime/focus-runtime';
 
 describe('Center Object (handleCenterObject from focus-runtime)', () => {
-  let mockRenderer: { getMoleculeCentroid: any; getMoleculeBounds: any; setCameraFocusTarget: any; animateToFocusedObject: any; camera: any };
+  let mockRenderer: { getMoleculeCentroid: any; getMoleculeBounds: any; setCameraFocusTarget: any; animateToFocusedObject: any; camera: any; getSceneRadius: () => number };
 
   beforeEach(() => {
     useAppStore.getState().resetTransientState();
@@ -68,6 +62,7 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
       setCameraFocusTarget: vi.fn(),
       animateToFocusedObject: vi.fn(),
       camera: { position: new THREE.Vector3(0, 0, 15) },
+      getSceneRadius: () => 10,
     };
   });
 
@@ -99,33 +94,35 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
     expect(mockRenderer.animateToFocusedObject).toHaveBeenCalled();
   });
 
-  it('multiple molecules, no valid focus: enters pick-focus', () => {
+  it('multiple molecules, no valid focus: centers nearest molecule', () => {
     useAppStore.getState().setMolecules([
       { id: 1, name: 'C60', structureFile: 'c60.xyz', atomCount: 60, atomOffset: 0 },
       { id: 2, name: 'CNT', structureFile: 'cnt.xyz', atomCount: 100, atomOffset: 60 },
     ]);
     handleCenterObject(mockRenderer);
-    expect(useAppStore.getState().pickFocusActive).toBe(true);
-    expect(mockRenderer.animateToFocusedObject).not.toHaveBeenCalled();
+    // No pick-focus mode — centers nearest molecule directly
+    expect(useAppStore.getState().pickFocusActive).toBe(false);
+    expect(mockRenderer.animateToFocusedObject).toHaveBeenCalled();
+    expect(useAppStore.getState().lastFocusedMoleculeId).not.toBeNull();
   });
 
-  it('multiple molecules, stale focused ID: enters pick-focus', () => {
+  it('multiple molecules, stale focused ID: centers nearest molecule', () => {
     useAppStore.getState().setMolecules([
       { id: 1, name: 'C60', structureFile: 'c60.xyz', atomCount: 60, atomOffset: 0 },
       { id: 2, name: 'CNT', structureFile: 'cnt.xyz', atomCount: 100, atomOffset: 60 },
     ]);
     useAppStore.getState().setLastFocusedMoleculeId(99);
     handleCenterObject(mockRenderer);
-    expect(useAppStore.getState().pickFocusActive).toBe(true);
-    expect(mockRenderer.animateToFocusedObject).not.toHaveBeenCalled();
+    expect(useAppStore.getState().pickFocusActive).toBe(false);
+    expect(mockRenderer.animateToFocusedObject).toHaveBeenCalled();
   });
 });
 
-// ── Pick-focus interception in interaction-dispatch ──
+// ── Interaction dispatch — normal start (no pick-focus) ──
 
 import { createInteractionDispatch } from '../../page/js/runtime/interaction-dispatch';
 
-describe('interaction-dispatch pick-focus interception', () => {
+describe('interaction-dispatch normal start', () => {
   beforeEach(() => {
     useAppStore.getState().resetTransientState();
     useAppStore.getState().setMolecules([
@@ -134,7 +131,6 @@ describe('interaction-dispatch pick-focus interception', () => {
   });
 
   function makeMockDispatchDeps() {
-    // Stable mock instances — same objects returned on every getter call
     const physics = {
       startDrag: vi.fn(),
       endDrag: vi.fn(),
@@ -178,46 +174,188 @@ describe('interaction-dispatch pick-focus interception', () => {
     };
   }
 
-  it('intercepts startDrag when pickFocusActive and clears the flag', () => {
-    useAppStore.getState().setPickFocusActive(true);
-    const mockDeps = makeMockDispatchDeps();
-    const dispatch = createInteractionDispatch(mockDeps);
-    const result = dispatch({ action: 'startDrag', atom: 30 } as any);
-    // Pick-focus consumed the command
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
-    expect(useAppStore.getState().lastFocusedMoleculeId).toBe(1);
-    // Pick-focus is explicit centering — animates to focused object
-    expect(mockDeps.renderer.animateToFocusedObject).toHaveBeenCalled();
-    // Normal interaction did NOT start (stable mock — same instance)
-    expect(mockDeps.physics.startDrag).not.toHaveBeenCalled();
-    expect(result.dragTarget).toBeNull();
-  });
-
-  it('intercepts startMove when pickFocusActive', () => {
-    useAppStore.getState().setPickFocusActive(true);
-    const mockDeps = makeMockDispatchDeps();
-    const dispatch = createInteractionDispatch(mockDeps);
-    dispatch({ action: 'startMove', atom: 5 } as any);
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
-    expect(mockDeps.physics.startTranslate).not.toHaveBeenCalled();
-  });
-
-  it('intercepts startRotate when pickFocusActive', () => {
-    useAppStore.getState().setPickFocusActive(true);
-    const mockDeps = makeMockDispatchDeps();
-    const dispatch = createInteractionDispatch(mockDeps);
-    dispatch({ action: 'startRotate', atom: 10 } as any);
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
-    expect(mockDeps.physics.startRotateDrag).not.toHaveBeenCalled();
-  });
-
-  it('does NOT intercept when pickFocusActive is false — normal interaction starts', () => {
-    // pickFocusActive defaults to false after reset
+  it('startDrag starts normal interaction (no pick-focus interception)', () => {
     const mockDeps = makeMockDispatchDeps();
     const dispatch = createInteractionDispatch(mockDeps);
     dispatch({ action: 'startDrag', atom: 5 } as any);
-    // Normal interaction should have started (same stable physics mock)
     expect(mockDeps.physics.startDrag).toHaveBeenCalledWith(5);
     expect(useAppStore.getState().pickFocusActive).toBe(false);
+  });
+});
+
+// ── Paused worker placement visual sync (scene-runtime integration) ──
+
+import { createSceneRuntime } from '../../page/js/runtime/scene-runtime';
+
+describe('paused worker placement calls renderer.updatePositions', () => {
+  it('paused + worker active → renderer.updatePositions called after commit', async () => {
+    useAppStore.getState().resetTransientState();
+    useAppStore.getState().setPlacementActive(true);
+
+    const updatePositions = vi.fn();
+    const mockRenderer = {
+      setPhysicsRef: vi.fn(),
+      updateSceneRadius: vi.fn(),
+      recomputeFocusDistance: vi.fn(),
+      fitCamera: vi.fn(),
+      getMoleculeCentroid: vi.fn(() => new THREE.Vector3(0, 0, 0)),
+      getMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(0, 0, 0), radius: 3 })),
+      setCameraFocusTarget: vi.fn(),
+      animateToFocusedObject: vi.fn(),
+      getSceneRadius: () => 10,
+      camera: { position: new THREE.Vector3(0, 0, 15) },
+      updatePositions,
+    } as any;
+
+    const mockWorkerRuntime = {
+      isActive: () => true,
+      appendMolecule: vi.fn(async () => ({ ok: true, sceneVersion: 2, atomOffset: 0, atomsAppended: 1, totalAtomCount: 1 })),
+      sendInteraction: vi.fn(),
+      getLatestSnapshot: () => ({ positions: new Float64Array(3), velocities: new Float64Array(3), n: 1 }),
+      syncStateNow: vi.fn(async () => {}),
+    };
+
+    const mockPhysics = {
+      n: 1, pos: new Float64Array(3), vel: new Float64Array(3),
+      createCheckpoint: vi.fn(() => ({})), restoreCheckpoint: vi.fn(),
+      appendMolecule: vi.fn(() => ({ atomOffset: 0, atomsAppended: 1 })),
+      assertPostAppendInvariants: vi.fn(), updateWallCenter: vi.fn(), updateWallRadius: vi.fn(),
+      getBonds: () => [], updateBondList: vi.fn(), rebuildComponents: vi.fn(),
+    } as any;
+    mockRenderer.ensureCapacityForAppend = vi.fn();
+    mockRenderer.populateAppendedAtoms = vi.fn();
+
+    const scene = createSceneRuntime({
+      getPhysics: () => mockPhysics,
+      getRenderer: () => mockRenderer,
+      getStateMachine: () => ({} as any),
+      getPlacement: () => null,
+      getStatusCtrl: () => null,
+      getWorkerRuntime: () => mockWorkerRuntime as any,
+      getInputBindings: () => ({ sync: vi.fn() } as any),
+      getSnapshotReconciler: () => null,
+      getSession: () => ({
+        theme: 'dark', textSize: 'normal', isLoading: false, interactionMode: 'atom',
+        playback: { selectedSpeed: 1, speedMode: 'fixed', effectiveSpeed: 1, maxSpeed: 1, paused: true },
+        scene: { molecules: [], nextId: 1, totalAtoms: 0 },
+      }),
+      dispatch: vi.fn(),
+      fullSchedulerReset: vi.fn(),
+      partialProfilerReset: vi.fn(),
+      recoverFromWorkerFailure: vi.fn(),
+    });
+
+    // commitMolecule triggers the paused-worker visual sync (now async for velocity sync)
+    await scene.commitMolecule('c60.xyz', 'C60', [{ x: 0, y: 0, z: 0, element: 'C' }], [], [0, 0, 0]);
+
+    expect(updatePositions).toHaveBeenCalled();
+  });
+
+  it('running (not paused) → updatePositions NOT called', async () => {
+    useAppStore.getState().resetTransientState();
+
+    const updatePositions = vi.fn();
+    const mockRenderer = {
+      setPhysicsRef: vi.fn(), updateSceneRadius: vi.fn(), recomputeFocusDistance: vi.fn(),
+      fitCamera: vi.fn(), getMoleculeCentroid: vi.fn(() => new THREE.Vector3(0, 0, 0)),
+      getMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(0, 0, 0), radius: 3 })),
+      setCameraFocusTarget: vi.fn(), animateToFocusedObject: vi.fn(),
+      getSceneRadius: () => 10, camera: { position: new THREE.Vector3(0, 0, 15) },
+      updatePositions,
+    } as any;
+
+    const mockPhysics = {
+      n: 1, pos: new Float64Array(3), vel: new Float64Array(3),
+      createCheckpoint: vi.fn(() => ({})), restoreCheckpoint: vi.fn(),
+      appendMolecule: vi.fn(() => ({ atomOffset: 0, atomsAppended: 1 })),
+      assertPostAppendInvariants: vi.fn(), updateWallCenter: vi.fn(), updateWallRadius: vi.fn(),
+      getBonds: () => [], updateBondList: vi.fn(), rebuildComponents: vi.fn(),
+    } as any;
+    mockRenderer.ensureCapacityForAppend = vi.fn();
+    mockRenderer.populateAppendedAtoms = vi.fn();
+
+    const scene = createSceneRuntime({
+      getPhysics: () => mockPhysics,
+      getRenderer: () => mockRenderer,
+      getStateMachine: () => ({} as any),
+      getPlacement: () => null, getStatusCtrl: () => null,
+      getWorkerRuntime: () => ({ isActive: () => true, appendMolecule: vi.fn(async () => ({ ok: true })), sendInteraction: vi.fn(), getLatestSnapshot: () => null } as any),
+      getInputBindings: () => ({ sync: vi.fn() } as any),
+      getSnapshotReconciler: () => null,
+      getSession: () => ({
+        theme: 'dark', textSize: 'normal', isLoading: false, interactionMode: 'atom',
+        playback: { selectedSpeed: 1, speedMode: 'fixed', effectiveSpeed: 1, maxSpeed: 1, paused: false },
+        scene: { molecules: [], nextId: 1, totalAtoms: 0 },
+      }),
+      dispatch: vi.fn(), fullSchedulerReset: vi.fn(), partialProfilerReset: vi.fn(),
+      recoverFromWorkerFailure: vi.fn(),
+    });
+
+    await scene.commitMolecule('c60.xyz', 'C60', [{ x: 0, y: 0, z: 0, element: 'C' }], [], [0, 0, 0]);
+
+    expect(updatePositions).not.toHaveBeenCalled();
+  });
+
+  it('paused + worker active → pre-append copies worker velocities to local physics', async () => {
+    useAppStore.getState().resetTransientState();
+    useAppStore.getState().setPlacementActive(true);
+
+    const updatePositions = vi.fn();
+    const mockRenderer = {
+      setPhysicsRef: vi.fn(), updateSceneRadius: vi.fn(), recomputeFocusDistance: vi.fn(),
+      fitCamera: vi.fn(), getMoleculeCentroid: vi.fn(() => new THREE.Vector3(0, 0, 0)),
+      getMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(0, 0, 0), radius: 3 })),
+      setCameraFocusTarget: vi.fn(), animateToFocusedObject: vi.fn(),
+      getSceneRadius: () => 10, camera: { position: new THREE.Vector3(0, 0, 15) },
+      updatePositions, ensureCapacityForAppend: vi.fn(), populateAppendedAtoms: vi.fn(),
+    } as any;
+
+    // Local physics has stale velocity (0,0,0)
+    const localVel = new Float64Array([0, 0, 0]);
+    // Worker snapshot has authoritative velocity (1,2,3)
+    const workerVel = new Float64Array([1, 2, 3]);
+
+    const mockPhysics = {
+      n: 1, pos: new Float64Array(3), vel: localVel,
+      createCheckpoint: vi.fn(() => ({})), restoreCheckpoint: vi.fn(),
+      appendMolecule: vi.fn(() => ({ atomOffset: 0, atomsAppended: 1 })),
+      assertPostAppendInvariants: vi.fn(), updateWallCenter: vi.fn(), updateWallRadius: vi.fn(),
+      getBonds: () => [], updateBondList: vi.fn(), rebuildComponents: vi.fn(),
+    } as any;
+
+    const syncStateNow = vi.fn(async () => {});
+    const mockWorkerRuntime = {
+      isActive: () => true,
+      appendMolecule: vi.fn(async () => ({ ok: true })),
+      sendInteraction: vi.fn(),
+      getLatestSnapshot: () => ({ positions: new Float64Array(3), velocities: workerVel, n: 1 }),
+      syncStateNow,
+    };
+
+    const scene = createSceneRuntime({
+      getPhysics: () => mockPhysics,
+      getRenderer: () => mockRenderer,
+      getStateMachine: () => ({} as any),
+      getPlacement: () => null, getStatusCtrl: () => null,
+      getWorkerRuntime: () => mockWorkerRuntime as any,
+      getInputBindings: () => ({ sync: vi.fn() } as any),
+      getSnapshotReconciler: () => null,
+      getSession: () => ({
+        theme: 'dark', textSize: 'normal', isLoading: false, interactionMode: 'atom',
+        playback: { selectedSpeed: 1, speedMode: 'fixed', effectiveSpeed: 1, maxSpeed: 1, paused: true },
+        scene: { molecules: [], nextId: 1, totalAtoms: 0 },
+      }),
+      dispatch: vi.fn(), fullSchedulerReset: vi.fn(), partialProfilerReset: vi.fn(),
+      recoverFromWorkerFailure: vi.fn(),
+    });
+
+    await scene.commitMolecule('c60.xyz', 'C60', [{ x: 0, y: 0, z: 0, element: 'C' }], [], [0, 0, 0]);
+
+    // syncStateNow was awaited before append
+    expect(syncStateNow).toHaveBeenCalled();
+    // Local physics.vel should now have the worker's authoritative velocity
+    expect(localVel[0]).toBe(1);
+    expect(localVel[1]).toBe(2);
+    expect(localVel[2]).toBe(3);
   });
 });

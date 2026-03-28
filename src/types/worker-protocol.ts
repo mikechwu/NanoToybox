@@ -55,7 +55,7 @@ export type MutationAckEvent =
 /** Scene-versioned non-mutating events — processed via acceptSceneVersionedEvent(). */
 export type SceneVersionedEvent =
   | { type: 'frameResult'; replyTo: number; sceneVersion: number; snapshotVersion: number;
-      positions: Float64Array; n: number; stepsCompleted: number; physStepMs: number;
+      positions: Float64Array; velocities?: Float64Array; n: number; stepsCompleted: number; physStepMs: number;
       topologyVersion?: number }
   | { type: 'frameSkipped'; replyTo: number; sceneVersion: number;
       stepsCompleted: number; physStepMs: number; reason: 'buffer_exhausted' | 'not_initialized' }

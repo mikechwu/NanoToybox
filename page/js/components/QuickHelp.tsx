@@ -32,7 +32,8 @@ export function QuickHelp({ open, onClose }: { open: boolean; onClose: () => voi
             <div className="quick-help-row"><b>Rotate</b> Drag triad or background</div>
             <div className="quick-help-row"><b>Snap View</b> Tap axis end (±X/Y/Z)</div>
             <div className="quick-help-row"><b>Reset</b> Double-tap triad center</div>
-            <div className="quick-help-row"><b>Center</b> Tap ⊕ button</div>
+            <div className="quick-help-row"><b>Center</b> Tap ⊕ · frames focused molecule</div>
+            <div className="quick-help-row"><b>Follow</b> Long-press ⊕ for automatic tracking · tap ⊕ to stop</div>
             <div className="quick-help-row"><b>Zoom</b> 2-finger pinch / scroll</div>
             <div className="quick-help-row"><b>Pan</b> 2-finger drag</div>
           </>

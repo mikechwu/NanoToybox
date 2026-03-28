@@ -25,8 +25,9 @@ export interface FocusRendererSurface {
   getMoleculeCentroid(atomOffset: number, atomCount: number): THREE.Vector3 | null;
   getMoleculeBounds(atomOffset: number, atomCount: number): { center: THREE.Vector3; radius: number } | null;
   setCameraFocusTarget(target: THREE.Vector3): void;
-  animateToFocusedObject(opts?: { levelUp?: boolean }): void;
+  animateToFocusedObject(opts?: { levelUp?: boolean; onComplete?: () => void }): void;
   camera: { position: THREE.Vector3 };
+  getSceneRadius(): number;
 }
 
 /** Typed return-target descriptor for shared recovery logic. */
@@ -93,12 +94,16 @@ export function resolveReturnTarget(
  */
 export function focusMoleculeByAtom(
   atomIdx: number,
-  _renderer: FocusRendererSurface,
+  renderer: FocusRendererSurface,
 ): void {
   const molecules = useAppStore.getState().molecules;
   const mol = findMoleculeForAtom(atomIdx, molecules);
   if (!mol) return;
-  useAppStore.getState().setLastFocusedMoleculeId(mol.id);
+  // In follow mode, freeze the tracked molecule — normal clicks should not
+  // change the follow target. Only disabling follow + re-enabling allows retarget.
+  if (!useAppStore.getState().orbitFollowEnabled) {
+    useAppStore.getState().setLastFocusedMoleculeId(mol.id);
+  }
 }
 
 /**
@@ -118,23 +123,21 @@ export function focusNewestPlacedMolecule(
 }
 
 /**
- * Center Object action: resolve the best focus target.
- * Priority: valid last-focused → single molecule → pick-focus mode (ambiguous).
- * Returns true if focus was set immediately, false if pick-focus mode was entered.
- * No-ops and returns true if no molecules exist.
+ * Center Object action: animate camera to the best focus target.
+ * Priority: valid last-focused → single molecule → nearest molecule to camera.
+ * No-op if no molecules exist. No pick-focus mode — always resolves immediately.
  */
-export function handleCenterObject(renderer: FocusRendererSurface): boolean {
+export function handleCenterObject(renderer: FocusRendererSurface): void {
   const store = useAppStore.getState();
   const molecules = store.molecules;
-  if (molecules.length === 0) return true;
+  if (molecules.length === 0) return;
 
   // Priority 1: valid last-focused molecule
   if (store.lastFocusedMoleculeId !== null) {
     const mol = molecules.find(m => m.id === store.lastFocusedMoleculeId);
     if (mol) {
-      // Animated framing instead of instant pivot
       renderer.animateToFocusedObject();
-      return true;
+      return;
     }
   }
 
@@ -142,12 +145,15 @@ export function handleCenterObject(renderer: FocusRendererSurface): boolean {
   if (molecules.length === 1) {
     useAppStore.getState().setLastFocusedMoleculeId(molecules[0].id);
     renderer.animateToFocusedObject();
-    return true;
+    return;
   }
 
-  // Priority 3: ambiguous — enter pick-focus mode
-  useAppStore.getState().setPickFocusActive(true);
-  return false;
+  // Priority 3: multiple molecules, no valid focus — center nearest to camera
+  const target = resolveReturnTarget(renderer, renderer.getSceneRadius());
+  if (target.kind === 'molecule' && target.moleculeId != null) {
+    useAppStore.getState().setLastFocusedMoleculeId(target.moleculeId);
+    renderer.animateToFocusedObject();
+  }
 }
 
 /**

@@ -19,7 +19,7 @@ import type { StateMachine, Command } from '../state-machine';
 
 export interface SnapshotReconciler {
   /** Apply a worker snapshot. Returns whether atom count changed (wall removal). */
-  apply(snapshot: { positions: Float64Array; n: number }): { atomCountChanged: boolean };
+  apply(snapshot: { positions: Float64Array; velocities?: Float64Array; n: number }): { atomCountChanged: boolean };
   /** Reset internal counter state (e.g., on scene clear). */
   reset(): void;
 }
@@ -61,6 +61,12 @@ export function createSnapshotReconciler(deps: {
       if (physics.pos) {
         const syncLen = Math.min(snapshot.positions.length, physics.pos.length);
         physics.pos.set(snapshot.positions.subarray(0, syncLen));
+      }
+
+      // Velocity sync from snapshot (fixes momentum-loss on paused placement)
+      if (snapshot.velocities && physics.vel) {
+        const velLen = Math.min(snapshot.velocities.length, physics.vel.length);
+        physics.vel.set(snapshot.velocities.subarray(0, velLen));
       }
 
       // Periodic bond refresh — every 20 frames

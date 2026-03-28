@@ -73,7 +73,13 @@ export interface AppStore {
   cameraHelpOpen: boolean;
   setCameraHelpOpen: (open: boolean) => void;
 
-  // Pick-focus mode (temporary: next atom tap sets camera pivot)
+  // Orbit follow mode: camera target tracks the focused molecule continuously.
+  // Toggled by long-press on ⊕. Short tap remains one-shot center.
+  orbitFollowEnabled: boolean;
+  setOrbitFollowEnabled: (enabled: boolean) => void;
+
+  // Pick-focus mode (fully dormant — no active runtime code consults this.
+  // Replaced by orbitFollowEnabled. Field retained for potential future use only.)
   pickFocusActive: boolean;
   setPickFocusActive: (active: boolean) => void;
 
@@ -211,6 +217,7 @@ export const useAppStore = create<AppStore>((set) => ({
   interactionMode: 'atom',
   cameraMode: 'orbit',
   cameraHelpOpen: false,
+  orbitFollowEnabled: false,
   pickFocusActive: false,
   cameraCallbacks: null,
   lastFocusedMoleculeId: null,
@@ -253,7 +260,7 @@ export const useAppStore = create<AppStore>((set) => ({
   // Actions
   setTheme: (theme) => set({ theme }),
   setTextSize: (size) => set({ textSize: size }),
-  openSheet: (sheet) => set({ activeSheet: sheet, cameraHelpOpen: false, pickFocusActive: false }),
+  openSheet: (sheet) => set({ activeSheet: sheet, cameraHelpOpen: false }),
   closeSheet: () => set({ activeSheet: null }),
   setInteractionMode: (mode) => set({ interactionMode: mode }),
   setCameraMode: (mode) => {
@@ -263,9 +270,10 @@ export const useAppStore = create<AppStore>((set) => ({
   },
   setCameraHelpOpen: (open) => set((s) => {
     // Mutual exclusivity: opening help closes sheets + cancels pick-focus
-    if (open && s.activeSheet !== null) return { cameraHelpOpen: open, activeSheet: null, pickFocusActive: false };
-    return { cameraHelpOpen: open, pickFocusActive: false };
+    if (open && s.activeSheet !== null) return { cameraHelpOpen: open, activeSheet: null };
+    return { cameraHelpOpen: open };
   }),
+  setOrbitFollowEnabled: (enabled) => set({ orbitFollowEnabled: enabled }),
   setPickFocusActive: (active) => set({ pickFocusActive: active }),
   setCameraCallbacks: (cbs) => set({ cameraCallbacks: cbs }),
   setLastFocusedMoleculeId: (id) => set({ lastFocusedMoleculeId: id }),
@@ -316,7 +324,8 @@ export const useAppStore = create<AppStore>((set) => ({
     interactionMode: 'atom',
     cameraMode: 'orbit',
     cameraHelpOpen: false,
-    pickFocusActive: false,
+    orbitFollowEnabled: false,
+  pickFocusActive: false,
     cameraCallbacks: null,
     lastFocusedMoleculeId: null,
     // Scene

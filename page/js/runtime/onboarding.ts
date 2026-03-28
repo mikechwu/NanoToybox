@@ -138,7 +138,6 @@ export function createOnboardingController(deps: OnboardingDeps): OnboardingCont
     if (s.placementActive) return false;
     if (s.atomCount === 0) return false;
     if (s.cameraHelpOpen) return false;
-    if (s.pickFocusActive) return false;
     return true;
   }
 

@@ -1,13 +1,13 @@
 /**
- * Unit tests for pick-focus mode behavior.
+ * Unit tests for pick-focus mode store state.
  *
- * Tests: entering pick-focus, clearing on overlay close, clearing on help/sheet open,
- * and store-level pick-focus state management.
+ * pickFocusActive is fully dormant — no active runtime code consults it.
+ * These tests verify the store field still functions for potential future use.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useAppStore } from '../../page/js/store/app-store';
 
-describe('Pick-focus mode store behavior', () => {
+describe('Pick-focus mode store behavior (dormant)', () => {
   beforeEach(() => {
     useAppStore.getState().resetTransientState();
   });
@@ -27,39 +27,6 @@ describe('Pick-focus mode store behavior', () => {
     expect(useAppStore.getState().pickFocusActive).toBe(false);
   });
 
-  it('openSheet clears pick-focus', () => {
-    useAppStore.getState().setPickFocusActive(true);
-    useAppStore.getState().openSheet('settings');
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
-  });
-
-  it('setCameraHelpOpen(true) clears pick-focus', () => {
-    useAppStore.getState().setPickFocusActive(true);
-    useAppStore.getState().setCameraHelpOpen(true);
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
-  });
-
-  it('setCameraHelpOpen(false) clears pick-focus', () => {
-    useAppStore.getState().setPickFocusActive(true);
-    useAppStore.getState().setCameraHelpOpen(false);
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
-  });
-
-  it('openSheet closes camera help AND clears pick-focus', () => {
-    useAppStore.getState().setCameraHelpOpen(true);
-    useAppStore.getState().setPickFocusActive(true);
-    useAppStore.getState().openSheet('chooser');
-    expect(useAppStore.getState().cameraHelpOpen).toBe(false);
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
-    expect(useAppStore.getState().activeSheet).toBe('chooser');
-  });
-
-  it('setCameraHelpOpen(true) closes active sheet AND clears pick-focus', () => {
-    useAppStore.getState().openSheet('settings');
-    useAppStore.getState().setPickFocusActive(true);
-    useAppStore.getState().setCameraHelpOpen(true);
-    expect(useAppStore.getState().activeSheet).toBeNull();
-    expect(useAppStore.getState().cameraHelpOpen).toBe(true);
-    expect(useAppStore.getState().pickFocusActive).toBe(false);
-  });
+  // Note: openSheet and setCameraHelpOpen no longer clear pickFocusActive.
+  // The field is fully dormant — no active runtime code consults it.
 });

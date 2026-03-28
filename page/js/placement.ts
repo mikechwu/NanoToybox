@@ -44,7 +44,7 @@ export class PlacementController {
   _loadStructure: (filename: string) => Promise<{ atoms: StructureAtom[]; bonds: StructureBond[] }>;
   _commands: {
     setDockPlacementMode: (active: boolean) => void;
-    commitToScene: (file: string, name: string, atoms: StructureAtom[], bonds: StructureBond[], offset: number[]) => void;
+    commitToScene: (file: string, name: string, atoms: StructureAtom[], bonds: StructureBond[], offset: number[]) => void | Promise<void>;
     updateStatus: (text: string) => void;
     updateSceneStatus: () => void;
     forceIdle: () => void;
@@ -56,10 +56,12 @@ export class PlacementController {
     isSnapshotFresh: () => boolean;
   };
   _generation: number;
+  _commitGeneration: number;
   _loading: boolean;
   _listeners: Record<string, (e: PointerEvent | TouchEvent) => void> | null;
   _state: {
     active: boolean;
+    isCommitting: boolean;
     structureFile: string | null;
     structureName: string | null;
     previewAtoms: StructureAtom[] | null;
@@ -100,12 +102,14 @@ export class PlacementController {
 
     // Internal state
     this._generation = 0;
+    this._commitGeneration = 0;
     this._loading = false;
     this._listeners = null;
 
     // Placement state (mirrors session.placement structure)
     this._state = {
       active: false,
+      isCommitting: false,
       structureFile: null,
       structureName: null,
       previewAtoms: null,
@@ -215,8 +219,9 @@ export class PlacementController {
 
   exit(commit: boolean) {
     if (!this._state.active) return;
+    // Block duplicate Place presses during async commit, but always allow Cancel
+    if (this._state.isCommitting && commit) return;
 
-    this._unregisterListeners();
     this._state.isDraggingPreview = false;
     this._commands.forceRender();
 
@@ -230,31 +235,64 @@ export class PlacementController {
       offset: [...this._state.previewOffset],
     } : null;
 
-    // Always clean up preview and state, even if commit will fail
-    this._renderer.hidePreview();
-    this._state.active = false;
-    this._state.structureFile = null;
-    this._state.structureName = null;
-    this._state.previewAtoms = null;
-    this._state.previewBonds = null;
-    this._state.previewOffset = [0, 0, 0];
-    this._state.placementPlane = null;
-    this._state.grabOffset = [0, 0, 0];
-    this._commands.setDockPlacementMode(false);
+    // Helper: finalize placement exit (called after commit succeeds or on cancel).
+    // Tears down listeners + bumps commit generation to invalidate pending async commits.
+    const finalize = () => {
+      this._commitGeneration++;
+      this._state.isCommitting = false;
+      this._unregisterListeners();
+      this._renderer.hidePreview();
+      this._state.active = false;
+      this._state.structureFile = null;
+      this._state.structureName = null;
+      this._state.previewAtoms = null;
+      this._state.previewBonds = null;
+      this._state.previewOffset = [0, 0, 0];
+      this._state.placementPlane = null;
+      this._state.grabOffset = [0, 0, 0];
+      this._commands.setDockPlacementMode(false);
+      this._commands.updateSceneStatus();
+    };
 
-    if (commitData) {
-      try {
-        this._commands.commitToScene(commitData.file, commitData.name, commitData.atoms, commitData.bonds, commitData.offset);
-        // Only update "last structure" after successful commit
-        this._state.lastStructureFile = commitData.file;
-        this._state.lastStructureName = commitData.name;
-      } catch (e) {
-        console.error('[placement] Commit failed:', e);
-        this._commands.updateStatus(`Error placing molecule: ${e.message}`);
+    if (!commitData) {
+      finalize();
+      return;
+    }
+
+    try {
+      // Mark committing — prevents duplicate Place, freezes preview interaction handlers
+      this._state.isCommitting = true;
+      const myCommitGen = ++this._commitGeneration;
+      const result = this._commands.commitToScene(commitData.file, commitData.name, commitData.atoms, commitData.bonds, commitData.offset);
+      if (result && typeof (result as any).then === 'function') {
+        // Async path: keep placement active until commit resolves.
+        // Use commit generation token to ignore stale promise resolution
+        // if the user cancels or starts a new placement before this resolves.
+        (result as Promise<void>).then(() => {
+          if (myCommitGen !== this._commitGeneration) return; // stale
+          this._state.lastStructureFile = commitData.file;
+          this._state.lastStructureName = commitData.name;
+          finalize();
+        }).catch((e: Error) => {
+          if (myCommitGen !== this._commitGeneration) return; // stale
+          console.error('[placement] Async commit failed:', e);
+          this._commands.updateStatus(`Placement failed: ${e.message}`);
+          // Recoverable failure: keep placement open, re-enable interaction
+          this._state.isCommitting = false;
+        });
         return;
       }
+      // Sync path: finalize immediately
+      this._state.lastStructureFile = commitData.file;
+      this._state.lastStructureName = commitData.name;
+    } catch (e) {
+      console.error('[placement] Commit failed:', e);
+      this._commands.updateStatus(`Placement failed: ${(e as Error).message}`);
+      // Recoverable failure: keep placement open, re-enable interaction
+      this._state.isCommitting = false;
+      return;
     }
-    this._commands.updateSceneStatus();
+    finalize();
   }
 
   /** Cancel pending loads. Called by clearPlayground. */
@@ -412,6 +450,7 @@ export class PlacementController {
     const self = this;
     const handlers = {
       pointerdown: (e) => {
+        if (self._state.isCommitting) return; // frozen during async commit
         if (e.button !== 0) return; // primary pointer only
         const hit = self._renderer.raycastPreview(e.clientX, e.clientY);
         if (hit.hit) {
@@ -436,7 +475,7 @@ export class PlacementController {
         // If miss, let propagate (camera)
       },
       pointermove: (e) => {
-        if (!self._state.isDraggingPreview) return;
+        if (self._state.isCommitting || !self._state.isDraggingPreview) return;
         e.stopPropagation();
         // Project pointer onto placement plane
         const pp = self._state.placementPlane;
@@ -461,6 +500,7 @@ export class PlacementController {
         // Always let propagate (OrbitControls needs pointerup)
       },
       touchstart: (e) => {
+        if (self._state.isCommitting) return; // frozen during async commit
         if (e.touches.length !== 1) {
           // 2+ fingers: cancel preview drag, let camera handle
           if (self._state.isDraggingPreview) {
@@ -489,7 +529,7 @@ export class PlacementController {
         }
       },
       touchmove: (e) => {
-        if (!self._state.isDraggingPreview || e.touches.length !== 1) return;
+        if (self._state.isCommitting || !self._state.isDraggingPreview || e.touches.length !== 1) return;
         e.stopPropagation();
         e.preventDefault();
         const touch = e.touches[0];

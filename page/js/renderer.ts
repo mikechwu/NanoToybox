@@ -1313,6 +1313,28 @@ export class Renderer {
     this._flightVelocity.set(0, 0, 0);
   }
 
+  /** Get the current cached scene radius. */
+  getSceneRadius(): number { return this._sceneRadius; }
+
+  /**
+   * Per-frame orbit follow: smoothly blend camera toward framed position of given bounds.
+   * Called from the main loop when orbitFollowEnabled is true.
+   * Uses the same framing math as ⊕ center, but with exponential smoothing.
+   */
+  updateOrbitFollow(dtMs: number, bounds: { center: THREE.Vector3; radius: number }): void {
+    const d = this.computeFramingDistance(bounds.radius);
+    const camToTarget = new THREE.Vector3().subVectors(bounds.center, this.camera.position);
+    const dist = camToTarget.length();
+    const dir = dist > 0.01 ? camToTarget.normalize() : new THREE.Vector3(0, 0, -1);
+    const desiredCamPos = bounds.center.clone().sub(dir.multiplyScalar(d));
+
+    // Frame-rate independent exponential ease (smoothing constant in seconds)
+    const blendFactor = 1 - Math.exp(-8 * (dtMs / 1000));
+    this.controls.target.lerp(bounds.center, blendFactor);
+    this.camera.position.lerp(desiredCamPos, blendFactor);
+    this.controls.update();
+  }
+
   /** Update cached scene radius from atom positions. */
   updateSceneRadius(): void {
     // Safety net: restore baseline far on scene mutations (also restored on animation complete/cancel)

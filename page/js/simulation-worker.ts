@@ -201,6 +201,8 @@ function handleRequestFrame(cmd: Extract<WorkerCommand, { type: 'requestFrame' }
   const n = engine.n;
   const positions = new Float64Array(n * 3);
   if (n > 0) positions.set(engine.pos.subarray(0, n * 3));
+  const velocities = new Float64Array(n * 3);
+  if (n > 0 && engine.vel) velocities.set(engine.vel.subarray(0, n * 3));
 
   emit({
     type: 'frameResult',
@@ -208,6 +210,7 @@ function handleRequestFrame(cmd: Extract<WorkerCommand, { type: 'requestFrame' }
     sceneVersion,
     snapshotVersion,
     positions,
+    velocities,
     n,
     stepsCompleted: steps,
     physStepMs,

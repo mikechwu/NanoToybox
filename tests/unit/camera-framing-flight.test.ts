@@ -250,6 +250,7 @@ describe('resolveReturnTarget', () => {
       setCameraFocusTarget: vi.fn(),
       animateToFocusedObject: vi.fn(),
       camera: { position: new THREE.Vector3(0, 0, 15) },
+      getSceneRadius: () => 10,
     } as any;
   }
 
@@ -364,7 +365,7 @@ describe('shipped renderer methods (thin harness)', () => {
       camera,
       _baselineFar: 2000,
       _physicsRef: null as any,
-      _sceneRadius: CONFIG.freeLook.defaultSceneRadius,
+      getSceneRadius: () => CONFIG.freeLook.defaultSceneRadius,
       _currentFocusDistance: CONFIG.camera.defaultOrbitDistance,
       _returnToObjectCallback: null as any,
       controls: { target: new THREE.Vector3() },
@@ -496,6 +497,7 @@ describe('focus helper ordering (store ID before setCameraFocusTarget)', () => {
       setCameraFocusTarget: vi.fn(),
       animateToFocusedObject: vi.fn(),
       camera: { position: new THREE.Vector3(0, 0, 15) },
+      getSceneRadius: () => 10,
     };
 
     // Focus atom 70 (belongs to molecule 2, offset 60, count 100)

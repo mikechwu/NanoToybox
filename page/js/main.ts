@@ -386,8 +386,7 @@ async function init() {
         e.preventDefault();
       } else if (
         useAppStore.getState().activeSheet !== null ||
-        useAppStore.getState().cameraHelpOpen ||
-        useAppStore.getState().pickFocusActive
+        useAppStore.getState().cameraHelpOpen
       ) {
         _overlay!.close();
         e.preventDefault();
@@ -410,7 +409,7 @@ async function init() {
     const pe = e as PointerEvent;
     const target = pe.target as Node;
     const _s = useAppStore.getState();
-    if (_s.activeSheet === null && !_s.cameraHelpOpen && !_s.pickFocusActive) return;
+    if (_s.activeSheet === null && !_s.cameraHelpOpen) return;
 
     // Only primary pointer — reject second touch in multi-touch, and
     // non-left mouse buttons (right-click, middle, stylus barrel).
@@ -550,7 +549,16 @@ async function init() {
     if (useAppStore.getState().paused !== session.playback.paused) {
       useAppStore.getState().togglePause();
     }
-    if (!session.playback.paused) {
+    if (session.playback.paused) {
+      // On pause: flush authoritative pos+vel from worker to main thread.
+      // Bump generation first to clear any outstanding request, then send
+      // a zero-step frame. The snapshot (with velocities) will be reconciled
+      // on the next frame loop tick, before placement commit can run.
+      if (_workerRuntime && _workerRuntime.isActive()) {
+        _workerRuntime.bumpGeneration();
+        _workerRuntime.sendRequestFrame(0);
+      }
+    } else {
       scheduler.lastFrameTs = performance.now();
       scheduler.simBudgetMs = 0;
     }
@@ -623,7 +631,7 @@ async function init() {
   // Wire return-target callback via shared resolveReturnTarget descriptor
   // Wire return-target callback directly from shared resolveReturnTarget
   renderer._returnToObjectCallback = () => {
-    const target = resolveReturnTarget(renderer, renderer._sceneRadius);
+    const target = resolveReturnTarget(renderer, renderer.getSceneRadius());
     return target; // ReturnTarget has position + radius (+ kind, guardrailEligible)
   };
 
@@ -937,6 +945,18 @@ function frameLoop(timestamp) {
     scheduler.forceRenderThisTick = false; // always consumed
     const shouldRender = wasForced || scheduler.renderSkipCounter >= scheduler.renderSkipLevel;
 
+    // Orbit follow mode: smoothly track focused molecule with framing
+    if (useAppStore.getState().orbitFollowEnabled && useAppStore.getState().cameraMode === 'orbit') {
+      const s = useAppStore.getState();
+      if (s.lastFocusedMoleculeId !== null) {
+        const mol = s.molecules.find(m => m.id === s.lastFocusedMoleculeId);
+        if (mol) {
+          const bounds = renderer.getMoleculeBounds(mol.atomOffset, mol.atomCount);
+          if (bounds) renderer.updateOrbitFollow(frameDtMs, bounds);
+        }
+      }
+    }
+
     // Free-Look flight update (before render, after physics)
     if (CONFIG.camera.freeLookEnabled && useAppStore.getState().cameraMode === 'freelook' && _inputBindings) {
       const dtSec = frameDtMs / 1000;
@@ -944,7 +964,7 @@ function frameLoop(timestamp) {
       if (axes) renderer.updateFlight(dtSec, axes.x, axes.z);
       // Update flightActive store flag (transition-gated)
       const speed = renderer._flightVelocity.length();
-      const maxSpd = renderer._sceneRadius * CONFIG.freeLook.maxSpeedScale;
+      const maxSpd = renderer.getSceneRadius() * CONFIG.freeLook.maxSpeedScale;
       const showT = Math.min(Math.max(maxSpd * CONFIG.freeLook.freezeShowScale, CONFIG.freeLook.freezeShowMin), CONFIG.freeLook.freezeShowMax);
       const hideT = showT * CONFIG.freeLook.freezeHideRatio;
       const store = useAppStore.getState();
@@ -952,10 +972,10 @@ function frameLoop(timestamp) {
       else if (store.flightActive && speed < hideT) useAppStore.getState().setFlightActive(false);
 
       // Far-drift guardrail via shared resolveReturnTarget (transition-gated)
-      const rt = resolveReturnTarget(renderer, renderer._sceneRadius);
+      const rt = resolveReturnTarget(renderer, renderer.getSceneRadius());
       if (rt.guardrailEligible) {
         const distToTarget = renderer.camera.position.distanceTo(rt.position);
-        const threshold = Math.min(Math.max(rt.radius * CONFIG.freeLook.farDriftTargetMult, CONFIG.freeLook.farDriftMinDistance), renderer._sceneRadius * CONFIG.freeLook.farDriftSceneMult);
+        const threshold = Math.min(Math.max(rt.radius * CONFIG.freeLook.farDriftTargetMult, CONFIG.freeLook.farDriftMinDistance), renderer.getSceneRadius() * CONFIG.freeLook.farDriftSceneMult);
         if (!store.farDrift && distToTarget > threshold) useAppStore.getState().setFarDrift(true);
         else if (store.farDrift && distToTarget < threshold * 0.8) useAppStore.getState().setFarDrift(false);
       } else if (store.farDrift) {

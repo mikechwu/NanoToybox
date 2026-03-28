@@ -26,8 +26,10 @@ export interface WorkerRuntime {
   isStalled(): boolean;
   canSendRequest(): boolean;
   sendRequestFrame(steps: number): void;
-  getLatestSnapshot(): { positions: Float64Array; n: number } | null;
+  getLatestSnapshot(): { positions: Float64Array; velocities?: Float64Array; n: number } | null;
   getSnapshotAge(): number;
+  /** Request a zero-step authoritative state sync and resolve when the snapshot arrives. */
+  syncStateNow(): Promise<void>;
   appendMolecule(atoms: AtomXYZ[], bonds: BondTuple[], offset: [number, number, number]): Promise<{ ok: boolean }>;
   bumpGeneration(): void;
   clearScene(): Promise<{ ok: boolean }>;
@@ -139,6 +141,30 @@ export function createWorkerRuntime(deps: {
 
     getSnapshotAge() {
       return _bridge && _initialized ? _bridge.getSnapshotAge() : Infinity;
+    },
+
+    async syncStateNow(): Promise<void> {
+      if (!_bridge || !_initialized) return;
+      // Clear outstanding requests (invalidates pre-bump snapshots) and send
+      // a zero-step frame. After bumpGeneration(), latestSnapshot is null and
+      // only the zero-step response can pass the generation gate — so the next
+      // non-null snapshot is provably the requested authoritative state.
+      _bridge.bumpGeneration();
+      _bridge.sendRequestFrame(0);
+      // Wait for the specific post-bump snapshot to arrive
+      const start = performance.now();
+      const timeout = 2000;
+      while (performance.now() - start < timeout) {
+        const snap = _bridge.getLatestSnapshot();
+        if (snap) return; // Post-bump snapshot arrived (generation-verified by bridge)
+        await new Promise(r => setTimeout(r, 10));
+      }
+      // Timeout: worker is unresponsive. Tear down and throw so the caller
+      // can abort the placement commit rather than continue with stale state.
+      console.warn('[worker] syncStateNow timed out — tearing down worker');
+      _teardown();
+      deps.onFailure('syncStateNow timeout — worker unresponsive during paused placement');
+      throw new Error('Worker state sync timed out');
     },
 
     async appendMolecule(atoms, bonds, offset) {

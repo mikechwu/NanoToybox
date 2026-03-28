@@ -243,14 +243,7 @@ describe('onboarding controller', () => {
       expect(surface.showCoachmark).not.toHaveBeenCalled();
     });
 
-    it('does not show when pickFocusActive is true', () => {
-      useAppStore.getState().setPickFocusActive(true);
-      createController();
-      controller.scheduleInitialCoachmarks();
-
-      vi.advanceTimersByTime(5000);
-      expect(surface.showCoachmark).not.toHaveBeenCalled();
-    });
+    // pickFocusActive no longer blocks coachmarks (dormant state)
   });
 
   // ── Overlay dismiss ──

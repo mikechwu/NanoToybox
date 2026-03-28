@@ -8,7 +8,7 @@
  * Store is sole authority for cameraMode and cameraHelpOpen.
  */
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useRef } from 'react';
 import { useAppStore } from '../store/app-store';
 import { CONFIG } from '../config';
 import { QuickHelp } from './QuickHelp';
@@ -16,13 +16,20 @@ import { QuickHelp } from './QuickHelp';
 /** Session flag to show "Coming soon" only once. */
 let _comingSoonShown = false;
 
+// Long-press threshold from CONFIG (tunable)
+
 export function CameraControls() {
   const cameraMode = useAppStore((s) => s.cameraMode);
   const cameraHelpOpen = useAppStore((s) => s.cameraHelpOpen);
-  const pickFocusActive = useAppStore((s) => s.pickFocusActive);
+  const orbitFollowEnabled = useAppStore((s) => s.orbitFollowEnabled);
   const flightActive = useAppStore((s) => s.flightActive);
   const farDrift = useAppStore((s) => s.farDrift);
   const cameraCallbacks = useAppStore((s) => s.cameraCallbacks);
+
+  // Long-press detection for ⊕ (follow mode toggle)
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wasLongPressRef = useRef(false);
+  const activatedByCurrentPressRef = useRef(false);
 
   // Chip body tap: toggle camera mode
   const handleChipTap = useCallback(() => {
@@ -63,6 +70,52 @@ export function CameraControls() {
     cameraCallbacks?.onCenterObject?.();
   }, [cameraCallbacks]);
 
+  // ⊕ button behavior depends on follow state:
+  // - follow OFF: short tap = center, long press = enable follow
+  // - follow ON: any tap = disable follow (low-friction off switch)
+  const handleCenterPointerDown = useCallback(() => {
+    activatedByCurrentPressRef.current = false;
+    if (useAppStore.getState().orbitFollowEnabled) {
+      // Follow already active — pointerUp will disable it
+      return;
+    }
+    wasLongPressRef.current = false;
+    holdTimerRef.current = setTimeout(() => {
+      holdTimerRef.current = null;
+      wasLongPressRef.current = true;
+      activatedByCurrentPressRef.current = true;
+      useAppStore.getState().setOrbitFollowEnabled(true);
+    }, CONFIG.camera.followLongPressMs);
+  }, []);
+
+  const handleCenterPointerUp = useCallback(() => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    // If this press just activated follow, do nothing on release (latch)
+    if (activatedByCurrentPressRef.current) {
+      activatedByCurrentPressRef.current = false;
+      return;
+    }
+    if (useAppStore.getState().orbitFollowEnabled) {
+      // Follow was already active before this press — tap disables it
+      useAppStore.getState().setOrbitFollowEnabled(false);
+      return;
+    }
+    // Short tap (not long press) → one-shot center
+    if (!wasLongPressRef.current) {
+      cameraCallbacks?.onCenterObject?.();
+    }
+  }, [cameraCallbacks]);
+
+  const handleCenterPointerCancel = useCallback(() => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+  }, []);
+
   return (
     <>
       <div className="camera-controls" data-camera-controls>
@@ -93,11 +146,14 @@ export function CameraControls() {
         {/* Action slot — mode-dependent */}
         {cameraMode === 'orbit' && (
           <button
-            className={`camera-action${pickFocusActive ? ' camera-action-pick' : ''}`}
-            onClick={handleCenterObject}
-            aria-label={pickFocusActive ? 'Tap molecule to center' : 'Center Object'}
+            className={`camera-action${orbitFollowEnabled ? ' camera-action-follow' : ''}`}
+            onPointerDown={handleCenterPointerDown}
+            onPointerUp={handleCenterPointerUp}
+            onPointerCancel={handleCenterPointerCancel}
+            onPointerLeave={handleCenterPointerCancel}
+            aria-label={orbitFollowEnabled ? 'Following target (tap to stop)' : 'Center Object (long-press to follow)'}
           >
-            {pickFocusActive ? 'Tap molecule' : '⊕'}
+            {orbitFollowEnabled ? '◎' : '⊕'}
           </button>
         )}
         {/* Free-Look actions (gated by feature flag) */}

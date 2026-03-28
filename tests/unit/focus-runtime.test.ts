@@ -20,6 +20,7 @@ function mockRenderer(centroid: THREE.Vector3 | null = new THREE.Vector3(1, 2, 3
     setCameraFocusTarget: vi.fn(),
     animateToFocusedObject: vi.fn(),
     camera: { position: new THREE.Vector3(0, 0, 15) },
+    getSceneRadius: () => 10,
   };
 }
 

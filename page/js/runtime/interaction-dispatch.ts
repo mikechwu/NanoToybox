@@ -37,20 +37,6 @@ export function createInteractionDispatch(deps: InteractionDispatchDeps) {
     const im = deps.getInputManager();
     if (!im) throw new Error('[interaction-dispatch] InputManager is null — dispatch called before init or after teardown');
 
-    // Pick-focus interception: when pickFocusActive is true, the next atom tap
-    // sets camera focus instead of starting normal interaction.
-    // Note: Free-Look focus-select is handled earlier in InputManager — atom
-    // clicks in Free-Look never reach the state machine or dispatch.
-    if (useAppStore.getState().pickFocusActive) {
-      if (cmd.action === 'startDrag' || cmd.action === 'startMove' || cmd.action === 'startRotate') {
-        focusMoleculeByAtom(cmd.atom, deps.getRenderer());
-        // Pick-focus is an explicit centering action — animate to the selected molecule
-        deps.getRenderer().animateToFocusedObject();
-        useAppStore.getState().setPickFocusActive(false);
-        return { dragTarget: null };
-      }
-    }
-
     const result = dispatchInteraction(cmd, screenX, screenY, {
       physics: deps.getPhysics(),
       renderer: deps.getRenderer(),

@@ -36,6 +36,7 @@ export type WorkerInteractionCommand =
 
 export interface FrameSnapshot {
   positions: Float64Array;
+  velocities?: Float64Array;
   n: number;
   sceneVersion: number;
   snapshotVersion: number;
@@ -457,6 +458,7 @@ export class WorkerBridge {
       case 'frameResult': {
         const snapshot: FrameSnapshot = {
           positions: event.positions,
+          velocities: event.velocities,
           n: event.n,
           sceneVersion: event.sceneVersion,
           snapshotVersion: event.snapshotVersion,

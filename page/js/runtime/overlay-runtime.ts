@@ -24,12 +24,9 @@ export function createOverlayRuntime(deps: {
 }): OverlayRuntime {
   function close() {
     const store = useAppStore.getState();
-    // Close camera help and cancel pick-focus (transient-UI mutual exclusivity)
+    // Close camera help (transient-UI mutual exclusivity)
     if (store.cameraHelpOpen) {
       store.setCameraHelpOpen(false);
-    }
-    if (store.pickFocusActive) {
-      store.setPickFocusActive(false);
     }
     if (store.activeSheet === 'settings' && store.helpPageActive) {
       store.setHelpPageActive(false);

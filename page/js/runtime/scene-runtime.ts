@@ -33,7 +33,7 @@ export interface SceneRuntime {
   updateChooserRecentRow(): void;
   updateSceneStatus(): void;
   updateActiveCountRow(): void;
-  commitMolecule(filename: string, name: string, atoms: any[], bonds: any[], offset: number[]): void;
+  commitMolecule(filename: string, name: string, atoms: any[], bonds: any[], offset: number[]): void | Promise<void>;
   clearPlayground(): void;
   addMoleculeToScene(filename: string, name: string, offset: number[]): Promise<void>;
   updateStatus(text: string): void;
@@ -121,10 +121,44 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
       useAppStore.getState().updateActiveCount(active, removed);
     },
 
-    commitMolecule(filename, name, atoms, bonds, offset) {
+    async commitMolecule(filename, name, atoms, bonds, offset) {
       const physics = deps.getPhysics();
       const renderer = deps.getRenderer();
       const session = getSession();
+
+      // Worker velocity authority: if worker mode is active and paused,
+      // await an authoritative pos+vel sync from the worker BEFORE local append.
+      // This guarantees physics.vel has the worker's true momentum, not stale
+      // main-thread state. Without this, COM velocity is lost on resume.
+      const wrGuard = deps.getWorkerRuntime();
+      if (wrGuard && wrGuard.isActive() && session.playback.paused) {
+        try {
+          await wrGuard.syncStateNow();
+        } catch (_e) {
+          // Worker sync failed/timed out — reject so PlacementController sees failure
+          console.warn('[scene-runtime] paused placement cancelled: worker sync unavailable');
+          useAppStore.getState().setStatusText('Placement cancelled: worker sync unavailable');
+          setTimeout(() => {
+            if (useAppStore.getState().statusText === 'Placement cancelled: worker sync unavailable') {
+              useAppStore.getState().setStatusText(null);
+            }
+          }, 3000);
+          throw new Error('Placement cancelled: worker sync unavailable');
+        }
+        // Apply the fresh snapshot to local physics
+        const snap = wrGuard.getLatestSnapshot();
+        if (snap && snap.n === physics.n) {
+          if (physics.pos) {
+            const len = Math.min(snap.positions.length, physics.pos.length);
+            physics.pos.set(snap.positions.subarray(0, len));
+          }
+          if (snap.velocities && physics.vel) {
+            const len = Math.min(snap.velocities.length, physics.vel.length);
+            physics.vel.set(snap.velocities.subarray(0, len));
+          }
+        }
+      }
+
       commitMolecule(physics as any, renderer as any, filename, name, atoms, bonds, offset, session.scene, {
         syncInput: () => { const ib = deps.getInputBindings(); if (ib) ib.sync(); },
         resetProfiler: deps.partialProfilerReset,
@@ -145,7 +179,17 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
         renderer.recomputeFocusDistance();
       }
 
+      // Immediate visual sync when paused in worker mode (visual fix only).
+      // Worker snapshots don't arrive while paused, so newly committed atoms
+      // would have positions but no bonds rendered until resume. Force a local
+      // visual refresh to show both atoms and bonds immediately.
+      // Note: this is separate from the velocity-authority fix above — this
+      // addresses rendering, not simulation state.
       const wr = deps.getWorkerRuntime();
+      const isPaused = deps.getSession().playback.paused;
+      if (wr && wr.isActive() && isPaused) {
+        renderer.updatePositions(physics);
+      }
       if (wr && wr.isActive()) {
         wr.appendMolecule(atoms as any, bonds as any, offset as [number, number, number]).then((result) => {
           if (!result.ok) {
