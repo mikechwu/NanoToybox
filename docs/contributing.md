@@ -105,8 +105,8 @@ See `docs/architecture.md` for the full module map and state ownership model.
 1. npm run dev                    # Vite dev server with HMR
 2. Make changes to page/js/ code
 3. npm run typecheck              # TypeScript type-checking
-4. npm run test:unit              # Vitest unit tests (158 tests)
-5. npm run test:e2e               # Playwright E2E browser tests (17 tests)
+4. npm run test:unit              # Vitest unit tests (363 tests)
+5. npm run test:e2e               # Playwright E2E browser tests (19 tests)
 6. npm run build                  # Production build → dist/
 ```
 

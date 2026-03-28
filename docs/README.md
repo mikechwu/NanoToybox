@@ -28,7 +28,7 @@ npm run dev
 
 # Run all checks
 npm run typecheck       # TypeScript type-checking
-npm run test:unit       # Vitest unit tests (347 tests)
+npm run test:unit       # Vitest unit tests (363 tests)
 npm run test:e2e        # Playwright E2E browser tests (19 tests)
 npm run build           # Production build → dist/
 
@@ -98,7 +98,7 @@ Browser                          Web Worker
 - **React UI** — all 10 UI components are React-authoritative with Zustand store, glassmorphic CSS, responsive layout (phone/tablet/desktop)
 - **Performance optimized** — InstancedMesh rendering (2 draw calls), on-the-fly Tersoff kernel (45% faster), spatial-hash neighbor/bond search (O(N))
 - **Wasm Tersoff kernel** — deployed and enabled by default, automatic JS fallback
-- **CI/CD** — GitHub Actions: typecheck, unit tests (347), build, E2E (19), deploy smoke, Python physics tests
+- **CI/CD** — GitHub Actions: typecheck, unit tests (363), build, E2E (19), deploy smoke, Python physics tests
 - **Containment boundary** — dynamic soft wall with Contain/Remove modes, live atom count, auto-scaling radius
 - Structure library: 15 canonical relaxed structures (60–720 atoms)
 - Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)

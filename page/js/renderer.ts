@@ -1,7 +1,7 @@
 /**
  * Three.js renderer — scene management, PBR materials, visual feedback.
  *
- * Camera-relative lighting rig (key/fill/rim + ambient) follows orbit.
+ * Camera-mounted lighting rig (SpotLight headlight + fill) follows camera pose.
  * MeshStandardMaterial with roughness=0.7, metalness=0.
  * State-driven feedback: highlight, force line, rotation cue.
  */
@@ -66,11 +66,13 @@ export class Renderer {
   _defaultCamTarget!: THREE.Vector3;
   _defaultCamUp!: THREE.Vector3;
 
-  // Lighting
-  ambientLight!: THREE.AmbientLight;
-  keyLight!: THREE.DirectionalLight;
-  fillLight!: THREE.DirectionalLight;
-  rimLight!: THREE.DirectionalLight;
+  // Camera lighting rig — camera-mounted spotlight + directional fill
+  _cameraLightRig: THREE.Group | null = null;
+  _headLight: THREE.SpotLight | null = null;
+  _headLightTarget: THREE.Object3D | null = null;
+  _cameraFillLight: THREE.DirectionalLight | null = null;
+  _cameraFillLightTarget: THREE.Object3D | null = null;
+  ambientLight: THREE.AmbientLight | null = null;
 
   // Resize handling
   _resizeHandler!: () => void;
@@ -119,7 +121,7 @@ export class Renderer {
     this._physicsRef = null;
 
     this._initScene();
-    this._initLighting();
+    this._initCameraLightRig();
     this._initForceLine();
   }
 
@@ -195,27 +197,99 @@ export class Renderer {
     this.renderer.setSize(w, h);
   }
 
-  _initLighting() {
-    const ambient = new THREE.AmbientLight(0x8090b0, 1.2);
-    this.scene.add(ambient);
-    this.ambientLight = ambient;
+  /**
+   * Camera lighting rig — camera-mounted subsystem.
+   * Ownership: camera pose owns lighting pose. Local offsets/targets are constants
+   * in camera space from CONFIG.cameraLighting. World transforms are never
+   * incrementally updated — the camera hierarchy produces them automatically.
+   * Theme only changes colors/intensities, not geometry.
+   */
+  _initCameraLightRig() {
+    const cfg = CONFIG.cameraLighting;
 
-    const key = new THREE.DirectionalLight(0xffffff, 3.0);
-    key.position.set(1.0, 0.7, 0.6);
-    this.camera.add(key);
-    this.keyLight = key;
+    // Scene ambient (not camera-mounted; color/intensity set by _applyLightTheme)
+    this.ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
+    this.scene.add(this.ambientLight);
 
-    const fill = new THREE.DirectionalLight(0x8098c0, 1.5);
-    fill.position.set(-1.0, 0.2, 0.4);
-    this.camera.add(fill);
-    this.fillLight = fill;
+    // Camera-local rig group
+    this._cameraLightRig = new THREE.Group();
+    this.camera.add(this._cameraLightRig);
 
-    const rim = new THREE.DirectionalLight(0x6070a0, 0.8);
-    rim.position.set(0.3, -0.6, -1.0);
-    this.camera.add(rim);
-    this.rimLight = rim;
+    // Primary SpotLight — flashlight metaphor (intensity set by _applyLightTheme)
+    this._headLight = new THREE.SpotLight(0xffffff, 1.0);
+    this._headLight.angle = cfg.head.angle;
+    this._headLight.penumbra = cfg.head.penumbra;
+    this._headLight.decay = cfg.head.decay;
+    this._headLight.distance = cfg.head.distance;
+    this._headLight.position.set(...cfg.head.offset);
 
+    // SpotLight target — direction derived from local target position, not manual quaternion math
+    this._headLightTarget = new THREE.Object3D();
+    this._headLightTarget.position.set(...cfg.head.target);
+    this._headLight.target = this._headLightTarget;
+
+    this._cameraLightRig.add(this._headLight);
+    this._cameraLightRig.add(this._headLightTarget);
+
+    // Fill light — camera-local DirectionalLight for broad off-axis fill.
+    // Explicit target parented to rig (same pattern as headlight) — no reliance on
+    // Three.js default target. No distance falloff — restores uniform fill the old rig had.
+    if (cfg.fill.enabled) {
+      this._cameraFillLight = new THREE.DirectionalLight(0xffffff, 1.0);
+      this._cameraFillLight.position.set(...cfg.fill.offset);
+
+      this._cameraFillLightTarget = new THREE.Object3D();
+      this._cameraFillLightTarget.position.set(...cfg.fill.target);
+      this._cameraFillLight.target = this._cameraFillLightTarget;
+
+      this._cameraLightRig.add(this._cameraFillLight);
+      this._cameraLightRig.add(this._cameraFillLightTarget);
+    }
+
+    // Camera must be in scene graph for camera-local children to inherit transforms
     this.scene.add(this.camera);
+
+    // Self-consistent: apply current theme so renderer is valid immediately after construction
+    this._applyLightTheme(THEMES[this.currentTheme]);
+  }
+
+  /** Dispose camera lighting rig — idempotent subsystem cleanup. Safe to call twice. */
+  _disposeCameraLightRig() {
+    if (this._cameraLightRig) {
+      this.camera.remove(this._cameraLightRig);
+      this._cameraLightRig = null;
+    }
+    if (this._headLight) {
+      this._headLight.dispose();
+      this._headLight = null;
+    }
+    this._headLightTarget = null;
+    if (this._cameraFillLight) {
+      this._cameraFillLight.dispose();
+      this._cameraFillLight = null;
+    }
+    this._cameraFillLightTarget = null;
+    if (this.ambientLight) {
+      this.scene.remove(this.ambientLight);
+      this.ambientLight.dispose();
+      this.ambientLight = null;
+    }
+  }
+
+  /** Update light colors/intensities from theme. Does not move rig geometry. */
+  _applyLightTheme(t: typeof THEMES[keyof typeof THEMES]) {
+    if (this.ambientLight) {
+      this.ambientLight.color.set(t.ambientColor);
+      this.ambientLight.intensity = t.ambientIntensity;
+    }
+    if (this._headLight) {
+      this._headLight.color.set(t.headLightColor);
+      this._headLight.intensity = t.headLightIntensity;
+    }
+    if (this._cameraFillLight) {
+      this._cameraFillLight.color.set(t.fillLightColor);
+      this._cameraFillLight.intensity = t.fillLightIntensity;
+    }
   }
 
   _initForceLine() {
@@ -625,14 +699,7 @@ export class Renderer {
     this.currentTheme = name;
     const t = THEMES[name];
     this.scene.background = new THREE.Color(t.bg);
-    this.ambientLight.color.set(t.ambientColor);
-    this.ambientLight.intensity = t.ambientIntensity;
-    this.keyLight.color.set(t.keyColor);
-    this.keyLight.intensity = t.keyIntensity;
-    this.fillLight.color.set(t.fillColor);
-    this.fillLight.intensity = t.fillIntensity;
-    this.rimLight.color.set(t.rimColor);
-    this.rimLight.intensity = t.rimIntensity;
+    this._applyLightTheme(t);
 
     if (this._atomMat) this._atomMat.color.set(t.atom);
     if (this._bondMat) this._bondMat.color.set(t.bond);
@@ -1016,6 +1083,7 @@ export class Renderer {
       this._pulseRafId = null;
     }
     this.cancelCameraAnimation();
+    this._disposeCameraLightRig();
     this.showAxisHighlight(null); // clean up triad highlight
     if (this._focusIndicator) {
       this.scene.remove(this._focusIndicator);

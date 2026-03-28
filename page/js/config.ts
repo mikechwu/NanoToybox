@@ -132,6 +132,29 @@ export const CONFIG = {
     );
   },
 
+  // Camera lighting rig — ownership boundary:
+  //   Rig geometry (offsets, target): CONFIG.cameraLighting below
+  //   Beam behavior (angle, penumbra, decay, distance): CONFIG.cameraLighting below
+  //   Visual style (color, intensity): THEMES in themes.ts — _applyLightTheme()
+  cameraLighting: {
+    head: {
+      // ── Rig geometry (camera-local transform) ──
+      offset: [0, 0.3, 0.5] as readonly [number, number, number],   // camera-local: slightly above and in front
+      target: [0, 0, -10] as readonly [number, number, number],      // camera-local: straight ahead on -Z
+      // ── Beam behavior (photometric, not transform) ──
+      angle: Math.PI / 3,    // [rad] wide cone — ensures framed molecules stay inside
+      penumbra: 0.8,         // [0–1] very soft edge to avoid harsh cone boundary
+      decay: 0,              // no distance falloff — uniform like directional
+      distance: 0,           // 0 = unlimited range — no cutoff darkening
+    },
+    fill: {
+      enabled: true,
+      // ── Rig geometry ──
+      offset: [-1.0, 0.2, 0.4] as readonly [number, number, number],  // camera-local: left side (broad fill)
+      target: [0, 0, -10] as readonly [number, number, number],        // camera-local: straight ahead on -Z
+    },
+  },
+
   debug: {
     input: false,
     load: false,

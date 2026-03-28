@@ -29,7 +29,7 @@ npm run dev
 | Interact modes | Atom (drag single atom), Move (translate connected component), Rotate (torque on component) |
 | Camera | Two modes: Orbit (default) and Free-Look (advanced). Mode chip near triad. See controls table below |
 | Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame, component-aware forces |
-| Rendering | InstancedMesh (2 draw calls for atoms+bonds), MeshStandardMaterial (PBR), camera-relative 4-light rig, axis triad |
+| Rendering | InstancedMesh (2 draw calls for atoms+bonds), MeshStandardMaterial (PBR), camera-mounted 3-light rig (SpotLight headlight + DirectionalLight fill + ambient), axis triad |
 | Themes | Dark (default) / Light |
 | Text size | Normal (default) / Large — Appearance section in settings. CSS-only token override via `[data-text-size]` attribute |
 | Settings sheet | Adjustable drag strength, rotation strength, damping, speed, boundary mode, theme, and text size — organized in grouped sections (Scene, Simulation, Interaction, Appearance, Boundary, Help) |
@@ -141,7 +141,7 @@ The interactive page uses a composition root pattern with React-authoritative UI
 - Interactive axis triad (ArrowHelper + sprites, scissor-test viewport, device-aware sizing 96–200px via `setOverlayLayout()`; drag=orbit/look, tap=snap, double-tap=reset on touch devices)
 - Camera control cluster: React CameraControls (mode chip + "?" + action slot) + QuickHelp (gesture reference card)
 - MeshStandardMaterial with roughness 0.7, metalness 0 (PBR)
-- Camera-relative 4-light rig (key/fill/rim/ambient)
+- Camera-mounted 3-light rig (SpotLight headlight + DirectionalLight fill + AmbientLight)
 
 ---
 

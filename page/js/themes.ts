@@ -1,6 +1,7 @@
 /**
  * Theme definitions — Dark and Light.
- * Camera-relative lighting with MeshStandardMaterial (roughness=0.7, metalness=0).
+ * Camera-mounted lighting rig with MeshStandardMaterial (roughness=0.7, metalness=0).
+ * Rig geometry (offsets, angles) lives in CONFIG.cameraLighting — themes own colors/intensities only.
  * ui* keys are the single source of truth for DOM CSS custom properties.
  */
 
@@ -11,9 +12,8 @@ export const THEMES = {
     atom: 0x444444,
     bond: 0x909090,
     ambientColor: 0x8090b0, ambientIntensity: 1.2,
-    keyColor: 0xffffff, keyIntensity: 3.0,
-    fillColor: 0x8098c0, fillIntensity: 1.5,
-    rimColor: 0x6070a0, rimIntensity: 0.8,
+    headLightColor: 0xffffff, headLightIntensity: 3.0,
+    fillLightColor: 0x8098c0, fillLightIntensity: 1.5,
     // DOM UI tokens (written to CSS custom properties by applyThemeTokens)
     uiBg: 'rgba(20,20,28,0.92)',
     uiPageBg: '#181820',
@@ -38,9 +38,8 @@ export const THEMES = {
     atom: 0x3a3a3a,
     bond: 0x808080,
     ambientColor: 0xc0d0e8, ambientIntensity: 1.5,
-    keyColor: 0xfff8f0, keyIntensity: 2.8,
-    fillColor: 0xa0b8d0, fillIntensity: 1.2,
-    rimColor: 0x909098, rimIntensity: 0.6,
+    headLightColor: 0xfff8f0, headLightIntensity: 2.8,
+    fillLightColor: 0xa0b8d0, fillLightIntensity: 1.2,
     // DOM UI tokens
     uiBg: 'rgba(240,240,238,0.92)',
     uiPageBg: '#f2f2f0',
