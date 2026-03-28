@@ -146,11 +146,12 @@ export function CameraControls() {
         {/* Action slot — mode-dependent */}
         {cameraMode === 'orbit' && (
           <button
-            className={`camera-action${orbitFollowEnabled ? ' camera-action-follow' : ''}`}
+            className={`camera-action camera-action-center${orbitFollowEnabled ? ' camera-action-follow' : ''}`}
             onPointerDown={handleCenterPointerDown}
             onPointerUp={handleCenterPointerUp}
             onPointerCancel={handleCenterPointerCancel}
             onPointerLeave={handleCenterPointerCancel}
+            onContextMenu={(e) => e.preventDefault()}
             aria-label={orbitFollowEnabled ? 'Following target (tap to stop)' : 'Center Object (long-press to follow)'}
           >
             {orbitFollowEnabled ? '◎' : '⊕'}
