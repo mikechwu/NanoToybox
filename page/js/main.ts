@@ -10,7 +10,7 @@ import { PhysicsEngine } from './physics';
 import { StateMachine, type Command } from './state-machine';
 import { Renderer } from './renderer';
 import { applyThemeTokens, applyTextSizeTokens } from './themes';
-import { CONFIG } from './config';
+import { CONFIG, DEFAULT_THEME } from './config';
 import { StatusController } from './status';
 import { PlacementController } from './placement';
 import { computeTargetSpeed, computeSubstepCount, updateOverloadState, computeEffectiveSpeed, shouldSkipRender, updateMaxSpeedEstimate } from './scheduler-pure';
@@ -41,7 +41,7 @@ let _snapshotReconciler: SnapshotReconciler | null = null;
 let _scene: SceneRuntime | null = null;
 
 const session = {
-  theme: 'dark',
+  theme: DEFAULT_THEME,
   textSize: 'normal',
   isLoading: false,
   interactionMode: 'atom',  // 'atom' | 'move' | 'rotate'

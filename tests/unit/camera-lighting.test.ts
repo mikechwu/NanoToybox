@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as THREE from 'three';
-import { CONFIG } from '../../page/js/config';
+import { CONFIG, DEFAULT_THEME } from '../../page/js/config';
 import { THEMES } from '../../page/js/themes';
 import { computeOrbitDelta, applyOrbitRotation } from '../../page/js/orbit-math';
 
@@ -42,7 +42,7 @@ function buildRig() {
   const ctx: any = {
     scene,
     camera,
-    currentTheme: 'dark',
+    currentTheme: DEFAULT_THEME,
     _cameraLightRig: null,
     _headLight: null,
     _headLightTarget: null,
@@ -284,11 +284,11 @@ describe('camera lighting rig invariants', () => {
     expect(headLight.distance).toBe(cfg.distance);
 
     // Self-consistent: theme was applied during init (no external call needed)
-    expect(headLight.intensity).toBe(THEMES['dark'].headLightIntensity);
+    expect(headLight.intensity).toBe(THEMES[DEFAULT_THEME].headLightIntensity);
 
     // Fill light is DirectionalLight with themed intensity
     expect(fillLight).toBeInstanceOf(THREE.DirectionalLight);
-    expect(fillLight!.intensity).toBe(THEMES['dark'].fillLightIntensity);
+    expect(fillLight!.intensity).toBe(THEMES[DEFAULT_THEME].fillLightIntensity);
   });
 
   it('no drift: 1000 orbit steps produce identical local rig geometry', () => {
@@ -407,13 +407,14 @@ describe('camera lighting adequacy', () => {
     expect(fillTarget!.position.z).toBeCloseTo(cfg.target[2], 5);
   });
 
-  it('theme intensities are comparable to old directional rig', () => {
-    // Old rig: key=3.0, fill=1.5, rim=0.8, ambient=1.2 (dark)
-    // New rig should have similar total intensity budget
+  it('headlight dominates for directional contrast', () => {
+    // Design goal: strong headlight for form, reduced ambient/fill for dark-side modeling.
+    // Headlight should be the strongest single source.
     const dark = THEMES['dark'];
-    const totalOld = 3.0 + 1.5 + 0.8 + 1.2; // = 6.5
-    const totalNew = dark.headLightIntensity + dark.fillLightIntensity + dark.ambientIntensity;
-    // New total should be at least 80% of old total
-    expect(totalNew).toBeGreaterThan(totalOld * 0.8);
+    expect(dark.headLightIntensity).toBeGreaterThan(dark.fillLightIntensity);
+    expect(dark.headLightIntensity).toBeGreaterThan(dark.ambientIntensity);
+    // Total budget should still be reasonable (> 3.0 for usable scene brightness)
+    const total = dark.headLightIntensity + dark.fillLightIntensity + dark.ambientIntensity;
+    expect(total).toBeGreaterThan(3.0);
   });
 });

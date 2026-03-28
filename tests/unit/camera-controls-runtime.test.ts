@@ -220,7 +220,7 @@ describe('paused worker placement calls renderer.updatePositions', () => {
       getInputBindings: () => ({ sync: vi.fn() } as any),
       getSnapshotReconciler: () => null,
       getSession: () => ({
-        theme: 'dark', textSize: 'normal', isLoading: false, interactionMode: 'atom',
+        theme: 'light', textSize: 'normal', isLoading: false, interactionMode: 'atom',
         playback: { selectedSpeed: 1, speedMode: 'fixed', effectiveSpeed: 1, maxSpeed: 1, paused: true },
         scene: { molecules: [], nextId: 1, totalAtoms: 0 },
       }),
@@ -268,7 +268,7 @@ describe('paused worker placement calls renderer.updatePositions', () => {
       getInputBindings: () => ({ sync: vi.fn() } as any),
       getSnapshotReconciler: () => null,
       getSession: () => ({
-        theme: 'dark', textSize: 'normal', isLoading: false, interactionMode: 'atom',
+        theme: 'light', textSize: 'normal', isLoading: false, interactionMode: 'atom',
         playback: { selectedSpeed: 1, speedMode: 'fixed', effectiveSpeed: 1, maxSpeed: 1, paused: false },
         scene: { molecules: [], nextId: 1, totalAtoms: 0 },
       }),
@@ -326,7 +326,7 @@ describe('paused worker placement calls renderer.updatePositions', () => {
       getInputBindings: () => ({ sync: vi.fn() } as any),
       getSnapshotReconciler: () => null,
       getSession: () => ({
-        theme: 'dark', textSize: 'normal', isLoading: false, interactionMode: 'atom',
+        theme: 'light', textSize: 'normal', isLoading: false, interactionMode: 'atom',
         playback: { selectedSpeed: 1, speedMode: 'fixed', effectiveSpeed: 1, maxSpeed: 1, paused: true },
         scene: { molecules: [], nextId: 1, totalAtoms: 0 },
       }),

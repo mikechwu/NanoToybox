@@ -6,18 +6,38 @@
  * accidental misconfiguration that could break physics or rendering.
  */
 import { describe, it, expect } from 'vitest';
-import { CONFIG } from '../../page/js/config';
+import { CONFIG, DEFAULT_THEME } from '../../page/js/config';
+describe('default theme', () => {
+  it('DEFAULT_THEME constant is light', () => {
+    expect(DEFAULT_THEME).toBe('light');
+  });
+});
 
 describe('CONFIG structure', () => {
   it('has all required top-level sections', () => {
     expect(CONFIG).toHaveProperty('bonds');
     expect(CONFIG).toHaveProperty('atoms');
     expect(CONFIG).toHaveProperty('bondMesh');
-    expect(CONFIG).toHaveProperty('material');
+    expect(CONFIG).toHaveProperty('atomMaterial');
+    expect(CONFIG).toHaveProperty('bondMaterial');
     expect(CONFIG).toHaveProperty('picker');
     expect(CONFIG).toHaveProperty('physics');
     expect(CONFIG).toHaveProperty('wall');
     expect(CONFIG).toHaveProperty('playback');
+  });
+});
+
+describe('CONFIG.bondMesh', () => {
+  it('bond radius is thicker than the original default for visible curvature', () => {
+    // Original was 0.07 — current target should be meaningfully larger
+    expect(CONFIG.bondMesh.radius).toBeGreaterThan(0.1);
+    expect(CONFIG.bondMesh.radius).toBeLessThan(0.2);
+  });
+});
+
+describe('CONFIG.atomMaterial / bondMaterial', () => {
+  it('bonds are smoother than atoms', () => {
+    expect(CONFIG.bondMaterial.roughness).toBeLessThan(CONFIG.atomMaterial.roughness);
   });
 });
 

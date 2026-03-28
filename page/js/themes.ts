@@ -1,19 +1,23 @@
 /**
  * Theme definitions — Dark and Light.
- * Camera-mounted lighting rig with MeshStandardMaterial (roughness=0.7, metalness=0).
- * Rig geometry (offsets, angles) lives in CONFIG.cameraLighting — themes own colors/intensities only.
+ * Camera-mounted lighting rig. Material params (roughness, metalness) in CONFIG.
+ * Rig geometry (offsets, angles) in CONFIG.cameraLighting — themes own colors/intensities only.
  * ui* keys are the single source of truth for DOM CSS custom properties.
  */
 
+// Visual direction:
+//   Atoms: darker, softer — solid structural masses (higher roughness in CONFIG.atomMaterial)
+//   Bonds: brighter, smoother — clean structural guides (lower roughness in CONFIG.bondMaterial)
+//   Bond albedo should remain distinctly brighter than atom albedo in both themes.
 export const THEMES = {
   'dark': {
     // Three.js renderer
     bg: 0x181820,
     atom: 0x444444,
-    bond: 0x909090,
-    ambientColor: 0x8090b0, ambientIntensity: 1.2,
-    headLightColor: 0xffffff, headLightIntensity: 3.0,
-    fillLightColor: 0x8098c0, fillLightIntensity: 1.5,
+    bond: 0xd8d8d8,      // near-white — bonds should read as bright structural guides
+    ambientColor: 0x8090b0, ambientIntensity: 0.7,
+    headLightColor: 0xffffff, headLightIntensity: 3.5,
+    fillLightColor: 0x8098c0, fillLightIntensity: 0.8,
     // DOM UI tokens (written to CSS custom properties by applyThemeTokens)
     uiBg: 'rgba(20,20,28,0.92)',
     uiPageBg: '#181820',
@@ -36,10 +40,10 @@ export const THEMES = {
     // Three.js renderer
     bg: 0xf2f2f0,
     atom: 0x3a3a3a,
-    bond: 0x808080,
-    ambientColor: 0xc0d0e8, ambientIntensity: 1.5,
-    headLightColor: 0xfff8f0, headLightIntensity: 2.8,
-    fillLightColor: 0xa0b8d0, fillLightIntensity: 1.2,
+    bond: 0xc8c0b8,      // warm off-white — readable against light background
+    ambientColor: 0xc0d0e8, ambientIntensity: 0.9,
+    headLightColor: 0xfff8f0, headLightIntensity: 3.2,
+    fillLightColor: 0xa0b8d0, fillLightIntensity: 0.7,
     // DOM UI tokens
     uiBg: 'rgba(240,240,238,0.92)',
     uiPageBg: '#f2f2f0',

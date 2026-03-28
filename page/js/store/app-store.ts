@@ -12,7 +12,7 @@
  */
 
 import { create } from 'zustand';
-import { CONFIG } from '../config';
+import { CONFIG, DEFAULT_THEME } from '../config';
 
 export interface MoleculeMetadata {
   id: number;
@@ -206,7 +206,7 @@ export interface AppStore {
 
 export const useAppStore = create<AppStore>((set) => ({
   // Initial state
-  theme: 'dark',
+  theme: DEFAULT_THEME,
   textSize: 'normal',
   activeSheet: null,
   interactionMode: 'atom',

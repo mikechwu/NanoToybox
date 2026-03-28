@@ -2,6 +2,10 @@
  * Centralized page configuration — single source of truth for all
  * tuning values, thresholds, and defaults used across page modules.
  */
+
+/** Default theme — single source of truth. Used by main.ts, renderer, and store. */
+export const DEFAULT_THEME: 'dark' | 'light' = 'light';
+
 export const CONFIG = {
   libraryPath: '../structures/library',
 
@@ -17,12 +21,17 @@ export const CONFIG = {
   },
 
   bondMesh: {
-    radius: 0.07,
+    radius: 0.126,
     segments: 12,
   },
 
-  material: {
-    roughness: 0.7,
+  atomMaterial: {
+    roughness: 0.55,
+    metalness: 0.0,
+  },
+
+  bondMaterial: {
+    roughness: 0.35,     // smoother than atoms — cleaner specular highlight on tubes
     metalness: 0.0,
   },
 

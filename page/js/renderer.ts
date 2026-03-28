@@ -2,13 +2,13 @@
  * Three.js renderer — scene management, PBR materials, visual feedback.
  *
  * Camera-mounted lighting rig (SpotLight headlight + fill) follows camera pose.
- * MeshStandardMaterial with roughness=0.7, metalness=0.
+ * MeshStandardMaterial with config-driven roughness/metalness (atoms and bonds independent).
  * State-driven feedback: highlight, force line, rotation cue.
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { THEMES } from './themes';
-import { CONFIG } from './config';
+import { CONFIG, DEFAULT_THEME } from './config';
 import { computeOrbitDelta, applyOrbitRotation, TRIAD_CAMERA_DISTANCE } from './orbit-math';
 
 export class Renderer {
@@ -102,7 +102,7 @@ export class Renderer {
 
     this.highlightAtom = -1;
     this.forceLine = null;
-    this.currentTheme = 'dark';
+    this.currentTheme = DEFAULT_THEME;
     this._previewGroup = null;  // THREE.Group for placement preview
 
     // Pre-allocated vectors/matrices reused every frame (avoid GC pressure)
@@ -292,6 +292,31 @@ export class Renderer {
     }
   }
 
+  // ── Material helpers — single source of truth for atom/bond material params ──
+  // Final presentation = theme albedo (color) + config surface response (roughness/metalness).
+  // Theme owns color in themes.ts; config owns roughness/metalness in config.ts.
+  // Both are combined here at the only point where MeshStandardMaterial is created.
+
+  /** Create atom MeshStandardMaterial with config params and theme color. */
+  _createAtomMaterial(t: typeof THEMES[keyof typeof THEMES], opts?: { transparent?: boolean; opacity?: number; emissive?: number; emissiveIntensity?: number }) {
+    return new THREE.MeshStandardMaterial({
+      color: t.atom,
+      roughness: CONFIG.atomMaterial.roughness,
+      metalness: CONFIG.atomMaterial.metalness,
+      ...opts,
+    });
+  }
+
+  /** Create bond MeshStandardMaterial with config params and theme color. */
+  _createBondMaterial(t: typeof THEMES[keyof typeof THEMES], opts?: { transparent?: boolean; opacity?: number }) {
+    return new THREE.MeshStandardMaterial({
+      color: t.bond,
+      roughness: CONFIG.bondMaterial.roughness,
+      metalness: CONFIG.bondMaterial.metalness,
+      ...opts,
+    });
+  }
+
   _initForceLine() {
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array(6); // 2 points × 3 coords
@@ -334,19 +359,11 @@ export class Renderer {
     this._atomGeom = new THREE.SphereGeometry(
       CONFIG.atoms.radius, CONFIG.atoms.segments[0], CONFIG.atoms.segments[1]
     );
-    this._atomMat = new THREE.MeshStandardMaterial({
-      color: t.atom,
-      roughness: CONFIG.material.roughness,
-      metalness: CONFIG.material.metalness,
-    });
+    this._atomMat = this._createAtomMaterial(t);
     this._bondGeom = new THREE.CylinderGeometry(
       CONFIG.bondMesh.radius, CONFIG.bondMesh.radius, 1, CONFIG.bondMesh.segments
     );
-    this._bondMat = new THREE.MeshStandardMaterial({
-      color: t.bond,
-      roughness: CONFIG.material.roughness,
-      metalness: CONFIG.material.metalness,
-    });
+    this._bondMat = this._createBondMaterial(t);
 
     // Create instanced atom mesh with geometric capacity
     this._atomCount = atoms.length;
@@ -611,12 +628,8 @@ export class Renderer {
         const geom = this._atomGeom || new THREE.SphereGeometry(
           CONFIG.atoms.radius, CONFIG.atoms.segments[0], CONFIG.atoms.segments[1]
         );
-        this._highlightMat = new THREE.MeshStandardMaterial({
-          color: this._atomMat ? this._atomMat.color.clone() : new THREE.Color(0xe0e0e0),
-          roughness: CONFIG.material.roughness,
-          metalness: CONFIG.material.metalness,
-          emissive: new THREE.Color(0x335544),
-          emissiveIntensity: 1.0,
+        this._highlightMat = this._createAtomMaterial(THEMES[this.currentTheme], {
+          emissive: 0x335544, emissiveIntensity: 1.0,
         });
         this._highlightMesh = new THREE.Mesh(geom, this._highlightMat);
         this._highlightMesh.renderOrder = 1; // render after atoms for consistent depth
@@ -721,17 +734,13 @@ export class Renderer {
       this._atomGeom = new THREE.SphereGeometry(
         CONFIG.atoms.radius, CONFIG.atoms.segments[0], CONFIG.atoms.segments[1]
       );
-      this._atomMat = new THREE.MeshStandardMaterial({
-        color: t.atom, roughness: CONFIG.material.roughness, metalness: CONFIG.material.metalness,
-      });
+      this._atomMat = this._createAtomMaterial(t);
     }
     if (!this._bondGeom) {
       this._bondGeom = new THREE.CylinderGeometry(
         CONFIG.bondMesh.radius, CONFIG.bondMesh.radius, 1, CONFIG.bondMesh.segments
       );
-      this._bondMat = new THREE.MeshStandardMaterial({
-        color: t.bond, roughness: CONFIG.material.roughness, metalness: CONFIG.material.metalness,
-      });
+      this._bondMat = this._createBondMaterial(t);
     }
 
     const newCount = this._atomCount + newAtomCount;
@@ -818,8 +827,7 @@ export class Renderer {
     this.hidePreview();
     const t = THEMES[this.currentTheme];
     const group = new THREE.Group();
-    const previewAtomMat = new THREE.MeshStandardMaterial({
-      color: t.atom, roughness: 0.7, metalness: 0,
+    const previewAtomMat = this._createAtomMaterial(t, {
       transparent: true, opacity: 0.4,
       emissive: 0x334466, emissiveIntensity: 0.5,
     });
@@ -835,8 +843,7 @@ export class Renderer {
     });
     // Preview bonds
     if (bonds && bonds.length > 0) {
-      const previewBondMat = new THREE.MeshStandardMaterial({
-        color: t.bond, roughness: 0.7, metalness: 0,
+      const previewBondMat = this._createBondMaterial(t, {
         transparent: true, opacity: 0.3,
       });
       const bondGeom = this._bondGeom || new THREE.CylinderGeometry(
