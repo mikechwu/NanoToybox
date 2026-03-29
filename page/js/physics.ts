@@ -993,6 +993,14 @@ export class PhysicsEngine {
     this.bonds.length = count;
   }
 
+  /** Refresh bond topology + connected components in one call.
+   *  Use this whenever bond graph may have changed and downstream code
+   *  (interaction scoping, bonded-group panel) needs fresh component data. */
+  refreshTopology() {
+    this.updateBondList();
+    this.rebuildComponents();
+  }
+
   /**
    * Recompute connected components from the current bond graph using Union-Find.
    * Called after each bond list rebuild so Move/Rotate forces are scoped to the

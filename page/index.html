@@ -403,6 +403,77 @@ fieldset.segmented {
 /* Placement surface styling — structure handled by JSX conditional rendering */
 .dock-add-btn.dock-placement-accent { color: var(--color-accent-text); }
 
+/* ── Bonded groups side panel ── */
+.bonded-groups-panel {
+  position: fixed;
+  top: 12px;
+  z-index: 150;
+  pointer-events: auto;
+  background: var(--panel-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  user-select: none;
+  -webkit-user-select: none;
+  min-width: 80px;
+  max-height: 60vh;
+  overflow-y: auto;
+  font-size: var(--font-sm);
+  color: var(--color-text);
+  transition: max-height 0.2s ease;
+}
+.bonded-groups-header {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  width: 100%;
+  text-align: left;
+}
+.bonded-groups-count {
+  font-weight: 400;
+  opacity: 0.7;
+}
+.bonded-groups-list {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bonded-groups-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0;
+  font-size: var(--font-xs);
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.bonded-groups-row:hover { background: var(--color-surface-hover); }
+.bonded-groups-selected { background: var(--color-accent-soft) !important; }
+.bonded-groups-label { opacity: 0.7; }
+.bonded-groups-atoms { font-variant-numeric: tabular-nums; }
+.bonded-groups-small-toggle {
+  opacity: 0.8;
+}
+.bonded-groups-small-row { opacity: 0.7; }
+.bonded-groups-panel.side-left { left: 12px; }
+.bonded-groups-panel.side-right { right: 12px; }
+
 /* ── Camera controls overlay (positioned by overlay-layout.ts) ── */
 .camera-controls {
   position: fixed;

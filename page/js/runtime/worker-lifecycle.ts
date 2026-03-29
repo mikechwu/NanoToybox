@@ -44,9 +44,12 @@ export interface WorkerRuntime {
   setTestStalledThreshold(ms: number): void;
 }
 
+/** Snapshot captured before teardown for recovery. */
+export type RecoverySnapshot = { positions: Float64Array; velocities?: Float64Array; n: number } | null;
+
 export function createWorkerRuntime(deps: {
   onSchedulerTiming: (physStepMs: number, stepsCompleted: number) => void;
-  onFailure: (reason: string) => void;
+  onFailure: (reason: string, lastSnapshot?: RecoverySnapshot) => void;
 }): WorkerRuntime {
   let _bridge: WorkerBridge | null = null;
   let _initialized = false;
@@ -56,6 +59,8 @@ export function createWorkerRuntime(deps: {
   let _testStalledThresholdMs = 0;
 
   function _teardown() {
+    // Capture snapshot BEFORE destroying bridge — bridge.destroy() makes it inaccessible
+    const lastSnap = _bridge?.getLatestSnapshot() ?? null;
     if (_bridge) {
       try { _bridge.destroy(); } catch (_) { /* ignore */ }
     }
@@ -63,6 +68,7 @@ export function createWorkerRuntime(deps: {
     _initialized = false;
     _stalled = false;
     _progressTs = 0;
+    return lastSnap;
   }
 
   return {
@@ -94,8 +100,8 @@ export function createWorkerRuntime(deps: {
       });
 
       bridge.setOnCrash((reason) => {
-        _teardown();
-        deps.onFailure(reason);
+        const snap = _teardown();
+        deps.onFailure(reason, snap);
       });
 
       if (atoms.length > 0) {
@@ -109,14 +115,14 @@ export function createWorkerRuntime(deps: {
             _stalled = false;
           } else {
             console.warn('[worker] init failed:', result.error);
-            _teardown();
-            deps.onFailure('Worker init failed: ' + (result.error || 'unknown'));
+            const snap = _teardown();
+            deps.onFailure('Worker init failed: ' + (result.error || 'unknown'), snap);
           }
         } catch (e) {
           if (_bridge !== bridge) return; // destroyed mid-flight
           console.warn('[worker] init error:', e);
-          _teardown();
-          deps.onFailure('Worker init error');
+          const snap = _teardown();
+          deps.onFailure('Worker init error', snap);
         }
       }
     },
@@ -162,8 +168,8 @@ export function createWorkerRuntime(deps: {
       // Timeout: worker is unresponsive. Tear down and throw so the caller
       // can abort the placement commit rather than continue with stale state.
       console.warn('[worker] syncStateNow timed out — tearing down worker');
-      _teardown();
-      deps.onFailure('syncStateNow timeout — worker unresponsive during paused placement');
+      const snap = _teardown();
+      deps.onFailure('syncStateNow timeout — worker unresponsive during paused placement', snap);
       throw new Error('Worker state sync timed out');
     },
 
@@ -173,8 +179,8 @@ export function createWorkerRuntime(deps: {
         return await _bridge.appendMolecule(atoms, bonds, offset);
       } catch (e) {
         console.warn('[worker] appendMolecule error:', e);
-        _teardown();
-        deps.onFailure('appendMolecule transport failure');
+        const snap = _teardown();
+        deps.onFailure('appendMolecule transport failure', snap);
         return { ok: false };
       }
     },
@@ -189,8 +195,8 @@ export function createWorkerRuntime(deps: {
         return await _bridge.clearScene();
       } catch (e) {
         console.warn('[worker] clearScene error:', e);
-        _teardown();
-        deps.onFailure('clearScene transport failure');
+        const snap = _teardown();
+        deps.onFailure('clearScene transport failure', snap);
         return { ok: false };
       }
     },
@@ -209,8 +215,8 @@ export function createWorkerRuntime(deps: {
       const fatalThresholdMs = stalledThresholdMs * 3;
       if (timeSinceProgress > fatalThresholdMs) {
         console.warn(`[worker] stalled (no progress for ${(fatalThresholdMs / 1000).toFixed(0)}s) — falling back to sync physics`);
-        _teardown();
-        deps.onFailure(`Worker stalled (no progress for ${(fatalThresholdMs / 1000).toFixed(0)}+ seconds)`);
+        const snap = _teardown();
+        deps.onFailure(`Worker stalled (no progress for ${(fatalThresholdMs / 1000).toFixed(0)}+ seconds)`, snap);
       } else if (timeSinceProgress > stalledThresholdMs) {
         _stalled = true;
       }

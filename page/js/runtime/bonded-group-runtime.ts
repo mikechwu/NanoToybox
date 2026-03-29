@@ -1,0 +1,186 @@
+/**
+ * Bonded group runtime — projects physics connected components into store.
+ *
+ * Reads physics.components (bond-graph connected components), builds UI summaries
+ * with overlap-reconciled stable IDs, and publishes to the Zustand store.
+ *
+ * Separate from scene molecules: scene-runtime owns placement metadata,
+ * this module owns live physics-topology-derived bonded groups.
+ *
+ * Update policy: called after scene mutations and at throttled cadence during
+ * simulation. Only publishes when the projection actually changes.
+ */
+
+import { useAppStore, type BondedGroupSummary } from '../store/app-store';
+
+/** Minimal physics interface — only the fields this module reads. */
+export interface BondedGroupPhysics {
+  n: number;
+  components: { atoms: number[]; size: number }[];
+}
+
+export interface BondedGroupRuntime {
+  projectNow(): void;
+  reset(): void;
+}
+
+// freshId counter is instance-scoped (moved inside createBondedGroupRuntime)
+
+/**
+ * Compute overlap score between two atom sets.
+ * Returns the number of atoms in common.
+ */
+function overlapScore(a: number[], b: Set<number>): number {
+  let count = 0;
+  for (const atom of a) {
+    if (b.has(atom)) count++;
+  }
+  return count;
+}
+
+/**
+ * Check if two summary arrays are equivalent (all fields match).
+ * Used to suppress no-op store updates.
+ */
+function summariesEqual(a: BondedGroupSummary[], b: BondedGroupSummary[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || a[i].displayIndex !== b[i].displayIndex
+      || a[i].atomCount !== b[i].atomCount || a[i].orderKey !== b[i].orderKey
+      || a[i].minAtomIndex !== b[i].minAtomIndex) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function createBondedGroupRuntime(deps: {
+  getPhysics: () => BondedGroupPhysics | null;
+}): BondedGroupRuntime {
+  // Instance-scoped ID counter — resets with the runtime instance
+  let nextGroupId = 1;
+  function freshId(): string { return `g${nextGroupId++}`; }
+
+  // Previous projection state for reconciliation
+  let prevGroups: { id: string; atoms: Set<number>; orderKey: number }[] = [];
+  let prevSummaries: BondedGroupSummary[] = [];
+
+  function projectNow() {
+    const physics = deps.getPhysics();
+    if (!physics || physics.n === 0) {
+      if (prevSummaries.length > 0) {
+        prevGroups = [];
+        prevSummaries = [];
+        const store = useAppStore.getState();
+        store.setBondedGroups([]);
+        store.setSelectedBondedGroup(null);
+      }
+      return;
+    }
+
+    const components = physics.components;
+    if (!components || components.length === 0) {
+      if (prevSummaries.length > 0) {
+        prevGroups = [];
+        prevSummaries = [];
+        const store = useAppStore.getState();
+        store.setBondedGroups([]);
+        store.setSelectedBondedGroup(null);
+      }
+      return;
+    }
+
+    // Step 1: Build raw fingerprints for each current component
+    const raw = components.map((comp) => ({
+      atoms: comp.atoms,
+      atomSet: new Set(comp.atoms),
+      atomCount: comp.size,
+      minAtomIndex: comp.atoms.length > 0 ? Math.min(...comp.atoms) : 0,
+    }));
+
+    // Step 2: Overlap-based reconciliation against previous groups
+    const usedPrevIds = new Set<string>();
+    const reconciled: { id: string; atoms: Set<number>; atomCount: number; minAtomIndex: number; orderKey: number }[] = [];
+
+    for (const curr of raw) {
+      let bestId: string | null = null;
+      let bestScore = 0;
+      let bestOrderKey = 0;
+
+      for (const prev of prevGroups) {
+        if (usedPrevIds.has(prev.id)) continue;
+        const score = overlapScore(curr.atoms, prev.atoms);
+        if (score > bestScore) {
+          bestScore = score;
+          bestId = prev.id;
+          bestOrderKey = prev.orderKey;
+        }
+      }
+
+      // Threshold: at least 1 atom overlap to inherit identity
+      if (bestId && bestScore > 0) {
+        usedPrevIds.add(bestId);
+        reconciled.push({
+          id: bestId,
+          atoms: curr.atomSet,
+          atomCount: curr.atomCount,
+          minAtomIndex: curr.minAtomIndex,
+          orderKey: bestOrderKey,
+        });
+      } else {
+        reconciled.push({
+          id: freshId(),
+          atoms: curr.atomSet,
+          atomCount: curr.atomCount,
+          minAtomIndex: curr.minAtomIndex,
+          orderKey: Number.MAX_SAFE_INTEGER, // new groups sort after existing
+        });
+      }
+    }
+
+    // Step 3: Sort — atomCount desc, orderKey asc (stable tie-break), minAtomIndex asc (fallback)
+    reconciled.sort((a, b) => {
+      if (a.atomCount !== b.atomCount) return b.atomCount - a.atomCount;
+      if (a.orderKey !== b.orderKey) return a.orderKey - b.orderKey;
+      return a.minAtomIndex - b.minAtomIndex;
+    });
+
+    // Assign final orderKeys and 1-based displayIndex from sorted position
+    const summaries: BondedGroupSummary[] = reconciled.map((g, i) => ({
+      id: g.id,
+      displayIndex: i + 1,
+      atomCount: g.atomCount,
+      minAtomIndex: g.minAtomIndex,
+      orderKey: i,
+    }));
+
+    // Update previous state for next reconciliation
+    prevGroups = reconciled.map((g, i) => ({
+      id: g.id,
+      atoms: g.atoms,
+      orderKey: i,
+    }));
+
+    // Step 4: Only publish if changed
+    if (!summariesEqual(prevSummaries, summaries)) {
+      prevSummaries = summaries;
+      const store = useAppStore.getState();
+      store.setBondedGroups(summaries);
+      // Clear stale selection if selected group no longer exists
+      if (store.selectedBondedGroupId && !summaries.some(g => g.id === store.selectedBondedGroupId)) {
+        store.setSelectedBondedGroup(null);
+      }
+    }
+  }
+
+  function reset() {
+    prevGroups = [];
+    prevSummaries = [];
+    const store = useAppStore.getState();
+    store.setBondedGroups([]);
+    store.setSelectedBondedGroup(null);
+  }
+
+  return { projectNow, reset };
+}
+

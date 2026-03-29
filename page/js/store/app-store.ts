@@ -58,6 +58,21 @@ export interface ChooserCallbacks {
   onSelectStructure: (file: string, description: string) => void;
 }
 
+/** Summary of a bonded connected component — projected from physics topology, not scene metadata.
+ *  id: stable topology identity (survives merge/split via overlap reconciliation)
+ *  displayIndex: 1-based visible index after sorting (for UI labels and future selection)
+ *  atomCount: number of atoms in this cluster
+ *  minAtomIndex: lowest atom index (deterministic fallback sort key)
+ *  orderKey: internal reconciliation key (not user-facing — use displayIndex for UI)
+ */
+export interface BondedGroupSummary {
+  id: string;
+  displayIndex: number;
+  atomCount: number;
+  minAtomIndex: number;
+  orderKey: number;
+}
+
 export interface AppStore {
   // UI chrome state
   theme: 'dark' | 'light';
@@ -111,6 +126,23 @@ export interface AppStore {
   // Free-Look flight state (derived from renderer, transition-gated)
   flightActive: boolean;
   farDrift: boolean;
+
+  // Bonded groups (physics-topology-derived, separate from scene molecules)
+  // Selection contract:
+  //   - selectedBondedGroupId is a UI-level group identity (BondedGroupSummary.id)
+  //   - Runtime invalidates it when the group disappears (merge/split/clear)
+  //   - UI sets it via row click; future actions should consume id, not displayIndex
+  //   - Store does not infer topology semantics from selection
+  bondedGroups: BondedGroupSummary[];
+  bondedGroupsExpanded: boolean;
+  bondedSmallGroupsExpanded: boolean;
+  bondedGroupsSide: 'left' | 'right';
+  selectedBondedGroupId: string | null;
+  setBondedGroups: (groups: BondedGroupSummary[]) => void;
+  toggleBondedGroupsExpanded: () => void;
+  toggleBondedSmallGroupsExpanded: () => void;
+  setBondedGroupsSide: (side: 'left' | 'right') => void;
+  setSelectedBondedGroup: (id: string | null) => void;
 
   // Reconciliation (debug-visible)
   reconciliationState: 'none' | 'awaiting_positions' | 'awaiting_bonds';
@@ -215,6 +247,11 @@ export const useAppStore = create<AppStore>((set) => ({
   orbitFollowEnabled: false,
   cameraCallbacks: null,
   lastFocusedMoleculeId: null,
+  bondedGroups: [],
+  bondedGroupsExpanded: false,
+  bondedSmallGroupsExpanded: false,
+  bondedGroupsSide: 'left',
+  selectedBondedGroupId: null,
   atomCount: 0,
   activeAtomCount: 0,
   wallRemovedCount: 0,
@@ -273,6 +310,12 @@ export const useAppStore = create<AppStore>((set) => ({
   setTargetSpeed: (speed) => set({ targetSpeed: speed }),
   togglePause: () => set((s) => ({ paused: !s.paused })),
 
+  setBondedGroups: (groups) => set({ bondedGroups: groups }),
+  toggleBondedGroupsExpanded: () => set((s) => ({ bondedGroupsExpanded: !s.bondedGroupsExpanded })),
+  toggleBondedSmallGroupsExpanded: () => set((s) => ({ bondedSmallGroupsExpanded: !s.bondedSmallGroupsExpanded })),
+  setBondedGroupsSide: (side) => set({ bondedGroupsSide: side }),
+  setSelectedBondedGroup: (id) => set({ selectedBondedGroupId: id }),
+
   updateAtomCount: (n) => set({ atomCount: n }),
   updateActiveCount: (active, removed) => set({ activeAtomCount: active, wallRemovedCount: removed }),
   setPlacementActive: (active) => set({ placementActive: active }),
@@ -320,6 +363,11 @@ export const useAppStore = create<AppStore>((set) => ({
     orbitFollowEnabled: false,
     cameraCallbacks: null,
     lastFocusedMoleculeId: null,
+    // Bonded groups (side preference preserved across reset)
+    bondedGroups: [],
+    bondedGroupsExpanded: false,
+    bondedSmallGroupsExpanded: false,
+    selectedBondedGroupId: null,
     // Scene
     atomCount: 0,
     activeAtomCount: 0,

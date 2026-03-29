@@ -34,7 +34,7 @@ export interface SceneRuntime {
   updateSceneStatus(): void;
   updateActiveCountRow(): void;
   commitMolecule(filename: string, name: string, atoms: any[], bonds: any[], offset: number[]): void | Promise<void>;
-  clearPlayground(): void;
+  clearPlayground(): void | Promise<void>;
   addMoleculeToScene(filename: string, name: string, offset: number[]): Promise<void>;
   updateStatus(text: string): void;
   collectSceneAtoms(): import('../../../src/types/domain').AtomXYZ[];
@@ -61,11 +61,20 @@ export interface SceneRuntimeDeps {
   dispatch: (cmd: import('../state-machine').Command) => void;
   fullSchedulerReset: () => void;
   partialProfilerReset: () => void;
-  recoverFromWorkerFailure: (reason: string) => void;
+  recoverFromWorkerFailure: (reason: string, lastSnapshot?: import('./worker-lifecycle').RecoverySnapshot) => void;
+  getPauseSyncPromise?: () => Promise<void> | null;
+  onSceneMutated?: () => void;
 }
 
 export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
   function getSession() { return deps.getSession(); }
+
+  /** Shared gate: awaits any in-flight pause sync before allowing paused mutations.
+   *  All scene mutations that touch physics during pause should call this first. */
+  async function awaitPauseSyncIfNeeded() {
+    const pauseSync = deps.getPauseSyncPromise?.();
+    if (pauseSync) await pauseSync;
+  }
 
   return {
     setDockPlacementMode(active: boolean) {
@@ -122,6 +131,8 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
     },
 
     async commitMolecule(filename, name, atoms, bonds, offset) {
+      await awaitPauseSyncIfNeeded();
+
       const physics = deps.getPhysics();
       const renderer = deps.getRenderer();
       const session = getSession();
@@ -207,9 +218,11 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
           });
         });
       }
+      deps.onSceneMutated?.();
     },
 
-    clearPlayground() {
+    async clearPlayground() {
+      await awaitPauseSyncIfNeeded();
       const physics = deps.getPhysics();
       const renderer = deps.getRenderer();
       const sm = deps.getStateMachine();
@@ -237,6 +250,7 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
         wr.bumpGeneration();
         wr.clearScene();
       }
+      deps.onSceneMutated?.();
     },
 
     async addMoleculeToScene(filename, name, offset) {

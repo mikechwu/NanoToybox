@@ -27,6 +27,7 @@ import { handleCenterObject as _handleCenterObject, resolveReturnTarget } from '
 import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/snapshot-reconciler';
 import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecycle';
 import { createOnboardingController } from './runtime/onboarding';
+import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-group-runtime';
 
 // --- Globals ---
 let renderer, physics, stateMachine;
@@ -132,6 +133,13 @@ let _inputBindings: InputBindings | null = null;
 // Onboarding controller (created in init, cleared on teardown)
 let _onboarding: import('./runtime/onboarding').OnboardingController | null = null;
 
+// Bonded group runtime (projects physics components into store)
+let _bondedGroups: BondedGroupRuntime | null = null;
+
+// Pause sync guard — resolves when syncStateNow completes during pause transition.
+// Awaited by scene-runtime commitMolecule to block mutations until local state is fresh.
+let _pauseSyncPromise: Promise<void> | null = null;
+
 // Interaction dispatch (created in init)
 let _dispatch: ((cmd: import('./state-machine').Command, sx?: number, sy?: number) => { dragTarget?: number[] }) | null = null;
 
@@ -163,6 +171,8 @@ function _teardownRuntime() {
   delete (window as unknown as Record<string, unknown>)._getUIState;
   // Destroy onboarding controller (clears coachmark timers + listeners)
   if (_onboarding) { _onboarding.destroy(); _onboarding = null; }
+  // Reset bonded group runtime
+  if (_bondedGroups) { _bondedGroups.reset(); _bondedGroups = null; }
   // Destroy overlay layout runtime (observer, pending RAF)
   if (_overlayLayout) { _overlayLayout.destroy(); _overlayLayout = null; }
   // Tear down controllers (consumers) before input bindings (provider)
@@ -308,6 +318,8 @@ async function init() {
     fullSchedulerReset,
     partialProfilerReset,
     recoverFromWorkerFailure: recoverLocalPhysicsAfterWorkerFailure,
+    getPauseSyncPromise: () => _pauseSyncPromise,
+    onSceneMutated: () => _bondedGroups?.projectNow(),
   });
 
   // Load manifest
@@ -339,7 +351,7 @@ async function init() {
         scheduler.prof.physStepMs += alpha * (msPerStep - scheduler.prof.physStepMs);
         scheduler.totalStepsProfiled += stepsCompleted;
       },
-      onFailure: (reason) => recoverLocalPhysicsAfterWorkerFailure(reason),
+      onFailure: (reason, lastSnapshot) => recoverLocalPhysicsAfterWorkerFailure(reason, lastSnapshot),
     });
 
     // Debug/test hooks — main.ts owns window globals, worker runtime provides data
@@ -528,6 +540,11 @@ async function init() {
   });
   _onboarding.scheduleInitialCoachmarks();
 
+  // ── Bonded group runtime — projects physics components into store ──
+  _bondedGroups = createBondedGroupRuntime({
+    getPhysics: () => physics,
+  });
+
   // Narrow test hook — returns only the specific observable E2E tests need.
   (window as unknown as Record<string, unknown>)._getUIState = () => {
     const s = useAppStore.getState();
@@ -550,13 +567,26 @@ async function init() {
       useAppStore.getState().togglePause();
     }
     if (session.playback.paused) {
-      // On pause: flush authoritative pos+vel from worker to main thread.
-      // Bump generation first to clear any outstanding request, then send
-      // a zero-step frame. The snapshot (with velocities) will be reconciled
-      // on the next frame loop tick, before placement commit can run.
+      // On pause: flush authoritative pos+vel from worker to local physics.
+      // _pauseSyncPromise is awaited by commitMolecule to block mutations until fresh.
       if (_workerRuntime && _workerRuntime.isActive()) {
-        _workerRuntime.bumpGeneration();
-        _workerRuntime.sendRequestFrame(0);
+        _pauseSyncPromise = _workerRuntime.syncStateNow().then(() => {
+          const snap = _workerRuntime?.getLatestSnapshot?.();
+          if (snap && snap.n === physics.n) {
+            if (physics.pos && snap.positions) {
+              const len = Math.min(snap.positions.length, physics.pos.length);
+              physics.pos.set(snap.positions.subarray(0, len));
+            }
+            if (physics.vel && snap.velocities) {
+              const len = Math.min(snap.velocities.length, physics.vel.length);
+              physics.vel.set(snap.velocities.subarray(0, len));
+            }
+          }
+        }).catch(() => {
+          // syncStateNow failure triggers worker teardown + recovery via onFailure
+        }).finally(() => {
+          _pauseSyncPromise = null;
+        });
       }
     } else {
       scheduler.lastFrameTs = performance.now();
@@ -680,15 +710,41 @@ function _buildWorkerConfig(): import('../../src/types/worker-protocol').Physics
   };
 }
 
-/** Recover local physics after worker failure. Called via workerRuntime.onFailure. */
-function recoverLocalPhysicsAfterWorkerFailure(reason: string) {
+/** Recover local physics after worker failure. Called via workerRuntime.onFailure.
+ *  Seeds local state from the snapshot captured before teardown if available,
+ *  including atom-count reconciliation if the worker's authoritative count differs.
+ *  Otherwise preserves existing local momentum. Never blanket-zeroes velocity. */
+function recoverLocalPhysicsAfterWorkerFailure(reason: string, lastSnapshot?: import('./runtime/worker-lifecycle').RecoverySnapshot) {
   console.warn('[worker] failure:', reason, '— rebuilding local physics for sync fallback');
-  if (physics && physics.n > 0) {
-    if (physics.vel) physics.vel.fill(0);
-    physics.computeForces();
-    physics.updateBondList();
-    physics.rebuildComponents();
-    physics.updateWallRadius();
+  if (physics) {
+    const snap = lastSnapshot;
+    if (snap) {
+      // Reconcile atom count — worker may have removed atoms (wall removal) since
+      // the last main-thread sync. Same pattern as snapshot-reconciler.ts:40.
+      if (snap.n !== physics.n) {
+        physics.n = snap.n;
+        if (renderer) {
+          renderer.setAtomCount(snap.n);
+          renderer.setPhysicsRef(physics);
+        }
+      }
+      // Copy authoritative positions
+      if (physics.pos && snap.positions) {
+        const len = Math.min(snap.positions.length, physics.pos.length);
+        physics.pos.set(snap.positions.subarray(0, len));
+      }
+      // Copy authoritative velocities (preserves COM momentum)
+      if (physics.vel && snap.velocities) {
+        const len = Math.min(snap.velocities.length, physics.vel.length);
+        physics.vel.set(snap.velocities.subarray(0, len));
+      }
+    }
+    // No snapshot: preserve existing local state — imperfect but better than zero
+    if (physics.n > 0) {
+      physics.computeForces();
+      physics.refreshTopology();
+      physics.updateWallRadius();
+    }
   }
   fullSchedulerReset();
   // Surface transient status so user/developer knows worker mode was lost
@@ -1033,6 +1089,9 @@ function frameLoop(timestamp) {
         workerStalled: _workerRuntime ? _workerRuntime.isStalled() : false,
         rafIntervalMs: scheduler.prof.rafIntervalMs,
       });
+
+      // Project bonded groups at the same 5 Hz cadence (throttled, only publishes on change)
+      _bondedGroups?.projectNow();
 
     // ── Auto FPS gate for UI effects ──
     // Only runs when glass UI is visible AND mode is 'auto' (not forced by developer).

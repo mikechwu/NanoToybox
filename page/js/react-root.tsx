@@ -17,6 +17,7 @@ import { CameraControls } from './components/CameraControls';
 import { SheetOverlay } from './components/SheetOverlay';
 import { SettingsSheet } from './components/SettingsSheet';
 import { StructureChooser } from './components/StructureChooser';
+import { BondedGroupsPanel } from './components/BondedGroupsPanel';
 
 let root: Root | null = null;
 
@@ -33,6 +34,7 @@ export function mountReactUI() {
     <React.StrictMode>
       <StatusBar />
       <FPSDisplay />
+      <BondedGroupsPanel />
       <CameraControls />
       <DockLayout>
         <DockBar />

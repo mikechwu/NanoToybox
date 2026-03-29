@@ -49,7 +49,7 @@ export function createSnapshotReconciler(deps: {
           physics.pos.set(snapshot.positions.subarray(0, len));
         }
         renderer.setPhysicsRef(physics);
-        physics.updateBondList();
+        physics.refreshTopology();
         // Invalidate active drag — atom indices changed after wall removal
         if (stateMachine.isInteracting()) {
           const cmd = stateMachine.forceIdle();
@@ -69,11 +69,11 @@ export function createSnapshotReconciler(deps: {
         physics.vel.set(snapshot.velocities.subarray(0, velLen));
       }
 
-      // Periodic bond refresh — every 20 frames
+      // Periodic topology refresh — every 20 frames (bonds + connected components)
       _bondRefreshCounter++;
       if (_bondRefreshCounter >= 20) {
         _bondRefreshCounter = 0;
-        physics.updateBondList();
+        physics.refreshTopology();
       }
 
       // Renderer update
