@@ -138,11 +138,14 @@ export interface AppStore {
   bondedSmallGroupsExpanded: boolean;
   bondedGroupsSide: 'left' | 'right';
   selectedBondedGroupId: string | null;
+  hoveredBondedGroupId: string | null;
   setBondedGroups: (groups: BondedGroupSummary[]) => void;
   toggleBondedGroupsExpanded: () => void;
   toggleBondedSmallGroupsExpanded: () => void;
   setBondedGroupsSide: (side: 'left' | 'right') => void;
   setSelectedBondedGroup: (id: string | null) => void;
+  setHoveredBondedGroup: (id: string | null) => void;
+  clearBondedGroupHighlightState: () => void;
 
   // Reconciliation (debug-visible)
   reconciliationState: 'none' | 'awaiting_positions' | 'awaiting_bonds';
@@ -252,6 +255,7 @@ export const useAppStore = create<AppStore>((set) => ({
   bondedSmallGroupsExpanded: false,
   bondedGroupsSide: 'left',
   selectedBondedGroupId: null,
+  hoveredBondedGroupId: null,
   atomCount: 0,
   activeAtomCount: 0,
   wallRemovedCount: 0,
@@ -315,6 +319,8 @@ export const useAppStore = create<AppStore>((set) => ({
   toggleBondedSmallGroupsExpanded: () => set((s) => ({ bondedSmallGroupsExpanded: !s.bondedSmallGroupsExpanded })),
   setBondedGroupsSide: (side) => set({ bondedGroupsSide: side }),
   setSelectedBondedGroup: (id) => set({ selectedBondedGroupId: id }),
+  setHoveredBondedGroup: (id) => set({ hoveredBondedGroupId: id }),
+  clearBondedGroupHighlightState: () => set({ selectedBondedGroupId: null, hoveredBondedGroupId: null }),
 
   updateAtomCount: (n) => set({ atomCount: n }),
   updateActiveCount: (active, removed) => set({ activeAtomCount: active, wallRemovedCount: removed }),
@@ -368,6 +374,7 @@ export const useAppStore = create<AppStore>((set) => ({
     bondedGroupsExpanded: false,
     bondedSmallGroupsExpanded: false,
     selectedBondedGroupId: null,
+    hoveredBondedGroupId: null,
     // Scene
     atomCount: 0,
     activeAtomCount: 0,

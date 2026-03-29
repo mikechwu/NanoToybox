@@ -48,9 +48,16 @@ export class Renderer {
   _tmpQuat: THREE.Quaternion;
   _dummyObj: THREE.Object3D;
 
-  // Highlight overlay
+  // Highlight overlay (single atom interaction highlight)
   _highlightMesh: THREE.Mesh | null;
   _highlightMat: THREE.MeshStandardMaterial | null;
+
+  // Group highlight overlay (bonded cluster selection/hover) — persistent, updated each frame
+  _groupHighlightMesh: THREE.InstancedMesh | null;
+  _groupHighlightMat: THREE.MeshStandardMaterial | null;
+  _groupHighlightIndices: number[] | null;
+  _groupHighlightIntensity: 'selected' | 'hover';
+  _groupHighlightCapacity: number;
 
   // Physics reference (read-only access to positions for rendering)
   _physicsRef: { n: number; pos: Float64Array; getBonds?: () => any[] } | null;
@@ -116,6 +123,13 @@ export class Renderer {
     // Highlight overlay mesh — separate from instanced atoms
     this._highlightMesh = null;
     this._highlightMat = null;
+
+    // Group highlight overlay — persistent, updated each frame
+    this._groupHighlightMesh = null;
+    this._groupHighlightMat = null;
+    this._groupHighlightIndices = null;
+    this._groupHighlightIntensity = 'selected';
+    this._groupHighlightCapacity = 0;
 
     // Current physics reference for position reads (set each updatePositions call)
     this._physicsRef = null;
@@ -451,6 +465,9 @@ export class Renderer {
       const hi3 = this.highlightAtom * 3;
       this._highlightMesh.position.set(pos[hi3], pos[hi3 + 1], pos[hi3 + 2]);
     }
+
+    // Update group highlight overlay from current positions
+    this._updateGroupHighlight();
   }
 
   /**
@@ -543,6 +560,9 @@ export class Renderer {
         this._highlightMesh.position.set(positions[hi3], positions[hi3 + 1], positions[hi3 + 2]);
       }
     }
+
+    // Update group highlight overlay from current positions
+    this._updateGroupHighlight();
   }
 
   /**
@@ -645,6 +665,104 @@ export class Renderer {
     } else if (this._highlightMesh) {
       this._highlightMesh.visible = false;
     }
+  }
+
+  /**
+   * Set which atoms to highlight (bonded cluster selection/hover).
+   * Stores the index set and intensity — actual overlay is created/updated
+   * by _updateGroupHighlight() each frame during updatePositions/updateFromSnapshot.
+   * Pass null to clear. Reuses overlay mesh when possible to avoid GC churn.
+   */
+  setHighlightedAtoms(atomIndices: number[] | null, intensity: 'selected' | 'hover' = 'selected') {
+    if (!atomIndices || atomIndices.length === 0) {
+      this._groupHighlightIndices = null;
+      if (this._groupHighlightMesh) {
+        this.scene.remove(this._groupHighlightMesh);
+        this._groupHighlightMesh.dispose();
+        this._groupHighlightMesh = null;
+        this._groupHighlightCapacity = 0;
+      }
+      if (this._groupHighlightMat) {
+        this._groupHighlightMat.dispose();
+        this._groupHighlightMat = null;
+      }
+      return;
+    }
+    this._groupHighlightIndices = atomIndices;
+    this._groupHighlightIntensity = intensity;
+    // Mutate material style in place (no dispose/recreate churn)
+    this._applyGroupHighlightStyle(intensity);
+    // Initial position sync
+    this._updateGroupHighlight();
+  }
+
+  /** Create or update group highlight material to match current intensity style.
+   *  Mutates in place when possible — avoids dispose/recreate and stale material refs.
+   *  Colors from CONFIG.groupHighlight for centralized tuning. */
+  private _applyGroupHighlightStyle(intensity: 'selected' | 'hover') {
+    const style = CONFIG.groupHighlight[intensity];
+
+    if (!this._groupHighlightMat) {
+      this._groupHighlightMat = new THREE.MeshStandardMaterial({
+        color: style.color, emissive: style.emissive,
+        emissiveIntensity: style.emissiveIntensity,
+        transparent: true, opacity: style.opacity,
+        roughness: CONFIG.atomMaterial.roughness,
+        metalness: CONFIG.atomMaterial.metalness,
+        depthWrite: false,
+      });
+    } else {
+      // Mutate existing material — keeps mesh.material reference valid
+      this._groupHighlightMat.color.set(style.color);
+      (this._groupHighlightMat.emissive as THREE.Color).set(style.emissive);
+      this._groupHighlightMat.emissiveIntensity = style.emissiveIntensity;
+      this._groupHighlightMat.opacity = style.opacity;
+    }
+
+    // Sync mesh material reference if mesh exists (handles intensity switch)
+    if (this._groupHighlightMesh && this._groupHighlightMesh.material !== this._groupHighlightMat) {
+      this._groupHighlightMesh.material = this._groupHighlightMat;
+    }
+  }
+
+  /** Update group highlight overlay transforms from current positions. Called each frame. */
+  _updateGroupHighlight() {
+    const indices = this._groupHighlightIndices;
+    if (!indices || indices.length === 0) return;
+    if (!this._physicsRef || !this._atomGeom) return;
+
+    const pos = this._physicsRef.pos;
+    const count = indices.length;
+    const scale = CONFIG.groupHighlight[this._groupHighlightIntensity].scale;
+
+    // Allocate or grow mesh if needed (compare against allocated capacity, not active count)
+    if (!this._groupHighlightMesh || this._groupHighlightCapacity < count) {
+      if (this._groupHighlightMesh) {
+        this.scene.remove(this._groupHighlightMesh);
+        this._groupHighlightMesh.dispose();
+      }
+      if (!this._groupHighlightMat) this._applyGroupHighlightStyle(this._groupHighlightIntensity);
+      this._groupHighlightCapacity = Math.max(count, 64);
+      this._groupHighlightMesh = new THREE.InstancedMesh(
+        this._atomGeom, this._groupHighlightMat!, this._groupHighlightCapacity,
+      );
+      this._groupHighlightMesh.frustumCulled = false;
+      this._groupHighlightMesh.renderOrder = 2;
+      this.scene.add(this._groupHighlightMesh);
+    }
+
+    const dummy = this._dummyObj;
+    for (let i = 0; i < count; i++) {
+      const ai = indices[i];
+      const i3 = ai * 3;
+      dummy.position.set(pos[i3], pos[i3 + 1], pos[i3 + 2]);
+      dummy.scale.setScalar(scale);
+      dummy.quaternion.identity();
+      dummy.updateMatrix();
+      this._groupHighlightMesh.setMatrixAt(i, dummy.matrix);
+    }
+    this._groupHighlightMesh.count = count;
+    this._groupHighlightMesh.instanceMatrix.needsUpdate = true;
   }
 
   showForceLine(fromAtomIndex, toWorldX, toWorldY, toWorldZ) {

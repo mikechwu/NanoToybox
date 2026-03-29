@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import React from 'react';
 import { render, fireEvent } from '@testing-library/react';
-import { BondedGroupsPanel } from '../../page/js/components/BondedGroupsPanel';
+import { BondedGroupsPanel, setBondedGroupsPanelCallbacks } from '../../page/js/components/BondedGroupsPanel';
 import { useAppStore, type BondedGroupSummary } from '../../page/js/store/app-store';
 
 const FIXTURE_GROUPS: BondedGroupSummary[] = [
@@ -33,6 +33,20 @@ function renderPanel() {
 describe('BondedGroupsPanel', () => {
   beforeEach(() => {
     useAppStore.getState().resetTransientState();
+    // Wire simple callbacks that directly update store (simulates highlight runtime)
+    setBondedGroupsPanelCallbacks({
+      onToggleSelect: (id) => {
+        const s = useAppStore.getState();
+        s.setSelectedBondedGroup(s.selectedBondedGroupId === id ? null : id);
+      },
+      onHover: (id) => {
+        const s = useAppStore.getState();
+        if (!s.selectedBondedGroupId) s.setHoveredBondedGroup(id);
+      },
+      onClearHighlight: () => {
+        useAppStore.getState().clearBondedGroupHighlightState();
+      },
+    });
   });
 
   it('returns null when no groups', () => {
@@ -153,5 +167,56 @@ describe('BondedGroupsPanel', () => {
     const selected = c.querySelector('.bonded-groups-selected');
     expect(selected).toBeTruthy();
     expect(selected!.textContent).toContain('Cluster 1');
+  });
+
+  it('hover adds hovered class when no selection', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+
+    const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
+    fireEvent.mouseEnter(rows[0]);
+    expect(useAppStore.getState().hoveredBondedGroupId).toBe('a');
+    // Re-render picks up hovered state
+    const hovered = c.querySelector('.bonded-groups-hovered');
+    expect(hovered).toBeTruthy();
+
+    // Hover clears when leaving the list container (not per-row)
+    const list = c.querySelector('.bonded-groups-list');
+    fireEvent.mouseLeave(list!);
+    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+  });
+
+  it('hover does not set state when selection exists', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    useAppStore.getState().setSelectedBondedGroup('a');
+    const c = renderPanel();
+
+    const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
+    fireEvent.mouseEnter(rows[1]);
+    // Hover should be blocked by the callback guard
+    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+  });
+
+  it('Clear Highlight button visible only during selection', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+
+    // No selection — no clear button
+    expect(c.querySelector('.bonded-groups-clear')).toBeNull();
+
+    // Select a group
+    const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
+    fireEvent.click(rows[0]);
+    expect(useAppStore.getState().selectedBondedGroupId).toBe('a');
+    const clearBtn = c.querySelector('.bonded-groups-clear');
+    expect(clearBtn).toBeTruthy();
+
+    // Click clear
+    fireEvent.click(clearBtn!);
+    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
+    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
   });
 });

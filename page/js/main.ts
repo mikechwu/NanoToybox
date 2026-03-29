@@ -28,6 +28,8 @@ import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/sna
 import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecycle';
 import { createOnboardingController } from './runtime/onboarding';
 import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-group-runtime';
+import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from './runtime/bonded-group-highlight-runtime';
+import { setBondedGroupsPanelCallbacks } from './components/BondedGroupsPanel';
 
 // --- Globals ---
 let renderer, physics, stateMachine;
@@ -135,6 +137,7 @@ let _onboarding: import('./runtime/onboarding').OnboardingController | null = nu
 
 // Bonded group runtime (projects physics components into store)
 let _bondedGroups: BondedGroupRuntime | null = null;
+let _bondedGroupHighlight: BondedGroupHighlightRuntime | null = null;
 
 // Pause sync guard — resolves when syncStateNow completes during pause transition.
 // Awaited by scene-runtime commitMolecule to block mutations until local state is fresh.
@@ -172,6 +175,8 @@ function _teardownRuntime() {
   // Destroy onboarding controller (clears coachmark timers + listeners)
   if (_onboarding) { _onboarding.destroy(); _onboarding = null; }
   // Reset bonded group runtime
+  if (_bondedGroupHighlight) { _bondedGroupHighlight.clearHighlight(); _bondedGroupHighlight = null; }
+  setBondedGroupsPanelCallbacks(null);
   if (_bondedGroups) { _bondedGroups.reset(); _bondedGroups = null; }
   // Destroy overlay layout runtime (observer, pending RAF)
   if (_overlayLayout) { _overlayLayout.destroy(); _overlayLayout = null; }
@@ -319,7 +324,7 @@ async function init() {
     partialProfilerReset,
     recoverFromWorkerFailure: recoverLocalPhysicsAfterWorkerFailure,
     getPauseSyncPromise: () => _pauseSyncPromise,
-    onSceneMutated: () => _bondedGroups?.projectNow(),
+    onSceneMutated: () => { _bondedGroups?.projectNow(); _bondedGroupHighlight?.syncAfterTopologyChange(); },
   });
 
   // Load manifest
@@ -543,6 +548,17 @@ async function init() {
   // ── Bonded group runtime — projects physics components into store ──
   _bondedGroups = createBondedGroupRuntime({
     getPhysics: () => physics,
+  });
+
+  // Bonded group highlight runtime — resolves selection/hover to renderer highlight
+  _bondedGroupHighlight = createBondedGroupHighlightRuntime({
+    getBondedGroupRuntime: () => _bondedGroups,
+    getRenderer: () => renderer,
+  });
+  setBondedGroupsPanelCallbacks({
+    onToggleSelect: (id) => _bondedGroupHighlight?.toggleSelectedGroup(id),
+    onHover: (id) => _bondedGroupHighlight?.setHoveredGroup(id),
+    onClearHighlight: () => _bondedGroupHighlight?.clearHighlight(),
   });
 
   // Narrow test hook — returns only the specific observable E2E tests need.
@@ -1092,6 +1108,7 @@ function frameLoop(timestamp) {
 
       // Project bonded groups at the same 5 Hz cadence (throttled, only publishes on change)
       _bondedGroups?.projectNow();
+      _bondedGroupHighlight?.syncAfterTopologyChange();
 
     // ── Auto FPS gate for UI effects ──
     // Only runs when glass UI is visible AND mode is 'auto' (not forced by developer).

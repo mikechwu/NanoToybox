@@ -22,6 +22,8 @@ export interface BondedGroupPhysics {
 export interface BondedGroupRuntime {
   projectNow(): void;
   reset(): void;
+  /** Get atom indices for a group by its stable ID. Returns null if not found. */
+  getAtomIndicesForGroup(id: string): number[] | null;
 }
 
 // freshId counter is instance-scoped (moved inside createBondedGroupRuntime)
@@ -65,12 +67,16 @@ export function createBondedGroupRuntime(deps: {
   let prevGroups: { id: string; atoms: Set<number>; orderKey: number }[] = [];
   let prevSummaries: BondedGroupSummary[] = [];
 
+  // Atom membership map — keyed by group ID, updated after each projection
+  const groupAtomMap = new Map<string, number[]>();
+
   function projectNow() {
     const physics = deps.getPhysics();
     if (!physics || physics.n === 0) {
       if (prevSummaries.length > 0) {
         prevGroups = [];
         prevSummaries = [];
+        groupAtomMap.clear();
         const store = useAppStore.getState();
         store.setBondedGroups([]);
         store.setSelectedBondedGroup(null);
@@ -83,6 +89,7 @@ export function createBondedGroupRuntime(deps: {
       if (prevSummaries.length > 0) {
         prevGroups = [];
         prevSummaries = [];
+        groupAtomMap.clear();
         const store = useAppStore.getState();
         store.setBondedGroups([]);
         store.setSelectedBondedGroup(null);
@@ -154,12 +161,12 @@ export function createBondedGroupRuntime(deps: {
       orderKey: i,
     }));
 
-    // Update previous state for next reconciliation
-    prevGroups = reconciled.map((g, i) => ({
-      id: g.id,
-      atoms: g.atoms,
-      orderKey: i,
-    }));
+    // Update previous state and atom membership map for next reconciliation
+    groupAtomMap.clear();
+    prevGroups = reconciled.map((g, i) => {
+      groupAtomMap.set(g.id, Array.from(g.atoms));
+      return { id: g.id, atoms: g.atoms, orderKey: i };
+    });
 
     // Step 4: Only publish if changed
     if (!summariesEqual(prevSummaries, summaries)) {
@@ -179,8 +186,13 @@ export function createBondedGroupRuntime(deps: {
     const store = useAppStore.getState();
     store.setBondedGroups([]);
     store.setSelectedBondedGroup(null);
+    groupAtomMap.clear();
   }
 
-  return { projectNow, reset };
+  function getAtomIndicesForGroup(id: string): number[] | null {
+    return groupAtomMap.get(id) ?? null;
+  }
+
+  return { projectNow, reset, getAtomIndicesForGroup };
 }
 
