@@ -290,10 +290,11 @@ Test after changes to CameraControls, QuickHelp, onboarding, or mode switching:
 
 | # | Check | How to verify |
 |---|---|---|
-| F1 | Mode chip toggles | Tap chip → switches between "Orbit" and "Free". Camera behavior changes immediately. |
+| F1 | Mode chip | When freeLookEnabled: tap chip toggles "Orbit"/"Free", camera changes immediately. When disabled (default): static "Orbit" label, no toggle. |
 | F2 | "?" opens help card | Tap "?" glyph → QuickHelp card appears with mode-appropriate gestures. Tap close → card dismisses. |
 | F3 | Help + sheet mutual exclusivity | Open settings → tap "?" → settings closes, help opens. Open help → open settings → help closes. |
-| F4 | Center Object (Orbit) | Tap ⊕ → camera centers on last-focused molecule, or single molecule, or nearest molecule. Long-press ⊕ → toggles orbit follow mode. |
+| F4 | Center Object (Orbit) | Tap ⊕ → camera centers on last-focused molecule, or single molecule, or nearest molecule. Long-press ⊕ → enables orbit follow (latch); next tap disables it. |
+| | **F5–F15 require `CONFIG.camera.freeLookEnabled = true` (disabled by default)** | |
 | F5 | Return to Object (Free-Look) | In Free-Look, tap ↩ → camera flies to last focused molecule, returns to Orbit mode. |
 | F6 | Free-Look look-around | In Free-Look, drag background (mobile) or right-drag (desktop) → camera yaw/pitch in place. Horizon stays stable. |
 | F7 | Free-Look focus-select | In Free-Look, tap/click atom → molecule marked as orbit target (focus indicator). No drag/move/rotate interaction starts. |

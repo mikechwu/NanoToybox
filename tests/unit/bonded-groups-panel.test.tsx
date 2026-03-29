@@ -13,8 +13,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import React from 'react';
 import { render, fireEvent } from '@testing-library/react';
-import { BondedGroupsPanel, setBondedGroupsPanelCallbacks } from '../../page/js/components/BondedGroupsPanel';
+import { BondedGroupsPanel } from '../../page/js/components/BondedGroupsPanel';
 import { useAppStore, type BondedGroupSummary } from '../../page/js/store/app-store';
+import { createBondedGroupHighlightRuntime } from '../../page/js/runtime/bonded-group-highlight-runtime';
+import type { BondedGroupRuntime } from '../../page/js/runtime/bonded-group-runtime';
 
 const FIXTURE_GROUPS: BondedGroupSummary[] = [
   { id: 'a', displayIndex: 1, atomCount: 42, minAtomIndex: 0, orderKey: 0 },
@@ -31,21 +33,29 @@ function renderPanel() {
 }
 
 describe('BondedGroupsPanel', () => {
+  // Atom map for the fixture groups
+  const atomMap: Record<string, number[]> = {
+    a: [0, 1, 2, 3, 4], b: [5, 6, 7, 8, 9],
+    c: [10, 11, 12], d: [13, 14], e: [15],
+  };
+  const mockBgr: BondedGroupRuntime = {
+    projectNow: () => {},
+    reset: () => {},
+    getAtomIndicesForGroup: (id: string) => atomMap[id] ?? null,
+  };
+
   beforeEach(() => {
     useAppStore.getState().resetTransientState();
-    // Wire simple callbacks that directly update store (simulates highlight runtime)
-    setBondedGroupsPanelCallbacks({
-      onToggleSelect: (id) => {
-        const s = useAppStore.getState();
-        s.setSelectedBondedGroup(s.selectedBondedGroupId === id ? null : id);
-      },
-      onHover: (id) => {
-        const s = useAppStore.getState();
-        if (!s.selectedBondedGroupId) s.setHoveredBondedGroup(id);
-      },
-      onClearHighlight: () => {
-        useAppStore.getState().clearBondedGroupHighlightState();
-      },
+    // Wire real highlight runtime via store-registered callbacks (same as main.ts)
+    const hl = createBondedGroupHighlightRuntime({
+      getBondedGroupRuntime: () => mockBgr,
+      getRenderer: () => ({ setHighlightedAtoms: () => {} }),
+      getPhysics: () => ({ n: 20 }),
+    });
+    useAppStore.getState().setBondedGroupCallbacks({
+      onToggleSelect: (id) => hl.toggleSelectedGroup(id),
+      onHover: (id) => hl.setHoveredGroup(id),
+      onClearHighlight: () => hl.clearHighlight(),
     });
   });
 
@@ -187,36 +197,53 @@ describe('BondedGroupsPanel', () => {
     expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
   });
 
-  it('hover does not set state when selection exists', () => {
+  it('hover does not set state when tracked highlight exists', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
-    useAppStore.getState().setSelectedBondedGroup('a');
     const c = renderPanel();
 
+    // Select first — creates tracked highlight via real runtime
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
+    fireEvent.click(rows[0]);
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(true);
+
+    // Now hover second row — should be blocked
     fireEvent.mouseEnter(rows[1]);
-    // Hover should be blocked by the callback guard
     expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
   });
 
-  it('Clear Highlight button visible only during selection', () => {
+  it('Clear Highlight button visible when tracked atoms exist', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
 
-    // No selection — no clear button
+    // No tracked atoms — no clear button
     expect(c.querySelector('.bonded-groups-clear')).toBeNull();
 
-    // Select a group
+    // Select a group — creates tracked atoms
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
     fireEvent.click(rows[0]);
-    expect(useAppStore.getState().selectedBondedGroupId).toBe('a');
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(true);
     const clearBtn = c.querySelector('.bonded-groups-clear');
     expect(clearBtn).toBeTruthy();
 
-    // Click clear
+    // Click clear — clears tracked atoms + selection
     fireEvent.click(clearBtn!);
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(false);
     expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
-    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+  });
+
+  it('Clear Highlight button visible even when selected ID is null but tracked atoms persist', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    // Select a group to create tracked highlight
+    const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
+    fireEvent.click(rows[0]);
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(true);
+    // Simulate group disappearing — ID cleared but tracked atoms persist
+    useAppStore.getState().setSelectedBondedGroup(null);
+    // Clear button should still be visible (tracked atoms exist)
+    expect(c.querySelector('.bonded-groups-clear')).toBeTruthy();
   });
 });

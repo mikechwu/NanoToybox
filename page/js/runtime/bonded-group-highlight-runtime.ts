@@ -1,11 +1,16 @@
 /**
- * Bonded group highlight runtime — resolves selected/hovered group to renderer highlight.
+ * Bonded group highlight runtime — persistent atom tracking + hover preview.
  *
- * Priority: selected > hovered > none (single highlight at a time).
- * Hover preview is disabled whenever a persistent selection exists.
+ * Two distinct highlight sources:
+ * 1. Persistent: _trackedAtoms (frozen at click time, owned by this runtime)
+ * 2. Temporary: hoveredBondedGroupId (always live group membership)
  *
- * Owns: highlight resolution, renderer update, topology invalidation.
- * Does NOT own: store state (UI sets selected/hovered via store actions).
+ * Priority: tracked atoms > hover preview > none.
+ * Hover entry disabled when tracked set exists; hover clearing always allowed.
+ * Invalid atom indices (>= physics.n) are filtered before rendering.
+ *
+ * Store owns lightweight UI flags only (hasTrackedBondedHighlight: boolean).
+ * Heavy atom arrays stay in this runtime, never in the store.
  */
 
 import { useAppStore } from '../store/app-store';
@@ -16,64 +21,102 @@ export interface HighlightRenderer {
 }
 
 export interface BondedGroupHighlightRuntime {
-  /** Toggle persistent selection for a group. */
   toggleSelectedGroup(id: string): void;
-  /** Set hover preview (ignored if selection exists). */
   setHoveredGroup(id: string | null): void;
-  /** Clear all highlight state. */
   clearHighlight(): void;
-  /** Resolve current highlight and update renderer. Call after store changes. */
   syncToRenderer(): void;
-  /** Clear stale selection/hover after topology update. */
   syncAfterTopologyChange(): void;
 }
 
 export function createBondedGroupHighlightRuntime(deps: {
   getBondedGroupRuntime: () => BondedGroupRuntime | null;
   getRenderer: () => HighlightRenderer | null;
+  getPhysics: () => { n: number } | null;
 }): BondedGroupHighlightRuntime {
+  // Heavy atom array owned by runtime, not store
+  let _trackedAtoms: number[] | null = null;
 
-  function resolveActiveGroupId(): { id: string | null; intensity: 'selected' | 'hover' } {
-    const store = useAppStore.getState();
-    if (store.selectedBondedGroupId) return { id: store.selectedBondedGroupId, intensity: 'selected' };
-    if (store.hoveredBondedGroupId) return { id: store.hoveredBondedGroupId, intensity: 'hover' };
-    return { id: null, intensity: 'hover' };
+  function filterValidIndices(indices: number[]): number[] {
+    const physics = deps.getPhysics();
+    if (!physics) return [];
+    const n = physics.n;
+    return indices.filter(i => i >= 0 && i < n);
+  }
+
+  /** Set tracked atoms and sync the store boolean. Uses setState directly
+   *  because hasTrackedBondedHighlight is not exposed as a public store action —
+   *  this runtime is the sole writer. */
+  function setTracked(atoms: number[] | null) {
+    _trackedAtoms = atoms;
+    useAppStore.setState({ hasTrackedBondedHighlight: atoms != null && atoms.length > 0 });
   }
 
   function syncToRenderer() {
     const renderer = deps.getRenderer();
     if (!renderer) return;
+    const store = useAppStore.getState();
 
-    const { id, intensity } = resolveActiveGroupId();
-    if (!id) {
-      renderer.setHighlightedAtoms(null);
+    // Priority 1: persistent tracked atoms (frozen at selection time)
+    if (_trackedAtoms && _trackedAtoms.length > 0) {
+      const valid = filterValidIndices(_trackedAtoms);
+      if (valid.length > 0) {
+        renderer.setHighlightedAtoms(valid, 'selected');
+      } else {
+        // All tracked atoms are now invalid — auto-clear
+        setTracked(null);
+        store.setSelectedBondedGroup(null);
+        renderer.setHighlightedAtoms(null);
+      }
       return;
     }
 
-    const bgr = deps.getBondedGroupRuntime();
-    const atoms = bgr?.getAtomIndicesForGroup(id) ?? null;
-    renderer.setHighlightedAtoms(atoms, intensity);
+    // Priority 2: hover preview (live group membership)
+    if (store.hoveredBondedGroupId) {
+      const bgr = deps.getBondedGroupRuntime();
+      const atoms = bgr?.getAtomIndicesForGroup(store.hoveredBondedGroupId) ?? null;
+      renderer.setHighlightedAtoms(atoms, 'hover');
+      return;
+    }
+
+    // Priority 3: no highlight
+    renderer.setHighlightedAtoms(null);
   }
 
   function toggleSelectedGroup(id: string) {
     const store = useAppStore.getState();
-    const newId = store.selectedBondedGroupId === id ? null : id;
-    store.setSelectedBondedGroup(newId);
-    // Clear hover when selecting (prevent stale hover after deselect)
-    if (newId) store.setHoveredBondedGroup(null);
+    if (store.selectedBondedGroupId === id) {
+      // Deselect: clear everything
+      store.setSelectedBondedGroup(null);
+      setTracked(null);
+    } else {
+      // Select: freeze current atom membership (guard: only if atoms exist)
+      const bgr = deps.getBondedGroupRuntime();
+      const atoms = bgr?.getAtomIndicesForGroup(id);
+      if (!atoms || atoms.length === 0) return; // no-op if group can't resolve
+      store.setSelectedBondedGroup(id);
+      setTracked([...atoms]);
+      store.setHoveredBondedGroup(null);
+    }
     syncToRenderer();
   }
 
   function setHoveredGroup(id: string | null) {
     const store = useAppStore.getState();
-    // Hover preview disabled when persistent selection exists
-    if (store.selectedBondedGroupId) return;
+    const hasTracked = _trackedAtoms != null && _trackedAtoms.length > 0;
+    // Block hover ENTRY when tracked highlight exists, but always allow CLEARING
+    if (id !== null && hasTracked) return;
     store.setHoveredBondedGroup(id);
-    syncToRenderer();
+    if (!hasTracked) syncToRenderer();
   }
 
   function clearHighlight() {
-    useAppStore.getState().clearBondedGroupHighlightState();
+    setTracked(null);
+    // Clear all highlight-related store state — this runtime is the sole owner
+    useAppStore.setState({
+      selectedBondedGroupId: null,
+      hoveredBondedGroupId: null,
+      hasTrackedBondedHighlight: false,
+    });
     syncToRenderer();
   }
 
@@ -81,23 +124,16 @@ export function createBondedGroupHighlightRuntime(deps: {
     const store = useAppStore.getState();
     const groups = store.bondedGroups;
     const groupIds = new Set(groups.map(g => g.id));
-    let changed = false;
 
+    // Clear stale selected row ID (but keep tracked atoms!)
     if (store.selectedBondedGroupId && !groupIds.has(store.selectedBondedGroupId)) {
       store.setSelectedBondedGroup(null);
-      changed = true;
     }
     if (store.hoveredBondedGroupId && !groupIds.has(store.hoveredBondedGroupId)) {
       store.setHoveredBondedGroup(null);
-      changed = true;
     }
 
-    if (changed) syncToRenderer();
-    else {
-      // Even if IDs survived, atom membership may have changed — re-resolve
-      const { id } = resolveActiveGroupId();
-      if (id) syncToRenderer();
-    }
+    syncToRenderer();
   }
 
   return { toggleSelectedGroup, setHoveredGroup, clearHighlight, syncToRenderer, syncAfterTopologyChange };

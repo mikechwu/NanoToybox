@@ -79,7 +79,6 @@ export function createBondedGroupRuntime(deps: {
         groupAtomMap.clear();
         const store = useAppStore.getState();
         store.setBondedGroups([]);
-        store.setSelectedBondedGroup(null);
       }
       return;
     }
@@ -92,7 +91,6 @@ export function createBondedGroupRuntime(deps: {
         groupAtomMap.clear();
         const store = useAppStore.getState();
         store.setBondedGroups([]);
-        store.setSelectedBondedGroup(null);
       }
       return;
     }
@@ -171,21 +169,18 @@ export function createBondedGroupRuntime(deps: {
     // Step 4: Only publish if changed
     if (!summariesEqual(prevSummaries, summaries)) {
       prevSummaries = summaries;
-      const store = useAppStore.getState();
-      store.setBondedGroups(summaries);
-      // Clear stale selection if selected group no longer exists
-      if (store.selectedBondedGroupId && !summaries.some(g => g.id === store.selectedBondedGroupId)) {
-        store.setSelectedBondedGroup(null);
-      }
+      useAppStore.getState().setBondedGroups(summaries);
+      // Selection invalidation is owned by bonded-group-highlight-runtime.syncAfterTopologyChange()
     }
   }
 
+  /** Reset projection state and clear groups from store.
+   *  Does NOT clear selection/highlight — that is owned by bonded-group-highlight-runtime.
+   *  Callers must coordinate with updateBondedGroups() or highlight runtime teardown. */
   function reset() {
     prevGroups = [];
     prevSummaries = [];
-    const store = useAppStore.getState();
-    store.setBondedGroups([]);
-    store.setSelectedBondedGroup(null);
+    useAppStore.getState().setBondedGroups([]);
     groupAtomMap.clear();
   }
 

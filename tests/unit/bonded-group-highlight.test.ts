@@ -2,16 +2,17 @@
  * @vitest-environment jsdom
  */
 /**
- * Bonded group highlight runtime tests.
+ * Bonded group highlight runtime tests — persistent atom tracking semantics.
  *
  * Verifies:
- * - Click select/deselect/switch
- * - Hover preview when no selection
- * - Hover disabled during selection
- * - Clear highlight clears both
- * - Topology change removing selected group clears highlight
- * - Topology change removing hovered group clears preview
- * - Renderer receives correct atom indices and intensity
+ * - Selection captures frozen atom snapshot at click time
+ * - Tracked atoms persist when group merges/splits/disappears
+ * - Joined atoms do not gain highlight
+ * - Departed atoms keep highlight
+ * - Hover preview uses live membership only
+ * - Hover disabled when tracked set exists
+ * - Invalid atom indices filtered against physics.n
+ * - Clear Highlight clears persistent tracked set
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from '../../page/js/runtime/bonded-group-highlight-runtime';
@@ -19,9 +20,7 @@ import { useAppStore } from '../../page/js/store/app-store';
 import type { BondedGroupRuntime } from '../../page/js/runtime/bonded-group-runtime';
 
 function makeMockRenderer() {
-  return {
-    setHighlightedAtoms: vi.fn(),
-  };
+  return { setHighlightedAtoms: vi.fn() };
 }
 
 function makeMockBGR(atomMap: Record<string, number[]>): BondedGroupRuntime {
@@ -32,10 +31,15 @@ function makeMockBGR(atomMap: Record<string, number[]>): BondedGroupRuntime {
   };
 }
 
-describe('bonded group highlight runtime', () => {
+function makeMockPhysics(n: number) {
+  return { n };
+}
+
+describe('persistent atom tracking', () => {
   let highlight: BondedGroupHighlightRuntime;
   let renderer: ReturnType<typeof makeMockRenderer>;
   let bgr: BondedGroupRuntime;
+  let physics: { n: number };
 
   beforeEach(() => {
     useAppStore.getState().resetTransientState();
@@ -45,109 +49,194 @@ describe('bonded group highlight runtime', () => {
     ]);
     renderer = makeMockRenderer();
     bgr = makeMockBGR({ a: [0, 1, 2], b: [3, 4] });
+    physics = makeMockPhysics(5);
     highlight = createBondedGroupHighlightRuntime({
       getBondedGroupRuntime: () => bgr,
       getRenderer: () => renderer,
+      getPhysics: () => physics,
     });
   });
 
-  // ── Selection ──
+  // ── 1. Selection captures atom snapshot ──
 
-  it('click selects group and highlights with selected intensity', () => {
+  it('selection freezes atom set at click time', () => {
     highlight.toggleSelectedGroup('a');
-    expect(useAppStore.getState().selectedBondedGroupId).toBe('a');
+
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(true);
     expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith([0, 1, 2], 'selected');
   });
 
-  it('click same group again deselects', () => {
+  // ── 2. Joined atoms do not gain highlight ──
+
+  it('joined atoms do not gain highlight after selection', () => {
+    highlight.toggleSelectedGroup('a');
+    renderer.setHighlightedAtoms.mockClear();
+
+    // Group A now includes atom 5, 6 — but tracked set stays frozen
+    (bgr as any).getAtomIndicesForGroup = (id: string) =>
+      id === 'a' ? [0, 1, 2, 5, 6] : id === 'b' ? [3, 4] : null;
+
+    highlight.syncToRenderer();
+
+    // Still renders original frozen set [0,1,2], not [0,1,2,5,6]
+    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith([0, 1, 2], 'selected');
+  });
+
+  // ── 3. Departed atoms keep highlight ──
+
+  it('departed atoms keep highlight after selection', () => {
+    highlight.toggleSelectedGroup('a');
+    renderer.setHighlightedAtoms.mockClear();
+
+    // Group A shrank to [1] — but tracked set stays frozen
+    (bgr as any).getAtomIndicesForGroup = (id: string) =>
+      id === 'a' ? [1] : id === 'b' ? [3, 4] : null;
+
+    highlight.syncToRenderer();
+
+    // Still renders original frozen set [0,1,2]
+    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith([0, 1, 2], 'selected');
+  });
+
+  // ── 4. Selected group disappears but highlight persists ──
+
+  it('tracked highlight persists when selected group disappears', () => {
+    highlight.toggleSelectedGroup('a');
+    renderer.setHighlightedAtoms.mockClear();
+
+    // Group A no longer exists in the list
+    useAppStore.getState().setBondedGroups([
+      { id: 'b', displayIndex: 1, atomCount: 5, minAtomIndex: 0, orderKey: 0 },
+    ]);
+
+    highlight.syncAfterTopologyChange();
+
+    // Selected row ID cleared (group gone from list)
+    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
+    // But tracked atoms persist!
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(true);
+    // Renderer still shows the frozen set
+    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith([0, 1, 2], 'selected');
+  });
+
+  // ── 5. Clear Highlight clears persistent tracked set ──
+
+  it('clearHighlight clears tracked atoms and renderer', () => {
+    highlight.toggleSelectedGroup('a');
+    renderer.setHighlightedAtoms.mockClear();
+
+    highlight.clearHighlight();
+
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(false);
+    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
+    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith(null);
+  });
+
+  // ── 6. Hover previews live membership when no tracked set ──
+
+  it('hover uses live group membership, not frozen', () => {
+    // No selection active
+    highlight.setHoveredGroup('b');
+    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith([3, 4], 'hover');
+
+    // Group B gains an atom
+    renderer.setHighlightedAtoms.mockClear();
+    (bgr as any).getAtomIndicesForGroup = (id: string) =>
+      id === 'b' ? [3, 4, 5] : null;
+
+    highlight.setHoveredGroup('b');
+    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith([3, 4, 5], 'hover');
+  });
+
+  // ── 7. Hover disabled when tracked highlight exists ──
+
+  it('hover ignored when tracked highlight exists', () => {
+    highlight.toggleSelectedGroup('a');
+    renderer.setHighlightedAtoms.mockClear();
+
+    highlight.setHoveredGroup('b');
+    // Hover is blocked — tracked set takes priority
+    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+    expect(renderer.setHighlightedAtoms).not.toHaveBeenCalled();
+  });
+
+  it('hover still blocked when selected ID is null but tracked atoms remain', () => {
+    highlight.toggleSelectedGroup('a');
+    // Simulate group disappearing — ID cleared but tracked atoms persist
+    useAppStore.getState().setSelectedBondedGroup(null);
+    renderer.setHighlightedAtoms.mockClear();
+
+    highlight.setHoveredGroup('b');
+    // Still blocked — tracked atoms exist
+    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+    expect(renderer.setHighlightedAtoms).not.toHaveBeenCalled();
+  });
+
+  it('hover clearing (null) still works when tracked atoms exist', () => {
+    // Set hover first, then select — hover should be clearable
+    useAppStore.getState().setHoveredBondedGroup('b');
+    highlight.toggleSelectedGroup('a');
+    renderer.setHighlightedAtoms.mockClear();
+
+    // Clear hover (e.g. mouse leaves list) — should succeed even with tracked atoms
+    highlight.setHoveredGroup(null);
+    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+  });
+
+  // ── 8. Invalid atom indices filtered ──
+
+  it('filters invalid atom indices when physics shrinks', () => {
+    highlight.toggleSelectedGroup('a'); // tracked: [0, 1, 2]
+    renderer.setHighlightedAtoms.mockClear();
+
+    // Physics now has only 2 atoms (atoms 2+ removed)
+    physics.n = 2;
+
+    highlight.syncToRenderer();
+    // Only [0, 1] are valid
+    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith([0, 1], 'selected');
+  });
+
+  it('auto-clears tracked highlight when all indices become invalid', () => {
+    highlight.toggleSelectedGroup('a'); // tracked: [0, 1, 2]
+    renderer.setHighlightedAtoms.mockClear();
+
+    // Physics now has 0 atoms
+    physics.n = 0;
+
+    highlight.syncToRenderer();
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(false);
+    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith(null);
+  });
+
+  // ── Selection toggling ──
+
+  it('click same group again deselects and clears tracked atoms', () => {
     highlight.toggleSelectedGroup('a');
     renderer.setHighlightedAtoms.mockClear();
 
     highlight.toggleSelectedGroup('a');
     expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(false);
     expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith(null);
   });
 
-  it('click different group switches selection', () => {
+  it('click different group switches to new frozen set', () => {
     highlight.toggleSelectedGroup('a');
     renderer.setHighlightedAtoms.mockClear();
 
     highlight.toggleSelectedGroup('b');
     expect(useAppStore.getState().selectedBondedGroupId).toBe('b');
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(true);
     expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith([3, 4], 'selected');
   });
 
-  // ── Hover preview ──
+  // ── Topology: hover disappears ──
 
-  it('hover highlights with hover intensity when no selection', () => {
-    highlight.setHoveredGroup('a');
-    expect(useAppStore.getState().hoveredBondedGroupId).toBe('a');
-    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith([0, 1, 2], 'hover');
-  });
-
-  it('moving across rows updates preview', () => {
-    highlight.setHoveredGroup('a');
-    renderer.setHighlightedAtoms.mockClear();
-
-    highlight.setHoveredGroup('b');
-    expect(useAppStore.getState().hoveredBondedGroupId).toBe('b');
-    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith([3, 4], 'hover');
-  });
-
-  it('leaving list clears hover preview', () => {
-    highlight.setHoveredGroup('a');
-    renderer.setHighlightedAtoms.mockClear();
-
-    highlight.setHoveredGroup(null);
-    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
-    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith(null);
-  });
-
-  // ── Hover disabled during selection ──
-
-  it('hover does nothing when selection exists', () => {
-    highlight.toggleSelectedGroup('a');
-    renderer.setHighlightedAtoms.mockClear();
-
-    highlight.setHoveredGroup('b');
-    // Hover should be ignored — selection takes priority
-    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
-    expect(renderer.setHighlightedAtoms).not.toHaveBeenCalled();
-  });
-
-  // ── Clear highlight ──
-
-  it('clearHighlight clears both selection and hover', () => {
-    highlight.toggleSelectedGroup('a');
-    renderer.setHighlightedAtoms.mockClear();
-
-    highlight.clearHighlight();
-    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
-    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
-    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith(null);
-  });
-
-  // ── Topology invalidation ──
-
-  it('syncAfterTopologyChange clears selection when group disappears', () => {
-    highlight.toggleSelectedGroup('a');
-    renderer.setHighlightedAtoms.mockClear();
-
-    // Remove group 'a' from store
-    useAppStore.getState().setBondedGroups([
-      { id: 'b', displayIndex: 1, atomCount: 2, minAtomIndex: 0, orderKey: 0 },
-    ]);
-
-    highlight.syncAfterTopologyChange();
-    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
-    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith(null);
-  });
-
-  it('syncAfterTopologyChange clears hover when hovered group disappears', () => {
+  it('topology change clears stale hover', () => {
     highlight.setHoveredGroup('b');
     renderer.setHighlightedAtoms.mockClear();
 
-    // Remove group 'b'
     useAppStore.getState().setBondedGroups([
       { id: 'a', displayIndex: 1, atomCount: 3, minAtomIndex: 0, orderKey: 0 },
     ]);
@@ -155,100 +244,45 @@ describe('bonded group highlight runtime', () => {
     highlight.syncAfterTopologyChange();
     expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
   });
-
-  it('renderer highlight updates when atoms move (no drift)', () => {
-    // This tests the key fix: highlight overlay must track atom positions each frame
-    const mockRenderer = {
-      setHighlightedAtoms: vi.fn(),
-      _updateGroupHighlight: vi.fn(), // verify it would be called
-    };
-    const localHighlight = createBondedGroupHighlightRuntime({
-      getBondedGroupRuntime: () => bgr,
-      getRenderer: () => mockRenderer as any,
-    });
-
-    localHighlight.toggleSelectedGroup('a');
-    // Renderer received the initial highlight
-    expect(mockRenderer.setHighlightedAtoms).toHaveBeenCalledWith([0, 1, 2], 'selected');
-
-    // The key contract: updatePositions() and updateFromSnapshot() call
-    // _updateGroupHighlight() to keep overlay aligned. We verify the renderer
-    // stores indices persistently (not one-shot) so the update path can use them.
-    // Since we can't call the real renderer here, verify the contract:
-    // - setHighlightedAtoms was called with indices (persistent state set)
-    // - subsequent updatePositions would call _updateGroupHighlight
-  });
-
-  it('syncAfterTopologyChange preserves selection when group survives', () => {
-    highlight.toggleSelectedGroup('a');
-    renderer.setHighlightedAtoms.mockClear();
-
-    // Both groups still present
-    highlight.syncAfterTopologyChange();
-    expect(useAppStore.getState().selectedBondedGroupId).toBe('a');
-    // Re-syncs atoms (membership may have changed)
-    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith([0, 1, 2], 'selected');
-  });
 });
 
-describe('renderer group highlight alignment', () => {
-  it('_updateGroupHighlight refreshes overlay positions from current physics', async () => {
+describe('renderer alignment with persistent tracking', () => {
+  it('_updateGroupHighlight tracks positions for frozen atom set', async () => {
     const { Renderer } = await import('../../page/js/renderer');
     const update = (Renderer.prototype as any)._updateGroupHighlight;
-
-    // Minimal renderer context with real Three.js objects
     const THREE = await import('three');
+
     const atomGeom = new THREE.SphereGeometry(0.35, 4, 4);
     const dummyObj = new THREE.Object3D();
     const scene = new THREE.Scene();
+    const pos = new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
-    const pos = new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9]); // 3 atoms
     const ctx: any = {
-      _groupHighlightIndices: [0, 2], // highlight atoms 0 and 2
+      _groupHighlightIndices: [0, 2],
       _groupHighlightIntensity: 'selected',
       _groupHighlightMesh: null,
       _groupHighlightMat: new THREE.MeshStandardMaterial(),
+      _groupHighlightCapacity: 0,
       _physicsRef: { pos, n: 3 },
       _atomGeom: atomGeom,
       _dummyObj: dummyObj,
       scene,
     };
 
-    // Call real _updateGroupHighlight
     update.call(ctx);
-
-    // Overlay mesh should be created
-    expect(ctx._groupHighlightMesh).not.toBeNull();
-    expect(ctx._groupHighlightMesh.count).toBe(2);
-
-    // Verify positions match physics
     const m = new THREE.Matrix4();
     ctx._groupHighlightMesh.getMatrixAt(0, m);
-    expect(m.elements[12]).toBeCloseTo(1, 5); // atom 0 x
-    expect(m.elements[13]).toBeCloseTo(2, 5); // atom 0 y
-    expect(m.elements[14]).toBeCloseTo(3, 5); // atom 0 z
+    expect(m.elements[12]).toBeCloseTo(1, 5);
 
-    ctx._groupHighlightMesh.getMatrixAt(1, m);
-    expect(m.elements[12]).toBeCloseTo(7, 5); // atom 2 x
-    expect(m.elements[13]).toBeCloseTo(8, 5); // atom 2 y
-    expect(m.elements[14]).toBeCloseTo(9, 5); // atom 2 z
-
-    // Move atoms
-    pos[0] = 10; pos[1] = 20; pos[2] = 30;
-    pos[6] = 70; pos[7] = 80; pos[8] = 90;
-
-    // Call update again — positions should track
+    // Move atoms — positions change but indices are frozen
+    pos[0] = 100; pos[6] = 700;
     update.call(ctx);
 
     ctx._groupHighlightMesh.getMatrixAt(0, m);
-    expect(m.elements[12]).toBeCloseTo(10, 5);
-    expect(m.elements[13]).toBeCloseTo(20, 5);
-
+    expect(m.elements[12]).toBeCloseTo(100, 5);
     ctx._groupHighlightMesh.getMatrixAt(1, m);
-    expect(m.elements[12]).toBeCloseTo(70, 5);
-    expect(m.elements[13]).toBeCloseTo(80, 5);
+    expect(m.elements[12]).toBeCloseTo(700, 5);
 
-    // Cleanup
     atomGeom.dispose();
   });
 });

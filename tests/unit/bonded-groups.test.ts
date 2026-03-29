@@ -323,7 +323,10 @@ describe('partitionBondedGroups', () => {
   });
 });
 
-describe('selection invalidation', () => {
+describe('selection ownership', () => {
+  // Selection invalidation is owned by bonded-group-highlight-runtime, not bonded-group-runtime.
+  // These tests verify that bonded-group-runtime does NOT touch selectedBondedGroupId.
+
   let physics: BondedGroupPhysics | null;
 
   beforeEach(() => {
@@ -335,8 +338,7 @@ describe('selection invalidation', () => {
     return createBondedGroupRuntime({ getPhysics: () => physics });
   }
 
-  it('clears selection when selected group disappears after merge', () => {
-    // Start with two groups, select one
+  it('projectNow does not clear selectedBondedGroupId', () => {
     physics = makePhysics([
       { atoms: [0, 1, 2], size: 3 },
       { atoms: [3, 4], size: 2 },
@@ -344,73 +346,18 @@ describe('selection invalidation', () => {
     const rt = createRuntime();
     rt.projectNow();
 
-    const groups = useAppStore.getState().bondedGroups;
-    const smallGroupId = groups[1].id; // the 2-atom group
+    const smallGroupId = useAppStore.getState().bondedGroups[1].id;
     useAppStore.getState().setSelectedBondedGroup(smallGroupId);
+
+    // Group disappears — runtime updates groups but does NOT clear selection
+    physics = makePhysics([{ atoms: [0, 1, 2, 3, 4], size: 5 }]);
+    rt.projectNow();
+
+    // Selection untouched by bonded-group-runtime
     expect(useAppStore.getState().selectedBondedGroupId).toBe(smallGroupId);
-
-    // Merge: small group absorbed into big group
-    physics = makePhysics([
-      { atoms: [0, 1, 2, 3, 4], size: 5 },
-    ]);
-    rt.projectNow();
-
-    // Selection should be cleared (small group ID no longer exists)
-    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
   });
 
-  it('preserves selection when selected group survives reconciliation', () => {
-    physics = makePhysics([
-      { atoms: [0, 1, 2], size: 3 },
-      { atoms: [3, 4], size: 2 },
-    ]);
-    const rt = createRuntime();
-    rt.projectNow();
-
-    const groups = useAppStore.getState().bondedGroups;
-    const bigGroupId = groups[0].id;
-    useAppStore.getState().setSelectedBondedGroup(bigGroupId);
-
-    // Same groups, different component order — big group survives
-    physics = makePhysics([
-      { atoms: [3, 4], size: 2 },
-      { atoms: [0, 1, 2], size: 3 },
-    ]);
-    rt.projectNow();
-
-    // Selection preserved
-    expect(useAppStore.getState().selectedBondedGroupId).toBe(bigGroupId);
-  });
-
-  it('clears selection on empty projection', () => {
-    physics = makePhysics([{ atoms: [0, 1], size: 2 }]);
-    const rt = createRuntime();
-    rt.projectNow();
-
-    const id = useAppStore.getState().bondedGroups[0].id;
-    useAppStore.getState().setSelectedBondedGroup(id);
-
-    // Physics goes empty
-    physics = makePhysics([]);
-    rt.projectNow();
-
-    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
-  });
-
-  it('clears selection on null physics', () => {
-    physics = makePhysics([{ atoms: [0, 1], size: 2 }]);
-    const rt = createRuntime();
-    rt.projectNow();
-
-    useAppStore.getState().setSelectedBondedGroup(useAppStore.getState().bondedGroups[0].id);
-
-    physics = null;
-    rt.projectNow();
-
-    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
-  });
-
-  it('clears selection on reset()', () => {
+  it('reset does not clear selectedBondedGroupId', () => {
     physics = makePhysics([{ atoms: [0, 1], size: 2 }]);
     const rt = createRuntime();
     rt.projectNow();
@@ -418,6 +365,7 @@ describe('selection invalidation', () => {
     useAppStore.getState().setSelectedBondedGroup(useAppStore.getState().bondedGroups[0].id);
     rt.reset();
 
-    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
+    // Selection untouched — highlight runtime owns invalidation
+    expect(useAppStore.getState().selectedBondedGroupId).not.toBeNull();
   });
 });

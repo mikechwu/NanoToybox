@@ -62,7 +62,10 @@ NanoToybox/
 │   │   │   ├── ui-bindings.ts        # Zustand store callback registration
 │   │   │   ├── atom-source.ts        # Renderer-to-input atom-picking adapter
 │   │   │   ├── focus-runtime.ts     # Focus resolution: molecule lookup, centroid, pivot update
-│   │   │   └── onboarding.ts        # Coachmark scheduling, pacing, persistence, achievements
+│   │   │   ├── onboarding.ts        # Coachmark scheduling, pacing, persistence, achievements
+│   │   │   ├── bonded-group-runtime.ts     # Live connected-component projection + stable ID reconciliation
+│   │   │   ├── bonded-group-highlight-runtime.ts # Persistent atom tracking + hover preview resolution
+│   │   │   └── bonded-group-coordinator.ts # Coordinated projection + highlight lifecycle
 │   │   ├── scene.ts              # Scene commit/clear/load (transaction-safe)
 │   │   ├── placement.ts          # Placement lifecycle, tangent computation, canvas listeners
 │   │   ├── interaction.ts        # Command dispatch, screen-to-physics projection
@@ -79,12 +82,14 @@ NanoToybox/
 │   │   │   ├── StatusBar.tsx     # Scene status display
 │   │   │   ├── FPSDisplay.tsx    # FPS/simulation status
 │   │   │   ├── CameraControls.tsx # Mode chip, "?" help glyph, Center Object / Return action
-│   │   │   └── QuickHelp.tsx    # Mode-aware gesture reference card
+│   │   │   ├── QuickHelp.tsx    # Mode-aware gesture reference card
+│   │   │   └── BondedGroupsPanel.tsx # Bonded cluster inspection panel (selection + hover highlight)
 │   │   ├── store/
 │   │   │   ├── app-store.ts      # Zustand store for UI state
 │   │   │   └── selectors/
 │   │   │       ├── dock.ts       # selectDockSurface derived selector
-│   │   │       └── camera.ts    # selectCameraMode selector + CameraMode type
+│   │   │       ├── camera.ts    # selectCameraMode selector + CameraMode type
+│   │   │       └── bonded-groups.ts # partitionBondedGroups (large/small bucket selector)
 │   │   ├── hooks/
 │   │   │   └── useSheetAnimation.ts # Sheet open/close CSS transitions
 │   │   ├── react-root.tsx        # React mount/unmount entry point
@@ -158,7 +163,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 
 ### Composition Root Pattern
 
-`main.ts` (~1070 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 11 modules in `page/js/runtime/`:
+`main.ts` (~1150 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 14 modules in `page/js/runtime/`:
 
 - **scene-runtime.ts** — scene mutation wrappers, scene-to-store projection, worker scene mirroring
 - **worker-lifecycle.ts** — worker bridge creation, init, stall detection (5s warning / 15s fatal), teardown
@@ -171,8 +176,11 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 - **atom-source.ts** — shared renderer-to-input atom-picking adapter
 - **focus-runtime.ts** — focus resolution: molecule lookup, centroid computation, camera pivot update
 - **onboarding.ts** — coachmark scheduling, pacing, persistence, achievement-triggered progressive hints
+- **bonded-group-runtime.ts** — live connected-component projection with overlap-reconciled stable IDs
+- **bonded-group-highlight-runtime.ts** — persistent atom tracking, hover preview, renderer highlight resolution
+- **bonded-group-coordinator.ts** — coordinated projection + highlight lifecycle (update + teardown)
 
-React components (DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, QuickHelp) are authoritative for all UI surfaces. Imperative controllers remain only for PlacementController and StatusController (hint-only).
+React components (DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, QuickHelp, BondedGroupsPanel) are authoritative for all UI surfaces. Imperative controllers remain only for PlacementController and StatusController (hint-only).
 
 `main.ts` must not be re-grown: new runtime logic goes into `page/js/runtime/`, new UI surfaces into `page/js/components/`.
 

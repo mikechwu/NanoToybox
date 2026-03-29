@@ -58,6 +58,13 @@ export interface ChooserCallbacks {
   onSelectStructure: (file: string, description: string) => void;
 }
 
+/** Imperative callbacks for the bonded-group panel, registered by main.ts. */
+export interface BondedGroupCallbacks {
+  onToggleSelect: (id: string) => void;
+  onHover: (id: string | null) => void;
+  onClearHighlight: () => void;
+}
+
 /** Summary of a bonded connected component — projected from physics topology, not scene metadata.
  *  id: stable topology identity (survives merge/split via overlap reconciliation)
  *  displayIndex: 1-based visible index after sorting (for UI labels and future selection)
@@ -128,24 +135,28 @@ export interface AppStore {
   farDrift: boolean;
 
   // Bonded groups (physics-topology-derived, separate from scene molecules)
-  // Selection contract:
-  //   - selectedBondedGroupId is a UI-level group identity (BondedGroupSummary.id)
-  //   - Runtime invalidates it when the group disappears (merge/split/clear)
-  //   - UI sets it via row click; future actions should consume id, not displayIndex
-  //   - Store does not infer topology semantics from selection
+  // Highlight contract:
+  //   - selectedBondedGroupId: selected row in the live cluster list
+  //   - hasTrackedBondedHighlight: true when frozen atom set exists (atoms owned by runtime, not store)
+  //   - hoveredBondedGroupId: transient hover preview (always live membership)
+  //   - Renderer authority: tracked atoms first, hover second, else none
+  //   - Tracked atoms persist even if the original group disappears from the list
   bondedGroups: BondedGroupSummary[];
   bondedGroupsExpanded: boolean;
   bondedSmallGroupsExpanded: boolean;
   bondedGroupsSide: 'left' | 'right';
   selectedBondedGroupId: string | null;
   hoveredBondedGroupId: string | null;
+  hasTrackedBondedHighlight: boolean;
   setBondedGroups: (groups: BondedGroupSummary[]) => void;
   toggleBondedGroupsExpanded: () => void;
   toggleBondedSmallGroupsExpanded: () => void;
   setBondedGroupsSide: (side: 'left' | 'right') => void;
   setSelectedBondedGroup: (id: string | null) => void;
   setHoveredBondedGroup: (id: string | null) => void;
-  clearBondedGroupHighlightState: () => void;
+  // hasTrackedBondedHighlight is read-only from the public interface.
+  // Only bonded-group-highlight-runtime may write highlight state (via useAppStore.setState).
+  // No public clear action — use highlight runtime's clearHighlight() instead.
 
   // Reconciliation (debug-visible)
   reconciliationState: 'none' | 'awaiting_positions' | 'awaiting_bonds';
@@ -234,6 +245,8 @@ export interface AppStore {
   setDockCallbacks: (cbs: DockCallbacks) => void;
   setSettingsCallbacks: (cbs: SettingsCallbacks) => void;
   setChooserCallbacks: (cbs: ChooserCallbacks) => void;
+  bondedGroupCallbacks: BondedGroupCallbacks | null;
+  setBondedGroupCallbacks: (cbs: BondedGroupCallbacks | null) => void;
 
   // Lifecycle
   resetTransientState: () => void;
@@ -256,6 +269,7 @@ export const useAppStore = create<AppStore>((set) => ({
   bondedGroupsSide: 'left',
   selectedBondedGroupId: null,
   hoveredBondedGroupId: null,
+  hasTrackedBondedHighlight: false,
   atomCount: 0,
   activeAtomCount: 0,
   wallRemovedCount: 0,
@@ -291,6 +305,7 @@ export const useAppStore = create<AppStore>((set) => ({
   dockCallbacks: null,
   settingsCallbacks: null,
   chooserCallbacks: null,
+  bondedGroupCallbacks: null,
 
   // Actions
   setTheme: (theme) => set({ theme }),
@@ -320,7 +335,7 @@ export const useAppStore = create<AppStore>((set) => ({
   setBondedGroupsSide: (side) => set({ bondedGroupsSide: side }),
   setSelectedBondedGroup: (id) => set({ selectedBondedGroupId: id }),
   setHoveredBondedGroup: (id) => set({ hoveredBondedGroupId: id }),
-  clearBondedGroupHighlightState: () => set({ selectedBondedGroupId: null, hoveredBondedGroupId: null }),
+  // clearBondedGroupHighlightState removed — highlight runtime owns the full clear path via useAppStore.setState()
 
   updateAtomCount: (n) => set({ atomCount: n }),
   updateActiveCount: (active, removed) => set({ activeAtomCount: active, wallRemovedCount: removed }),
@@ -352,6 +367,7 @@ export const useAppStore = create<AppStore>((set) => ({
   setDockCallbacks: (cbs) => set({ dockCallbacks: cbs }),
   setSettingsCallbacks: (cbs) => set({ settingsCallbacks: cbs }),
   setChooserCallbacks: (cbs) => set({ chooserCallbacks: cbs }),
+  setBondedGroupCallbacks: (cbs) => set({ bondedGroupCallbacks: cbs }),
 
   resetTransientState: () => set({
     // Callbacks
@@ -359,6 +375,7 @@ export const useAppStore = create<AppStore>((set) => ({
     dockCallbacks: null,
     settingsCallbacks: null,
     chooserCallbacks: null,
+    bondedGroupCallbacks: null,
     // UI chrome
     activeSheet: null,
     helpPageActive: false,
@@ -375,6 +392,7 @@ export const useAppStore = create<AppStore>((set) => ({
     bondedSmallGroupsExpanded: false,
     selectedBondedGroupId: null,
     hoveredBondedGroupId: null,
+    hasTrackedBondedHighlight: false,
     // Scene
     atomCount: 0,
     activeAtomCount: 0,

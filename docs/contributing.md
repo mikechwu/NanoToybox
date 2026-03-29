@@ -70,7 +70,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - Dock + sheet navigation — responsive two-tier UI with React components (`page/js/components/`)
 - React UI migration — all UI surfaces (DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay) are React-authoritative with Zustand store
 - Web Worker physics — off-thread simulation via `page/js/simulation-worker.ts` with automatic JS fallback
-- Runtime module extraction — 11 modules in `page/js/runtime/` (scene, worker lifecycle, snapshot reconciler, overlay layout/runtime, interaction dispatch, input bindings, UI bindings, atom source, focus resolution, onboarding); main.ts reduced to composition-root-only
+- Runtime module extraction — 14 modules in `page/js/runtime/` (scene, worker lifecycle, snapshot reconciler, overlay layout/runtime, interaction dispatch, input bindings, UI bindings, atom source, focus resolution, onboarding, bonded-group projection, bonded-group highlight, bonded-group coordinator); main.ts reduced to composition-root-only
 
 ## Architecture Rules
 
@@ -105,7 +105,7 @@ See `docs/architecture.md` for the full module map and state ownership model.
 1. npm run dev                    # Vite dev server with HMR
 2. Make changes to page/js/ code
 3. npm run typecheck              # TypeScript type-checking
-4. npm run test:unit              # Vitest unit tests (363 tests)
+4. npm run test:unit              # Vitest unit tests (427 tests)
 5. npm run test:e2e               # Playwright E2E browser tests (19 tests)
 6. npm run build                  # Production build → dist/
 ```
@@ -131,6 +131,7 @@ See `docs/architecture.md` for the full module map and state ownership model.
 | Runtime modules (scene, worker, input) | `page/js/runtime/scene-runtime.ts`, `page/js/runtime/worker-lifecycle.ts`, `page/js/runtime/snapshot-reconciler.ts`, `page/js/runtime/input-bindings.ts`, `page/js/runtime/interaction-dispatch.ts` |
 | Overlay layout & open/close policy | `page/js/runtime/overlay-layout.ts`, `page/js/runtime/overlay-runtime.ts` |
 | Focus resolution & onboarding | `page/js/runtime/focus-runtime.ts`, `page/js/runtime/onboarding.ts` |
+| Bonded clusters (panel + highlight) | `page/js/runtime/bonded-group-runtime.ts`, `page/js/runtime/bonded-group-highlight-runtime.ts`, `page/js/runtime/bonded-group-coordinator.ts`, `page/js/components/BondedGroupsPanel.tsx` |
 | Store callback wiring | `page/js/runtime/ui-bindings.ts`, `page/js/store/app-store.ts` |
 | Scene / placement | `page/js/scene.ts`, `page/js/placement.ts` |
 | Browser physics | `page/js/physics.ts` (JS Tersoff), `sim/wasm/tersoff.c` (Wasm kernel) |

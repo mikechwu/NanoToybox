@@ -29,7 +29,7 @@ import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecy
 import { createOnboardingController } from './runtime/onboarding';
 import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-group-runtime';
 import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from './runtime/bonded-group-highlight-runtime';
-import { setBondedGroupsPanelCallbacks } from './components/BondedGroupsPanel';
+import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './runtime/bonded-group-coordinator';
 
 // --- Globals ---
 let renderer, physics, stateMachine;
@@ -135,9 +135,10 @@ let _inputBindings: InputBindings | null = null;
 // Onboarding controller (created in init, cleared on teardown)
 let _onboarding: import('./runtime/onboarding').OnboardingController | null = null;
 
-// Bonded group runtime (projects physics components into store)
+// Bonded group subsystem
 let _bondedGroups: BondedGroupRuntime | null = null;
 let _bondedGroupHighlight: BondedGroupHighlightRuntime | null = null;
+let _bondedGroupCoordinator: BondedGroupCoordinator | null = null;
 
 // Pause sync guard — resolves when syncStateNow completes during pause transition.
 // Awaited by scene-runtime commitMolecule to block mutations until local state is fresh.
@@ -174,10 +175,10 @@ function _teardownRuntime() {
   delete (window as unknown as Record<string, unknown>)._getUIState;
   // Destroy onboarding controller (clears coachmark timers + listeners)
   if (_onboarding) { _onboarding.destroy(); _onboarding = null; }
-  // Reset bonded group runtime
-  if (_bondedGroupHighlight) { _bondedGroupHighlight.clearHighlight(); _bondedGroupHighlight = null; }
-  setBondedGroupsPanelCallbacks(null);
-  if (_bondedGroups) { _bondedGroups.reset(); _bondedGroups = null; }
+  // Bonded group subsystem teardown (coordinator owns the sequence)
+  if (_bondedGroupCoordinator) { _bondedGroupCoordinator.teardown(); _bondedGroupCoordinator = null; }
+  _bondedGroupHighlight = null;
+  _bondedGroups = null;
   // Destroy overlay layout runtime (observer, pending RAF)
   if (_overlayLayout) { _overlayLayout.destroy(); _overlayLayout = null; }
   // Tear down controllers (consumers) before input bindings (provider)
@@ -324,7 +325,7 @@ async function init() {
     partialProfilerReset,
     recoverFromWorkerFailure: recoverLocalPhysicsAfterWorkerFailure,
     getPauseSyncPromise: () => _pauseSyncPromise,
-    onSceneMutated: () => { _bondedGroups?.projectNow(); _bondedGroupHighlight?.syncAfterTopologyChange(); },
+    onSceneMutated: () => _bondedGroupCoordinator?.update(),
   });
 
   // Load manifest
@@ -545,17 +546,21 @@ async function init() {
   });
   _onboarding.scheduleInitialCoachmarks();
 
-  // ── Bonded group runtime — projects physics components into store ──
+  // ── Bonded group subsystem ──
   _bondedGroups = createBondedGroupRuntime({
     getPhysics: () => physics,
   });
-
-  // Bonded group highlight runtime — resolves selection/hover to renderer highlight
   _bondedGroupHighlight = createBondedGroupHighlightRuntime({
     getBondedGroupRuntime: () => _bondedGroups,
     getRenderer: () => renderer,
+    getPhysics: () => physics,
   });
-  setBondedGroupsPanelCallbacks({
+  _bondedGroupCoordinator = createBondedGroupCoordinator({
+    getBondedGroupRuntime: () => _bondedGroups,
+    getBondedGroupHighlightRuntime: () => _bondedGroupHighlight,
+  });
+  // Register callbacks via store (same pattern as dock/settings/chooser)
+  useAppStore.getState().setBondedGroupCallbacks({
     onToggleSelect: (id) => _bondedGroupHighlight?.toggleSelectedGroup(id),
     onHover: (id) => _bondedGroupHighlight?.setHoveredGroup(id),
     onClearHighlight: () => _bondedGroupHighlight?.clearHighlight(),
@@ -1107,8 +1112,7 @@ function frameLoop(timestamp) {
       });
 
       // Project bonded groups at the same 5 Hz cadence (throttled, only publishes on change)
-      _bondedGroups?.projectNow();
-      _bondedGroupHighlight?.syncAfterTopologyChange();
+      _bondedGroupCoordinator?.update();
 
     // ── Auto FPS gate for UI effects ──
     // Only runs when glass UI is visible AND mode is 'auto' (not forced by developer).

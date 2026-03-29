@@ -5,46 +5,36 @@
  * 1. Header click: expand/collapse the full cluster list
  * 2. "Small clusters" row click: expand/collapse clusters with <= 3 atoms
  * 3. Row click: toggle persistent selection highlight
- * 4. Row hover (desktop): temporary preview highlight (disabled during selection)
- * 5. Clear Highlight button: visible only during persistent selection
+ * 4. Row hover (desktop): temporary preview highlight (disabled during tracked set)
+ * 5. Clear Highlight button: visible whenever tracked highlight exists (even after group disappears)
+ *
+ * Callbacks are read from store.bondedGroupCallbacks (registered by main.ts),
+ * following the same pattern as dockCallbacks/settingsCallbacks/chooserCallbacks.
  */
 
 import React, { useMemo, useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 import { partitionBondedGroups } from '../store/selectors/bonded-groups';
 
-/** Callbacks provided by the highlight runtime, wired via main.ts. */
-export interface BondedGroupsPanelCallbacks {
-  onToggleSelect: (id: string) => void;
-  onHover: (id: string | null) => void;
-  onClearHighlight: () => void;
-}
-
-// Module-level callback holder — set by main.ts after panel mounts
-let _callbacks: BondedGroupsPanelCallbacks | null = null;
-export function setBondedGroupsPanelCallbacks(cbs: BondedGroupsPanelCallbacks | null) {
-  _callbacks = cbs;
-}
-
 function ClusterRow({ id, displayIndex, atomCount, isSmall }: {
   id: string; displayIndex: number; atomCount: number; isSmall?: boolean;
 }) {
   const selectedId = useAppStore((s) => s.selectedBondedGroupId);
   const hoveredId = useAppStore((s) => s.hoveredBondedGroupId);
+  const hasTracked = useAppStore((s) => s.hasTrackedBondedHighlight);
+  const callbacks = useAppStore((s) => s.bondedGroupCallbacks);
   const isSelected = selectedId === id;
-  const isHovered = hoveredId === id && !selectedId;
+  const isHovered = hoveredId === id && !hasTracked;
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    _callbacks?.onToggleSelect(id);
-  }, [id]);
+    callbacks?.onToggleSelect(id);
+  }, [id, callbacks]);
 
   const handleMouseEnter = useCallback(() => {
-    _callbacks?.onHover(id);
-  }, [id]);
+    callbacks?.onHover(id);
+  }, [id, callbacks]);
 
-  // No per-row onMouseLeave — hover is cleared at the list container level only,
-  // preventing flicker when cursor moves directly between rows.
   return (
     <button
       className={`bonded-groups-row${isSmall ? ' bonded-groups-small-row' : ''}${isSelected ? ' bonded-groups-selected' : ''}${isHovered ? ' bonded-groups-hovered' : ''}`}
@@ -65,13 +55,14 @@ export function BondedGroupsPanel() {
   const toggleExpanded = useAppStore((s) => s.toggleBondedGroupsExpanded);
   const toggleSmall = useAppStore((s) => s.toggleBondedSmallGroupsExpanded);
   const side = useAppStore((s) => s.bondedGroupsSide);
-  const selectedId = useAppStore((s) => s.selectedBondedGroupId);
+  const hasTrackedHighlight = useAppStore((s) => s.hasTrackedBondedHighlight);
+  const callbacks = useAppStore((s) => s.bondedGroupCallbacks);
 
   const { large, small } = useMemo(() => partitionBondedGroups(groups), [groups]);
 
   const handleListLeave = useCallback(() => {
-    _callbacks?.onHover(null);
-  }, []);
+    callbacks?.onHover(null);
+  }, [callbacks]);
 
   if (groups.length === 0) return null;
 
@@ -102,10 +93,10 @@ export function BondedGroupsPanel() {
           )}
         </div>
       )}
-      {selectedId && (
+      {hasTrackedHighlight && (
         <button
           className="bonded-groups-clear"
-          onClick={() => _callbacks?.onClearHighlight()}
+          onClick={() => callbacks?.onClearHighlight()}
           type="button"
         >
           Clear Highlight

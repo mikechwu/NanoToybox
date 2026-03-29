@@ -34,6 +34,7 @@ npm run dev
 | Text size | Normal (default) / Large — Appearance section in settings. CSS-only token override via `[data-text-size]` attribute |
 | Settings sheet | Adjustable drag strength, rotation strength, damping, speed, boundary mode, theme, and text size — organized in grouped sections (Scene, Simulation, Interaction, Appearance, Boundary, Help) |
 | Containment boundary | Contain mode (soft harmonic wall bounces atoms back) or Remove mode (atoms deleted past boundary). Live atom count in Settings sheet (Scene section). Wall radius auto-scales with atom count (CONFIG.wall.density). Toggle in Settings sheet (Boundary section). |
+| Bonded clusters | Side panel showing live connected components. Click to select (persistent frozen highlight), hover to preview (desktop). Two-level expand: large clusters + collapsible small clusters. Clear Highlight button when tracked set exists. |
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
 | Pause | Primary control — freezes physics, camera/UI remain active |
 | Status | Sim speed (Nx), MD rate (ps/s), hardware-limited indicator. Tap to expand on mobile |
