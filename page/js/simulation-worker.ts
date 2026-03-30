@@ -192,7 +192,8 @@ function handleAppendMolecule(cmd: Extract<WorkerCommand, { type: 'appendMolecul
 
 // ─── Clear scene ───────────────────────────────────────────────────────────
 function handleClearScene(cmd: Extract<WorkerCommand, { type: 'clearScene' }>): void {
-  if (engine) engine.clearScene();
+  if (!engine) { emitNotReady(cmd, 'Engine not initialized'); return; }
+  engine.clearScene();
   sceneVersion += 1;
   snapshotVersion = 0;
   emit({
