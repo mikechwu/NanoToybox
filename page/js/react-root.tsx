@@ -18,6 +18,25 @@ import { SheetOverlay } from './components/SheetOverlay';
 import { SettingsSheet } from './components/SettingsSheet';
 import { StructureChooser } from './components/StructureChooser';
 import { BondedGroupsPanel } from './components/BondedGroupsPanel';
+import { TimelineBar } from './components/TimelineBar';
+
+/**
+ * Lightweight error boundary — prevents a crash in one optional surface
+ * (e.g. TimelineBar) from tearing down the rest of the UI tree.
+ */
+class FeatureBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+  static getDerivedStateFromError() { return { hasError: true }; }
+  componentDidCatch(error: Error) {
+    console.error('[FeatureBoundary] caught:', error.message);
+  }
+  render() {
+    return this.state.hasError ? null : this.props.children;
+  }
+}
 
 let root: Root | null = null;
 
@@ -37,6 +56,9 @@ export function mountReactUI() {
       <BondedGroupsPanel />
       <CameraControls />
       <DockLayout>
+        <FeatureBoundary>
+          <TimelineBar />
+        </FeatureBoundary>
         <DockBar />
       </DockLayout>
       <SheetOverlay />

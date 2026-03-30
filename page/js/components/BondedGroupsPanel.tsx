@@ -57,6 +57,7 @@ export function BondedGroupsPanel() {
   const side = useAppStore((s) => s.bondedGroupsSide);
   const hasTrackedHighlight = useAppStore((s) => s.hasTrackedBondedHighlight);
   const callbacks = useAppStore((s) => s.bondedGroupCallbacks);
+  const timelineMode = useAppStore((s) => s.timelineMode);
 
   const { large, small } = useMemo(() => partitionBondedGroups(groups), [groups]);
 
@@ -64,7 +65,8 @@ export function BondedGroupsPanel() {
     callbacks?.onHover(null);
   }, [callbacks]);
 
-  if (groups.length === 0) return null;
+  // Hide during timeline review — live topology doesn't match historical positions
+  if (groups.length === 0 || timelineMode === 'review') return null;
 
   return (
     <div className={`bonded-groups-panel side-${side}`}>

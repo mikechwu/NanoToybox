@@ -51,6 +51,8 @@ export function createInputBindings(deps: InputBindingsDeps): InputBindings {
       buildAtomSource(),
       {
         onHover: (atomIdx) => {
+          // Block all scene interaction during timeline review — review is display-only.
+          if (useAppStore.getState().timelineMode === 'review') return;
           const p = deps.getPlacement();
           if (p && p.active) return;
           const sm = deps.getStateMachine();
@@ -60,6 +62,7 @@ export function createInputBindings(deps: InputBindingsDeps): InputBindings {
           if (cmd) deps.dispatch(cmd);
         },
         onPointerDown: (atomIdx, sx, sy, isRotate) => {
+          if (useAppStore.getState().timelineMode === 'review') return;
           const p = deps.getPlacement();
           if (p && p.active) return;
           const mode = isRotate ? 'rotate' : deps.getSessionInteractionMode();
@@ -67,12 +70,14 @@ export function createInputBindings(deps: InputBindingsDeps): InputBindings {
           if (cmd) deps.dispatch(cmd, sx, sy);
         },
         onPointerMove: (sx, sy) => {
+          if (useAppStore.getState().timelineMode === 'review') return;
           const p = deps.getPlacement();
           if (p && p.active) return;
           const cmd = deps.getStateMachine().onPointerMove(sx, sy);
           if (cmd) deps.dispatch(cmd, sx, sy);
         },
         onPointerUp: () => {
+          if (useAppStore.getState().timelineMode === 'review') return;
           const p = deps.getPlacement();
           if (p && p.active) return;
           const cmd = deps.getStateMachine().onPointerUp();

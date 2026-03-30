@@ -25,7 +25,14 @@ export interface PhysicsConfig {
 }
 
 export type WorkerCommand =
-  | { type: 'init'; commandId: number; config: PhysicsConfig; atoms: AtomXYZ[]; bonds: BondTuple[] }
+  | { type: 'init'; commandId: number; config: PhysicsConfig; atoms: AtomXYZ[]; bonds: BondTuple[];
+      /** Restart: initial velocities (zeroed if omitted). */
+      velocities?: Float64Array;
+      /** Restart: boundary snapshot to restore (recomputed from atoms if omitted). */
+      boundary?: { mode: 'contain' | 'remove'; wallRadius: number; wallCenter: [number, number, number]; wallCenterSet: boolean; removedCount: number; damping: number };
+      /** Restart: interaction to restore (idle if omitted). */
+      interaction?: { kind: 'none' } | { kind: 'atom_drag'; atomIndex: number; target: [number, number, number] } | { kind: 'move_group'; atomIndex: number; componentId: number; target: [number, number, number] } | { kind: 'rotate_group'; atomIndex: number; componentId: number; target: [number, number, number] };
+    }
   | { type: 'appendMolecule'; commandId: number; atoms: AtomXYZ[]; bonds: BondTuple[]; offset: [number, number, number] }
   | { type: 'clearScene'; commandId: number }
   | { type: 'requestFrame'; commandId: number; stepsRequested: number }

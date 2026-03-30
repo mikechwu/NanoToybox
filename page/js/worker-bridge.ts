@@ -129,6 +129,9 @@ export class WorkerBridge {
     config: PhysicsConfig,
     atoms: AtomXYZ[],
     bonds: BondTuple[],
+    velocities?: Float64Array,
+    boundary?: Extract<WorkerCommand, { type: 'init' }>['boundary'],
+    interaction?: Extract<WorkerCommand, { type: 'init' }>['interaction'],
   ): Promise<InitResult> {
     const commandId = this._nextId();
     this._registerMutation(commandId, 'init');
@@ -143,6 +146,9 @@ export class WorkerBridge {
       config,
       atoms,
       bonds,
+      ...(velocities ? { velocities } : {}),
+      ...(boundary ? { boundary } : {}),
+      ...(interaction ? { interaction } : {}),
     });
 
     const result = await promise;

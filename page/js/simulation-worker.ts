@@ -68,16 +68,45 @@ async function handleInit(cmd: Extract<WorkerCommand, { type: 'init' }>): Promis
     const candidate = new PhysicsEngine({ skipWasmInit: true });
     candidate.init(cmd.atoms, cmd.bonds);
 
+    // Apply initial velocities if provided (restart path passes deformed-state velocities)
+    if (cmd.velocities && cmd.velocities.length > 0) {
+      const copyLen = Math.min(cmd.velocities.length, candidate.vel.length);
+      candidate.vel.set(cmd.velocities.subarray(0, copyLen));
+    }
+
     // Apply config
     candidate.setDamping(cmd.config.damping);
     candidate.setDragStrength(cmd.config.kDrag);
     candidate.setRotateStrength(cmd.config.kRotate);
     candidate.setWallMode(cmd.config.wallMode);
 
-    // Initialize wall from current atoms (wall needs center + radius to function)
-    if (cmd.atoms.length > 0) {
+    // Boundary: restore from snapshot (restart) or compute from atoms (fresh init)
+    if (cmd.boundary) {
+      candidate.restoreBoundarySnapshot(cmd.boundary);
+    } else if (cmd.atoms.length > 0) {
       candidate.updateWallCenter(cmd.atoms, [0, 0, 0]);
       candidate.updateWallRadius();
+    }
+
+    // Interaction: restore active drag/move/rotate (restart)
+    if (cmd.interaction && cmd.interaction.kind !== 'none') {
+      const s = cmd.interaction;
+      if (s.atomIndex >= 0 && s.atomIndex < candidate.n) {
+        switch (s.kind) {
+          case 'atom_drag':
+            candidate.startDrag(s.atomIndex);
+            candidate.updateDrag(s.target[0], s.target[1], s.target[2]);
+            break;
+          case 'move_group':
+            candidate.startTranslate(s.atomIndex);
+            candidate.updateDrag(s.target[0], s.target[1], s.target[2]);
+            break;
+          case 'rotate_group':
+            candidate.startRotateDrag(s.atomIndex);
+            candidate.updateDrag(s.target[0], s.target[1], s.target[2]);
+            break;
+        }
+      }
     }
 
     // Wasm: explicit, worker-authoritative

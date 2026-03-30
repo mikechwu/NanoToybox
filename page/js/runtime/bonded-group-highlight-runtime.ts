@@ -83,6 +83,8 @@ export function createBondedGroupHighlightRuntime(deps: {
   }
 
   function toggleSelectedGroup(id: string) {
+    // Block during timeline review — review is display-only
+    if (useAppStore.getState().timelineMode === 'review') return;
     const store = useAppStore.getState();
     if (store.selectedBondedGroupId === id) {
       // Deselect: clear everything
@@ -101,6 +103,8 @@ export function createBondedGroupHighlightRuntime(deps: {
   }
 
   function setHoveredGroup(id: string | null) {
+    // Block during timeline review — review is display-only
+    if (useAppStore.getState().timelineMode === 'review') return;
     const store = useAppStore.getState();
     const hasTracked = _trackedAtoms != null && _trackedAtoms.length > 0;
     // Block hover ENTRY when tracked highlight exists, but always allow CLEARING

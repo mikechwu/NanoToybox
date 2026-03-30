@@ -566,6 +566,37 @@ export class Renderer {
   }
 
   /**
+   * Display-only review frame update — updates atom instance transforms and
+   * bond visuals from the given positions WITHOUT touching physics.pos or any
+   * physics state. Used exclusively by the timeline review path.
+   *
+   * Bonds are rendered from the physics topology (getBonds) but positioned
+   * using the supplied review positions, not physics.pos.
+   */
+  updateReviewFrame(positions: Float64Array, n: number): void {
+    if (!this._instancedAtoms || n === 0) return;
+    const m = new THREE.Matrix4();
+    const count = Math.min(n, this._atomCapacity);
+    for (let i = 0; i < count; i++) {
+      m.makeTranslation(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+      this._instancedAtoms.setMatrixAt(i, m);
+    }
+    this._instancedAtoms.count = count;
+    this._instancedAtoms.instanceMatrix.needsUpdate = true;
+
+    // Render bonds from topology + review positions (no physics.pos write)
+    if (this._physicsRef?.getBonds) {
+      const bonds = this._physicsRef.getBonds();
+      this._ensureBondCapacity(bonds.length);
+      this._updateBondTransformsInstanced(bonds, positions, null);
+    }
+
+    // Suppress highlights — review is not interactive
+    if (this._highlightMesh) this._highlightMesh.visible = false;
+    if (this._groupHighlightMesh) this._groupHighlightMesh.visible = false;
+  }
+
+  /**
    * Ensure bond InstancedMesh capacity is sufficient.
    * Uses geometric growth (grow-only during session).
    */

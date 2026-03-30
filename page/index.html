@@ -406,7 +406,7 @@ fieldset.segmented {
 /* ── Bonded groups side panel ── */
 .bonded-groups-panel {
   position: fixed;
-  top: 12px;
+  /* top set per-side below (secondary slot, offset below primary overlays) */
   z-index: 150;
   pointer-events: auto;
   background: var(--panel-bg);
@@ -486,8 +486,13 @@ fieldset.segmented {
   cursor: pointer;
 }
 .bonded-groups-clear:hover { background: var(--color-surface-hover); }
-.bonded-groups-panel.side-left { left: 12px; }
-.bonded-groups-panel.side-right { right: 12px; }
+/* Top-overlay layout contract:
+ *   top-left primary:  .react-info (status)
+ *   top-right primary: .react-fps (FPS display)
+ *   top-left secondary: bonded-groups panel (offset below status)
+ *   top-right secondary: bonded-groups panel (offset below FPS) */
+.bonded-groups-panel.side-left { left: 12px; top: 48px; }
+.bonded-groups-panel.side-right { right: 12px; top: 48px; }
 
 /* ── Camera controls overlay (positioned by overlay-layout.ts) ── */
 .camera-controls {
@@ -635,6 +640,92 @@ fieldset.segmented {
   padding: 6px 12px; border-radius: var(--radius-sm);
   border: 1px solid var(--color-border);
   line-height: 1.4; cursor: pointer;
+}
+
+/* ── Timeline bar (inside dock-region, normal flow above dock-bar) ── */
+.timeline-bar {
+  display: flex; align-items: center; gap: var(--space-sm);
+  height: 32px;
+  padding: 0 var(--space-md);
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+  color: var(--color-text-secondary);
+  touch-action: none;
+  user-select: none;
+}
+/* When timeline sits above dock-bar, use bottom border on timeline instead of
+   top border on dock-bar to avoid doubling. The + combinator targets dock-bar
+   that immediately follows timeline-bar. */
+.timeline-bar + .dock-bar { border-top: none; }
+.timeline-badge {
+  flex: 0 0 48px; /* fixed width — Live and Review both fit */
+  text-align: center;
+  padding: 2px 0; border-radius: 4px;
+  font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.timeline-badge--live {
+  background: rgba(80, 200, 80, 0.15); color: var(--color-accent-text);
+}
+.timeline-badge--review {
+  background: rgba(255, 180, 60, 0.15); color: var(--color-text);
+}
+.timeline-time {
+  flex: 0 0 60px; /* fixed width — tabular-nums keeps digits stable */
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.timeline-track {
+  flex: 1; position: relative;
+  height: 6px; border-radius: 3px;
+  background: var(--color-border);
+  cursor: pointer;
+}
+/* Expanded touch hit area — meets 44px tap target via invisible ::before */
+.timeline-track::before {
+  content: ''; position: absolute;
+  inset: -18px 0;
+  cursor: pointer;
+}
+.timeline-fill {
+  position: absolute; top: 0; left: 0; bottom: 0;
+  border-radius: 3px;
+  background: var(--color-accent-text);
+  pointer-events: none;
+}
+.timeline-thumb {
+  position: absolute; top: 50%;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--color-accent-text);
+  border: 2px solid var(--panel-bg);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  transition: transform 0.1s ease;
+}
+.timeline-track:active .timeline-thumb { transform: translate(-50%, -50%) scale(1.2); }
+.timeline-actions {
+  flex: 0 0 140px; /* fixed width — immune to label length changes */
+  display: flex; align-items: center; gap: 4px;
+  justify-content: flex-end;
+}
+.timeline-restart-target {
+  font-variant-numeric: tabular-nums;
+  font-size: 10px; opacity: 0.7;
+  min-width: 40px; text-align: right;
+}
+.timeline-action {
+  padding: 4px 10px; border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: none; color: var(--color-text);
+  font-family: var(--font-family); font-size: var(--font-xs);
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.timeline-action:disabled { opacity: 0; cursor: default; pointer-events: none; }
+.timeline-action:hover { background: var(--color-border); }
+.timeline-action--restart {
+  border-color: var(--color-accent-text);
+  color: var(--color-accent-text);
 }
 </style>
 </head>

@@ -58,6 +58,13 @@ export interface ChooserCallbacks {
   onSelectStructure: (file: string, description: string) => void;
 }
 
+/** Imperative callbacks for the timeline bar, registered by main.ts. */
+export interface TimelineCallbacks {
+  onScrub: (timePs: number) => void;
+  onReturnToLive: () => void;
+  onRestartFromHere: () => void;
+}
+
 /** Imperative callbacks for the bonded-group panel, registered by main.ts. */
 export interface BondedGroupCallbacks {
   onToggleSelect: (id: string) => void;
@@ -157,6 +164,33 @@ export interface AppStore {
   // hasTrackedBondedHighlight is read-only from the public interface.
   // Only bonded-group-highlight-runtime may write highlight state (via useAppStore.setState).
   // No public clear action — use highlight runtime's clearHighlight() instead.
+
+  // Timeline
+  timelineMode: 'live' | 'review';
+  timelineCurrentTimePs: number;
+  timelineReviewTimePs: number | null;
+  timelineRangePs: { start: number; end: number } | null;
+  timelineCanReturnToLive: boolean;
+  timelineCanRestart: boolean;
+  /** The actual checkpoint time restart will use (null if no checkpoint available). */
+  timelineRestartTargetPs: number | null;
+  timelineCallbacks: TimelineCallbacks | null;
+  setTimelineMode: (mode: 'live' | 'review') => void;
+  setTimelineCurrentTimePs: (t: number) => void;
+  setTimelineReviewTimePs: (t: number | null) => void;
+  setTimelineRangePs: (range: { start: number; end: number } | null) => void;
+  setTimelineCanReturnToLive: (v: boolean) => void;
+  setTimelineCanRestart: (v: boolean) => void;
+  setTimelineCallbacks: (cbs: TimelineCallbacks | null) => void;
+  updateTimelineState: (state: {
+    mode: 'live' | 'review';
+    currentTimePs: number;
+    reviewTimePs: number | null;
+    rangePs: { start: number; end: number } | null;
+    canReturnToLive: boolean;
+    canRestart: boolean;
+    restartTargetPs: number | null;
+  }) => void;
 
   // Reconciliation (debug-visible)
   reconciliationState: 'none' | 'awaiting_positions' | 'awaiting_bonds';
@@ -266,7 +300,7 @@ export const useAppStore = create<AppStore>((set) => ({
   bondedGroups: [],
   bondedGroupsExpanded: false,
   bondedSmallGroupsExpanded: false,
-  bondedGroupsSide: 'left',
+  bondedGroupsSide: 'right',
   selectedBondedGroupId: null,
   hoveredBondedGroupId: null,
   hasTrackedBondedHighlight: false,
@@ -288,6 +322,14 @@ export const useAppStore = create<AppStore>((set) => ({
   rafIntervalMs: 16.67,
   flightActive: false,
   farDrift: false,
+  timelineMode: 'live',
+  timelineCurrentTimePs: 0,
+  timelineReviewTimePs: null,
+  timelineRangePs: null,
+  timelineCanReturnToLive: false,
+  timelineCanRestart: false,
+  timelineRestartTargetPs: null,
+  timelineCallbacks: null,
   reconciliationState: 'none',
   paused: false,
   targetSpeed: 1,
@@ -352,6 +394,22 @@ export const useAppStore = create<AppStore>((set) => ({
   }),
 
   updatePlaybackMetrics: (metrics) => set(metrics),
+  setTimelineMode: (mode) => set({ timelineMode: mode }),
+  setTimelineCurrentTimePs: (t) => set({ timelineCurrentTimePs: t }),
+  setTimelineReviewTimePs: (t) => set({ timelineReviewTimePs: t }),
+  setTimelineRangePs: (range) => set({ timelineRangePs: range }),
+  setTimelineCanReturnToLive: (v) => set({ timelineCanReturnToLive: v }),
+  setTimelineCanRestart: (v) => set({ timelineCanRestart: v }),
+  setTimelineCallbacks: (cbs) => set({ timelineCallbacks: cbs }),
+  updateTimelineState: (state) => set({
+    timelineMode: state.mode,
+    timelineCurrentTimePs: state.currentTimePs,
+    timelineReviewTimePs: state.reviewTimePs,
+    timelineRangePs: state.rangePs,
+    timelineCanReturnToLive: state.canReturnToLive,
+    timelineCanRestart: state.canRestart,
+    timelineRestartTargetPs: state.restartTargetPs,
+  }),
   setFlightActive: (active) => set({ flightActive: active }),
   setFarDrift: (drift) => set({ farDrift: drift }),
   setReconciliationState: (state) => set({ reconciliationState: state }),
@@ -420,6 +478,15 @@ export const useAppStore = create<AppStore>((set) => ({
     // Flight
     flightActive: false,
     farDrift: false,
+    // Timeline
+    timelineMode: 'live',
+    timelineCurrentTimePs: 0,
+    timelineReviewTimePs: null,
+    timelineRangePs: null,
+    timelineCanReturnToLive: false,
+    timelineCanRestart: false,
+    timelineRestartTargetPs: null,
+    timelineCallbacks: null,
     // Debug
     reconciliationState: 'none',
     // Status channels

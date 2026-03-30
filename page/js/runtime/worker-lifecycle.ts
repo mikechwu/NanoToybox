@@ -13,13 +13,13 @@
  */
 
 import { WorkerBridge, type WorkerInteractionCommand } from '../worker-bridge';
-import type { PhysicsConfig } from '../../../src/types/worker-protocol';
+import type { PhysicsConfig, WorkerCommand } from '../../../src/types/worker-protocol';
 import type { AtomXYZ } from '../../../src/types/domain';
 import type { BondTuple } from '../../../src/types/interfaces';
 
 export interface WorkerRuntime {
-  /** Initialize with a pre-built config from main.ts. */
-  init(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[]): Promise<void>;
+  /** Initialize with a pre-built config from main.ts. Optional restart state for rewind. */
+  init(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[], velocities?: Float64Array, boundary?: Extract<WorkerCommand, { type: 'init' }>['boundary'], interaction?: Extract<WorkerCommand, { type: 'init' }>['interaction']): Promise<void>;
   /** Tear down worker transport. Does NOT recover local physics. */
   destroy(): void;
   isActive(): boolean;
@@ -72,7 +72,7 @@ export function createWorkerRuntime(deps: {
   }
 
   return {
-    async init(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[]) {
+    async init(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[], velocities?: Float64Array, boundary?: Extract<WorkerCommand, { type: 'init' }>['boundary'], interaction?: Extract<WorkerCommand, { type: 'init' }>['interaction']) {
       let bridge: WorkerBridge;
       try {
         bridge = new WorkerBridge();
@@ -106,7 +106,7 @@ export function createWorkerRuntime(deps: {
 
       if (atoms.length > 0) {
         try {
-          const result = await bridge.init(config, atoms, bonds);
+          const result = await bridge.init(config, atoms, bonds, velocities, boundary, interaction);
           // Guard: if destroy() was called during the await, abandon
           if (_bridge !== bridge) return;
           if (result.ok) {

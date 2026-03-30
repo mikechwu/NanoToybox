@@ -30,6 +30,10 @@ import { createOnboardingController } from './runtime/onboarding';
 import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-group-runtime';
 import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from './runtime/bonded-group-highlight-runtime';
 import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './runtime/bonded-group-coordinator';
+import { createSimulationTimeline, type SimulationTimeline } from './runtime/simulation-timeline';
+import { createTimelineCoordinator, type TimelineCoordinator } from './runtime/simulation-timeline-coordinator';
+import { captureInteractionState, captureBoundaryState } from './runtime/timeline-context-capture';
+import { createTimelineRecordingPolicy, type TimelineRecordingPolicy } from './runtime/timeline-recording-policy';
 
 // --- Globals ---
 let renderer, physics, stateMachine;
@@ -140,6 +144,14 @@ let _bondedGroups: BondedGroupRuntime | null = null;
 let _bondedGroupHighlight: BondedGroupHighlightRuntime | null = null;
 let _bondedGroupCoordinator: BondedGroupCoordinator | null = null;
 
+// Simulation timeline subsystem
+let _timeline: SimulationTimeline | null = null;
+let _timelineCoordinator: TimelineCoordinator | null = null;
+/** Simulated time accumulator in picoseconds (1 fs = 1 ps). */
+let _simTimePs = 0;
+/** Timeline recording policy — disarmed until first meaningful user interaction. */
+let _recordingPolicy: TimelineRecordingPolicy | null = null;
+
 // Pause sync guard — resolves when syncStateNow completes during pause transition.
 // Awaited by scene-runtime commitMolecule to block mutations until local state is fresh.
 let _pauseSyncPromise: Promise<void> | null = null;
@@ -173,6 +185,18 @@ function _teardownRuntime() {
   delete (window as unknown as Record<string, unknown>)._simulateWorkerStall;
   delete (window as unknown as Record<string, unknown>)._setTestStalledThreshold;
   delete (window as unknown as Record<string, unknown>)._getUIState;
+  // Destroy timeline subsystem
+  if (_timeline) { _timeline.clear(); _timeline = null; }
+  _timelineCoordinator = null;
+  _simTimePs = 0;
+  _recordingPolicy?.disarm();
+  _recordingPolicy = null;
+  // Clear timeline store state so TimelineBar hides and callbacks don't hold stale refs
+  useAppStore.getState().setTimelineCallbacks(null);
+  useAppStore.getState().updateTimelineState({
+    mode: 'live', currentTimePs: 0, reviewTimePs: null,
+    rangePs: null, canReturnToLive: false, canRestart: false, restartTargetPs: null,
+  });
   // Destroy onboarding controller (clears coachmark timers + listeners)
   if (_onboarding) { _onboarding.destroy(); _onboarding = null; }
   // Bonded group subsystem teardown (coordinator owns the sequence)
@@ -306,6 +330,24 @@ async function init() {
 
   // Mount React UI early so StatusBar is available for error display
   mountReactUI();
+
+  // Register safe placeholder callbacks immediately so the UI is never in a
+  // null-callback state during the async init window. Real callbacks are
+  // registered later via registerStoreCallbacks() once all subsystems exist.
+  {
+    const noop = () => {};
+    const store = useAppStore.getState();
+    store.setDockCallbacks({
+      onAdd: noop, onPause: noop, onSettings: noop, onCancel: noop, onModeChange: noop,
+    });
+    store.setSettingsCallbacks({
+      onSpeedChange: noop, onThemeChange: noop, onBoundaryChange: noop,
+      onDragChange: noop, onRotateChange: noop, onDampingChange: noop,
+      onTextSizeChange: noop, onAddMolecule: noop, onClear: noop, onResetView: noop,
+    });
+    store.setChooserCallbacks({ onSelectStructure: noop });
+    store.setTimelineCallbacks({ onScrub: noop, onReturnToLive: noop, onRestartFromHere: noop });
+  }
 
   // Scene runtime — created early so addMoleculeToScene is available during manifest load.
   // Getter deps resolve lazily; subsystems like _dispatch, _inputBindings are null during
@@ -476,7 +518,7 @@ async function init() {
     getInputManager: () => _inputBindings ? _inputBindings.getManager() : null,
     getStatusCtrl: () => statusCtrl,
     isWorkerActive: () => !!(_workerRuntime && _workerRuntime.isActive()),
-    sendWorkerInteraction: (cmd) => { if (_workerRuntime) _workerRuntime.sendInteraction(cmd); },
+    sendWorkerInteraction: (cmd) => { _recordingPolicy?.markUserEngaged(); if (_workerRuntime) _workerRuntime.sendInteraction(cmd); },
     updateStatus: (text) => _scene!.updateStatus(text),
     updateSceneStatus: () => _scene!.updateSceneStatus(),
   });
@@ -566,6 +608,67 @@ async function init() {
     onClearHighlight: () => _bondedGroupHighlight?.clearHighlight(),
   });
 
+  // ── Simulation timeline subsystem ──
+  _timeline = createSimulationTimeline();
+  _recordingPolicy = createTimelineRecordingPolicy();
+  _timelineCoordinator = createTimelineCoordinator({
+    timeline: _timeline,
+    getPhysics: () => physics,
+    getRenderer: () => renderer,
+    pause: () => {
+      if (!session.playback.paused) togglePlaybackPause();
+    },
+    resume: () => {
+      if (session.playback.paused) togglePlaybackPause();
+    },
+    isPaused: () => session.playback.paused,
+    reinitWorker: async () => {
+      if (_workerRuntime && physics.n > 0) {
+        _workerRuntime.destroy();
+        _workerRuntime = createWorkerRuntime({
+          onSchedulerTiming: (msPerStep, stepsCompleted) => {
+            const a = CONFIG.playback.profilerAlpha;
+            scheduler.prof.physStepMs += a * (msPerStep - scheduler.prof.physStepMs);
+            scheduler.totalStepsProfiled += stepsCompleted;
+          },
+          onFailure: (reason, lastSnapshot) => recoverLocalPhysicsAfterWorkerFailure(reason, lastSnapshot),
+        });
+        // Serialize from CURRENT physics state (post-restore), not scene-model
+        // reference coordinates. This is critical for restart: the worker must
+        // begin from the restored deformed positions, not the original placement.
+        const atoms: import('../../src/types/domain').AtomXYZ[] = [];
+        for (let i = 0; i < physics.n; i++) {
+          const i3 = i * 3;
+          atoms.push({ x: physics.pos[i3], y: physics.pos[i3 + 1], z: physics.pos[i3 + 2] });
+        }
+        const bonds = physics.getBonds().map(
+          (b: number[]) => [b[0], b[1], b[2]] as import('../../src/types/interfaces').BondTuple,
+        );
+        // Pass full dynamic state so the worker resumes from the same state as main thread.
+        const velocities = physics.vel ? new Float64Array(physics.vel.subarray(0, physics.n * 3)) : undefined;
+        const boundary = physics.getBoundarySnapshot();
+        const interaction = captureInteractionState(physics);
+        await _workerRuntime.init(_buildWorkerConfig(), atoms, bonds, velocities, boundary, interaction);
+      }
+    },
+    isWorkerActive: () => !!(_workerRuntime && _workerRuntime.isActive()),
+    forceRender: () => { scheduler.forceRenderThisTick = true; },
+    setSimTimePs: (timePs: number) => { _simTimePs = timePs; },
+    clearBondedGroupHighlight: () => { _bondedGroupHighlight?.clearHighlight(); },
+    clearRendererFeedback: () => { if (renderer) renderer.clearFeedback(); },
+    syncStoreState: () => {
+      if (!_timeline) return;
+      const ts = _timeline.getState();
+      useAppStore.getState().updateTimelineState({ ...ts });
+    },
+  });
+  // Register timeline callbacks via store
+  useAppStore.getState().setTimelineCallbacks({
+    onScrub: (timePs) => _timelineCoordinator?.handleScrub(timePs),
+    onReturnToLive: () => _timelineCoordinator?.returnToLive(),
+    onRestartFromHere: () => { _timelineCoordinator?.restartFromHere(); },
+  });
+
   // Narrow test hook — returns only the specific observable E2E tests need.
   (window as unknown as Record<string, unknown>)._getUIState = () => {
     const s = useAppStore.getState();
@@ -583,6 +686,7 @@ async function init() {
 
   // ── Named playback/settings commands for store callback registration ──
   function togglePlaybackPause() {
+    _recordingPolicy?.markUserEngaged();
     session.playback.paused = !session.playback.paused;
     if (useAppStore.getState().paused !== session.playback.paused) {
       useAppStore.getState().togglePause();
@@ -616,6 +720,7 @@ async function init() {
   }
 
   function changePlaybackSpeed(val: '0.5' | '1' | '2' | '4' | 'max') {
+    _recordingPolicy?.markUserEngaged();
     if (val === 'max') {
       session.playback.speedMode = 'max';
     } else {
@@ -650,20 +755,20 @@ async function init() {
     changeSpeed: changePlaybackSpeed,
     setInteractionMode: setInteractionModeSetting,
     forceRenderThisTick: () => { scheduler.forceRenderThisTick = true; },
-    clearPlayground: () => _scene!.clearPlayground(),
+    clearPlayground: () => { _scene!.clearPlayground(); if (_timeline) { _timeline.clear(); _simTimePs = 0; _recordingPolicy?.disarm(); useAppStore.getState().updateTimelineState(_timeline.getState()); } },
     resetView: () => renderer.resetView(),
     updateChooserRecentRow: () => _scene!.updateChooserRecentRow(),
-    setPhysicsWallMode: (mode) => physics.setWallMode(mode),
-    setPhysicsDragStrength: (v) => physics.setDragStrength(v),
-    setPhysicsRotateStrength: (v) => physics.setRotateStrength(v),
-    setPhysicsDamping: (d) => physics.setDamping(d),
+    setPhysicsWallMode: (mode) => { _recordingPolicy?.markUserEngaged(); physics.setWallMode(mode); },
+    setPhysicsDragStrength: (v) => { _recordingPolicy?.markUserEngaged(); physics.setDragStrength(v); },
+    setPhysicsRotateStrength: (v) => { _recordingPolicy?.markUserEngaged(); physics.setRotateStrength(v); },
+    setPhysicsDamping: (d) => { _recordingPolicy?.markUserEngaged(); physics.setDamping(d); },
     applyTheme: applyThemeSetting,
     applyTextSize: applyTextSizeSetting,
     isWorkerActive: () => !!(_workerRuntime && _workerRuntime.isActive()),
     sendWorkerInteraction: (cmd) => { if (_workerRuntime) _workerRuntime.sendInteraction(cmd); },
     isPlacementActive: () => !!(placement && placement.active),
     exitPlacement: (commit) => { if (placement) placement.exit(commit); },
-    startPlacement: (file, desc) => { if (placement) placement.start(file, desc); },
+    startPlacement: (file, desc) => { _recordingPolicy?.markUserEngaged(); if (placement) placement.start(file, desc); },
   });
 
   // Register camera control callbacks via store (consumed by CameraControls.tsx)
@@ -972,30 +1077,83 @@ function frameLoop(timestamp) {
     if (_workerRuntime) _workerRuntime.checkStalled(session.playback.paused);
 
     // Update positions + feedback (every tick)
+    // Skip live position sync during timeline review — review frames are display-only,
+    // applied by the timeline coordinator. Live sync would overwrite them.
+    const inReview = _timeline && _timeline.getState().mode === 'review';
     const updateStart = performance.now();
-    if (_workerRuntime && _workerRuntime.isActive()) {
-      // Worker mode: reconcile snapshot (position sync, remap, bond refresh)
-      const snapshot = _workerRuntime.getLatestSnapshot();
-      if (snapshot && snapshot.n > 0 && _snapshotReconciler) {
-        _snapshotReconciler.apply(snapshot);
-      }
-    } else {
-      // Sync mode: render from local physics
-      // Sync renderer if atoms were removed by containment wall
-      if (physics.n !== renderer.getAtomCount()) {
-        renderer.setAtomCount(physics.n);
-        // Force full visual sync after boundary removal: update bonds immediately
-        // so atom and bond visuals are consistent even if rendering is delayed.
-        physics.updateBondList();
-        physics.rebuildComponents();
-      }
-      if (renderer.getAtomCount() > 0 && physics.n > 0) {
-        renderer.updatePositions(physics);
+    if (!inReview) {
+      if (_workerRuntime && _workerRuntime.isActive()) {
+        // Worker mode: reconcile snapshot (position sync, remap, bond refresh)
+        const snapshot = _workerRuntime.getLatestSnapshot();
+        if (snapshot && snapshot.n > 0 && _snapshotReconciler) {
+          _snapshotReconciler.apply(snapshot);
+        }
+      } else {
+        // Sync mode: render from local physics
+        // Sync renderer if atoms were removed by containment wall
+        if (physics.n !== renderer.getAtomCount()) {
+          renderer.setAtomCount(physics.n);
+          // Force full visual sync after boundary removal: update bonds immediately
+          // so atom and bond visuals are consistent even if rendering is delayed.
+          physics.updateBondList();
+          physics.rebuildComponents();
+        }
+        if (renderer.getAtomCount() > 0 && physics.n > 0) {
+          renderer.updatePositions(physics);
+        }
       }
     }
-    renderer.updateFeedback(stateMachine.getFeedbackState());
+    // Skip live hover/selection feedback during review — review is display-only,
+    // and live hit-testing against historical positions would highlight wrong atoms.
+    if (!inReview) {
+      renderer.updateFeedback(stateMachine.getFeedbackState());
+    }
     const updateEnd = performance.now();
     scheduler.prof.updatePosMs += alpha * ((updateEnd - updateStart) - scheduler.prof.updatePosMs);
+
+    // ── Timeline recording (only in live mode, after position update, when armed) ──
+    if (_recordingPolicy?.isArmed() && _timeline && _timeline.getState().mode === 'live' && physics.n > 0 && substepsThisFrame > 0) {
+      // Advance simulated time (substeps * stepsPerFrame * dt in fs → ps)
+      _simTimePs += substepsThisFrame * CONFIG.physics.stepsPerFrame * CONFIG.physics.dt;
+
+      // Dense frame + restart frame recording (~10 Hz)
+      if (_timeline.shouldRecordFrame()) {
+        // In worker mode, use the latest worker snapshot (authoritative positions/velocities)
+        const workerSnap = (_workerRuntime && _workerRuntime.isActive()) ? _workerRuntime.getLatestSnapshot() : null;
+        const recN = workerSnap ? workerSnap.n : physics.n;
+        const recPos = workerSnap ? workerSnap.positions.subarray(0, workerSnap.n * 3) : physics.pos.subarray(0, physics.n * 3);
+        const interaction = captureInteractionState(physics);
+        const boundary = captureBoundaryState(physics);
+
+        // Review frame (positions only — lightweight for smooth scrubbing)
+        _timeline.recordFrame({ timePs: _simTimePs, n: recN, positions: recPos, interaction, boundary });
+
+        // Restart frame — full force-defining state for physically consistent restart.
+        // Positions/velocities come from the same authority (worker snapshot or local physics).
+        // Bonds also come from the same authority: after reconciler has applied the snapshot,
+        // local physics topology is in sync with the position authority.
+        const recVel = workerSnap?.velocities
+          ? workerSnap.velocities.subarray(0, workerSnap.n * 3)
+          : physics.vel.subarray(0, physics.n * 3);
+        const recBonds = physics.getBonds().map((b: number[]) => [b[0], b[1], b[2]] as [number, number, number]);
+        const recConfig = { damping: physics.getDamping(), kDrag: physics.getDragStrength(), kRotate: physics.getRotateStrength() };
+        _timeline.recordRestartFrame({ timePs: _simTimePs, n: recN, positions: recPos, velocities: recVel, bonds: recBonds, config: recConfig, interaction, boundary });
+
+        // Update store at recording cadence
+        useAppStore.getState().updateTimelineState(_timeline.getState());
+      }
+
+      // Sparse checkpoint recording (~1/sec)
+      if (_timeline.shouldRecordCheckpoint()) {
+        _timeline.recordCheckpoint({
+          timePs: _simTimePs,
+          physics: physics.createCheckpoint(),
+          config: { damping: physics.getDamping(), kDrag: physics.getDragStrength(), kRotate: physics.getRotateStrength() },
+          interaction: captureInteractionState(physics),
+          boundary: captureBoundaryState(physics),
+        });
+      }
+    }
 
     // Render decision: budget-driven with hysteresis (pure function)
     const usedMs = (substepsThisFrame * scheduler.prof.physStepMs) + scheduler.prof.updatePosMs + scheduler.prof.otherMs;

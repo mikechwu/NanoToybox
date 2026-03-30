@@ -1410,6 +1410,44 @@ export class PhysicsEngine {
   getWallRemovedCount() { return this._wallRemovedCount; }
   getActiveAtomCount() { return this.n; }
 
+  /** Snapshot boundary state for timeline checkpoints. */
+  getBoundarySnapshot(): {
+    mode: 'contain' | 'remove';
+    wallRadius: number;
+    wallCenter: [number, number, number];
+    wallCenterSet: boolean;
+    removedCount: number;
+    damping: number;
+  } {
+    return {
+      mode: this._wallMode as 'contain' | 'remove',
+      wallRadius: this._wallRadius,
+      wallCenter: [this._wallCenter[0], this._wallCenter[1], this._wallCenter[2]],
+      wallCenterSet: this._wallCenterSet,
+      removedCount: this._wallRemovedCount,
+      damping: this.damping,
+    };
+  }
+
+  /** Restore boundary state from a timeline checkpoint snapshot. */
+  restoreBoundarySnapshot(snap: {
+    mode: 'contain' | 'remove';
+    wallRadius: number;
+    wallCenter: [number, number, number];
+    wallCenterSet: boolean;
+    removedCount: number;
+    damping: number;
+  }): void {
+    this._wallMode = snap.mode;
+    this._wallRadius = snap.wallRadius;
+    this._wallCenter[0] = snap.wallCenter[0];
+    this._wallCenter[1] = snap.wallCenter[1];
+    this._wallCenter[2] = snap.wallCenter[2];
+    this._wallCenterSet = snap.wallCenterSet;
+    this._wallRemovedCount = snap.removedCount;
+    this.setDamping(snap.damping);
+  }
+
   /**
    * Remove all atoms beyond the wall radius from wall center.
    * Removes any atom (isolated or bonded) that has crossed the boundary.

@@ -138,8 +138,8 @@ describe('BondedGroupsPanel', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     const c = renderPanel();
     const panel = c.querySelector('.bonded-groups-panel');
-    expect(panel?.classList.contains('side-left')).toBe(true);
-    expect(panel?.classList.contains('side-right')).toBe(false);
+    expect(panel?.classList.contains('side-right')).toBe(true);
+    expect(panel?.classList.contains('side-left')).toBe(false);
   });
 
   it('uses side-right class when store side is right', () => {
@@ -245,5 +245,39 @@ describe('BondedGroupsPanel', () => {
     useAppStore.getState().setSelectedBondedGroup(null);
     // Clear button should still be visible (tracked atoms exist)
     expect(c.querySelector('.bonded-groups-clear')).toBeTruthy();
+  });
+
+  it('panel hidden during timeline review mode', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().setTimelineMode('review');
+    const c = renderPanel();
+    expect(c.innerHTML).toBe('');
+  });
+
+  it('bonded-group select blocked during review', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    // Enter review after groups visible
+    useAppStore.getState().setTimelineMode('review');
+    // toggleSelectedGroup should no-op
+    const hl = createBondedGroupHighlightRuntime({
+      getBondedGroupRuntime: () => mockBgr,
+      getRenderer: () => ({ setHighlightedAtoms: () => {} }),
+      getPhysics: () => ({ n: 20 }),
+    });
+    hl.toggleSelectedGroup('a');
+    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
+  });
+
+  it('bonded-group hover blocked during review', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().setTimelineMode('review');
+    const hl = createBondedGroupHighlightRuntime({
+      getBondedGroupRuntime: () => mockBgr,
+      getRenderer: () => ({ setHighlightedAtoms: () => {} }),
+      getPhysics: () => ({ n: 20 }),
+    });
+    hl.setHoveredGroup('a');
+    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
   });
 });
