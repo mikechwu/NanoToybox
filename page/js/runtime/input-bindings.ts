@@ -88,6 +88,9 @@ export function createInputBindings(deps: InputBindingsDeps): InputBindings {
     // Wire camera state getter and triad interaction source
     const renderer = deps.getRenderer();
     _manager.setCameraStateGetter(() => useAppStore.getState().cameraMode);
+    _manager.setScenePolicyGetter(() => ({
+      allowAtomInteraction: useAppStore.getState().timelineMode !== 'review',
+    }));
     _manager.setTriadSource({
       isInsideTriad: (cx, cy) => renderer.isInsideTriad(cx, cy),
       applyOrbitDelta: (dx, dy) => renderer.applyOrbitDelta(dx, dy),

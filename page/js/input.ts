@@ -61,6 +61,8 @@ export class InputManager {
 
   // Camera mode getter (injected from store, not read from triad source)
   _getCameraMode: () => 'orbit' | 'freelook';
+  // Scene interaction policy getter (injected from input-bindings)
+  _getScenePolicy: () => { allowAtomInteraction: boolean };
 
   // Key-tracking set for Free-Look flight (replaces key-repeat approach)
   _pressedKeys: Set<string>;
@@ -107,6 +109,7 @@ export class InputManager {
     this._triadLastY = 0;
     this._triadSource = null;
     this._getCameraMode = () => 'orbit';
+    this._getScenePolicy = () => ({ allowAtomInteraction: true });
     this._pressedKeys = new Set();
     this._bgOrbitLastX = 0;
     this._bgOrbitLastY = 0;
@@ -143,6 +146,11 @@ export class InputManager {
   /** Connect the triad interaction source (renderer). Called once from main.ts. */
   setTriadSource(source: InputManager['_triadSource']) {
     this._triadSource = source;
+  }
+
+  /** Inject scene interaction policy (e.g. review mode disables atom interaction). */
+  setScenePolicyGetter(getter: () => { allowAtomInteraction: boolean }) {
+    this._getScenePolicy = getter;
   }
 
   /** Inject camera mode getter (reads from store, respects feature flag). */
@@ -455,14 +463,25 @@ export class InputManager {
     }
 
     if (e.button === 0) {
+      // Scene policy: in review mode, left-click becomes camera orbit
+      const { allowAtomInteraction } = this._getScenePolicy();
+      if (!allowAtomInteraction) {
+        this.isDragging = false;
+        this.isTriadDragging = false;
+        this.isCamera = true;
+        this._bgOrbitLastX = e.clientX;
+        this._bgOrbitLastY = e.clientY;
+        this._cameraPointerId = e.pointerId;
+        this.canvas.setPointerCapture(e.pointerId);
+        this._triadSource?.onBackgroundOrbitStart?.();
+        return;
+      }
+
       const atomIdx = this._raycastAtom(e.clientX, e.clientY);
       if (atomIdx >= 0) {
         if (this._getCameraMode() === 'freelook') {
-          // Free-Look: focus-select only — bypass state machine entirely.
-          // No isDragging, no onPointerDown, no state machine transition.
           this._triadSource?.onFreeLookFocusSelect?.(atomIdx);
         } else {
-          // Orbit: normal atom interaction
           this.isDragging = true;
           this.isCamera = false;
           this.cb.onPointerDown?.(atomIdx, e.clientX, e.clientY, false);
@@ -565,12 +584,23 @@ export class InputManager {
       return;
     }
 
-    // 2. Try atom interaction — atom hit always wins
+    // 2. Scene interaction policy — in review mode, all touch becomes camera orbit
+    //    (no atom picking, no drag/move/rotate, no hover/select)
+    const { allowAtomInteraction } = this._getScenePolicy();
+    if (!allowAtomInteraction) {
+      this.isDragging = false;
+      this.isTriadDragging = false;
+      this.isCamera = true;
+      this._bgOrbitLastX = touch.clientX;
+      this._bgOrbitLastY = touch.clientY;
+      this._triadSource?.onBackgroundOrbitStart?.();
+      return;
+    }
+
+    // 3. Try atom interaction — atom hit always wins (live mode only)
     const atomIdx = this._raycastAtom(touch.clientX, touch.clientY);
     if (atomIdx >= 0) {
       if (this._getCameraMode() === 'freelook') {
-        // Free-Look: focus-select only — bypass state machine entirely.
-        // No isDragging, no onPointerDown, no state machine transition.
         this._triadSource?.onFreeLookFocusSelect?.(atomIdx);
       } else {
         this.isDragging = true;
@@ -579,7 +609,7 @@ export class InputManager {
       return;
     }
 
-    // 3. Empty space → background orbit via applyOrbitDelta (same path as triad drag)
+    // 4. Empty space → background orbit via applyOrbitDelta (same path as triad drag)
     this.isCamera = true;
     this._bgOrbitLastX = touch.clientX;
     this._bgOrbitLastY = touch.clientY;
