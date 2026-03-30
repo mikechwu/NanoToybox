@@ -83,7 +83,7 @@ async function runTests() {
   log('\nTest 2: Init with dimer');
   const initPromise = collectMessages(worker, 1);
   worker.postMessage({ type: 'init', commandId: ++commandId, config: {
-    dt: 0.5, stepsPerFrame: 4, damping: 0, kDrag: 2, kRotate: 5, wallMode: 'contain', useWasm: true
+    dt: 0.5, dampingReferenceSteps: 4, damping: 0, kDrag: 2, kRotate: 5, wallMode: 'contain', useWasm: true
   }, atoms: DIMER_ATOMS, bonds: DIMER_BONDS });
   const [initResult] = await initPromise;
   assert(initResult.type === 'initResult', `Receives initResult (got: ${initResult.type})`);
@@ -154,7 +154,7 @@ async function runTests() {
   log('\nTest 7: Re-init with useWasm: false');
   const reinitPromise = collectMessages(worker, 1);
   worker.postMessage({ type: 'init', commandId: ++commandId, config: {
-    dt: 0.5, stepsPerFrame: 4, damping: 0.1, kDrag: 3.5, kRotate: 7, wallMode: 'remove', useWasm: false
+    dt: 0.5, dampingReferenceSteps: 4, damping: 0.1, kDrag: 3.5, kRotate: 7, wallMode: 'remove', useWasm: false
   }, atoms: DIMER_ATOMS, bonds: DIMER_BONDS });
   const [reinitResult] = await reinitPromise;
   assert(reinitResult.type === 'initResult', `Re-init produces initResult`);
@@ -174,7 +174,7 @@ async function runTests() {
   // and drain AFTER initResult, so we should get: initResult, then frameResult
   const serialMsgs = collectMessages(worker2, 2);
   worker2.postMessage({ type: 'init', commandId: 900, config: {
-    dt: 0.5, stepsPerFrame: 4, damping: 0, kDrag: 2, kRotate: 5, wallMode: 'contain', useWasm: false
+    dt: 0.5, dampingReferenceSteps: 4, damping: 0, kDrag: 2, kRotate: 5, wallMode: 'contain', useWasm: false
   }, atoms: DIMER_ATOMS, bonds: DIMER_BONDS });
   worker2.postMessage({ type: 'requestFrame', commandId: 901, stepsRequested: 1 });
 
