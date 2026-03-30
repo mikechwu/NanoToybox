@@ -57,7 +57,7 @@ NanoToybox/
 │   │   │   ├── snapshot-reconciler.ts # Worker snapshot → physics/renderer reconciliation
 │   │   │   ├── overlay-layout.ts     # Hint clearance + triad sizing (RAF-coalesced, ResizeObserver)
 │   │   │   ├── overlay-runtime.ts    # Overlay open/close policy (Escape, outside-click)
-│   │   │   ├── interaction-dispatch.ts # Interaction command effects + worker mirroring
+│   │   │   ├── interaction-dispatch.ts # Interaction command effects, worker mirroring, timeline arming
 │   │   │   ├── input-bindings.ts     # InputManager construction, sync, callback wiring
 │   │   │   ├── ui-bindings.ts        # Zustand store callback registration
 │   │   │   ├── atom-source.ts        # Renderer-to-input atom-picking adapter
@@ -69,7 +69,7 @@ NanoToybox/
 │   │   │   ├── simulation-timeline.ts        # Ring buffers (review frames, restart frames, checkpoints), RestartState contract, frozen review range, truncation on restart
 │   │   │   ├── simulation-timeline-coordinator.ts # Orchestrates review/restart across physics, renderer, worker, store
 │   │   │   ├── timeline-context-capture.ts   # Capture/restore interaction and boundary state via public physics API
-│   │   │   ├── timeline-recording-policy.ts  # Arming policy (disarmed until first user interaction)
+│   │   │   ├── timeline-recording-policy.ts  # Arming policy (disarmed until first atom interaction)
 │   │   │   ├── timeline-recording-orchestrator.ts # Owns recording cadence, authority-aware capture from reconciled physics
 │   │   │   ├── timeline-subsystem.ts         # Factory that creates the full subsystem, exposes high-level interface to main.ts
 │   │   │   ├── restart-state-adapter.ts      # Serialization/application/capture of RestartState
@@ -181,7 +181,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
    = single authority)  (boundary + interaction state)
 ```
 
-**Recording flow:** timeline-recording-policy arms after first user interaction → timeline-recording-orchestrator captures from reconciled physics state (single authority) → simulation-timeline stores dense review frames + periodic restart frames / checkpoints.
+**Recording flow:** timeline-recording-policy arms after first atom interaction (drag/move/rotate/flick via interaction-dispatch) → timeline-recording-orchestrator captures from reconciled physics state (single authority) → simulation-timeline stores dense review frames + periodic restart frames / checkpoints.
 
 **Review flow:** simulation-timeline-coordinator enters review mode → renderer.updateReviewFrame (display-only, no physics mutation) → all scene input gated at input-bindings boundary → TimelineBar scrub drives reviewTimePs.
 
@@ -196,7 +196,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 - All scene input gated at input-bindings boundary during review
 - RestartState is the single authoritative contract for rewindable physical state (interaction is metadata only, not restored)
 - Recording uses reconciled physics state as single authority
-- Timeline recording disarmed until first meaningful user interaction
+- Timeline recording disarmed until first atom interaction (placement, pause, speed, and settings do not arm)
 - Scheduler timing derived live from engine `dtFs`, not cached constants
 
 ## Key Design Decisions
@@ -217,7 +217,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 - **snapshot-reconciler.ts** — worker snapshot → physics position sync, atom-remap handling, bond refresh
 - **overlay-layout.ts** — hint clearance and triad sizing/positioning (RAF-coalesced, ResizeObserver)
 - **overlay-runtime.ts** — overlay open/close policy (Escape, outside-click, device-mode switch)
-- **interaction-dispatch.ts** — interaction command side effects and worker mirroring (flick ordering)
+- **interaction-dispatch.ts** — interaction command side effects, worker mirroring (flick ordering), and timeline arming (unconditional on startDrag/startMove/startRotate/flick)
 - **input-bindings.ts** — InputManager construction, sync (scene-mutation resync contract)
 - **ui-bindings.ts** — Zustand store callback registration (React intents → imperative commands)
 - **atom-source.ts** — shared renderer-to-input atom-picking adapter
@@ -229,7 +229,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 - **simulation-timeline.ts** — ring buffers for dense review frames, restart frames, and checkpoints; RestartState contract; frozen review range; truncation on restart
 - **simulation-timeline-coordinator.ts** — orchestrates review/restart across physics, renderer, worker, store
 - **timeline-context-capture.ts** — capture/restore interaction and boundary state via public physics API
-- **timeline-recording-policy.ts** — arming policy (disarmed until first meaningful user interaction)
+- **timeline-recording-policy.ts** — arming policy (disarmed until first atom interaction; placement, pause, speed, and settings do not arm)
 - **timeline-recording-orchestrator.ts** — owns recording cadence, authority-aware capture from reconciled physics state (single authority)
 - **timeline-subsystem.ts** — factory that creates the full timeline subsystem, exposes high-level interface to main.ts
 - **restart-state-adapter.ts** — serialization, application, and capture of RestartState
@@ -255,7 +255,7 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | placement state | placement.ts (`_state`) | React DockBar (add/cancel via dockCallbacks) |
 | scheduler / effectsGate | main.ts (frame loop only) | — |
 | Timeline state (`mode`, `currentTimePs`, `reviewTimePs`, `rangePs`, etc.) | simulation-timeline-coordinator.ts (via store) | TimelineBar (scrub, restart), timeline-recording-orchestrator (range updates) |
-| Timeline recording arm state | timeline-recording-policy.ts | input-bindings (first meaningful user interaction) |
+| Timeline recording arm state | timeline-recording-policy.ts | interaction-dispatch (first atom interaction: drag/move/rotate/flick) |
 | Timeline buffers (review frames, restart frames, checkpoints) | simulation-timeline.ts | timeline-recording-orchestrator (writes), simulation-timeline-coordinator (reads) |
 
 ### Overlay Close Policy

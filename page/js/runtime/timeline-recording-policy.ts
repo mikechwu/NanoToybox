@@ -1,24 +1,36 @@
 /**
  * Timeline recording policy — controls when history recording is active.
  *
- * Recording stays disarmed until the first user action that changes
- * simulation behavior. This prevents idle sessions from allocating
- * history buffers.
+ * Recording stays disarmed until the first direct atom interaction
+ * (drag, move, rotate, flick). This prevents idle sessions from
+ * allocating history buffers.
+ *
+ * The following actions do NOT arm recording:
+ *   - Molecule placement (open, preview, commit)
+ *   - Pause / resume
+ *   - Speed changes
+ *   - Physics settings (wall mode, drag/rotate strength, damping)
+ *
+ * The createInteractionDispatch function calls markAtomInteractionStarted()
+ * unconditionally (not gated by isWorkerActive) when dispatching atom
+ * interaction commands (startDrag, startMove, startRotate, flick). This
+ * fires whether or not the worker is active, so both worker and sync/local
+ * modes arm recording on atom interaction. Arming is idempotent, so only
+ * the first call in an interaction sequence matters.
  *
  * Usage:
- *   - Call markUserEngaged() from any user-driven action that changes
- *     the simulation trajectory (drag, pause, settings change, etc.)
+ *   - Call markAtomInteractionStarted() ONLY from atom interaction paths
  *   - Call isArmed() in the frame loop before recording
  *   - Call disarm() on clear/reset
  *
- * This is the single ownership point for the arming policy. New user
- * action paths should call markUserEngaged() here instead of scattering
- * arming calls across main.ts.
+ * This is the single ownership point for the arming policy. New action
+ * paths must NOT call markAtomInteractionStarted() unless they represent
+ * a direct user interaction with atoms in the scene.
  */
 
 export interface TimelineRecordingPolicy {
-  /** Arm recording. Idempotent — safe to call on every interaction. */
-  markUserEngaged(): void;
+  /** Arm recording on first atom interaction. Idempotent. */
+  markAtomInteractionStarted(): void;
   /** Is recording currently armed? */
   isArmed(): boolean;
   /** Disarm recording (e.g. on clear/reset). */
@@ -29,7 +41,7 @@ export function createTimelineRecordingPolicy(): TimelineRecordingPolicy {
   let _armed = false;
 
   return {
-    markUserEngaged() { _armed = true; },
+    markAtomInteractionStarted() { _armed = true; },
     isArmed() { return _armed; },
     disarm() { _armed = false; },
   };

@@ -83,7 +83,7 @@ describe('TimelineSubsystem', () => {
 
   it('records after arming', () => {
     const sub = createSub();
-    sub.markUserEngaged();
+    sub.markAtomInteractionStarted();
     sub.recordAfterReconciliation(4);
     const state = useAppStore.getState();
     expect(state.timelineRangePs).not.toBeNull();
@@ -91,7 +91,7 @@ describe('TimelineSubsystem', () => {
 
   it('clearAndDisarm resets and disarms', () => {
     const sub = createSub();
-    sub.markUserEngaged();
+    sub.markAtomInteractionStarted();
     sub.recordAfterReconciliation(4);
     expect(useAppStore.getState().timelineRangePs).not.toBeNull();
 
@@ -105,7 +105,7 @@ describe('TimelineSubsystem', () => {
 
   it('teardown clears store state', () => {
     const sub = createSub();
-    sub.markUserEngaged();
+    sub.markAtomInteractionStarted();
     sub.recordAfterReconciliation(4);
     sub.teardown();
     expect(useAppStore.getState().timelineMode).toBe('live');
@@ -115,7 +115,7 @@ describe('TimelineSubsystem', () => {
 
   it('isInReview reflects review mode', () => {
     const sub = createSub();
-    sub.markUserEngaged();
+    sub.markAtomInteractionStarted();
     sub.recordAfterReconciliation(4);
     expect(sub.isInReview()).toBe(false);
 
@@ -128,7 +128,7 @@ describe('TimelineSubsystem', () => {
 
   it('does not record when stepsReconciled is 0', () => {
     const sub = createSub();
-    sub.markUserEngaged();
+    sub.markAtomInteractionStarted();
 
     // First reconciliation records
     sub.recordAfterReconciliation(4);
@@ -150,5 +150,63 @@ describe('TimelineSubsystem', () => {
     expect(cbs!.onScrub).toBeTypeOf('function');
     expect(cbs!.onReturnToLive).toBeTypeOf('function');
     expect(cbs!.onRestartFromHere).toBeTypeOf('function');
+  });
+
+  // ── Regression: only atom interaction arms recording ──
+  // These tests pin the product rule that molecule placement, playback
+  // controls, and physics settings must never start timeline recording.
+  // Only direct atom interactions (drag, move, rotate, flick) arm the
+  // timeline. See timeline-arming-wiring.test.ts for full wiring coverage.
+
+  it('recording stays disarmed when only reconciliation ticks occur (simulates placement-only flow)', () => {
+    const sub = createSub();
+    // Simulate: initial C60 loaded, physics running, user has not interacted with atoms.
+    // Frame loop calls recordAfterReconciliation each tick — should produce no frames.
+    sub.recordAfterReconciliation(4);
+    sub.recordAfterReconciliation(4);
+    sub.recordAfterReconciliation(4);
+    expect(useAppStore.getState().timelineRangePs).toBeNull();
+  });
+
+  it('multiple molecule additions without atom interaction keep timeline empty', () => {
+    const sub = createSub();
+    // Simulate: user adds molecule 1 (placement only, no markAtomInteractionStarted call)
+    sub.recordAfterReconciliation(4);
+    // user adds molecule 2
+    sub.recordAfterReconciliation(4);
+    // user adds molecule 3
+    sub.recordAfterReconciliation(4);
+    // Still disarmed — no atom interaction has occurred
+    expect(useAppStore.getState().timelineRangePs).toBeNull();
+  });
+
+  it('first atom interaction arms recording after prior placements', () => {
+    const sub = createSub();
+    // Phase 1: placement-only ticks — no recording
+    sub.recordAfterReconciliation(4);
+    sub.recordAfterReconciliation(4);
+    expect(useAppStore.getState().timelineRangePs).toBeNull();
+
+    // Phase 2: user drags an atom → markAtomInteractionStarted
+    sub.markAtomInteractionStarted();
+    sub.recordAfterReconciliation(4);
+    expect(useAppStore.getState().timelineRangePs).not.toBeNull();
+  });
+
+  it('timeline history begins at atom interaction time, not earlier sim time', () => {
+    const sub = createSub();
+    // 100 ticks of physics without arming (simulates idle + placements)
+    for (let i = 0; i < 100; i++) sub.recordAfterReconciliation(4);
+    expect(useAppStore.getState().timelineRangePs).toBeNull();
+
+    // Now user interacts → arm and record
+    sub.markAtomInteractionStarted();
+    sub.recordAfterReconciliation(4);
+    const range = useAppStore.getState().timelineRangePs;
+    expect(range).not.toBeNull();
+    // The first recorded frame time should reflect only the steps after arming,
+    // not the 100 ticks worth of sim time that elapsed before arming.
+    // 4 steps × 0.5 fs / 1000 = 0.002 ps (only the post-arming tick)
+    expect(range!.start).toBeCloseTo(0.002);
   });
 });

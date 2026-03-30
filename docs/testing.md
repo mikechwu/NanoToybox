@@ -95,7 +95,7 @@ Each test writes results to `outputs/testN_*/`:
 
 ## Frontend Unit Tests
 
-Automated unit tests live in `tests/unit/` and run via Vitest. Total suite: **533 tests**.
+Automated unit tests live in `tests/unit/` and run via Vitest. Total suite: **582 tests**.
 
 ```bash
 # Run all unit tests
@@ -105,7 +105,7 @@ npx vitest run
 npx vitest run tests/unit/simulation-timeline.test.ts
 ```
 
-### Timeline Subsystem (~60 tests across 6 files)
+### Timeline Subsystem (~93 tests across 9 files)
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
@@ -113,7 +113,10 @@ npx vitest run tests/unit/simulation-timeline.test.ts
 | `timeline-bar-lifecycle.test.tsx` | 6 | TimelineBar React hook safety (null→valid store transition), review mode toggle, action slot stability across re-renders, layout structure |
 | `timeline-recording-orchestrator.test.ts` | 9 | Orchestrator arming, recording cadence (frame capture rate), review-mode blocking of new recordings, sim-time advancement during recording, reset behavior |
 | `timeline-recording-policy.test.ts` | 5 | Arm/disarm/re-arm lifecycle, policy state transitions |
-| `timeline-subsystem.test.ts` | 8 | Subsystem boundary isolation, clearAndDisarm, teardown cleanup, isInReview predicate, installStoreCallbacks wiring |
+| `timeline-subsystem.test.ts` | 11 | Subsystem boundary isolation, clearAndDisarm, teardown cleanup, isInReview predicate, installStoreCallbacks wiring, placement-does-not-arm regression tests |
+| `timeline-arming-wiring.test.ts` | 10 | Store callback integration: placement, pause, speed, physics settings do not arm; atom interaction arms after placement |
+| `interaction-dispatch-arming.test.ts` | 16 | Real createInteractionDispatch: arming on startDrag/startMove/startRotate/flick regardless of worker state; continuation events do not arm; worker mirroring independent of arming |
+| `store-callbacks-arming.test.ts` | 7 | Real registerStoreCallbacks: chooser, dock, and settings callbacks verified through actual store surface |
 | `reconciled-steps.test.ts` | 4 | Snapshot deduplication — ensures reconciled steps don't produce duplicate frames |
 
 ### Restart & State Restore (11 tests across 2 files)

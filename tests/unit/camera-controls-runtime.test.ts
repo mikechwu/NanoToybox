@@ -153,6 +153,7 @@ describe('interaction-dispatch normal start', () => {
       getStatusCtrl: () => null,
       isWorkerActive: () => false,
       sendWorkerInteraction: vi.fn(),
+      markAtomInteractionStarted: vi.fn(),
       updateStatus: vi.fn(),
       updateSceneStatus: vi.fn(),
       physics,

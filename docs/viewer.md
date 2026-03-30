@@ -37,7 +37,7 @@ npm run dev
 | Bonded clusters | Side panel showing live connected components. Click to select (persistent frozen highlight), hover to preview (desktop). Two-level expand: large clusters + collapsible small clusters. Clear Highlight button when tracked set exists. |
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
 | Pause | Primary control — freezes physics, camera/UI remain active |
-| Timeline | TimelineBar with scrub track, review mode (display-only playback of history), and restart from dense frames. Recording arms on first meaningful interaction |
+| Timeline | TimelineBar with scrub track, review mode (display-only playback of history), and restart from dense frames. Recording arms on first atom interaction (drag/move/rotate/flick) |
 | Status | Message-only StatusBar: shows statusError or statusText, returns null otherwise |
 | Scene controls | Add (dock) and Add Molecule (settings sheet) both open the chooser; chooser shows a pinned Recent shortcut after first placement. Clear playground, Reset View. |
 
@@ -91,7 +91,7 @@ Restart uses dense restart frames recorded at 10 Hz containing pos + vel + bonds
 
 **Recording Policy**
 
-Recording is disarmed until the first meaningful user interaction. It arms on: drag, pause, speed change, settings change, or molecule placement. Clearing the playground disarms recording.
+Recording is disarmed until the first direct atom interaction (drag, move, rotate, flick). Molecule placement, pause/resume, speed changes, and physics settings do not arm recording — users can set up complex scenes before history begins. Clearing the playground disarms recording.
 
 ### StatusBar
 

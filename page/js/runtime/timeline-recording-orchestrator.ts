@@ -46,6 +46,12 @@ export function createRecordingOrchestrator(deps: RecordingOrchestratorDeps): Ti
     const physics = deps.getPhysics();
     if (physics.n === 0 || stepsReconciled === 0) return;
 
+    // Design note: sim time only advances while armed. Pre-arming ticks
+    // (idle simulation, molecule placements) do not accumulate time, so the
+    // first recorded frame reflects only post-interaction physics — not
+    // elapsed wall time before the user touched an atom. This is intentional:
+    // history begins on the first post-arming simulation step.
+    //
     // Advance sim time by ACTUAL completed steps.
     // Each stepOnce() advances by dtFs femtoseconds; convert to picoseconds.
     _simTimePs += stepsReconciled * deps.getDtFs() / 1000;

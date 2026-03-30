@@ -28,6 +28,9 @@ export interface InteractionDispatchDeps {
   getStatusCtrl: () => { fadeHint: () => void } | null;
   isWorkerActive: () => boolean;
   sendWorkerInteraction: (cmd: WorkerInteractionCommand) => void;
+  /** Arm timeline recording on first atom interaction. Called unconditionally
+   *  on startDrag/startMove/startRotate/flick — not gated by isWorkerActive. */
+  markAtomInteractionStarted: () => void;
   updateStatus: (text: string) => void;
   updateSceneStatus: () => void;
 }
@@ -49,6 +52,18 @@ export function createInteractionDispatch(deps: InteractionDispatchDeps) {
         focusMoleculeByAtom(atomIdx, deps.getRenderer());
       },
     });
+
+    // Arm timeline recording on interaction-initiating actions.
+    // Unconditional — must not be gated by isWorkerActive so that
+    // sync/local mode also arms recording on atom interaction.
+    switch (cmd.action) {
+      case 'startDrag':
+      case 'startMove':
+      case 'startRotate':
+      case 'flick':
+        deps.markAtomInteractionStarted();
+        break;
+    }
 
     // Forward interaction commands to worker to keep worker scene in sync
     if (deps.isWorkerActive()) {

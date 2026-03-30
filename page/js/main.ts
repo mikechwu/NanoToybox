@@ -512,7 +512,8 @@ async function init() {
     getInputManager: () => _inputBindings ? _inputBindings.getManager() : null,
     getStatusCtrl: () => statusCtrl,
     isWorkerActive: () => !!(_workerRuntime && _workerRuntime.isActive()),
-    sendWorkerInteraction: (cmd) => { _timelineSub?.markUserEngaged(); if (_workerRuntime) _workerRuntime.sendInteraction(cmd); },
+    sendWorkerInteraction: (cmd) => { if (_workerRuntime) _workerRuntime.sendInteraction(cmd); },
+    markAtomInteractionStarted: () => { _timelineSub?.markAtomInteractionStarted(); },
     updateStatus: (text) => _scene!.updateStatus(text),
     updateSceneStatus: () => _scene!.updateSceneStatus(),
   });
@@ -641,7 +642,6 @@ async function init() {
 
   // ── Named playback/settings commands for store callback registration ──
   function togglePlaybackPause() {
-    _timelineSub?.markUserEngaged();
     session.playback.paused = !session.playback.paused;
     if (useAppStore.getState().paused !== session.playback.paused) {
       useAppStore.getState().togglePause();
@@ -675,7 +675,6 @@ async function init() {
   }
 
   function changePlaybackSpeed(val: '0.5' | '1' | '2' | '4' | 'max') {
-    _timelineSub?.markUserEngaged();
     if (val === 'max') {
       session.playback.speedMode = 'max';
     } else {
@@ -713,17 +712,17 @@ async function init() {
     clearPlayground: () => { _scene!.clearPlayground(); if (_timelineSub) _timelineSub.clearAndDisarm(); },
     resetView: () => renderer.resetView(),
     updateChooserRecentRow: () => _scene!.updateChooserRecentRow(),
-    setPhysicsWallMode: (mode) => { _timelineSub?.markUserEngaged(); physics.setWallMode(mode); },
-    setPhysicsDragStrength: (v) => { _timelineSub?.markUserEngaged(); physics.setDragStrength(v); },
-    setPhysicsRotateStrength: (v) => { _timelineSub?.markUserEngaged(); physics.setRotateStrength(v); },
-    setPhysicsDamping: (d) => { _timelineSub?.markUserEngaged(); physics.setDamping(d); },
+    setPhysicsWallMode: (mode) => { physics.setWallMode(mode); },
+    setPhysicsDragStrength: (v) => { physics.setDragStrength(v); },
+    setPhysicsRotateStrength: (v) => { physics.setRotateStrength(v); },
+    setPhysicsDamping: (d) => { physics.setDamping(d); },
     applyTheme: applyThemeSetting,
     applyTextSize: applyTextSizeSetting,
     isWorkerActive: () => !!(_workerRuntime && _workerRuntime.isActive()),
     sendWorkerInteraction: (cmd) => { if (_workerRuntime) _workerRuntime.sendInteraction(cmd); },
     isPlacementActive: () => !!(placement && placement.active),
     exitPlacement: (commit) => { if (placement) placement.exit(commit); },
-    startPlacement: (file, desc) => { _timelineSub?.markUserEngaged(); if (placement) placement.start(file, desc); },
+    startPlacement: (file, desc) => { if (placement) placement.start(file, desc); },
   });
 
   // Register camera control callbacks via store (consumed by CameraControls.tsx)

@@ -27,8 +27,9 @@ export interface TimelineSubsystemDeps {
 
 /** High-level subsystem handle — main.ts should only use these methods. */
 export interface TimelineSubsystem {
-  /** Arm recording on first user interaction. Idempotent. */
-  markUserEngaged(): void;
+  /** Arm recording on first atom interaction. Idempotent.
+   *  Placement-only actions must NOT call this. */
+  markAtomInteractionStarted(): void;
   /** Record after reconciliation. Pass actual completed steps, not budgeted. */
   recordAfterReconciliation(stepsReconciled: number): void;
   /** Is the simulation in review mode? */
@@ -80,7 +81,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
   });
 
   return {
-    markUserEngaged: () => policy.markUserEngaged(),
+    markAtomInteractionStarted: () => policy.markAtomInteractionStarted(),
     recordAfterReconciliation: (steps) => orchestrator.tick(steps),
     isInReview: () => timeline.getState().mode === 'review',
     handleScrub: (timePs) => coordinator.handleScrub(timePs),

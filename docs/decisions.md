@@ -155,6 +155,10 @@ Key strategic and technical decisions made during development, with rationale.
 
 ## D20: Timeline Recording Policy
 
-**Decision:** Recording is disarmed until the first meaningful user interaction, preventing idle memory allocation. The policy is extracted into a dedicated module (`timeline-recording-policy.ts`).
+**Decision:** Recording is disarmed until the first direct atom interaction (drag, move, rotate, flick), preventing idle memory allocation. The policy is extracted into a dedicated module (`timeline-recording-policy.ts`), and arming is triggered by `interaction-dispatch.ts` unconditionally (not gated by `isWorkerActive`).
 
-**Rationale:** Without a gating policy, the timeline would begin allocating frames immediately on page load even if the user never interacts, wasting memory. The policy arms recording on: interaction dispatch, pause, speed change, settings changes, or molecule placement. Clearing the playground disarms and resets the policy. Recording reads only from reconciled physics state (single authority), ensuring frames are never captured from stale or in-flight data.
+**Rationale:** Without a gating policy, the timeline would begin allocating frames immediately on page load even if the user never interacts, wasting memory. The policy arms recording ONLY on direct atom interactions — startDrag, startMove, startRotate, and flick commands dispatched through `interaction-dispatch.ts`. Molecule placement, pause/resume, speed changes, and physics settings changes (wall mode, drag/rotate strength, damping) explicitly do NOT arm recording. This allows users to set up complex multi-molecule scenes before history begins. Clearing the playground disarms and resets the policy. Recording reads only from reconciled physics state (single authority), ensuring frames are never captured from stale or in-flight data.
+
+**Update:** The original implementation incorrectly armed on `startPlacement` and on several non-atom callbacks (pause, speed, physics settings). This was narrowed to atom-interaction-only arming, the method was renamed from `markUserEngaged()` to `markAtomInteractionStarted()`, and arming was moved from the `sendWorkerInteraction` callback (which was gated by `isWorkerActive`) into the dispatch function itself (unconditional). This ensures recording arms in both worker and sync/local modes.
+
+**Evidence:** `page/js/runtime/timeline-recording-policy.ts`, `page/js/runtime/interaction-dispatch.ts`, `tests/unit/interaction-dispatch-arming.test.ts`, `tests/unit/store-callbacks-arming.test.ts`

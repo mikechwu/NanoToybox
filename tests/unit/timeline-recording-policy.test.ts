@@ -3,7 +3,7 @@
  *
  * Verifies:
  *  - disarmed by default
- *  - armed after markUserEngaged
+ *  - armed after markAtomInteractionStarted
  *  - idempotent arming
  *  - disarm resets to unarmed
  *  - re-arm after disarm works
@@ -18,23 +18,23 @@ describe('TimelineRecordingPolicy', () => {
     expect(policy.isArmed()).toBe(false);
   });
 
-  it('arms on markUserEngaged', () => {
+  it('arms on markAtomInteractionStarted', () => {
     const policy = createTimelineRecordingPolicy();
-    policy.markUserEngaged();
+    policy.markAtomInteractionStarted();
     expect(policy.isArmed()).toBe(true);
   });
 
   it('arming is idempotent', () => {
     const policy = createTimelineRecordingPolicy();
-    policy.markUserEngaged();
-    policy.markUserEngaged();
-    policy.markUserEngaged();
+    policy.markAtomInteractionStarted();
+    policy.markAtomInteractionStarted();
+    policy.markAtomInteractionStarted();
     expect(policy.isArmed()).toBe(true);
   });
 
   it('disarm resets to unarmed', () => {
     const policy = createTimelineRecordingPolicy();
-    policy.markUserEngaged();
+    policy.markAtomInteractionStarted();
     expect(policy.isArmed()).toBe(true);
     policy.disarm();
     expect(policy.isArmed()).toBe(false);
@@ -42,9 +42,9 @@ describe('TimelineRecordingPolicy', () => {
 
   it('can re-arm after disarm', () => {
     const policy = createTimelineRecordingPolicy();
-    policy.markUserEngaged();
+    policy.markAtomInteractionStarted();
     policy.disarm();
-    policy.markUserEngaged();
+    policy.markAtomInteractionStarted();
     expect(policy.isArmed()).toBe(true);
   });
 });
