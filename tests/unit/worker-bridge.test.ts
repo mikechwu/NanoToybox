@@ -392,3 +392,6 @@ describe('Generation-based invalidation on clearScene', () => {
     expect(latestSnapshot).toBeNull();
   });
 });
+
+// restoreState behavioral tests are in worker-bridge-direct.test.ts
+// (real class with mock Worker, not logic-mirror tests).

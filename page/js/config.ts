@@ -70,7 +70,9 @@ export const CONFIG = {
   },
 
   playback: {
-    baseStepsPerSecond: 240,  // canonical 1x = 240 steps/sec (independent of display refresh)
+    /** Canonical 1x physical simulation rate in ps/s.
+     *  Step rate is derived via getPhysicsTiming(): baseSimRatePsPerSecond / (dt / 1000). */
+    baseSimRatePsPerSecond: 0.12,
     minSpeed: 0.5,
     defaultSpeed: 1.0,
     maxSpeedCap: 16.0,
@@ -179,3 +181,12 @@ export const CONFIG = {
     profiler: false,                // 'live' | 'bench' | false — runtime stage instrumentation
   },
 };
+
+/** Derive consistent physics timing from the canonical config.
+ *  If dt changes, call this to get the correct derived step rate. */
+export function getPhysicsTiming() {
+  const dtFs = CONFIG.physics.dt;
+  const stepPs = dtFs / 1000;
+  const baseStepsPerSecond = CONFIG.playback.baseSimRatePsPerSecond / stepPs;
+  return { dtFs, stepPs, baseStepsPerSecond };
+}

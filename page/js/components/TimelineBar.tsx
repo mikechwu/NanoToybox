@@ -14,10 +14,14 @@
 import React, { useCallback, useRef } from 'react';
 import { useAppStore } from '../store/app-store';
 
-/** Format picoseconds into a short human label. */
+/** Format picoseconds into a short human label with enough resolution
+ *  to distinguish adjacent recorded frames (~0.0005 ps apart at 1x). */
 function formatTime(ps: number): string {
-  if (ps < 1000) return `${ps.toFixed(0)} ps`;
-  if (ps < 1_000_000) return `${(ps / 1000).toFixed(1)} ns`;
+  if (ps < 0.001) return `${(ps * 1000).toFixed(1)} fs`;
+  if (ps < 1) return `${(ps * 1000).toFixed(0)} fs`;
+  if (ps < 100) return `${ps.toFixed(2)} ps`;
+  if (ps < 10_000) return `${ps.toFixed(1)} ps`;
+  if (ps < 1_000_000) return `${(ps / 1000).toFixed(2)} ns`;
   return `${(ps / 1_000_000).toFixed(2)} \u00b5s`;
 }
 

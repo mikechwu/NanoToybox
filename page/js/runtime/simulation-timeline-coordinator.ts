@@ -6,12 +6,10 @@
  * should not know about each other directly.
  */
 
-import type { SimulationTimeline, TimelineFrame, TimelineCheckpoint } from './simulation-timeline';
+import type { SimulationTimeline, TimelineFrame } from './simulation-timeline';
 import type { PhysicsEngine } from '../physics';
 import type { Renderer } from '../renderer';
-import {
-  restoreInteractionState,
-} from './timeline-context-capture';
+import { applyRestartState } from './restart-state-adapter';
 
 
 export interface TimelineCoordinatorDeps {
@@ -38,8 +36,6 @@ export interface TimelineCoordinator {
   scrubTo(timePs: number): void;
   returnToLive(): void;
   restartFromHere(): Promise<void>;
-  applyReviewFrame(frame: TimelineFrame): void;
-  wasPausedBeforeReview(): boolean;
 }
 
 export function createTimelineCoordinator(deps: TimelineCoordinatorDeps): TimelineCoordinator {
@@ -110,20 +106,8 @@ export function createTimelineCoordinator(deps: TimelineCoordinatorDeps): Timeli
       const physics = deps.getPhysics();
       const renderer = deps.getRenderer();
 
-      // 1. Restore physics core state (pos, vel, bonds, forces, topology)
-      physics.restoreCheckpoint({
-        n: rs.n,
-        pos: new Float64Array(rs.positions),
-        vel: new Float64Array(rs.velocities),
-        bonds: rs.bonds.map(b => [...b] as [number, number, number]),
-      });
-
-      // 2. Restore all force-defining context from the same RestartState
-      physics.restoreBoundarySnapshot(rs.boundary);
-      physics.setDamping(rs.config.damping);
-      physics.setDragStrength(rs.config.kDrag);
-      physics.setRotateStrength(rs.config.kRotate);
-      restoreInteractionState(physics, rs.interaction ?? { kind: 'none' });
+      // 1-2. Restore full physics state via the shared adapter
+      applyRestartState(physics, rs);
       deps.setSimTimePs(rs.timePs);
 
       // 3. Truncate history after restart point — maintains monotonic timeline
@@ -171,7 +155,5 @@ export function createTimelineCoordinator(deps: TimelineCoordinatorDeps): Timeli
     scrubTo,
     returnToLive,
     restartFromHere,
-    applyReviewFrame,
-    wasPausedBeforeReview: () => _wasPausedBeforeReview,
   };
 }

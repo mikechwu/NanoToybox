@@ -13,10 +13,11 @@ import type { BondTuple } from './interfaces'
 // ═══════════════════════════════════════════════════════════════════════
 
 export interface PhysicsConfig {
-  /** C.2+ — not yet configurable via worker; PhysicsEngine uses internal CONFIG.physics.dt */
+  /** Timestep in femtoseconds — authoritative engine timing input. */
   dt: number
-  /** C.2+ — not yet configurable via worker; main thread controls stepsPerFrame via requestFrame.stepsRequested */
-  stepsPerFrame: number
+  /** Damping reference batch size — authoritative engine timing input.
+   *  Used only for damping normalization, not for frame-rate control. */
+  dampingReferenceSteps: number
   damping: number
   kDrag: number
   kRotate: number
@@ -25,13 +26,10 @@ export interface PhysicsConfig {
 }
 
 export type WorkerCommand =
-  | { type: 'init'; commandId: number; config: PhysicsConfig; atoms: AtomXYZ[]; bonds: BondTuple[];
-      /** Restart: initial velocities (zeroed if omitted). */
-      velocities?: Float64Array;
-      /** Restart: boundary snapshot to restore (recomputed from atoms if omitted). */
-      boundary?: { mode: 'contain' | 'remove'; wallRadius: number; wallCenter: [number, number, number]; wallCenterSet: boolean; removedCount: number; damping: number };
-      /** Restart: interaction to restore (idle if omitted). */
-      interaction?: { kind: 'none' } | { kind: 'atom_drag'; atomIndex: number; target: [number, number, number] } | { kind: 'move_group'; atomIndex: number; componentId: number; target: [number, number, number] } | { kind: 'rotate_group'; atomIndex: number; componentId: number; target: [number, number, number] };
+  | { type: 'init'; commandId: number; config: PhysicsConfig; atoms: AtomXYZ[]; bonds: BondTuple[] }
+  | { type: 'restoreState'; commandId: number; config: PhysicsConfig;
+      atoms: AtomXYZ[]; bonds: BondTuple[]; velocities: Float64Array;
+      boundary: { mode: 'contain' | 'remove'; wallRadius: number; wallCenter: [number, number, number]; wallCenterSet: boolean; removedCount: number; damping: number };
     }
   | { type: 'appendMolecule'; commandId: number; atoms: AtomXYZ[]; bonds: BondTuple[]; offset: [number, number, number] }
   | { type: 'clearScene'; commandId: number }
@@ -58,6 +56,8 @@ export type MutationAckEvent =
   | { type: 'appendResult'; replyTo: number; ok: boolean; sceneVersion: number;
       atomOffset: number; atomsAppended: number; totalAtomCount: number; error?: string }
   | { type: 'clearSceneResult'; replyTo: number; ok: boolean; sceneVersion: number; error?: string }
+  | { type: 'restoreStateResult'; replyTo: number; ok: boolean; sceneVersion: number;
+      atomCount: number; wasmReady: boolean; kernel: 'wasm' | 'js'; error?: string }
 
 /** Scene-versioned non-mutating events — processed via acceptSceneVersionedEvent(). */
 export type SceneVersionedEvent =

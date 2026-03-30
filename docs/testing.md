@@ -93,6 +93,57 @@ Each test writes results to `outputs/testN_*/`:
 - Before generating ML training data
 - Before claiming any validation result
 
+## Frontend Unit Tests
+
+Automated unit tests live in `tests/unit/` and run via Vitest. Total suite: **533 tests**.
+
+```bash
+# Run all unit tests
+npx vitest run
+
+# Run a single file
+npx vitest run tests/unit/simulation-timeline.test.ts
+```
+
+### Timeline Subsystem (~60 tests across 6 files)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `simulation-timeline.test.ts` | 28+ | Core SimulationTimeline: recording frames, retention limits, review mode entry/exit, scrub to arbitrary frame, restart from timeline, truncation on re-record, motion preservation across restore, arming lifecycle |
+| `timeline-bar-lifecycle.test.tsx` | 6 | TimelineBar React hook safety (null→valid store transition), review mode toggle, action slot stability across re-renders, layout structure |
+| `timeline-recording-orchestrator.test.ts` | 9 | Orchestrator arming, recording cadence (frame capture rate), review-mode blocking of new recordings, sim-time advancement during recording, reset behavior |
+| `timeline-recording-policy.test.ts` | 5 | Arm/disarm/re-arm lifecycle, policy state transitions |
+| `timeline-subsystem.test.ts` | 8 | Subsystem boundary isolation, clearAndDisarm, teardown cleanup, isInReview predicate, installStoreCallbacks wiring |
+| `reconciled-steps.test.ts` | 4 | Snapshot deduplication — ensures reconciled steps don't produce duplicate frames |
+
+### Restart & State Restore (11 tests across 2 files)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `restart-state-adapter.test.ts` | 8 | State serialization round-trip, application to simulation, no-interaction-restore (preserving untouched state) |
+| `worker-lifecycle-restore.test.ts` | 3 | Restore success reactivates worker, restore failure tears down, error during restore tears down |
+
+### Worker Bridge (3 new tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `worker-bridge-direct.test.ts` | 3 | restoreState posts correct command to worker, resolves on success acknowledgement, crash yields failure |
+
+### Physics Timing (10 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `physics-timing.test.ts` | 10 | Derived simulation rate, damping invariance across speed changes, setTimeConfig parameter application, engine parameterization consistency |
+
+### UI Components (10 tests across 2 files)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `bonded-groups-panel.test.tsx` | 3 | Review-mode guards: panel hidden during review, atom select blocked, hover blocked |
+| `status-bar-precedence.test.tsx` | 7 | Rewritten for message-only contract: status message precedence rules across simulation states |
+
+Previously-skipped StatusBar tests have been unskipped and now pass.
+
 ## Frontend Smoke Test
 
 Manual verification checklist for the interactive page (`page/index.html`). Run after any changes to `page/` code.

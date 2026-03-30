@@ -12,7 +12,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 import { formatStatusText } from '../format-status';
-import { CONFIG } from '../config';
+import { CONFIG, getPhysicsTiming } from '../config';
 
 const EXPAND_DURATION_MS = 5000;
 
@@ -60,8 +60,8 @@ export function FPSDisplay() {
     effectiveSpeed,
     fps,
     rafIntervalMs,
-    baseStepsPerSecond: CONFIG.playback.baseStepsPerSecond,
-    dt: CONFIG.physics.dt,
+    baseStepsPerSecond: getPhysicsTiming().baseStepsPerSecond,
+    dt: getPhysicsTiming().dtFs,
     compact: isCompact && !expanded,
   });
 

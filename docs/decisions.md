@@ -140,3 +140,21 @@ Key strategic and technical decisions made during development, with rationale.
 **Phase 5 (post-launch):** 6DOF/Roll sub-mode — opt-in via "Enable Roll" toggle, not default.
 
 **Evidence:** `page/js/components/CameraControls.tsx`, `page/js/components/QuickHelp.tsx`, `page/js/renderer.ts` (applyFreeLookDelta, resetOrientation, returnToOrbitFromFreeLook, setOrbitControlsForMode), `page/js/input.ts` (mode-aware routing, WASD, wheel, keyboard guards), `page/js/runtime/onboarding.ts`, `page/js/runtime/focus-runtime.ts`, `page/js/store/app-store.ts` (cameraMode, cameraHelpOpen, cameraCallbacks), `page/js/orbit-math.ts` (rigid arcball delta math), `.reports/2026-03-26-camera-ux-improvements-plan.md`
+
+## D18: Simulation Timeline with Review and Restart
+
+**Decision:** Implement a simulation timeline with dense review frames, dense restart frames, and sparse full checkpoints, keeping review display-only and restart physically consistent.
+
+**Rationale:** Dense review frames at 10 Hz capture positions only, enabling smooth visual scrubbing with minimal memory overhead. Dense restart frames at 10 Hz store full force-defining state (pos+vel+bonds+config+boundary) so the simulation can resume from any point with physical consistency. Sparse full checkpoints at 1/sec serve as a fallback safety net. Review is display-only — it uses a dedicated renderer path with no physics mutation, preventing accidental state corruption during scrubbing. `RestartState` is the single authoritative contract shared by storage, main-thread restore, and worker restore, eliminating divergent state definitions. Interaction state (e.g., drag targets) is captured as metadata but NOT restored on restart, preventing ghost spring forces from stale drag targets.
+
+## D19: Instance-Owned Physics Timing
+
+**Decision:** Make `PhysicsEngine` own all physics timing parameters (`dtFs`, `dampingRefSteps`, `dampingRefDurationFs`) as instance state. Remove module-level `DT` and `STEPS_PER_FRAME` constants.
+
+**Rationale:** Module-level timing constants created hidden coupling and made it impossible to vary dt at runtime. With instance-owned timing, the time-based exponential damping model preserves the physical decay rate when dt changes. Scheduler timing is derived live from `engine.getDtFs()` rather than cached constants. The worker receives timing via the protocol config and applies it via `setTimeConfig()`. `getPhysicsTiming()` derives `baseStepsPerSecond` from `baseSimRatePsPerSecond` and dt, keeping all timing relationships consistent from a single source.
+
+## D20: Timeline Recording Policy
+
+**Decision:** Recording is disarmed until the first meaningful user interaction, preventing idle memory allocation. The policy is extracted into a dedicated module (`timeline-recording-policy.ts`).
+
+**Rationale:** Without a gating policy, the timeline would begin allocating frames immediately on page load even if the user never interacts, wasting memory. The policy arms recording on: interaction dispatch, pause, speed change, settings changes, or molecule placement. Clearing the playground disarms and resets the policy. Recording reads only from reconciled physics state (single authority), ensuring frames are never captured from stale or in-flight data.

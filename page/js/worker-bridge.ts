@@ -55,6 +55,7 @@ export interface FrameSkipInfo {
 // ─── Extract result types from MutationAckEvent ─────────────────────────────
 
 type InitResult = Extract<MutationAckEvent, { type: 'initResult' }>;
+type RestoreStateResult = Extract<MutationAckEvent, { type: 'restoreStateResult' }>;
 type AppendResult = Extract<MutationAckEvent, { type: 'appendResult' }>;
 type ClearSceneResult = Extract<MutationAckEvent, { type: 'clearSceneResult' }>;
 
@@ -129,9 +130,6 @@ export class WorkerBridge {
     config: PhysicsConfig,
     atoms: AtomXYZ[],
     bonds: BondTuple[],
-    velocities?: Float64Array,
-    boundary?: Extract<WorkerCommand, { type: 'init' }>['boundary'],
-    interaction?: Extract<WorkerCommand, { type: 'init' }>['interaction'],
   ): Promise<InitResult> {
     const commandId = this._nextId();
     this._registerMutation(commandId, 'init');
@@ -140,16 +138,31 @@ export class WorkerBridge {
       this.pendingResolvers.set(commandId, resolve as (v: MutationAckEvent) => void);
     });
 
-    this._post({
-      type: 'init',
-      commandId,
-      config,
-      atoms,
-      bonds,
-      ...(velocities ? { velocities } : {}),
-      ...(boundary ? { boundary } : {}),
-      ...(interaction ? { interaction } : {}),
+    this._post({ type: 'init', commandId, config, atoms, bonds });
+
+    const result = await promise;
+    if (result.ok) {
+      this.workerState = 'running';
+    }
+    return result;
+  }
+
+  /** Restore full physics state for restart. No interaction — restart clears drag to prevent ghost forces. */
+  async restoreState(
+    config: PhysicsConfig,
+    atoms: AtomXYZ[],
+    bonds: BondTuple[],
+    velocities: Float64Array,
+    boundary: Extract<WorkerCommand, { type: 'restoreState' }>['boundary'],
+  ): Promise<RestoreStateResult> {
+    const commandId = this._nextId();
+    this._registerMutation(commandId, 'restoreState');
+
+    const promise = new Promise<RestoreStateResult>((resolve) => {
+      this.pendingResolvers.set(commandId, resolve as (v: MutationAckEvent) => void);
     });
+
+    this._post({ type: 'restoreState', commandId, config, atoms, bonds, velocities, boundary });
 
     const result = await promise;
     if (result.ok) {
@@ -304,6 +317,7 @@ export class WorkerBridge {
     switch (event.type) {
       // Mutation acks
       case 'initResult':
+      case 'restoreStateResult':
       case 'appendResult':
       case 'clearSceneResult':
         this._acceptMutationAck(event);
@@ -351,6 +365,9 @@ export class WorkerBridge {
       switch (pending.type) {
         case 'init':
           failedAck = { type: 'initResult', replyTo: id, ok: false, sceneVersion: this.lastKnownSceneVersion, atomCount: 0, wasmReady: false, kernel: 'js', error: reason };
+          break;
+        case 'restoreState':
+          failedAck = { type: 'restoreStateResult', replyTo: id, ok: false, sceneVersion: this.lastKnownSceneVersion, atomCount: 0, wasmReady: false, kernel: 'js', error: reason };
           break;
         case 'appendMolecule':
           failedAck = { type: 'appendResult', replyTo: id, ok: false, sceneVersion: this.lastKnownSceneVersion, atomOffset: 0, atomsAppended: 0, totalAtomCount: 0, error: reason };

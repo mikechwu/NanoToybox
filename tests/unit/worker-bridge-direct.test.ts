@@ -409,3 +409,92 @@ describe('Direct WorkerBridge — append snapshot race regression', () => {
     expect(bridge.getWorkerState()).toBe('crashed');
   });
 });
+
+// ─── restoreState behavioral tests ───────────────────────────────────
+
+describe('Direct WorkerBridge — restoreState', () => {
+  async function initBridge() {
+    const bridge = await createBridge();
+    const initP = bridge.init(
+      { dt: 0.5, dampingReferenceSteps: 4, damping: 0, kDrag: 2, kRotate: 5, wallMode: 'contain', useWasm: false } as any,
+      [{ x: 0, y: 0, z: 0 }], [[0, 1, 1.42] as any],
+    );
+    const initCmd = mockWorkerInstance.posted[0];
+    mockWorkerInstance.respond({
+      type: 'initResult', replyTo: initCmd.commandId, ok: true,
+      sceneVersion: 1, atomCount: 1, wasmReady: false, kernel: 'js',
+    });
+    await initP;
+    return bridge;
+  }
+
+  it('posts a restoreState command with velocities and boundary', async () => {
+    const bridge = await initBridge();
+    const vel = new Float64Array([0.01, 0.02, 0.03]);
+    const boundary = {
+      mode: 'contain' as const, wallRadius: 60,
+      wallCenter: [1, 2, 3] as [number, number, number],
+      wallCenterSet: true, removedCount: 0, damping: 0.1,
+    };
+
+    bridge.restoreState(
+      { dt: 0.5, dampingReferenceSteps: 4, damping: 0.1, kDrag: 3, kRotate: 7, wallMode: 'contain', useWasm: false },
+      [{ x: 10, y: 20, z: 30 }],
+      [[0, 1, 1.5] as any],
+      vel, boundary,
+    );
+
+    // Find the restoreState command (skip init which was posted[0])
+    const restoreCmd = mockWorkerInstance.posted.find((c: any) => c.type === 'restoreState');
+    expect(restoreCmd).toBeDefined();
+    expect(restoreCmd.type).toBe('restoreState');
+    expect(restoreCmd.velocities).toBe(vel);
+    expect(restoreCmd.boundary.wallRadius).toBe(60);
+    expect(restoreCmd.atoms[0].x).toBe(10);
+    // No interaction field
+    expect('interaction' in restoreCmd).toBe(false);
+  });
+
+  it('resolves on restoreStateResult with ok: true', async () => {
+    const bridge = await initBridge();
+    const vel = new Float64Array(3);
+    const boundary = { mode: 'contain' as const, wallRadius: 50, wallCenter: [0, 0, 0] as [number, number, number], wallCenterSet: true, removedCount: 0, damping: 0 };
+
+    const restoreP = bridge.restoreState(
+      { dt: 0.5, dampingReferenceSteps: 4, damping: 0, kDrag: 2, kRotate: 5, wallMode: 'contain', useWasm: false },
+      [{ x: 0, y: 0, z: 0 }], [], vel, boundary,
+    );
+
+    const restoreCmd = mockWorkerInstance.posted.find((c: any) => c.type === 'restoreState');
+    mockWorkerInstance.respond({
+      type: 'restoreStateResult', replyTo: restoreCmd.commandId, ok: true,
+      sceneVersion: 2, atomCount: 1, wasmReady: false, kernel: 'js',
+    });
+
+    const result = await restoreP;
+    expect(result.ok).toBe(true);
+    expect(result.atomCount).toBe(1);
+    // Bridge should be in running state after successful restore
+    expect(bridge.canSendRequest()).toBe(true);
+  });
+
+  it('resolves synthetic failure on worker crash during restoreState', async () => {
+    const bridge = await initBridge();
+    const vel = new Float64Array(3);
+    const boundary = { mode: 'contain' as const, wallRadius: 50, wallCenter: [0, 0, 0] as [number, number, number], wallCenterSet: true, removedCount: 0, damping: 0 };
+
+    const restoreP = bridge.restoreState(
+      { dt: 0.5, dampingReferenceSteps: 4, damping: 0, kDrag: 2, kRotate: 5, wallMode: 'contain', useWasm: false },
+      [{ x: 0, y: 0, z: 0 }], [], vel, boundary,
+    );
+
+    // Simulate worker crash
+    if (mockWorkerInstance.onerror) {
+      mockWorkerInstance.onerror({ message: 'crash' } as ErrorEvent);
+    }
+
+    const result = await restoreP;
+    expect(result.ok).toBe(false);
+    expect(result.type).toBe('restoreStateResult');
+  });
+});

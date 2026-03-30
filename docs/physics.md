@@ -72,6 +72,16 @@ Properties: symplectic, time-reversible, second-order accurate. Guarantees bound
 
 **Explicit Euler is forbidden** — it causes catastrophic energy growth for Tersoff carbon.
 
+## Timing Parameterization
+
+`PhysicsEngine` owns its timestep (`dtFs`) as instance state rather than reading a module-level constant. `stepOnce()` uses `this.dtFs`. The runtime method `setTimeConfig(dtFs, dampingRefSteps)` allows changing the timestep and damping reference without rebuilding the engine.
+
+**Time-based exponential damping.** The user-facing damping parameter *d* represents fractional velocity loss over a reference batch duration (`dampingRefDurationFs`). This is converted to a decay rate γ (per femtosecond), then to a per-step factor via `exp(-γ · dtFs)`. Because the factor is derived from physical time, the effective decay rate is preserved when dt changes.
+
+**Boundary snapshots.** `getBoundarySnapshot()` and `restoreBoundarySnapshot()` capture/restore wall state (mode, radius, center, centerSet, removedCount, damping). Used by timeline restart to reset the boundary consistently.
+
+**Derived scheduler timing.** `getPhysicsTiming()` in `config.ts` derives `baseStepsPerSecond` from `baseSimRatePsPerSecond` and dt. The scheduler reads timing live from the engine each frame rather than caching values at startup.
+
 ## Unit System
 
 | Quantity | Unit | Notes |

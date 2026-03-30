@@ -111,7 +111,7 @@ describe('TimelineBar lifecycle', () => {
     expect(container.querySelector('.timeline-action')?.textContent).toBe('Live');
     // Restart button has fixed label; target time shown in separate readout
     expect(container.querySelector('.timeline-action--restart')?.textContent).toBe('Restart');
-    expect(container.querySelector('.timeline-restart-target')?.textContent).toBe('500 ps');
+    expect(container.querySelector('.timeline-restart-target')?.textContent).toBe('500.0 ps');
   });
 
   it('action slot is always present for stable track width', () => {

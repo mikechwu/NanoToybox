@@ -39,16 +39,24 @@ export interface TimelinePhysicsConfig {
 }
 
 /**
- * RestartState — the single authoritative contract for rewindable simulation state.
+ * RestartState — the single authoritative contract for restartable physical state.
  *
- * This type defines every input needed to reproduce a trajectory from a past
- * point. It is the shared contract between:
+ * Restart restores: positions, velocities, bonds, boundary, and physics
+ * coefficients. It does NOT restore active interaction (drag/move/rotate)
+ * because restoring pointer-driven forces without matching user input
+ * creates ghost spring forces.
+ *
+ * The `interaction` field is retained as historical metadata for review
+ * display and future annotation features, but is never applied during
+ * restart.
+ *
+ * Shared between:
  *   - timeline storage (restart frames and checkpoints produce this)
- *   - main-thread restore (coordinator consumes this)
- *   - worker restore (worker init receives the same fields)
+ *   - main-thread restore (coordinator consumes this via applyRestartState)
+ *   - worker restore (receives physical fields only, no interaction)
  *
- * It does NOT include derived state (forces, neighbor lists) because those
- * are deterministically recomputed from the fields here.
+ * Does NOT include derived state (forces, neighbor lists) — those are
+ * deterministically recomputed from the fields here.
  */
 export interface RestartState {
   timePs: number;

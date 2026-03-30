@@ -16,7 +16,7 @@ const BASE: StatusInputs = {
   effectiveSpeed: 1.0,
   fps: 60,
   rafIntervalMs: 16.67,
-  baseStepsPerSecond: 240,
+  baseStepsPerSecond: 240, // derived from getPhysicsTiming() at dt=0.5fs, rate=0.12ps/s
   dt: 0.5,
   compact: false,
 };

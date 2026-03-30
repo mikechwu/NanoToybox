@@ -65,7 +65,15 @@ NanoToybox/
 │   │   │   ├── onboarding.ts        # Coachmark scheduling, pacing, persistence, achievements
 │   │   │   ├── bonded-group-runtime.ts     # Live connected-component projection + stable ID reconciliation
 │   │   │   ├── bonded-group-highlight-runtime.ts # Persistent atom tracking + hover preview resolution
-│   │   │   └── bonded-group-coordinator.ts # Coordinated projection + highlight lifecycle
+│   │   │   ├── bonded-group-coordinator.ts # Coordinated projection + highlight lifecycle
+│   │   │   ├── simulation-timeline.ts        # Ring buffers (review frames, restart frames, checkpoints), RestartState contract, frozen review range, truncation on restart
+│   │   │   ├── simulation-timeline-coordinator.ts # Orchestrates review/restart across physics, renderer, worker, store
+│   │   │   ├── timeline-context-capture.ts   # Capture/restore interaction and boundary state via public physics API
+│   │   │   ├── timeline-recording-policy.ts  # Arming policy (disarmed until first user interaction)
+│   │   │   ├── timeline-recording-orchestrator.ts # Owns recording cadence, authority-aware capture from reconciled physics
+│   │   │   ├── timeline-subsystem.ts         # Factory that creates the full subsystem, exposes high-level interface to main.ts
+│   │   │   ├── restart-state-adapter.ts      # Serialization/application/capture of RestartState
+│   │   │   └── reconciled-steps.ts           # Deduplication helper for worker snapshot step counting
 │   │   ├── scene.ts              # Scene commit/clear/load (transaction-safe)
 │   │   ├── placement.ts          # Placement lifecycle, tangent computation, canvas listeners
 │   │   ├── interaction.ts        # Command dispatch, screen-to-physics projection
@@ -83,7 +91,8 @@ NanoToybox/
 │   │   │   ├── FPSDisplay.tsx    # FPS/simulation status
 │   │   │   ├── CameraControls.tsx # Mode chip, "?" help glyph, Center Object / Return action
 │   │   │   ├── QuickHelp.tsx    # Mode-aware gesture reference card
-│   │   │   └── BondedGroupsPanel.tsx # Bonded cluster inspection panel (selection + hover highlight)
+│   │   │   ├── BondedGroupsPanel.tsx # Bonded cluster inspection panel (selection + hover highlight)
+│   │   │   └── TimelineBar.tsx       # Bottom timeline UI inside DockLayout with FeatureBoundary
 │   │   ├── store/
 │   │   │   ├── app-store.ts      # Zustand store for UI state
 │   │   │   └── selectors/
@@ -152,6 +161,44 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
     (F_total, F_2body, F_resid)    (data/)        (ml/)
 ```
 
+### Timeline Subsystem
+```
+                     timeline-subsystem.ts (factory)
+                              │
+              ┌───────────────┼───────────────────┐
+              ▼               ▼                   ▼
+  timeline-recording-   simulation-timeline-   simulation-timeline.ts
+  orchestrator.ts       coordinator.ts         (ring buffers)
+  (cadence + capture)   (review/restart)             │
+        │                     │               ┌──────┼──────┐
+        ▼                     ▼               ▼      ▼      ▼
+  reconciled-steps.ts   restart-state-     review  restart  check-
+  (dedup helper)        adapter.ts         frames  frames   points
+        │               (serialize/apply)
+        ▼                     │
+  snapshot-reconciler.ts      ▼
+  (reconciled physics   timeline-context-capture.ts
+   = single authority)  (boundary + interaction state)
+```
+
+**Recording flow:** timeline-recording-policy arms after first user interaction → timeline-recording-orchestrator captures from reconciled physics state (single authority) → simulation-timeline stores dense review frames + periodic restart frames / checkpoints.
+
+**Review flow:** simulation-timeline-coordinator enters review mode → renderer.updateReviewFrame (display-only, no physics mutation) → all scene input gated at input-bindings boundary → TimelineBar scrub drives reviewTimePs.
+
+**Restart flow:** simulation-timeline-coordinator reads RestartState from nearest restart frame → restart-state-adapter applies state to physics → timeline-context-capture restores boundary snapshot via physics public API (`getBoundarySnapshot()` / `restoreBoundarySnapshot()`) → worker receives dedicated `restoreState` command (separate from `init`) → simulation-timeline truncates buffer at restart point.
+
+**Worker changes:** dedicated `restoreState` command for restart (separate from `init`); `workerTransaction` helper factored from shared init/restore logic.
+
+**Physics changes:** instance-owned timing (`dtFs`, `dampingRefSteps`, `dampingRefDurationFs`); `getBoundarySnapshot()` / `restoreBoundarySnapshot()` public API; time-based exponential damping model; `getPhysicsTiming()` derives scheduler step rate from engine `dtFs`.
+
+**Key rules:**
+- Review mode is display-only (no physics mutation)
+- All scene input gated at input-bindings boundary during review
+- RestartState is the single authoritative contract for rewindable physical state (interaction is metadata only, not restored)
+- Recording uses reconciled physics state as single authority
+- Timeline recording disarmed until first meaningful user interaction
+- Scheduler timing derived live from engine `dtFs`, not cached constants
+
 ## Key Design Decisions
 
 1. **Python reference + Numba acceleration** — pure Python for correctness, Numba for speed
@@ -163,7 +210,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 
 ### Composition Root Pattern
 
-`main.ts` (~1150 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 14 modules in `page/js/runtime/`:
+`main.ts` (~1150 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 23 modules in `page/js/runtime/`:
 
 - **scene-runtime.ts** — scene mutation wrappers, scene-to-store projection, worker scene mirroring
 - **worker-lifecycle.ts** — worker bridge creation, init, stall detection (5s warning / 15s fatal), teardown
@@ -179,8 +226,16 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 - **bonded-group-runtime.ts** — live connected-component projection with overlap-reconciled stable IDs
 - **bonded-group-highlight-runtime.ts** — persistent atom tracking, hover preview, renderer highlight resolution
 - **bonded-group-coordinator.ts** — coordinated projection + highlight lifecycle (update + teardown)
+- **simulation-timeline.ts** — ring buffers for dense review frames, restart frames, and checkpoints; RestartState contract; frozen review range; truncation on restart
+- **simulation-timeline-coordinator.ts** — orchestrates review/restart across physics, renderer, worker, store
+- **timeline-context-capture.ts** — capture/restore interaction and boundary state via public physics API
+- **timeline-recording-policy.ts** — arming policy (disarmed until first meaningful user interaction)
+- **timeline-recording-orchestrator.ts** — owns recording cadence, authority-aware capture from reconciled physics state (single authority)
+- **timeline-subsystem.ts** — factory that creates the full timeline subsystem, exposes high-level interface to main.ts
+- **restart-state-adapter.ts** — serialization, application, and capture of RestartState
+- **reconciled-steps.ts** — deduplication helper for worker snapshot step counting
 
-React components (DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, QuickHelp, BondedGroupsPanel) are authoritative for all UI surfaces. Imperative controllers remain only for PlacementController and StatusController (hint-only).
+React components (DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, QuickHelp, BondedGroupsPanel, TimelineBar) are authoritative for all UI surfaces. Imperative controllers remain only for PlacementController and StatusController (hint-only).
 
 `main.ts` must not be re-grown: new runtime logic goes into `page/js/runtime/`, new UI surfaces into `page/js/components/`.
 
@@ -199,6 +254,9 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | `session.theme` | main.ts (via settings callback) | React SettingsSheet (theme segmented) |
 | placement state | placement.ts (`_state`) | React DockBar (add/cancel via dockCallbacks) |
 | scheduler / effectsGate | main.ts (frame loop only) | — |
+| Timeline state (`mode`, `currentTimePs`, `reviewTimePs`, `rangePs`, etc.) | simulation-timeline-coordinator.ts (via store) | TimelineBar (scrub, restart), timeline-recording-orchestrator (range updates) |
+| Timeline recording arm state | timeline-recording-policy.ts | input-bindings (first meaningful user interaction) |
+| Timeline buffers (review frames, restart frames, checkpoints) | simulation-timeline.ts | timeline-recording-orchestrator (writes), simulation-timeline-coordinator (reads) |
 
 ### Overlay Close Policy
 

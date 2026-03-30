@@ -16,9 +16,9 @@ export interface StatusInputs {
   effectiveSpeed: number;
   fps: number;
   rafIntervalMs: number;
-  /** Base steps per second (CONFIG.playback.baseStepsPerSecond) */
+  /** Base steps per second (derived from getPhysicsTiming()) */
   baseStepsPerSecond: number;
-  /** Physics timestep (CONFIG.physics.dt) */
+  /** Physics timestep in femtoseconds (from engine getDtFs()) */
   dt: number;
   /** Compact mode (narrow viewport) */
   compact: boolean;

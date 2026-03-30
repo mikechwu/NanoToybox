@@ -37,7 +37,8 @@ npm run dev
 | Bonded clusters | Side panel showing live connected components. Click to select (persistent frozen highlight), hover to preview (desktop). Two-level expand: large clusters + collapsible small clusters. Clear Highlight button when tracked set exists. |
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
 | Pause | Primary control — freezes physics, camera/UI remain active |
-| Status | Sim speed (Nx), MD rate (ps/s), hardware-limited indicator. Tap to expand on mobile |
+| Timeline | TimelineBar with scrub track, review mode (display-only playback of history), and restart from dense frames. Recording arms on first meaningful interaction |
+| Status | Message-only StatusBar: shows statusError or statusText, returns null otherwise |
 | Scene controls | Add (dock) and Add Molecule (settings sheet) both open the chooser; chooser shows a pinned Recent shortcut after first placement. Clear playground, Reset View. |
 
 ### Interaction Modes
@@ -63,6 +64,38 @@ The dock has a three-way segmented mode selector: **Atom** | **Move** | **Rotate
 **MD rate**: displayed alongside relative speed. `mdRate = effectiveSpeed × 240 × 0.5fs / 1000 = ps/s`. Gives users a physically meaningful throughput metric.
 
 **Overload**: if the scene is too heavy, the scheduler enters an overloaded mode that caps the accumulator and reports the true sustainable speed. Recovery blends back to the normal estimator over ~1s.
+
+### Timeline
+
+The TimelineBar component lives inside DockLayout as a normal-flow element above DockBar. It provides scrubbing, review playback, and restart capabilities for the simulation history.
+
+**Timeline UI**
+
+The bar uses a fixed-lane layout:
+
+| Lane | Width | Content |
+|------|-------|---------|
+| Mode badge | 48 px | Shows **Live** or **Review** |
+| Time readout | 76 px | Displays fs / ps / ns with auto-scaling resolution |
+| Scrub track | flex | Draggable scrubber with pointer capture for smooth dragging |
+| Actions | 140 px | **Live** button (returns to live simulation) |
+| Restart target | — | **Restart** button with target time readout |
+
+**Review Mode**
+
+Scrubbing away from the live edge auto-pauses the simulation and enters review mode. Review is display-only: `renderer.updateReviewFrame()` never mutates physics. All scene interaction is blocked at the input boundary during review. The bonded-groups panel is hidden and highlights are cleared. The frozen scrubber range is decoupled from live retention.
+
+**Restart**
+
+Restart uses dense restart frames recorded at 10 Hz containing pos + vel + bonds + config + boundary. Dense restart frames are preferred over sparse checkpoints because they are closer to the viewed time. The worker receives full dynamic state via a dedicated `restoreState` command. History is truncated after the restart point to maintain a monotonic timeline. Interaction state is NOT restored (prevents ghost spring forces).
+
+**Recording Policy**
+
+Recording is disarmed until the first meaningful user interaction. It arms on: drag, pause, speed change, settings change, or molecule placement. Clearing the playground disarms recording.
+
+### StatusBar
+
+StatusBar is now message-only (no persistent scene summary). It shows `statusError` or `statusText` and returns `null` otherwise.
 
 ### Interaction Model
 
@@ -133,7 +166,7 @@ The interactive page uses a composition root pattern with React-authoritative UI
 ### Technology
 
 - Vite (v8) build pipeline: TypeScript + React (JSX) compiled and bundled. Dev server via `npm run dev`
-- React 19 (`createRoot`) — authoritative UI: DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay
+- React 19 (`createRoot`) — authoritative UI: DockLayout, DockBar, TimelineBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay
 - Zustand (`app-store.ts`) — reactive UI state store; imperative callbacks from `main.ts` registered via store slots
 - Web Worker (`simulation-worker.ts`) + bridge (`worker-bridge.ts`) — physics runs off the main thread
 - Three.js v0.170 (npm, bundled by Vite)

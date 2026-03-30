@@ -6,7 +6,7 @@
  * accidental misconfiguration that could break physics or rendering.
  */
 import { describe, it, expect } from 'vitest';
-import { CONFIG, DEFAULT_THEME } from '../../page/js/config';
+import { CONFIG, DEFAULT_THEME, getPhysicsTiming } from '../../page/js/config';
 describe('default theme', () => {
   it('DEFAULT_THEME constant is light', () => {
     expect(DEFAULT_THEME).toBe('light');
@@ -98,8 +98,8 @@ describe('CONFIG.wall', () => {
 });
 
 describe('CONFIG.playback', () => {
-  it('baseStepsPerSecond is positive', () => {
-    expect(CONFIG.playback.baseStepsPerSecond).toBeGreaterThan(0);
+  it('derived baseStepsPerSecond is positive', () => {
+    expect(getPhysicsTiming().baseStepsPerSecond).toBeGreaterThan(0);
   });
 
   it('minSpeed <= defaultSpeed', () => {

@@ -18,15 +18,17 @@ import type { AtomXYZ } from '../../../src/types/domain';
 import type { BondTuple } from '../../../src/types/interfaces';
 
 export interface WorkerRuntime {
-  /** Initialize with a pre-built config from main.ts. Optional restart state for rewind. */
-  init(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[], velocities?: Float64Array, boundary?: Extract<WorkerCommand, { type: 'init' }>['boundary'], interaction?: Extract<WorkerCommand, { type: 'init' }>['interaction']): Promise<void>;
+  /** Initialize with a pre-built config from main.ts. */
+  init(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[]): Promise<void>;
+  /** Dedicated state restore for restart — uses the full RestartState payload. */
+  restoreState(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[], velocities: Float64Array, boundary: Extract<WorkerCommand, { type: 'restoreState' }>['boundary']): Promise<void>;
   /** Tear down worker transport. Does NOT recover local physics. */
   destroy(): void;
   isActive(): boolean;
   isStalled(): boolean;
   canSendRequest(): boolean;
   sendRequestFrame(steps: number): void;
-  getLatestSnapshot(): { positions: Float64Array; velocities?: Float64Array; n: number } | null;
+  getLatestSnapshot(): { positions: Float64Array; velocities?: Float64Array; n: number; snapshotVersion: number; stepsCompleted: number } | null;
   getSnapshotAge(): number;
   /** Request a zero-step authoritative state sync and resolve when the snapshot arrives. */
   syncStateNow(): Promise<void>;
@@ -72,7 +74,7 @@ export function createWorkerRuntime(deps: {
   }
 
   return {
-    async init(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[], velocities?: Float64Array, boundary?: Extract<WorkerCommand, { type: 'init' }>['boundary'], interaction?: Extract<WorkerCommand, { type: 'init' }>['interaction']) {
+    async init(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[]) {
       let bridge: WorkerBridge;
       try {
         bridge = new WorkerBridge();
@@ -106,7 +108,7 @@ export function createWorkerRuntime(deps: {
 
       if (atoms.length > 0) {
         try {
-          const result = await bridge.init(config, atoms, bonds, velocities, boundary, interaction);
+          const result = await bridge.init(config, atoms, bonds);
           // Guard: if destroy() was called during the await, abandon
           if (_bridge !== bridge) return;
           if (result.ok) {
@@ -124,6 +126,27 @@ export function createWorkerRuntime(deps: {
           const snap = _teardown();
           deps.onFailure('Worker init error', snap);
         }
+      }
+    },
+
+    async restoreState(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[], velocities: Float64Array, boundary: Extract<WorkerCommand, { type: 'restoreState' }>['boundary']) {
+      if (!_bridge) return;
+      try {
+        const result = await _bridge.restoreState(config, atoms, bonds, velocities, boundary);
+        if (_bridge === null) return; // destroyed during await
+        if (result.ok) {
+          _initialized = true;
+          _progressTs = performance.now();
+          _stalled = false;
+        } else {
+          console.warn('[worker] restoreState failed:', result.error);
+          const snap = _teardown();
+          deps.onFailure('Worker restoreState failed: ' + (result.error || 'unknown'), snap);
+        }
+      } catch (e) {
+        console.warn('[worker] restoreState error:', e);
+        const snap = _teardown();
+        deps.onFailure('Worker restoreState error', snap);
       }
     },
 

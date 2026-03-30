@@ -1,117 +1,91 @@
 /**
- * NanoToybox simulation Web Worker (Milestone C.1).
+ * NanoToybox simulation worker — runs PhysicsEngine off the main thread.
  *
- * Runs PhysicsEngine on a dedicated thread, communicating with the main
- * thread via the WorkerCommand / WorkerEvent protocol.
- *
- * Protocol guarantees:
- * - Mutation commands (init, appendMolecule, clearScene) always produce an ack
- * - requestFrame always produces exactly one completion (frameResult or frameSkipped)
- * - Init is transactional and serialized: all commands are queued during init
- * - Commands sent when uninitialized get typed error responses (no silent drops)
- * - Failed init discards its queued commands with error acks (no stale-scene drain)
+ * Invariants:
+ * 1. Mutation commands (init, restoreState, appendMolecule, clearScene) always produce an ack.
+ * 2. requestFrame always produces exactly one completion (frameResult or frameSkipped).
+ * 3. Init/restoreState are transactional — commands queue during setup.
+ * 4. Commands sent when uninitialized get typed error responses.
+ * 5. Failed init discards queued commands with error acks.
  */
+/// <reference lib="webworker" />
+declare const self: DedicatedWorkerGlobalScope;
 
 import { PhysicsEngine } from './physics';
 import type {
   WorkerCommand,
   WorkerEvent,
+  PhysicsConfig,
 } from '../../src/types/worker-protocol';
+import type { AtomXYZ } from '../../src/types/domain';
+import type { BondTuple } from '../../src/types/interfaces';
 
-// ─── Worker state ───────────────────────────────────────────────────────────
-
+// ─── Global state ──────────────────────────────────────────────────────────
 let engine: PhysicsEngine | null = null;
 let sceneVersion = 0;
 let snapshotVersion = 0;
+
+// Init transaction tracking
 let initInFlight = false;
-let initEpoch = 0;          // incremented per init attempt
+let initEpoch = 0;
 let currentInitQueue: WorkerCommand[] = [];
 
-// ─── Emit helper ────────────────────────────────────────────────────────────
-
-function emit(event: WorkerEvent): void {
-  self.postMessage(event);
-}
-
-// ─── Error responses for commands when engine is not ready ──────────────────
-
+// ─── Emit helpers ──────────────────────────────────────────────────────────
+function emit(event: WorkerEvent): void { self.postMessage(event); }
 function emitNotReady(cmd: WorkerCommand, reason: string): void {
-  switch (cmd.type) {
-    case 'init':
+  if ('commandId' in cmd) {
+    if (cmd.type === 'init') {
       emit({ type: 'initResult', replyTo: cmd.commandId, ok: false, sceneVersion, atomCount: 0, wasmReady: false, kernel: 'js', error: reason });
-      break;
-    case 'appendMolecule':
-      emit({ type: 'appendResult', replyTo: cmd.commandId, ok: false, sceneVersion, atomOffset: 0, atomsAppended: 0, totalAtomCount: engine ? engine.n : 0, error: reason });
-      break;
-    case 'clearScene':
-      emit({ type: 'clearSceneResult', replyTo: cmd.commandId, ok: false, sceneVersion, error: reason });
-      break;
-    case 'requestFrame':
-      // Use frameSkipped with reason to distinguish from valid empty scene
+    } else if (cmd.type === 'restoreState') {
+      emit({ type: 'restoreStateResult', replyTo: cmd.commandId, ok: false, sceneVersion, atomCount: 0, wasmReady: false, kernel: 'js', error: reason });
+    } else if (cmd.type === 'appendMolecule') {
+      emit({ type: 'appendResult', replyTo: cmd.commandId, ok: false, sceneVersion, atomOffset: 0, atomsAppended: 0, totalAtomCount: 0, error: reason });
+    } else if (cmd.type === 'requestFrame') {
       emit({ type: 'frameSkipped', replyTo: cmd.commandId, sceneVersion, stepsCompleted: 0, physStepMs: 0, reason: 'not_initialized' });
-      break;
-    // Interactive/settings commands are fire-and-forget — no ack required
-    default:
-      break;
+    } else if (cmd.type === 'clearScene') {
+      emit({ type: 'clearSceneResult', replyTo: cmd.commandId, ok: false, sceneVersion, error: reason });
+    }
   }
 }
 
-// ─── Command handlers ───────────────────────────────────────────────────────
+// ─── Shared worker transaction helper ──────────────────────────────────────
+// Factors the common pattern: build candidate → apply state → init wasm →
+// commit or fail. Used by both handleInit and handleRestoreState.
 
-async function handleInit(cmd: Extract<WorkerCommand, { type: 'init' }>): Promise<void> {
+type AckType = 'initResult' | 'restoreStateResult';
+
+function operationName(ackType: AckType): string {
+  return ackType === 'initResult' ? 'Init' : 'Restore state';
+}
+
+async function workerTransaction(
+  commandId: number,
+  config: PhysicsConfig,
+  ackType: AckType,
+  applyState: (candidate: PhysicsEngine) => void,
+): Promise<void> {
   initInFlight = true;
   const thisEpoch = ++initEpoch;
   currentInitQueue = [];
 
   try {
-    // Build candidate engine without assigning to global (transactional)
     const candidate = new PhysicsEngine({ skipWasmInit: true });
-    candidate.init(cmd.atoms, cmd.bonds);
 
-    // Apply initial velocities if provided (restart path passes deformed-state velocities)
-    if (cmd.velocities && cmd.velocities.length > 0) {
-      const copyLen = Math.min(cmd.velocities.length, candidate.vel.length);
-      candidate.vel.set(cmd.velocities.subarray(0, copyLen));
-    }
+    // Apply timing config so engine uses protocol dt/dampingReferenceSteps, not defaults.
+    candidate.setTimeConfig(config.dt, config.dampingReferenceSteps);
+    // Apply shared config FIRST so caller-specific state (e.g. restoreBoundarySnapshot)
+    // can override wallMode and damping if it has authoritative values.
+    candidate.setDamping(config.damping);
+    candidate.setDragStrength(config.kDrag);
+    candidate.setRotateStrength(config.kRotate);
+    candidate.setWallMode(config.wallMode);
 
-    // Apply config
-    candidate.setDamping(cmd.config.damping);
-    candidate.setDragStrength(cmd.config.kDrag);
-    candidate.setRotateStrength(cmd.config.kRotate);
-    candidate.setWallMode(cmd.config.wallMode);
+    // Apply caller-specific state (may override config values with authoritative state)
+    applyState(candidate);
 
-    // Boundary: restore from snapshot (restart) or compute from atoms (fresh init)
-    if (cmd.boundary) {
-      candidate.restoreBoundarySnapshot(cmd.boundary);
-    } else if (cmd.atoms.length > 0) {
-      candidate.updateWallCenter(cmd.atoms, [0, 0, 0]);
-      candidate.updateWallRadius();
-    }
-
-    // Interaction: restore active drag/move/rotate (restart)
-    if (cmd.interaction && cmd.interaction.kind !== 'none') {
-      const s = cmd.interaction;
-      if (s.atomIndex >= 0 && s.atomIndex < candidate.n) {
-        switch (s.kind) {
-          case 'atom_drag':
-            candidate.startDrag(s.atomIndex);
-            candidate.updateDrag(s.target[0], s.target[1], s.target[2]);
-            break;
-          case 'move_group':
-            candidate.startTranslate(s.atomIndex);
-            candidate.updateDrag(s.target[0], s.target[1], s.target[2]);
-            break;
-          case 'rotate_group':
-            candidate.startRotateDrag(s.atomIndex);
-            candidate.updateDrag(s.target[0], s.target[1], s.target[2]);
-            break;
-        }
-      }
-    }
-
-    // Wasm: explicit, worker-authoritative
+    // Wasm
     let wasmReady = false;
-    if (cmd.config.useWasm) {
+    if (config.useWasm) {
       const { initWasm, isReady } = await import('./tersoff-wasm');
       await initWasm();
       wasmReady = isReady();
@@ -120,8 +94,7 @@ async function handleInit(cmd: Extract<WorkerCommand, { type: 'init' }>): Promis
       candidate.setWasmReady(false);
     }
 
-    // Check if this init was superseded by a newer one
-    if (thisEpoch !== initEpoch) return; // a newer init took over
+    if (thisEpoch !== initEpoch) return; // superseded
 
     // Commit
     engine = candidate;
@@ -129,8 +102,8 @@ async function handleInit(cmd: Extract<WorkerCommand, { type: 'init' }>): Promis
     snapshotVersion = 0;
 
     emit({
-      type: 'initResult',
-      replyTo: cmd.commandId,
+      type: ackType,
+      replyTo: commandId,
       ok: true,
       sceneVersion,
       atomCount: engine.n,
@@ -138,21 +111,15 @@ async function handleInit(cmd: Extract<WorkerCommand, { type: 'init' }>): Promis
       kernel: engine.getActiveKernel(),
     });
 
-    // Drain queued commands from THIS init epoch
     initInFlight = false;
     const queue = currentInitQueue;
     currentInitQueue = [];
-    for (const qcmd of queue) {
-      dispatch(qcmd);
-    }
+    for (const qcmd of queue) dispatch(qcmd);
   } catch (err) {
-    // Check if superseded
     if (thisEpoch !== initEpoch) return;
-
-    // Failed init: engine stays as-is (null or previous)
     emit({
-      type: 'initResult',
-      replyTo: cmd.commandId,
+      type: ackType,
+      replyTo: commandId,
       ok: false,
       sceneVersion,
       atomCount: 0,
@@ -160,17 +127,39 @@ async function handleInit(cmd: Extract<WorkerCommand, { type: 'init' }>): Promis
       kernel: 'js',
       error: String(err),
     });
-
-    // Discard queued commands with error acks (they were meant for the failed scene)
     initInFlight = false;
     const failedQueue = currentInitQueue;
     currentInitQueue = [];
-    for (const qcmd of failedQueue) {
-      emitNotReady(qcmd, 'Init failed; queued command discarded');
-    }
+    for (const qcmd of failedQueue) emitNotReady(qcmd, `${operationName(ackType)} failed`);
   }
 }
 
+// ─── Init (fresh scene) ────────────────────────────────────────────────────
+async function handleInit(cmd: Extract<WorkerCommand, { type: 'init' }>): Promise<void> {
+  await workerTransaction(cmd.commandId, cmd.config, 'initResult', (candidate) => {
+    candidate.init(cmd.atoms, cmd.bonds);
+    if (cmd.atoms.length > 0) {
+      candidate.updateWallCenter(cmd.atoms, [0, 0, 0]);
+      candidate.updateWallRadius();
+    }
+  });
+}
+
+// ─── Restore state (restart from timeline) ─────────────────────────────────
+async function handleRestoreState(cmd: Extract<WorkerCommand, { type: 'restoreState' }>): Promise<void> {
+  await workerTransaction(cmd.commandId, cmd.config, 'restoreStateResult', (candidate) => {
+    candidate.init(cmd.atoms, cmd.bonds);
+    // Overlay restart-grade dynamic state
+    const copyLen = Math.min(cmd.velocities.length, candidate.vel.length);
+    candidate.vel.set(cmd.velocities.subarray(0, copyLen));
+    candidate.restoreBoundarySnapshot(cmd.boundary);
+    // Do NOT restore interaction state — that creates phantom spring forces
+    // without a matching user pointer input. The user's current pointer
+    // state drives interaction after restart.
+  });
+}
+
+// ─── Append molecule ───────────────────────────────────────────────────────
 function handleAppendMolecule(cmd: Extract<WorkerCommand, { type: 'appendMolecule' }>): void {
   if (!engine) { emitNotReady(cmd, 'Engine not initialized'); return; }
   try {
@@ -201,17 +190,22 @@ function handleAppendMolecule(cmd: Extract<WorkerCommand, { type: 'appendMolecul
   }
 }
 
+// ─── Clear scene ───────────────────────────────────────────────────────────
 function handleClearScene(cmd: Extract<WorkerCommand, { type: 'clearScene' }>): void {
-  if (!engine) { emitNotReady(cmd, 'Engine not initialized'); return; }
-  engine.clearScene();
+  if (engine) engine.clearScene();
   sceneVersion += 1;
   snapshotVersion = 0;
-  emit({ type: 'clearSceneResult', replyTo: cmd.commandId, ok: true, sceneVersion });
+  emit({
+    type: 'clearSceneResult',
+    replyTo: cmd.commandId,
+    ok: true,
+    sceneVersion,
+  });
 }
 
+// ─── Request frame ─────────────────────────────────────────────────────────
 function handleRequestFrame(cmd: Extract<WorkerCommand, { type: 'requestFrame' }>): void {
   if (!engine) {
-    // Typed failure completion — not a valid empty scene
     emit({ type: 'frameSkipped', replyTo: cmd.commandId, sceneVersion, stepsCompleted: 0, physStepMs: 0, reason: 'not_initialized' });
     return;
   }
@@ -219,19 +213,14 @@ function handleRequestFrame(cmd: Extract<WorkerCommand, { type: 'requestFrame' }
   const t0 = performance.now();
   const steps = cmd.stepsRequested;
   if (engine.n > 0) {
-    for (let s = 0; s < steps; s++) {
-      engine.stepOnce();
-    }
+    for (let s = 0; s < steps; s++) engine.stepOnce();
     engine.applySafetyControls();
   }
   const physStepMs = performance.now() - t0;
-  snapshotVersion += 1;
 
-  const n = engine.n;
-  const positions = new Float64Array(n * 3);
-  if (n > 0) positions.set(engine.pos.subarray(0, n * 3));
-  const velocities = new Float64Array(n * 3);
-  if (n > 0 && engine.vel) velocities.set(engine.vel.subarray(0, n * 3));
+  snapshotVersion++;
+  const positions = new Float64Array(engine.pos.subarray(0, engine.n * 3));
+  const velocities = new Float64Array(engine.vel.subarray(0, engine.n * 3));
 
   emit({
     type: 'frameResult',
@@ -240,20 +229,18 @@ function handleRequestFrame(cmd: Extract<WorkerCommand, { type: 'requestFrame' }
     snapshotVersion,
     positions,
     velocities,
-    n,
+    n: engine.n,
     stepsCompleted: steps,
     physStepMs,
   });
 }
 
-// Interactive commands — fire-and-forget
+// ─── Interaction commands ──────────────────────────────────────────────────
 function handleStartDrag(cmd: Extract<WorkerCommand, { type: 'startDrag' }>): void {
   if (!engine) return;
-  switch (cmd.mode) {
-    case 'atom': engine.startDrag(cmd.atomIndex); break;
-    case 'move': engine.startTranslate(cmd.atomIndex); break;
-    case 'rotate': engine.startRotateDrag(cmd.atomIndex); break;
-  }
+  if (cmd.mode === 'atom') engine.startDrag(cmd.atomIndex);
+  else if (cmd.mode === 'move') engine.startTranslate(cmd.atomIndex);
+  else if (cmd.mode === 'rotate') engine.startRotateDrag(cmd.atomIndex);
 }
 
 function handleUpdateDrag(cmd: Extract<WorkerCommand, { type: 'updateDrag' }>): void {
@@ -277,7 +264,7 @@ function handleFlick(cmd: Extract<WorkerCommand, { type: 'flick' }>): void {
   engine.applyImpulse(cmd.atomIndex, cmd.vx, cmd.vy);
 }
 
-// Settings commands — fire-and-forget
+// ─── Settings commands ─────────────────────────────────────────────────────
 function handleSetDragStrength(cmd: Extract<WorkerCommand, { type: 'setDragStrength' }>): void { if (engine) engine.setDragStrength(cmd.value); }
 function handleSetRotateStrength(cmd: Extract<WorkerCommand, { type: 'setRotateStrength' }>): void { if (engine) engine.setRotateStrength(cmd.value); }
 function handleSetDamping(cmd: Extract<WorkerCommand, { type: 'setDamping' }>): void { if (engine) engine.setDamping(cmd.value); }
@@ -285,15 +272,15 @@ function handleSetWallMode(cmd: Extract<WorkerCommand, { type: 'setWallMode' }>)
 function handleUpdateWallCenter(cmd: Extract<WorkerCommand, { type: 'updateWallCenter' }>): void {
   if (engine) {
     engine.updateWallCenter(cmd.atoms, cmd.offset);
-    engine.updateWallRadius(); // Wall radius depends on atom count + density; must update after center
+    engine.updateWallRadius();
   }
 }
 
 // ─── Centralized dispatcher ────────────────────────────────────────────────
-
 function dispatch(cmd: WorkerCommand): void {
   switch (cmd.type) {
     case 'init':              handleInit(cmd); break;
+    case 'restoreState':      handleRestoreState(cmd); break;
     case 'appendMolecule':    handleAppendMolecule(cmd); break;
     case 'clearScene':        handleClearScene(cmd); break;
     case 'requestFrame':      handleRequestFrame(cmd); break;
@@ -313,15 +300,10 @@ function dispatch(cmd: WorkerCommand): void {
 self.onmessage = (e: MessageEvent<WorkerCommand>): void => {
   const cmd = e.data;
   if (initInFlight) {
-    // ALL commands are queued during init (including a second init)
     currentInitQueue.push(cmd);
     return;
   }
   dispatch(cmd);
 };
-
-// ─── Signal readiness ───────────────────────────────────────────────────────
-// 'ready' means "worker script loaded and accepting commands."
-// Simulation/Wasm readiness comes via initResult after an init command.
 
 emit({ type: 'ready' });

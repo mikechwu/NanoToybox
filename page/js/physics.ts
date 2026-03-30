@@ -47,9 +47,7 @@ const F_MAX = CONFIG.physics.fMax;
 const V_HARD_MAX = CONFIG.physics.vHardMax;
 const KE_CAP_MULT = CONFIG.physics.keCapMult;
 
-// ─── Integration ───
-const DT = CONFIG.physics.dt;
-const STEPS_PER_FRAME = CONFIG.physics.stepsPerFrame;
+// ─── Integration defaults (instance-level; see PhysicsEngine.dtFs / .dampingRefSteps) ───
 
 // ─── Unit conversion ───
 const ACC_FACTOR = 1.602176634e-29 / 1.9944235e-26;
@@ -334,6 +332,12 @@ export class PhysicsEngine {
   damping!: number;
   _dampingFactor!: number;
 
+  // Engine timing (instance-level, set from config or setTimeConfig)
+  dtFs!: number;
+  dampingRefSteps!: number;
+  /** Reference batch duration in fs for damping normalization. */
+  dampingRefDurationFs!: number;
+
   // Benchmark timing
   _bench!: Record<string, number> | null;
 
@@ -392,7 +396,12 @@ export class PhysicsEngine {
     this.kDrag = CONFIG.physics.kDragDefault;
     this.kRotate = CONFIG.physics.kRotateDefault;
     this.damping = CONFIG.physics.dampingDefault;
-    this._dampingFactor = this.damping > 0 ? Math.pow(1 - this.damping, 1 / STEPS_PER_FRAME) : 1.0;
+    /** Timestep in femtoseconds — used by integrate() and timeline. */
+    this.dtFs = CONFIG.physics.dt;
+    /** Reference batch size for damping normalization. */
+    this.dampingRefSteps = CONFIG.physics.stepsPerFrame;
+    this.dampingRefDurationFs = this.dtFs * this.dampingRefSteps;
+    this._recomputeDampingFactor();
 
     // Benchmark timing hooks (null when not benchmarking, zero overhead)
     this._bench = null; // set to {} to enable per-stage timing
@@ -1053,7 +1062,7 @@ export class PhysicsEngine {
    * Called by the accumulator in main.js (speed-controlled) or by step() (legacy).
    */
   stepOnce() {
-    this.integrate(DT);
+    this.integrate(this.dtFs);
     this.stepCount++;
     // Per-step damping: precomputed factor from legacy damping parameter
     if (this._dampingFactor < 1.0) {
@@ -1090,9 +1099,9 @@ export class PhysicsEngine {
     }
   }
 
-  /** Legacy wrapper: runs stepsPerFrame substeps + safety controls. */
+  /** Legacy wrapper: runs dampingRefSteps substeps + safety controls. */
   step() {
-    for (let s = 0; s < STEPS_PER_FRAME; s++) this.stepOnce();
+    for (let s = 0; s < this.dampingRefSteps; s++) this.stepOnce();
     this.applySafetyControls();
   }
 
@@ -1582,7 +1591,33 @@ export class PhysicsEngine {
   getRotateStrength() { return this.kRotate; }
   setDamping(val: number) {
     this.damping = val;
-    this._dampingFactor = val > 0 ? Math.pow(1 - val, 1 / STEPS_PER_FRAME) : 1.0;
+    this._recomputeDampingFactor();
   }
   getDamping() { return this.damping; }
+
+  /** Get timestep in femtoseconds. */
+  getDtFs() { return this.dtFs; }
+
+  /** Set engine timing from protocol config.
+   *  Damping reference duration is pinned at first initialization and NOT
+   *  changed by setTimeConfig — this preserves the original damping
+   *  calibration while allowing the actual step size to change. */
+  setTimeConfig(dtFs: number, dampingRefSteps: number) {
+    this.dtFs = dtFs;
+    this.dampingRefSteps = dampingRefSteps;
+    // dampingRefDurationFs stays at boot value — intentionally not recalculated
+    this._recomputeDampingFactor();
+  }
+
+  /** Convert user-facing damping to a per-step velocity multiplier using
+   *  time-based exponential decay. The damping parameter d represents the
+   *  fractional velocity loss over the reference batch duration (dampingRefDurationFs).
+   *  This is converted to a decay rate (gamma per fs) then to a per-step
+   *  factor at the current dtFs, so changing dtFs preserves the physical
+   *  decay per simulated time. */
+  _recomputeDampingFactor() {
+    if (this.damping <= 0) { this._dampingFactor = 1.0; return; }
+    const gamma = -Math.log(1 - this.damping) / this.dampingRefDurationFs;
+    this._dampingFactor = Math.exp(-gamma * this.dtFs);
+  }
 }
