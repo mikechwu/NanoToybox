@@ -80,6 +80,8 @@ describe('Store callbacks do not arm timeline (real registerStoreCallbacks)', ()
       clearRendererFeedback: vi.fn(),
     });
 
+    sub.installAndEnable(); // Match main.ts init — start in ready state
+
     // Wire the real registerStoreCallbacks with deps matching main.ts
     // construction — no arming in any callback.
     registerStoreCallbacks({

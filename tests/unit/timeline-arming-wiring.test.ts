@@ -139,6 +139,7 @@ describe('Timeline arming wiring (integration)', () => {
     useAppStore.getState().resetTransientState();
     physics = makePhysics();
     sub = createTestSubsystem();
+    sub.installAndEnable(); // Match main.ts init — start in ready state
     callbacks = createMainCallbacks(sub);
   });
 

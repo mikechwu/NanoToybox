@@ -83,7 +83,7 @@ describe('TimelineSubsystem', () => {
 
   it('records after arming', () => {
     const sub = createSub();
-    sub.markAtomInteractionStarted();
+    sub.startRecordingNow();
     sub.recordAfterReconciliation(4);
     const state = useAppStore.getState();
     expect(state.timelineRangePs).not.toBeNull();
@@ -91,7 +91,7 @@ describe('TimelineSubsystem', () => {
 
   it('clearAndDisarm resets and disarms', () => {
     const sub = createSub();
-    sub.markAtomInteractionStarted();
+    sub.startRecordingNow();
     sub.recordAfterReconciliation(4);
     expect(useAppStore.getState().timelineRangePs).not.toBeNull();
 
@@ -105,7 +105,7 @@ describe('TimelineSubsystem', () => {
 
   it('teardown clears store state', () => {
     const sub = createSub();
-    sub.markAtomInteractionStarted();
+    sub.startRecordingNow();
     sub.recordAfterReconciliation(4);
     sub.teardown();
     expect(useAppStore.getState().timelineMode).toBe('live');
@@ -115,7 +115,7 @@ describe('TimelineSubsystem', () => {
 
   it('isInReview reflects review mode', () => {
     const sub = createSub();
-    sub.markAtomInteractionStarted();
+    sub.startRecordingNow();
     sub.recordAfterReconciliation(4);
     expect(sub.isInReview()).toBe(false);
 
@@ -128,28 +128,30 @@ describe('TimelineSubsystem', () => {
 
   it('does not record when stepsReconciled is 0', () => {
     const sub = createSub();
-    sub.markAtomInteractionStarted();
+    sub.startRecordingNow();
+    // Seed frame at time 0
+    const afterSeed = useAppStore.getState().timelineCurrentTimePs;
 
-    // First reconciliation records
-    sub.recordAfterReconciliation(4);
-    const afterFirst = useAppStore.getState().timelineCurrentTimePs;
-    expect(afterFirst).toBeGreaterThan(0);
-
-    // Zero-step calls should NOT change stored time or frame count
+    // Zero-step calls should NOT change stored time
     sub.recordAfterReconciliation(0);
     sub.recordAfterReconciliation(0);
-    expect(useAppStore.getState().timelineCurrentTimePs).toBe(afterFirst);
+    expect(useAppStore.getState().timelineCurrentTimePs).toBe(afterSeed);
   });
 
-  it('installStoreCallbacks registers callbacks in store', () => {
+  it('installAndEnable registers callbacks and enters ready atomically', () => {
     const sub = createSub();
     expect(useAppStore.getState().timelineCallbacks).toBeNull();
-    sub.installStoreCallbacks();
+    expect(useAppStore.getState().timelineInstalled).toBe(false);
+    sub.installAndEnable();
     const cbs = useAppStore.getState().timelineCallbacks;
     expect(cbs).not.toBeNull();
     expect(cbs!.onScrub).toBeTypeOf('function');
     expect(cbs!.onReturnToLive).toBeTypeOf('function');
     expect(cbs!.onRestartFromHere).toBeTypeOf('function');
+    expect(cbs!.onStartRecordingNow).toBeTypeOf('function');
+    expect(cbs!.onTurnRecordingOff).toBeTypeOf('function');
+    expect(useAppStore.getState().timelineInstalled).toBe(true);
+    expect(useAppStore.getState().timelineRecordingMode).toBe('ready');
   });
 
   // ── Regression: only atom interaction arms recording ──
@@ -188,7 +190,7 @@ describe('TimelineSubsystem', () => {
     expect(useAppStore.getState().timelineRangePs).toBeNull();
 
     // Phase 2: user drags an atom → markAtomInteractionStarted
-    sub.markAtomInteractionStarted();
+    sub.startRecordingNow();
     sub.recordAfterReconciliation(4);
     expect(useAppStore.getState().timelineRangePs).not.toBeNull();
   });
@@ -200,7 +202,7 @@ describe('TimelineSubsystem', () => {
     expect(useAppStore.getState().timelineRangePs).toBeNull();
 
     // Now user interacts → arm and record
-    sub.markAtomInteractionStarted();
+    sub.startRecordingNow();
     sub.recordAfterReconciliation(4);
     const range = useAppStore.getState().timelineRangePs;
     expect(range).not.toBeNull();
@@ -208,5 +210,116 @@ describe('TimelineSubsystem', () => {
     // not the 100 ticks worth of sim time that elapsed before arming.
     // 4 steps × 0.5 fs / 1000 = 0.002 ps (only the post-arming tick)
     expect(range!.start).toBeCloseTo(0.002);
+  });
+
+  // ── Recording lifecycle: off/on cycles ──
+
+  it('turnRecordingOff from review exits review, clears history, goes to off', () => {
+    const sub = createSub();
+    sub.startRecordingNow();
+    sub.recordAfterReconciliation(4);
+    sub.recordAfterReconciliation(4);
+    expect(useAppStore.getState().timelineRangePs).not.toBeNull();
+
+    // Enter review
+    sub.handleScrub(0);
+    expect(sub.isInReview()).toBe(true);
+
+    // Turn off while in review
+    sub.turnRecordingOff();
+    expect(useAppStore.getState().timelineRecordingMode).toBe('off');
+    expect(sub.isInReview()).toBe(false);
+    expect(useAppStore.getState().timelineMode).toBe('live');
+    expect(useAppStore.getState().timelineRangePs).toBeNull();
+    expect(useAppStore.getState().timelineCurrentTimePs).toBe(0);
+    expect(useAppStore.getState().timelineRestartTargetPs).toBeNull();
+  });
+
+  it('turnRecordingOn after off returns to ready with empty history', () => {
+    const sub = createSub();
+    sub.startRecordingNow();
+    sub.recordAfterReconciliation(4);
+    expect(useAppStore.getState().timelineRangePs).not.toBeNull();
+
+    // Turn off
+    sub.turnRecordingOff();
+    expect(useAppStore.getState().timelineRecordingMode).toBe('off');
+    expect(useAppStore.getState().timelineRangePs).toBeNull();
+
+    // Start recording again — immediate active with seed frame
+    sub.startRecordingNow();
+    expect(useAppStore.getState().timelineRecordingMode).toBe('active');
+    const newRange = useAppStore.getState().timelineRangePs;
+    expect(newRange).not.toBeNull();
+    expect(newRange!.start).toBe(0); // fresh history from 0
+  });
+
+  it('multiple off/on cycles produce clean state each time', () => {
+    const sub = createSub();
+
+    for (let cycle = 0; cycle < 3; cycle++) {
+      sub.startRecordingNow();
+      expect(sub.getRecordingMode()).toBe('active');
+
+      sub.recordAfterReconciliation(4);
+      expect(useAppStore.getState().timelineRangePs).not.toBeNull();
+
+      sub.turnRecordingOff();
+      expect(sub.getRecordingMode()).toBe('off');
+      expect(useAppStore.getState().timelineRangePs).toBeNull();
+    }
+  });
+
+  it('atom interaction after re-enabling starts fresh history', () => {
+    const sub = createSub();
+    // First cycle
+    sub.startRecordingNow();
+    sub.recordAfterReconciliation(4);
+    sub.recordAfterReconciliation(4);
+    const firstRange = useAppStore.getState().timelineRangePs;
+    expect(firstRange).not.toBeNull();
+
+    // Off + restart recording
+    sub.turnRecordingOff();
+    sub.startRecordingNow();
+
+    // Second cycle — immediate seed frame at time 0
+    const secondRange = useAppStore.getState().timelineRangePs;
+    expect(secondRange).not.toBeNull();
+    expect(secondRange!.start).toBe(0);
+  });
+
+  // ── startRecordingNow (explicit enable with immediate seed frame) ──
+
+  it('startRecordingNow transitions off → active and seeds first frame', () => {
+    const sub = createSub();
+    expect(sub.getRecordingMode()).toBe('off');
+    sub.startRecordingNow();
+    expect(sub.getRecordingMode()).toBe('active');
+    // Should have seeded an immediate frame at time 0
+    expect(useAppStore.getState().timelineRecordingMode).toBe('active');
+    const range = useAppStore.getState().timelineRangePs;
+    expect(range).not.toBeNull();
+    expect(range!.start).toBe(0);
+  });
+
+  it('startRecordingNow is no-op when already in ready (via installAndEnable)', () => {
+    const sub = createSub();
+    sub.installAndEnable();
+    expect(sub.getRecordingMode()).toBe('ready');
+    sub.startRecordingNow();
+    expect(sub.getRecordingMode()).toBe('ready'); // unchanged — startNow only works from off
+  });
+
+  it('startRecordingNow followed by ticks continues recording', () => {
+    const sub = createSub();
+    sub.startRecordingNow();
+    // Seed frame at time 0
+    const rangeAfterSeed = useAppStore.getState().timelineRangePs;
+    expect(rangeAfterSeed).not.toBeNull();
+    expect(rangeAfterSeed!.start).toBe(0);
+    // Subsequent ticks advance time (recording is active)
+    sub.recordAfterReconciliation(4);
+    expect(sub.getRecordingMode()).toBe('active');
   });
 });

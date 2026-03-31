@@ -76,7 +76,7 @@ describe('TimelineRecordingOrchestrator', () => {
 
   it('records after arming', () => {
     const orch = createOrch();
-    policy.markAtomInteractionStarted();
+    policy.turnOn(); policy.markAtomInteractionStarted();
     orch.tick(4);
     expect(timeline.getFrameCount()).toBe(1);
     expect(timeline.getRestartFrameCount()).toBe(1);
@@ -85,7 +85,7 @@ describe('TimelineRecordingOrchestrator', () => {
 
   it('does not record in review mode', () => {
     const orch = createOrch();
-    policy.markAtomInteractionStarted();
+    policy.turnOn(); policy.markAtomInteractionStarted();
     orch.tick(4); // record one frame first
     timeline.enterReview(0); // enter review
     orch.tick(4); // should not record
@@ -94,7 +94,7 @@ describe('TimelineRecordingOrchestrator', () => {
 
   it('advances sim time on tick', () => {
     const orch = createOrch();
-    policy.markAtomInteractionStarted();
+    policy.turnOn(); policy.markAtomInteractionStarted();
     expect(orch.getSimTimePs()).toBe(0);
     orch.tick(4); // 4 steps × 0.5 fs / 1000 = 0.002 ps
     expect(orch.getSimTimePs()).toBeCloseTo(0.002);
@@ -104,7 +104,7 @@ describe('TimelineRecordingOrchestrator', () => {
 
   it('does not advance time when substeps = 0', () => {
     const orch = createOrch();
-    policy.markAtomInteractionStarted();
+    policy.turnOn(); policy.markAtomInteractionStarted();
     orch.tick(0);
     expect(orch.getSimTimePs()).toBe(0);
     expect(timeline.getFrameCount()).toBe(0);
@@ -113,21 +113,21 @@ describe('TimelineRecordingOrchestrator', () => {
   it('does not record when physics.n = 0', () => {
     physics.n = 0;
     const orch = createOrch();
-    policy.markAtomInteractionStarted();
+    policy.turnOn(); policy.markAtomInteractionStarted();
     orch.tick(4);
     expect(timeline.getFrameCount()).toBe(0);
   });
 
   it('syncs store state at recording cadence', () => {
     const orch = createOrch();
-    policy.markAtomInteractionStarted();
+    policy.turnOn(); policy.markAtomInteractionStarted();
     orch.tick(4);
     expect(syncCalls).toBe(1);
   });
 
   it('reset clears time and disarms', () => {
     const orch = createOrch();
-    policy.markAtomInteractionStarted();
+    policy.turnOn(); policy.markAtomInteractionStarted();
     orch.tick(4);
     expect(orch.getSimTimePs()).toBeGreaterThan(0);
     expect(policy.isArmed()).toBe(true);
@@ -148,7 +148,7 @@ describe('TimelineRecordingOrchestrator', () => {
     physics.pos[0] = 42.0;
     physics.vel[0] = 7.7;
     const orch = createOrch();
-    policy.markAtomInteractionStarted();
+    policy.turnOn(); policy.markAtomInteractionStarted();
     orch.tick(4);
     const src = timeline.findRestartSource(100);
     expect(src).not.toBeNull();

@@ -340,7 +340,9 @@ async function init() {
       onTextSizeChange: noop, onAddMolecule: noop, onClear: noop, onResetView: noop,
     });
     store.setChooserCallbacks({ onSelectStructure: noop });
-    store.setTimelineCallbacks({ onScrub: noop, onReturnToLive: noop, onRestartFromHere: noop });
+    // Timeline callbacks are NOT pre-installed here — TimelineBar gates on
+    // timelineInstalled, which is set by installAndEnable() after the real
+    // subsystem is constructed. No noop placeholders needed.
   }
 
   // Scene runtime — created early so addMoleculeToScene is available during manifest load.
@@ -623,7 +625,7 @@ async function init() {
     clearBondedGroupHighlight: () => { _bondedGroupHighlight?.clearHighlight(); },
     clearRendererFeedback: () => { if (renderer) renderer.clearFeedback(); },
   });
-  _timelineSub.installStoreCallbacks();
+  _timelineSub.installAndEnable(); // Atomic: install callbacks + enter ready state (no transient off flash)
 
   // Narrow test hook — returns only the specific observable E2E tests need.
   (window as unknown as Record<string, unknown>)._getUIState = () => {

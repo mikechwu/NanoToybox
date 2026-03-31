@@ -1,48 +1,62 @@
 /**
- * Timeline recording policy — controls when history recording is active.
+ * Timeline recording policy — 3-state machine controlling recording lifecycle.
  *
- * Recording stays disarmed until the first direct atom interaction
- * (drag, move, rotate, flick). This prevents idle sessions from
- * allocating history buffers.
+ * States:
+ *   off    — recording disabled, history destroyed, bar shows "History Off"
+ *   ready  — recording enabled, waiting for first atom interaction (passive startup)
+ *   active — recording in progress, history accumulating
+ *
+ * Transitions:
+ *   off    → ready   via turnOn()         (passive: wait for atom interaction)
+ *   off    → active  via startNow()       (explicit: user clicked Start Recording)
+ *   ready  → active  via markAtomInteractionStarted()  (auto-arm on first drag)
+ *   any    → off     via turnOff() or disarm()
+ *
+ * Two enable paths exist for different UX semantics:
+ *   - turnOn()     — passive startup: enters ready, recording begins on first
+ *                    atom interaction. Used by app init (installAndEnable).
+ *   - startNow()   — explicit user action: enters active immediately with a
+ *                    seed frame. Used by the "Start Recording" button.
+ *
+ * markAtomInteractionStarted() is a no-op from off (recording disabled)
+ * and from active (already recording). Only ready → active is meaningful.
  *
  * The following actions do NOT arm recording:
  *   - Molecule placement (open, preview, commit)
  *   - Pause / resume
  *   - Speed changes
  *   - Physics settings (wall mode, drag/rotate strength, damping)
- *
- * The createInteractionDispatch function calls markAtomInteractionStarted()
- * unconditionally (not gated by isWorkerActive) when dispatching atom
- * interaction commands (startDrag, startMove, startRotate, flick). This
- * fires whether or not the worker is active, so both worker and sync/local
- * modes arm recording on atom interaction. Arming is idempotent, so only
- * the first call in an interaction sequence matters.
- *
- * Usage:
- *   - Call markAtomInteractionStarted() ONLY from atom interaction paths
- *   - Call isArmed() in the frame loop before recording
- *   - Call disarm() on clear/reset
- *
- * This is the single ownership point for the arming policy. New action
- * paths must NOT call markAtomInteractionStarted() unless they represent
- * a direct user interaction with atoms in the scene.
  */
 
+export type RecordingMode = 'off' | 'ready' | 'active';
+
 export interface TimelineRecordingPolicy {
-  /** Arm recording on first atom interaction. Idempotent. */
+  /** Passive enable — off → ready. No-op from ready or active. */
+  turnOn(): void;
+  /** Explicit enable — off → active. No-op from ready or active. */
+  startNow(): void;
+  /** Disable recording — any state → off. */
+  turnOff(): void;
+  /** Auto-arm on atom interaction. ready → active; no-op from off or active. */
   markAtomInteractionStarted(): void;
-  /** Is recording currently armed? */
+  /** Is recording actively capturing frames? (mode === 'active') */
   isArmed(): boolean;
-  /** Disarm recording (e.g. on clear/reset). */
+  /** Disable recording (alias for turnOff, used by orchestrator.reset). */
   disarm(): void;
+  /** Current state machine mode. */
+  getMode(): RecordingMode;
 }
 
 export function createTimelineRecordingPolicy(): TimelineRecordingPolicy {
-  let _armed = false;
+  let _mode: RecordingMode = 'off';
 
   return {
-    markAtomInteractionStarted() { _armed = true; },
-    isArmed() { return _armed; },
-    disarm() { _armed = false; },
+    turnOn() { if (_mode === 'off') _mode = 'ready'; },
+    startNow() { if (_mode === 'off') _mode = 'active'; },
+    turnOff() { _mode = 'off'; },
+    markAtomInteractionStarted() { if (_mode === 'ready') _mode = 'active'; },
+    isArmed() { return _mode === 'active'; },
+    disarm() { _mode = 'off'; },
+    getMode() { return _mode; },
   };
 }

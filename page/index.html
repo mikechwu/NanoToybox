@@ -213,7 +213,9 @@ canvas { display: block; touch-action: none; }
 @media (min-width: 768px) {
   .dock-region {
     left: 50%; transform: translateX(-50%);
-    width: auto; min-width: 320px; max-width: 480px;
+    /* Fixed-width pill: stable across all timeline states (no shrink-wrap).
+       Uses min() so the region never exceeds the viewport on narrow tablets. */
+    width: min(480px, calc(100vw - 2 * var(--space-lg)));
     bottom: calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));
   }
   .dock-bar {
@@ -643,24 +645,40 @@ fieldset.segmented {
 }
 
 /* ── Timeline bar (inside dock-region, normal flow above dock-bar) ── */
+/* ── Timeline bar: 2-row CSS grid ──
+   Row 1: badge | time | track  — track width is stable across all modes
+   Row 2: meta  | meta | actions — actions never compete with track for space
+   The track column always gets minmax(80px, 1fr) regardless of how many
+   buttons appear in the actions area. */
+/* Row 1 is a 3-column grid (badge | time | track) with all fixed or 1fr columns.
+   Row 2 is a plain flex row (meta + actions) OUTSIDE the grid, so its variable-
+   width buttons never affect track width. This is the only way to guarantee
+   the track column is identical across off/ready/active/review states. */
 .timeline-bar {
-  display: flex; align-items: center; gap: var(--space-sm);
-  height: 32px;
-  padding: 0 var(--space-md);
+  display: flex; flex-direction: column;
+  padding: 2px var(--space-md) 4px;
   font-family: var(--font-family);
   font-size: var(--font-xs);
   color: var(--color-text-secondary);
   touch-action: none;
   user-select: none;
 }
-/* When timeline sits above dock-bar, use bottom border on timeline instead of
-   top border on dock-bar to avoid doubling. The + combinator targets dock-bar
-   that immediately follows timeline-bar. */
 .timeline-bar + .dock-bar { border-top: none; }
+.timeline-row1 {
+  display: grid; align-items: center; gap: var(--space-sm);
+  grid-template-columns: 80px 60px 1fr;
+  height: 28px;
+}
+.timeline-row2 {
+  display: flex; align-items: center; gap: var(--space-sm);
+  min-height: 18px;
+}
+.timeline-lane-meta { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline-lane-actions { flex: 0 0 auto; }
 .timeline-badge {
-  flex: 0 0 48px; /* fixed width — Live and Review both fit */
+  display: inline-block;
   text-align: center;
-  padding: 2px 0; border-radius: 4px;
+  padding: 2px 8px; border-radius: 4px;
   font-size: 10px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.5px;
 }
@@ -670,18 +688,22 @@ fieldset.segmented {
 .timeline-badge--review {
   background: rgba(255, 180, 60, 0.15); color: var(--color-text);
 }
+.timeline-badge--off {
+  background: var(--color-border); color: var(--color-text-secondary);
+}
+.timeline-badge--ready {
+  background: rgba(80, 160, 255, 0.15); color: var(--color-accent-text);
+}
 .timeline-time {
-  flex: 0 0 76px; /* fixed width — fits "999 fs" up to "9999.9 ps" */
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
 .timeline-track {
-  flex: 1; position: relative;
+  position: relative;
   height: 6px; border-radius: 3px;
   background: var(--color-border);
   cursor: pointer;
 }
-/* Expanded touch hit area — meets 44px tap target via invisible ::before */
 .timeline-track::before {
   content: ''; position: absolute;
   inset: -18px 0;
@@ -705,27 +727,42 @@ fieldset.segmented {
 }
 .timeline-track:active .timeline-thumb { transform: translate(-50%, -50%) scale(1.2); }
 .timeline-actions {
-  flex: 0 0 140px; /* fixed width — immune to label length changes */
   display: flex; align-items: center; gap: 4px;
   justify-content: flex-end;
 }
 .timeline-restart-target {
   font-variant-numeric: tabular-nums;
   font-size: 10px; opacity: 0.7;
-  min-width: 40px; text-align: right;
 }
 .timeline-action {
   padding: 4px 10px; border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: none; color: var(--color-text);
   font-family: var(--font-family); font-size: var(--font-xs);
-  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  cursor: pointer; white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
 }
 .timeline-action:disabled { opacity: 0; cursor: default; pointer-events: none; }
 .timeline-action:hover { background: var(--color-border); }
 .timeline-action--restart {
   border-color: var(--color-accent-text);
   color: var(--color-accent-text);
+}
+.timeline-action--destructive {
+  border-color: rgba(220, 80, 60, 0.5);
+  color: rgba(220, 80, 60, 0.9);
+}
+.timeline-action--destructive:hover { background: rgba(220, 80, 60, 0.1); }
+.timeline-bar--disabled { opacity: 0.7; }
+.timeline-track--disabled { pointer-events: none; cursor: default; }
+.timeline-helper {
+  font-style: italic; font-size: var(--font-xs); opacity: 0.6;
+}
+/* Compact: narrower fixed columns on small screens */
+@media (max-width: 599px) {
+  .timeline-bar { --timeline-compact: 1; }
+  .timeline-row1 { grid-template-columns: 64px 50px 1fr; }
+  .timeline-row2 { flex-wrap: wrap; justify-content: center; }
 }
 </style>
 </head>
