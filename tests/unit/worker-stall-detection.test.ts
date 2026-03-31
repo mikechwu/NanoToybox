@@ -66,10 +66,8 @@ describe('Worker stall detection — refined logic', () => {
     const { runtime, onFailure } = await createInitedRuntime();
     runtime.setTestStalledThreshold(100);
 
-    // Simulate frozen progress (no completions)
-    runtime.simulateStall();
-
     // Advance past the fatal threshold — but no request is outstanding
+    // (don't call simulateStall — just advance time with no sends)
     vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 500);
 
     runtime.checkStalled(false);
@@ -201,6 +199,36 @@ describe('Worker stall detection — refined logic', () => {
     runtime.checkStalled(false);
     expect(runtime.isStalled()).toBe(true);
     expect(onFailure).not.toHaveBeenCalled(); // fresh recovery, not teardown
+
+    vi.restoreAllMocks();
+  });
+
+  it('simulateStall creates a synthetic wedged-request condition', async () => {
+    const { runtime, onFailure } = await createInitedRuntime();
+    runtime.setTestStalledThreshold(100);
+
+    // simulateStall should create a synthetic outstanding request
+    runtime.simulateStall();
+    const debug = runtime.getDebugState();
+    expect(debug.hasOutstandingRequest).toBe(true);
+
+    // Advance past warning threshold — stalled flag should set
+    const baseNow = performance.now();
+    vi.spyOn(performance, 'now').mockReturnValue(baseNow + 150);
+    runtime.checkStalled(false);
+    expect(runtime.isStalled()).toBe(true);
+    expect(onFailure).not.toHaveBeenCalled();
+
+    // Advance past fatal threshold — recovery attempt, not immediate teardown
+    vi.spyOn(performance, 'now').mockReturnValue(baseNow + 350);
+    runtime.checkStalled(false);
+    expect(runtime.isStalled()).toBe(true);
+    expect(onFailure).not.toHaveBeenCalled(); // recovery attempted
+
+    // Second fatal — teardown
+    vi.spyOn(performance, 'now').mockReturnValue(baseNow + 700);
+    runtime.checkStalled(false);
+    expect(onFailure).toHaveBeenCalledTimes(1);
 
     vi.restoreAllMocks();
   });

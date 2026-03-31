@@ -11,7 +11,7 @@ interface WorkerDebugState {
   workerActive: boolean
   workerState: string | null
   workerStalled: boolean
-  outstandingRequests: number
+  bridgeOutstandingRequests: number
   physStepMs: number
   totalStepsProfiled: number
   hasSnapshot: boolean
@@ -48,7 +48,7 @@ test.describe('C.2 Integration — Worker-Driven Main App', () => {
     expect(state.workerState).toBe('running')
 
     // At most 1 outstanding request (one-in-flight enforcement)
-    expect(state.outstandingRequests).toBeLessThanOrEqual(1)
+    expect(state.bridgeOutstandingRequests).toBeLessThanOrEqual(1)
 
     // Worker has produced at least one snapshot
     expect(state.hasSnapshot).toBe(true)

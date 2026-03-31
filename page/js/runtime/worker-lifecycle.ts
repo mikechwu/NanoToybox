@@ -59,6 +59,8 @@ export function createWorkerRuntime(deps: {
   let _stalled = false;
   let _recoveryAttempted = false;
   let _testFreezeProgress = false;
+  let _testForceOutstanding = false;
+  let _testFreezeRequestAge = false;
   let _testStalledThresholdMs = 0;
   let _lastRequestSentTs = 0;
 
@@ -72,6 +74,9 @@ export function createWorkerRuntime(deps: {
     _initialized = false;
     _stalled = false;
     _recoveryAttempted = false;
+    _testFreezeProgress = false;
+    _testForceOutstanding = false;
+    _testFreezeRequestAge = false;
     _progressTs = 0;
     _lastRequestSentTs = 0;
     return lastSnap;
@@ -93,6 +98,7 @@ export function createWorkerRuntime(deps: {
           _progressTs = performance.now();
           if (_stalled) _stalled = false;
           if (_recoveryAttempted) _recoveryAttempted = false;
+          if (_testForceOutstanding) _testForceOutstanding = false;
         }
         if (snapshot.stepsCompleted > 0) {
           deps.onSchedulerTiming(snapshot.physStepMs / snapshot.stepsCompleted, snapshot.stepsCompleted);
@@ -104,6 +110,7 @@ export function createWorkerRuntime(deps: {
           _progressTs = performance.now();
           if (_stalled) _stalled = false;
           if (_recoveryAttempted) _recoveryAttempted = false;
+          if (_testForceOutstanding) _testForceOutstanding = false;
         }
         if (info.stepsCompleted > 0) {
           deps.onSchedulerTiming(info.physStepMs / info.stepsCompleted, info.stepsCompleted);
@@ -170,7 +177,7 @@ export function createWorkerRuntime(deps: {
     sendRequestFrame(steps: number) {
       if (_bridge && _initialized) {
         _bridge.sendRequestFrame(steps);
-        _lastRequestSentTs = performance.now();
+        if (!_testFreezeRequestAge) _lastRequestSentTs = performance.now();
       }
     },
 
@@ -244,7 +251,7 @@ export function createWorkerRuntime(deps: {
       if (!_bridge || !_initialized || _progressTs <= 0) return;
       if (paused) return; // don't stall-detect while simulation is paused
 
-      const hasOutstanding = _bridge.getOutstandingRequestCount() > 0;
+      const hasOutstanding = _testForceOutstanding || _bridge.getOutstandingRequestCount() > 0;
       const stalledThresholdMs = _testStalledThresholdMs > 0 ? _testStalledThresholdMs : 5000;
       const fatalThresholdMs = stalledThresholdMs * 3;
 
@@ -281,12 +288,13 @@ export function createWorkerRuntime(deps: {
     },
 
     getDebugState() {
-      const hasOutstanding = _bridge ? _bridge.getOutstandingRequestCount() > 0 : false;
+      const hasOutstanding = _testForceOutstanding || (_bridge ? _bridge.getOutstandingRequestCount() > 0 : false);
       return {
         workerActive: !!(_bridge && _initialized),
         workerState: _bridge ? _bridge.getWorkerState() : null,
         workerStalled: _stalled,
-        outstandingRequests: _bridge ? _bridge.getOutstandingRequestCount() : -1,
+        bridgeOutstandingRequests: _bridge ? _bridge.getOutstandingRequestCount() : -1,
+        syntheticOutstandingRequest: _testForceOutstanding,
         hasOutstandingRequest: hasOutstanding,
         outstandingRequestAgeMs: hasOutstanding && _lastRequestSentTs > 0
           ? performance.now() - _lastRequestSentTs : -1,
@@ -299,7 +307,10 @@ export function createWorkerRuntime(deps: {
 
     simulateStall() {
       _testFreezeProgress = true;
+      _testFreezeRequestAge = true;
+      _testForceOutstanding = true;
       _progressTs = performance.now();
+      _lastRequestSentTs = performance.now();
     },
 
     setTestStalledThreshold(ms: number) {
