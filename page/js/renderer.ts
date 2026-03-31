@@ -321,12 +321,12 @@ export class Renderer {
     });
   }
 
-  /** Create bond MeshStandardMaterial with config params and theme color. */
+  /** Create bond MeshStandardMaterial with theme-specific surface params. */
   _createBondMaterial(t: typeof THEMES[keyof typeof THEMES], opts?: { transparent?: boolean; opacity?: number }) {
     return new THREE.MeshStandardMaterial({
       color: t.bond,
-      roughness: CONFIG.bondMaterial.roughness,
-      metalness: CONFIG.bondMaterial.metalness,
+      roughness: t.bondRoughness ?? CONFIG.bondMaterial.roughness,
+      metalness: t.bondMetalness ?? CONFIG.bondMaterial.metalness,
       ...opts,
     });
   }
@@ -864,7 +864,11 @@ export class Renderer {
     this._applyLightTheme(t);
 
     if (this._atomMat) this._atomMat.color.set(t.atom);
-    if (this._bondMat) this._bondMat.color.set(t.bond);
+    if (this._bondMat) {
+      this._bondMat.color.set(t.bond);
+      this._bondMat.roughness = t.bondRoughness ?? CONFIG.bondMaterial.roughness;
+      this._bondMat.metalness = t.bondMetalness ?? CONFIG.bondMaterial.metalness;
+    }
     // Update highlight overlay material if active
     if (this._highlightMat) this._highlightMat.color.set(t.atom);
   }

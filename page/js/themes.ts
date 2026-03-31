@@ -14,7 +14,9 @@ export const THEMES = {
     // Three.js renderer
     bg: 0x181820,
     atom: 0x444444,
-    bond: 0xd8d8d8,      // near-white — bonds should read as bright structural guides
+    bond: 0xb0a8a0,      // warm muted gray — readable without glare, closer to light mode tone
+    bondRoughness: 0.22,  // tighter specular for more 3D depth against dark background
+    bondMetalness: 0.08,  // slight metallic sheen for cylindrical definition
     ambientColor: 0x8090b0, ambientIntensity: 0.7,
     headLightColor: 0xffffff, headLightIntensity: 3.5,
     fillLightColor: 0x8098c0, fillLightIntensity: 0.8,
@@ -41,6 +43,8 @@ export const THEMES = {
     bg: 0xf2f2f0,
     atom: 0x3a3a3a,
     bond: 0xc8c0b8,      // warm off-white — readable against light background
+    bondRoughness: 0.35,  // matches CONFIG.bondMaterial default
+    bondMetalness: 0.0,
     ambientColor: 0xc0d0e8, ambientIntensity: 0.9,
     headLightColor: 0xfff8f0, headLightIntensity: 3.2,
     fillLightColor: 0xa0b8d0, fillLightIntensity: 0.7,
