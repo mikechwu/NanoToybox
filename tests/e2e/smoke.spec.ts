@@ -466,3 +466,48 @@ test.describe('Milestone D — React UI Migration', () => {
     expect(errors).toEqual([])
   })
 })
+
+test.describe('Tooltip touch suppression', () => {
+  test('timeline hints are hidden on touch/coarse-pointer devices', async ({ browser, baseURL }) => {
+    // Create a context emulating a touch device (pointer: coarse, hover: none)
+    const context = await browser.newContext({
+      hasTouch: true,
+      isMobile: true,
+      viewport: { width: 375, height: 812 },
+    })
+    const page = await context.newPage()
+    const errors = collectErrors(page)
+
+    try {
+      await page.goto(`${baseURL}/page/`)
+      await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
+
+      // Confirm touch emulation is active
+      const isCoarse = await page.evaluate(() => window.matchMedia('(pointer: coarse)').matches)
+      expect(isCoarse).toBe(true)
+
+      // Inject a timeline-hint element and verify CSS hides it
+      const displayValue = await page.evaluate(() => {
+        const el = document.createElement('span')
+        el.className = 'timeline-hint'
+        document.body.appendChild(el)
+        const display = getComputedStyle(el).display
+        el.remove()
+        return display
+      })
+      expect(displayValue).toBe('none')
+
+      // Verify real rendered tooltip is also suppressed (timeline starts in
+      // ready state with a Stop & Clear button that has a real hint element)
+      const realHint = page.locator('.timeline-hint-anchor .timeline-hint').first()
+      if (await realHint.count() > 0) {
+        const realDisplay = await realHint.evaluate(el => getComputedStyle(el).display)
+        expect(realDisplay).toBe('none')
+      }
+
+      expect(errors).toEqual([])
+    } finally {
+      await context.close()
+    }
+  })
+})

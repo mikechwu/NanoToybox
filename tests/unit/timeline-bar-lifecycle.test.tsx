@@ -17,10 +17,11 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, act } from '@testing-library/react';
+import { render, cleanup, act, fireEvent } from '@testing-library/react';
 import { useAppStore } from '../../page/js/store/app-store';
 import type { TimelineCallbacks } from '../../page/js/store/app-store';
 import { TimelineBar } from '../../page/js/components/TimelineBar';
+import { HINT_DELAY_MS } from '../../page/js/components/TimelineActionHint';
 
 const noop = () => {};
 
@@ -260,5 +261,170 @@ describe('TimelineBar lifecycle', () => {
     expect(row2.querySelector('.timeline-lane-meta')).not.toBeNull();
     expect(row2.querySelector('.timeline-lane-actions')).not.toBeNull();
     expect(row2.querySelector('.timeline-lane-meta .timeline-restart-target')?.textContent).toBe('Restart at 400.0 ps');
+  });
+
+  // ── Tooltip hint tests ──
+
+  describe('TimelineActionHint tooltips', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('Start Recording shows hint on hover after delay', () => {
+      act(() => { installSubsystem('off'); });
+      const { container } = render(<TimelineBar />);
+      const anchor = container.querySelector('.timeline-hint-anchor')!;
+      act(() => { fireEvent.mouseEnter(anchor); });
+      // Not visible before delay
+      expect(container.querySelector('.timeline-hint--visible')).toBeNull();
+      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+      expect(container.querySelector('.timeline-hint--visible')).not.toBeNull();
+      expect(container.querySelector('.timeline-hint--visible')?.textContent).toContain('Start saving timeline history now.');
+    });
+
+    it('hint hides on mouse leave', () => {
+      act(() => { installSubsystem('off'); });
+      const { container } = render(<TimelineBar />);
+      const anchor = container.querySelector('.timeline-hint-anchor')!;
+      act(() => { fireEvent.mouseEnter(anchor); });
+      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+      expect(container.querySelector('.timeline-hint--visible')).not.toBeNull();
+      act(() => { fireEvent.mouseLeave(anchor); });
+      expect(container.querySelector('.timeline-hint--visible')).toBeNull();
+    });
+
+    it('hint appears on focus and hides on blur', () => {
+      act(() => { installSubsystem('off'); });
+      const { container } = render(<TimelineBar />);
+      const anchor = container.querySelector('.timeline-hint-anchor')!;
+      act(() => { fireEvent.focus(anchor); });
+      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+      expect(container.querySelector('.timeline-hint--visible')).not.toBeNull();
+      act(() => { fireEvent.blur(anchor); });
+      expect(container.querySelector('.timeline-hint--visible')).toBeNull();
+    });
+
+    it('Stop & Clear shows destructive hint on hover', () => {
+      act(() => { installSubsystem('ready'); });
+      const { container } = render(<TimelineBar />);
+      const anchor = container.querySelector('.timeline-hint-anchor')!;
+      act(() => { fireEvent.mouseEnter(anchor); });
+      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+      expect(container.querySelector('.timeline-hint--visible')?.textContent).toContain('Stop recording and erase all saved history.');
+    });
+
+    it('Live shows review-mode hint', () => {
+      act(() => {
+        installSubsystem('active');
+        useAppStore.getState().updateTimelineState({
+          mode: 'review', currentTimePs: 500, reviewTimePs: 500,
+          rangePs: { start: 0, end: 1000 },
+          canReturnToLive: true, canRestart: true, restartTargetPs: 500,
+        });
+      });
+      const { container } = render(<TimelineBar />);
+      const anchors = container.querySelectorAll('.timeline-hint-anchor');
+      // First anchor in review: Live button
+      act(() => { fireEvent.mouseEnter(anchors[0]); });
+      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+      expect(anchors[0].querySelector('.timeline-hint--visible')?.textContent).toContain('Jump back to the current simulation.');
+    });
+
+    it('Restart shows enabled hint when canRestart is true', () => {
+      act(() => {
+        installSubsystem('active');
+        useAppStore.getState().updateTimelineState({
+          mode: 'review', currentTimePs: 500, reviewTimePs: 500,
+          rangePs: { start: 0, end: 1000 },
+          canReturnToLive: true, canRestart: true, restartTargetPs: 500,
+        });
+      });
+      const { container } = render(<TimelineBar />);
+      const anchors = container.querySelectorAll('.timeline-hint-anchor');
+      // Second anchor: Restart button
+      act(() => { fireEvent.mouseEnter(anchors[1]); });
+      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+      expect(anchors[1].querySelector('.timeline-hint--visible')?.textContent).toContain('Restart the simulation from this saved point.');
+    });
+
+    it('Restart shows disabled hint when canRestart is false', () => {
+      act(() => {
+        installSubsystem('active');
+        useAppStore.getState().updateTimelineState({
+          mode: 'review', currentTimePs: 500, reviewTimePs: 500,
+          rangePs: { start: 0, end: 1000 },
+          canReturnToLive: true, canRestart: false, restartTargetPs: null,
+        });
+      });
+      const { container } = render(<TimelineBar />);
+      const anchors = container.querySelectorAll('.timeline-hint-anchor');
+      // Second anchor: Restart button (disabled)
+      act(() => { fireEvent.mouseEnter(anchors[1]); });
+      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+      expect(anchors[1].querySelector('.timeline-hint--visible')?.textContent).toContain('No restart point is available here.');
+    });
+
+    it('disabled Restart wrapper is keyboard-focusable with accessible name', () => {
+      act(() => {
+        installSubsystem('active');
+        useAppStore.getState().updateTimelineState({
+          mode: 'review', currentTimePs: 500, reviewTimePs: 500,
+          rangePs: { start: 0, end: 1000 },
+          canReturnToLive: true, canRestart: false, restartTargetPs: null,
+        });
+      });
+      const { container } = render(<TimelineBar />);
+      const anchors = container.querySelectorAll('.timeline-hint-anchor');
+      // Restart anchor (second) should have tabIndex=0 when button is disabled
+      expect(anchors[1].getAttribute('tabindex')).toBe('0');
+      // Should have aria-label so screen readers announce the control name
+      expect(anchors[1].getAttribute('aria-label')).toBe('Restart');
+      expect(anchors[1].getAttribute('aria-disabled')).toBe('true');
+      // Focus the wrapper and verify hint appears
+      act(() => { fireEvent.focus(anchors[1]); });
+      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+      expect(anchors[1].querySelector('.timeline-hint--visible')?.textContent).toContain('No restart point is available here.');
+    });
+
+    it('enabled Restart wrapper does not have tabIndex', () => {
+      act(() => {
+        installSubsystem('active');
+        useAppStore.getState().updateTimelineState({
+          mode: 'review', currentTimePs: 500, reviewTimePs: 500,
+          rangePs: { start: 0, end: 1000 },
+          canReturnToLive: true, canRestart: true, restartTargetPs: 500,
+        });
+      });
+      const { container } = render(<TimelineBar />);
+      const anchors = container.querySelectorAll('.timeline-hint-anchor');
+      // Restart anchor (second) should NOT have tabIndex when button is enabled
+      expect(anchors[1].hasAttribute('tabindex')).toBe(false);
+    });
+
+    it('Stop & Clear tooltip uses top-end placement class in ready state', () => {
+      act(() => { installSubsystem('ready'); });
+      const { container } = render(<TimelineBar />);
+      const anchor = container.querySelector('.timeline-hint-anchor')!;
+      const hint = anchor.querySelector('.timeline-hint')!;
+      expect(hint.classList.contains('timeline-hint--top-end')).toBe(true);
+    });
+
+    it('Stop & Clear tooltip uses top-end placement class in active state', () => {
+      act(() => {
+        installSubsystem('active');
+        useAppStore.getState().updateTimelineState({
+          mode: 'live', currentTimePs: 100, reviewTimePs: null,
+          rangePs: { start: 0, end: 200 },
+          canReturnToLive: false, canRestart: false, restartTargetPs: null,
+        });
+      });
+      const { container } = render(<TimelineBar />);
+      const anchors = container.querySelectorAll('.timeline-hint-anchor');
+      const lastHint = anchors[anchors.length - 1].querySelector('.timeline-hint')!;
+      expect(lastHint.classList.contains('timeline-hint--top-end')).toBe(true);
+    });
   });
 });

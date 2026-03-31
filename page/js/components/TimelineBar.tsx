@@ -13,6 +13,7 @@
 
 import React, { useCallback, useRef } from 'react';
 import { useAppStore } from '../store/app-store';
+import { TimelineActionHint } from './TimelineActionHint';
 
 function formatTime(ps: number): string {
   if (ps < 0.001) return `${(ps * 1000).toFixed(1)} fs`;
@@ -49,7 +50,9 @@ function TimelineBarOff() {
       <div className="timeline-row2">
         <span className="timeline-lane-meta" />
         <div className="timeline-lane-actions timeline-actions">
-          <button className="timeline-action" onClick={handleStart}>Start Recording</button>
+          <TimelineActionHint text="Start saving timeline history now.">
+            <button className="timeline-action" onClick={handleStart}>Start Recording</button>
+          </TimelineActionHint>
         </div>
       </div>
     </div>
@@ -71,7 +74,9 @@ function TimelineBarReady() {
       <div className="timeline-row2">
         <span className="timeline-lane-meta timeline-helper">Recording starts when you touch an atom</span>
         <div className="timeline-lane-actions timeline-actions">
-          <button className="timeline-action timeline-action--destructive" onClick={handleTurnOff}>Stop &amp; Clear</button>
+          <TimelineActionHint text="Stop recording and erase all saved history." placement="top-end">
+            <button className="timeline-action timeline-action--destructive" onClick={handleTurnOff}>Stop &amp; Clear</button>
+          </TimelineActionHint>
         </div>
       </div>
     </div>
@@ -128,6 +133,9 @@ function TimelineBarActive() {
   const handleTurnOff = useCallback(() => { callbacks?.onTurnRecordingOff(); }, [callbacks]);
 
   const isReview = mode === 'review';
+  const restartHint = canRestart
+    ? 'Restart the simulation from this saved point.'
+    : 'No restart point is available here.';
 
   return (
     <div className="timeline-bar" role="region" aria-label="Simulation timeline">
@@ -157,11 +165,17 @@ function TimelineBarActive() {
         <div className="timeline-lane-actions timeline-actions">
           {isReview && (
             <>
-              <button className="timeline-action" onClick={handleReturnToLive} disabled={!canReturnToLive}>Live</button>
-              <button className="timeline-action timeline-action--restart" onClick={handleRestart} disabled={!canRestart}>Restart</button>
+              <TimelineActionHint text="Jump back to the current simulation." focusableWhenDisabled={!canReturnToLive} focusLabel="Live">
+                <button className="timeline-action" onClick={handleReturnToLive} disabled={!canReturnToLive}>Live</button>
+              </TimelineActionHint>
+              <TimelineActionHint text={restartHint} focusableWhenDisabled={!canRestart} focusLabel="Restart">
+                <button className="timeline-action timeline-action--restart" onClick={handleRestart} disabled={!canRestart}>Restart</button>
+              </TimelineActionHint>
             </>
           )}
-          <button className="timeline-action timeline-action--destructive" onClick={handleTurnOff}>Stop &amp; Clear</button>
+          <TimelineActionHint text="Stop recording and erase all saved history." placement="top-end">
+            <button className="timeline-action timeline-action--destructive" onClick={handleTurnOff}>Stop &amp; Clear</button>
+          </TimelineActionHint>
         </div>
       </div>
     </div>
