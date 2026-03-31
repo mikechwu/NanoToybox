@@ -57,6 +57,9 @@ export interface TimelineSubsystem {
   restartFromHere(): Promise<void>;
   /** Clear history and turn recording off (e.g. on playground clear). */
   clearAndDisarm(): void;
+  /** Clear history but remain passively armed (ready). Used by scene clear
+   *  so the user doesn't have to manually re-enable recording. */
+  resetToPassiveReady(): void;
   /** Full teardown — clear, turn off, null store state. */
   teardown(): void;
   /** Install callbacks + enter ready state atomically (no transient off flash). */
@@ -182,8 +185,20 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
     returnToLive: () => coordinator.returnToLive(),
     restartFromHere: () => coordinator.restartFromHere(),
     clearAndDisarm: () => {
+      if (timeline.getState().mode === 'review') coordinator.returnToLive();
       resetRuntime();
       publishOffState();
+    },
+    resetToPassiveReady: () => {
+      if (timeline.getState().mode === 'review') coordinator.returnToLive();
+      resetRuntime();
+      policy.turnOn();
+      const store = useAppStore.getState();
+      store.setTimelineRecordingMode('ready');
+      store.updateTimelineState({
+        mode: 'live', currentTimePs: 0, reviewTimePs: null,
+        rangePs: null, canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
     },
     teardown: () => {
       resetRuntime();

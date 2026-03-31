@@ -124,16 +124,19 @@ interface AddMoleculeDeps {
 }
 
 /** Load a structure and add it to the scene. Used for initial auto-load. */
-export async function addMoleculeToScene(filename: string, name: string, offset: number[], deps: AddMoleculeDeps) {
+export async function addMoleculeToScene(filename: string, name: string, offset: number[], deps: AddMoleculeDeps): Promise<boolean> {
   deps.setLoading(true);
   deps.updateStatus('Loading...');
+  let committed = false;
   try {
     const { atoms, bonds } = await deps.loadStructure(filename);
     if (DEBUG_LOAD) console.log(`[add] ${name}: ${atoms.length} atoms, ${bonds.length} bonds`);
     commitMolecule(deps.physics, deps.renderer, filename, name, atoms, bonds, offset, deps.sceneState, deps.commitCallbacks);
+    committed = true;
   } catch (e) {
     deps.updateStatus(`Error: ${e.message}`);
     console.error(e);
   }
   deps.setLoading(false);
+  return committed;
 }

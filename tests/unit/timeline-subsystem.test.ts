@@ -103,6 +103,57 @@ describe('TimelineSubsystem', () => {
     expect(useAppStore.getState().timelineRangePs).toBeNull();
   });
 
+  it('resetToPassiveReady clears history but enters ready', () => {
+    const sub = createSub();
+    sub.installAndEnable();
+    sub.markAtomInteractionStarted(); // ready → active
+    sub.recordAfterReconciliation(4);
+    expect(useAppStore.getState().timelineRangePs).not.toBeNull();
+
+    sub.resetToPassiveReady();
+    expect(useAppStore.getState().timelineRecordingMode).toBe('ready');
+    expect(useAppStore.getState().timelineRangePs).toBeNull();
+    expect(useAppStore.getState().timelineCurrentTimePs).toBe(0);
+  });
+
+  it('turnRecordingOff still enters off', () => {
+    const sub = createSub();
+    sub.installAndEnable();
+    sub.markAtomInteractionStarted();
+    sub.recordAfterReconciliation(4);
+
+    sub.turnRecordingOff();
+    expect(useAppStore.getState().timelineRecordingMode).toBe('off');
+  });
+
+  it('resetToPassiveReady after review exits review and enters ready', () => {
+    const sub = createSub();
+    sub.installAndEnable();
+    sub.markAtomInteractionStarted();
+    sub.recordAfterReconciliation(4);
+    sub.handleScrub(0); // enters review
+    expect(sub.isInReview()).toBe(true);
+
+    sub.resetToPassiveReady();
+    expect(sub.isInReview()).toBe(false);
+    expect(useAppStore.getState().timelineRecordingMode).toBe('ready');
+    expect(useAppStore.getState().timelineRangePs).toBeNull();
+  });
+
+  it('resetToPassiveReady allows re-arming on next atom interaction', () => {
+    const sub = createSub();
+    sub.installAndEnable();
+    sub.markAtomInteractionStarted();
+    sub.recordAfterReconciliation(4);
+
+    sub.resetToPassiveReady();
+    expect(useAppStore.getState().timelineRecordingMode).toBe('ready');
+
+    // Atom interaction should arm recording again
+    sub.markAtomInteractionStarted();
+    expect(useAppStore.getState().timelineRecordingMode).toBe('active');
+  });
+
   it('teardown clears store state', () => {
     const sub = createSub();
     sub.startRecordingNow();

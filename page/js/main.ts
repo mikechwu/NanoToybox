@@ -639,6 +639,8 @@ async function init() {
       boundaryMode: s.boundaryMode,
       interactionMode: s.interactionMode,
       theme: s.theme,
+      atomCount: s.atomCount,
+      activeBonds: renderer.getActiveBondCount(),
     };
   };
 
@@ -711,7 +713,7 @@ async function init() {
     changeSpeed: changePlaybackSpeed,
     setInteractionMode: setInteractionModeSetting,
     forceRenderThisTick: () => { scheduler.forceRenderThisTick = true; },
-    clearPlayground: () => { _scene!.clearPlayground(); if (_timelineSub) _timelineSub.clearAndDisarm(); },
+    clearPlayground: async () => { await _scene!.clearPlayground(); _timelineSub?.resetToPassiveReady(); },
     resetView: () => renderer.resetView(),
     updateChooserRecentRow: () => _scene!.updateChooserRecentRow(),
     setPhysicsWallMode: (mode) => { physics.setWallMode(mode); },

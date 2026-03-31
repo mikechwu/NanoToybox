@@ -28,7 +28,7 @@ export interface UIBindingsDeps {
   forceRenderThisTick: () => void;
 
   // Scene commands
-  clearPlayground: () => void;
+  clearPlayground: () => void | Promise<void>;
   resetView: () => void;
   updateChooserRecentRow: () => void;
 
@@ -123,7 +123,11 @@ export function registerStoreCallbacks(deps: UIBindingsDeps): void {
     },
     onClear: () => {
       deps.overlayRuntime.close();
-      deps.clearPlayground();
+      void Promise.resolve(deps.clearPlayground()).catch((e) => {
+        console.error('[ui] clear failed:', e);
+        useAppStore.getState().setStatusText('Clear failed');
+        setTimeout(() => { if (useAppStore.getState().statusText === 'Clear failed') useAppStore.getState().setStatusText(null); }, 3000);
+      });
     },
     onResetView: () => { deps.resetView(); },
   });

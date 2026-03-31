@@ -57,8 +57,10 @@ export function createWorkerRuntime(deps: {
   let _initialized = false;
   let _progressTs = 0;
   let _stalled = false;
+  let _recoveryAttempted = false;
   let _testFreezeProgress = false;
   let _testStalledThresholdMs = 0;
+  let _lastRequestSentTs = 0;
 
   function _teardown() {
     // Capture snapshot BEFORE destroying bridge — bridge.destroy() makes it inaccessible
@@ -69,7 +71,9 @@ export function createWorkerRuntime(deps: {
     _bridge = null;
     _initialized = false;
     _stalled = false;
+    _recoveryAttempted = false;
     _progressTs = 0;
+    _lastRequestSentTs = 0;
     return lastSnap;
   }
 
@@ -88,6 +92,7 @@ export function createWorkerRuntime(deps: {
         if (!_testFreezeProgress) {
           _progressTs = performance.now();
           if (_stalled) _stalled = false;
+          if (_recoveryAttempted) _recoveryAttempted = false;
         }
         if (snapshot.stepsCompleted > 0) {
           deps.onSchedulerTiming(snapshot.physStepMs / snapshot.stepsCompleted, snapshot.stepsCompleted);
@@ -95,7 +100,11 @@ export function createWorkerRuntime(deps: {
       });
 
       bridge.setOnFrameSkipped((info) => {
-        if (!_testFreezeProgress) _progressTs = performance.now();
+        if (!_testFreezeProgress) {
+          _progressTs = performance.now();
+          if (_stalled) _stalled = false;
+          if (_recoveryAttempted) _recoveryAttempted = false;
+        }
         if (info.stepsCompleted > 0) {
           deps.onSchedulerTiming(info.physStepMs / info.stepsCompleted, info.stepsCompleted);
         }
@@ -161,6 +170,7 @@ export function createWorkerRuntime(deps: {
     sendRequestFrame(steps: number) {
       if (_bridge && _initialized) {
         _bridge.sendRequestFrame(steps);
+        _lastRequestSentTs = performance.now();
       }
     },
 
@@ -233,24 +243,53 @@ export function createWorkerRuntime(deps: {
     checkStalled(paused: boolean) {
       if (!_bridge || !_initialized || _progressTs <= 0) return;
       if (paused) return; // don't stall-detect while simulation is paused
-      const timeSinceProgress = performance.now() - _progressTs;
+
+      const hasOutstanding = _bridge.getOutstandingRequestCount() > 0;
       const stalledThresholdMs = _testStalledThresholdMs > 0 ? _testStalledThresholdMs : 5000;
       const fatalThresholdMs = stalledThresholdMs * 3;
-      if (timeSinceProgress > fatalThresholdMs) {
-        console.warn(`[worker] stalled (no progress for ${(fatalThresholdMs / 1000).toFixed(0)}s) — falling back to sync physics`);
-        const snap = _teardown();
-        deps.onFailure(`Worker stalled (no progress for ${(fatalThresholdMs / 1000).toFixed(0)}+ seconds)`, snap);
-      } else if (timeSinceProgress > stalledThresholdMs) {
+
+      // If no request is outstanding, the worker is idle — not stalled.
+      // The scheduler may simply not be sending requests (e.g. frame budget
+      // gating). Only diagnose stall when sent work is hanging.
+      if (!hasOutstanding) {
+        if (_stalled) _stalled = false;
+        if (_recoveryAttempted) _recoveryAttempted = false;
+        return;
+      }
+
+      const outstandingAge = _lastRequestSentTs > 0 ? performance.now() - _lastRequestSentTs : 0;
+
+      if (outstandingAge > fatalThresholdMs) {
+        // Attempt lightweight recovery first: invalidate the wedged request
+        // and allow the pipeline to resume. Only tear down if a second
+        // attempt also fails.
+        if (!_recoveryAttempted) {
+          _stalled = true;
+          _recoveryAttempted = true;
+          _bridge.bumpGeneration();
+          _lastRequestSentTs = performance.now(); // reset for recovery window
+          console.warn(`[worker] request wedged (${(outstandingAge / 1000).toFixed(1)}s) — attempting recovery via generation bump`);
+        } else {
+          // Already tried recovery, still stalled — truly fatal
+          console.warn(`[worker] stalled after recovery attempt — falling back to sync physics`);
+          const snap = _teardown();
+          deps.onFailure(`Worker stalled (outstanding request for ${(outstandingAge / 1000).toFixed(0)}+ seconds)`, snap);
+        }
+      } else if (outstandingAge > stalledThresholdMs) {
         _stalled = true;
       }
     },
 
     getDebugState() {
+      const hasOutstanding = _bridge ? _bridge.getOutstandingRequestCount() > 0 : false;
       return {
         workerActive: !!(_bridge && _initialized),
         workerState: _bridge ? _bridge.getWorkerState() : null,
         workerStalled: _stalled,
         outstandingRequests: _bridge ? _bridge.getOutstandingRequestCount() : -1,
+        hasOutstandingRequest: hasOutstanding,
+        outstandingRequestAgeMs: hasOutstanding && _lastRequestSentTs > 0
+          ? performance.now() - _lastRequestSentTs : -1,
         hasSnapshot: _bridge ? _bridge.getLatestSnapshot() !== null : false,
         roundTripMs: _bridge ? _bridge.getRoundTripMs() : -1,
         snapshotAgeMs: _bridge ? _bridge.getSnapshotAge() : -1,

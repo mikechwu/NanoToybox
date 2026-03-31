@@ -157,6 +157,27 @@ test.describe('Milestone A — Hard-Supported Pages', () => {
   })
 })
 
+test.describe('Initial-load bond regression', () => {
+  test('first-load C60 has nonzero bond count before any sheet interaction', async ({ page, baseURL }) => {
+    const errors = collectErrors(page)
+    await page.goto(`${baseURL}/page/`)
+
+    // Wait for app to fully initialize (toolbar = React mounted + init complete)
+    await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
+    await waitForUIState(page)
+
+    // Poll until bond count is nonzero (renderer finalization ran after auto-load)
+    await expect(async () => {
+      const ui = await page.evaluate(() => (window as any)._getUIState?.())
+      expect(ui).toBeTruthy()
+      expect(ui.atomCount).toBeGreaterThan(0)
+      expect(ui.activeBonds).toBeGreaterThan(0)
+    }).toPass({ timeout: 5000 })
+
+    expect(errors).toEqual([])
+  })
+})
+
 test.describe('Milestone D — React UI Migration', () => {
 
   test('settings sheet: opens, shows controls, closes', async ({ page, baseURL }) => {

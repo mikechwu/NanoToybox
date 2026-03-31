@@ -76,6 +76,21 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
     if (pauseSync) await pauseSync;
   }
 
+  /** Shared post-commit renderer sync. Every successful scene commit (initial
+   *  load or placement) must call this so atoms AND bonds are visible. */
+  function finalizeCommittedScene(opts: { focusNewestPlaced?: boolean }) {
+    const physics = deps.getPhysics();
+    const renderer = deps.getRenderer();
+    renderer.setPhysicsRef(physics);
+    renderer.updateSceneRadius();
+    if (opts.focusNewestPlaced) {
+      focusNewestPlacedMolecule(renderer);
+    } else {
+      renderer.recomputeFocusDistance();
+    }
+    renderer.updatePositions(physics);
+  }
+
   return {
     setDockPlacementMode(active: boolean) {
       useAppStore.getState().setPlacementActive(active);
@@ -176,31 +191,9 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
         fitCamera: () => renderer.fitCamera(),
         updateSceneStatus: () => this.updateSceneStatus(),
       });
-      renderer.setPhysicsRef(physics);
+      finalizeCommittedScene({ focusNewestPlaced: useAppStore.getState().placementActive });
 
-      // Update scene radius first (used by framing calculations)
-      renderer.updateSceneRadius();
-
-      // Focus-aware pivot: if this commit was from active placement, focus the new molecule
-      // (setCameraFocusTarget inside will update _currentFocusDistance)
-      if (useAppStore.getState().placementActive) {
-        focusNewestPlacedMolecule(renderer);
-      } else {
-        // No placement → recompute focus distance from current target
-        renderer.recomputeFocusDistance();
-      }
-
-      // Immediate visual sync when paused in worker mode (visual fix only).
-      // Worker snapshots don't arrive while paused, so newly committed atoms
-      // would have positions but no bonds rendered until resume. Force a local
-      // visual refresh to show both atoms and bonds immediately.
-      // Note: this is separate from the velocity-authority fix above — this
-      // addresses rendering, not simulation state.
       const wr = deps.getWorkerRuntime();
-      const isPaused = deps.getSession().playback.paused;
-      if (wr && wr.isActive() && isPaused) {
-        renderer.updatePositions(physics);
-      }
       if (wr && wr.isActive()) {
         wr.appendMolecule(atoms as any, bonds as any, offset as [number, number, number]).then((result) => {
           if (!result.ok) {
@@ -257,7 +250,7 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
       const physics = deps.getPhysics();
       const renderer = deps.getRenderer();
       const session = getSession();
-      await addMoleculeToScene(filename, name, offset, {
+      const committed = await addMoleculeToScene(filename, name, offset, {
         loadStructure, physics: physics as any, renderer: renderer as any,
         sceneState: session.scene,
         commitCallbacks: {
@@ -269,6 +262,7 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
         updateStatus: (text) => this.updateStatus(text),
         setLoading: (v) => { deps.getSession().isLoading = v; },
       });
+      if (committed) finalizeCommittedScene({ focusNewestPlaced: false });
     },
 
     updateStatus(text: string) {

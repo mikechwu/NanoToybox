@@ -1190,6 +1190,11 @@ export class Renderer {
     return this._atomCount;
   }
 
+  /** Number of active bonds (after visibility-cutoff filtering). */
+  getActiveBondCount() {
+    return this._activeBonds;
+  }
+
   /** Update active atom count (e.g. after boundary removal compacts physics arrays). */
   setAtomCount(n) {
     this._atomCount = n;
