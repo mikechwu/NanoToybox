@@ -189,3 +189,11 @@ Key strategic and technical decisions made during development, with rationale.
 **Rationale:** Consistent visual language with accessibility defaults (`aria-hidden`, `focusable={false}`). Icons use a 20x20 viewBox with currentColor stroke. Optional `size`, `strokeWidth`, `title`, `className` props for responsive refinement. DockBar uses Add, Check, Cancel, Pause, Resume, Settings. CameraControls uses Center, Follow, Freeze, Return.
 
 **Evidence:** `page/js/components/Icons.tsx`, `page/js/components/DockBar.tsx`, `page/js/components/CameraControls.tsx`
+
+## D24: Mode-Aware Interaction Group Highlight
+
+**Decision:** Highlight the full bonded group during Move and Rotate interactions, not just the picked atom. Atom mode continues to highlight a single atom. Hover preview reflects the upcoming action scope before pointer-down.
+
+**Rationale:** Physics applies force to the full connected component in Move and Rotate modes. Highlighting only the picked atom made the interaction appear narrower than it actually was. The resolver (`interaction-highlight-runtime.ts`) maps interaction state + session mode to the correct highlight target using live `physics.componentId` / `physics.components`. The renderer has separate interaction and panel highlight channels so bonded-group panel selection is not clobbered. Interaction highlight takes visual priority; panel highlight restores automatically when interaction ends. Review mode clears both channels.
+
+**Evidence:** `page/js/runtime/interaction-highlight-runtime.ts`, `page/js/renderer.ts` (setInteractionHighlightedAtoms, clearInteractionHighlight, updateFeedback with sessionMode), `page/js/main.ts` (resolveInteractionHighlight in frame loop), `tests/unit/interaction-highlight.test.ts`, `tests/unit/renderer-interaction-highlight.test.ts`

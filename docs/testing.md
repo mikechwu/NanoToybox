@@ -180,10 +180,12 @@ npm run dev
 | 12 | Large structure (C720) | Loads without crash, interaction works at reduced FPS |
 | 13 | XYZ axes indicator | Visible in corner, rotates with camera |
 | 14 | Hint text | Fades on first atom interaction |
-| 15 | Move mode: drag atom | Entire molecule translates, blue highlight + force line |
-| 15a | Release in Move mode, damping=0 | Molecule coasts (approximately NVE) |
-| 15b | Release in Move mode, damping>0 | Motion decays visibly |
-| 16 | Rotate mode: 1-finger drag on atom (mobile) | Molecule rotates (torque) |
+| 15 | Move mode: hover atom | Full bonded group highlights (not just the hovered atom) |
+| 15a | Move mode: drag atom | Entire molecule translates, group highlight + blue force line |
+| 15b | Release in Move mode, damping=0 | Molecule coasts (approximately NVE) |
+| 15c | Release in Move mode, damping>0 | Motion decays visibly |
+| 16 | Rotate mode: hover atom | Full bonded group highlights |
+| 16a | Rotate mode: 1-finger drag on atom (mobile) | Molecule rotates (torque), group highlight |
 | 17 | Switch mode during idle | No side effects, next interaction uses new mode |
 | 18 | Ctrl+click in Atom/Move mode | Rotates molecule (shortcut override) |
 | 19 | Move mode on C60 vs C720 | Both respond without being sluggish or explosive (subjective) |

@@ -52,12 +52,20 @@ export class Renderer {
   _highlightMesh: THREE.Mesh | null;
   _highlightMat: THREE.MeshStandardMaterial | null;
 
-  // Group highlight overlay (bonded cluster selection/hover) — persistent, updated each frame
+  // Group highlight overlay (bonded cluster panel selection/hover) — persistent, updated each frame
   _groupHighlightMesh: THREE.InstancedMesh | null;
   _groupHighlightMat: THREE.MeshStandardMaterial | null;
   _groupHighlightIndices: number[] | null;
   _groupHighlightIntensity: 'selected' | 'hover';
   _groupHighlightCapacity: number;
+
+  // Interaction group highlight (Move/Rotate mode — separate channel from panel highlight)
+  _interactionHighlightIndices: number[] | null;
+  _interactionHighlightIntensity: 'hover' | 'active';
+
+  // Panel highlight state (saved for restore after interaction ends)
+  _panelHighlightIndices: number[] | null;
+  _panelHighlightIntensity: 'selected' | 'hover';
 
   // Physics reference (read-only access to positions for rendering)
   _physicsRef: { n: number; pos: Float64Array; getBonds?: () => any[] } | null;
@@ -135,6 +143,12 @@ export class Renderer {
     this._groupHighlightIndices = null;
     this._groupHighlightIntensity = 'selected';
     this._groupHighlightCapacity = 0;
+
+    // Interaction group highlight (separate from panel highlight)
+    this._interactionHighlightIndices = null;
+    this._interactionHighlightIntensity = 'hover';
+    this._panelHighlightIndices = null;
+    this._panelHighlightIntensity = 'selected';
 
     // Current physics reference for position reads (set each updatePositions call)
     this._physicsRef = null;
@@ -726,6 +740,11 @@ export class Renderer {
    * Pass null to clear. Reuses overlay mesh when possible to avoid GC churn.
    */
   setHighlightedAtoms(atomIndices: number[] | null, intensity: 'selected' | 'hover' = 'selected') {
+    // Save panel state for restore after interaction highlight ends
+    this._panelHighlightIndices = atomIndices;
+    this._panelHighlightIntensity = intensity;
+    // If interaction highlight is active, don't overwrite the visual — panel state is saved for later
+    if (this._interactionHighlightIndices && this._interactionHighlightIndices.length > 0) return;
     if (!atomIndices || atomIndices.length === 0) {
       this._groupHighlightIndices = null;
       if (this._groupHighlightMesh) {
@@ -746,6 +765,70 @@ export class Renderer {
     this._applyGroupHighlightStyle(intensity);
     // Initial position sync
     this._updateGroupHighlight();
+  }
+
+  // ── Interaction group highlight (Move/Rotate — separate from panel) ──
+
+  /**
+   * Set interaction-level group highlight for Move/Rotate mode.
+   * This is a separate channel from panel highlight (setHighlightedAtoms).
+   * Interaction highlight takes visual priority when active.
+   */
+  setInteractionHighlightedAtoms(atomIndices: number[] | null, intensity: 'hover' | 'active' = 'hover'): void {
+    this._interactionHighlightIndices = atomIndices;
+    this._interactionHighlightIntensity = intensity;
+    // Reuse the group highlight mesh for rendering — interaction takes priority
+    if (atomIndices && atomIndices.length > 0) {
+      const style = intensity === 'active'
+        ? { color: 0x336688, emissive: 0x445566, emissiveIntensity: 1.2, opacity: 0.3 }
+        : { color: 0x336688, emissive: 0x445566, emissiveIntensity: 0.8, opacity: 0.2 };
+      this._applyGroupHighlightStyleDirect(style);
+      this._groupHighlightIndices = atomIndices;
+      // Set intensity to a compatible key for _updateGroupHighlight scale lookup
+      this._groupHighlightIntensity = intensity === 'active' ? 'selected' : 'hover';
+      this._updateGroupHighlight();
+    } else if (!this._groupHighlightIndices || this._interactionHighlightIndices === null) {
+      // Interaction cleared — restore panel highlight if it exists
+      this._restorePanelHighlight();
+    }
+  }
+
+  clearInteractionHighlight(): void {
+    this._interactionHighlightIndices = null;
+    this._restorePanelHighlight();
+  }
+
+  /** Restore panel highlight after interaction highlight ends. */
+  private _restorePanelHighlight(): void {
+    if (this._panelHighlightIndices && this._panelHighlightIndices.length > 0) {
+      this._groupHighlightIndices = this._panelHighlightIndices;
+      this._applyGroupHighlightStyle(this._panelHighlightIntensity);
+      this._updateGroupHighlight();
+    } else {
+      this.setHighlightedAtoms(null);
+    }
+  }
+
+  /** Apply a raw style to the group highlight material. */
+  private _applyGroupHighlightStyleDirect(style: { color: number; emissive: number; emissiveIntensity: number; opacity: number }): void {
+    if (!this._groupHighlightMat) {
+      this._groupHighlightMat = new THREE.MeshStandardMaterial({
+        color: style.color, emissive: style.emissive,
+        emissiveIntensity: style.emissiveIntensity,
+        transparent: true, opacity: style.opacity,
+        roughness: CONFIG.atomMaterial.roughness,
+        metalness: CONFIG.atomMaterial.metalness,
+        depthWrite: false,
+      });
+    } else {
+      this._groupHighlightMat.color.set(style.color);
+      (this._groupHighlightMat.emissive as THREE.Color).set(style.emissive);
+      this._groupHighlightMat.emissiveIntensity = style.emissiveIntensity;
+      this._groupHighlightMat.opacity = style.opacity;
+    }
+    if (this._groupHighlightMesh && this._groupHighlightMesh.material !== this._groupHighlightMat) {
+      this._groupHighlightMesh.material = this._groupHighlightMat;
+    }
   }
 
   /** Create or update group highlight material to match current intensity style.
@@ -840,31 +923,37 @@ export class Renderer {
    * Reads state machine feedback and sets all visuals accordingly.
    * No event-driven flickering — purely a function of state.
    */
-  updateFeedback(feedbackState) {
+  updateFeedback(feedbackState, sessionMode: 'atom' | 'move' | 'rotate' = 'atom') {
     const { hoverAtom, activeAtom, isDragging, isMoving, isRotating } = feedbackState;
     const isActive = isDragging || isMoving || isRotating;
+    // Group mode: active Move/Rotate OR hover in move/rotate session mode
+    const isGroupMode = isMoving || isRotating || (!isActive && (sessionMode === 'move' || sessionMode === 'rotate'));
 
-    // Determine which atom should be highlighted
-    const targetAtom = activeAtom >= 0 ? activeAtom : hoverAtom;
-
-    // Only update if changed
-    if (targetAtom !== this.highlightAtom) {
-      this.setHighlight(targetAtom);
-    }
-
-    // Active interaction gets stronger highlight with mode-specific color
-    if (isActive && activeAtom >= 0 && this._highlightMesh && this._highlightMat) {
-      if (isMoving) {
-        // Blue tint for Move mode
-        this._highlightMat.emissive.set(0x445566);
-        (this.forceLine.material as THREE.LineBasicMaterial).color.set(0x66aaff);
-      } else {
-        // Green tint for Atom drag and Rotate
+    // Single-atom highlight: only for Atom mode. Move/Rotate use the group channel.
+    if (isGroupMode) {
+      // Clear single-atom highlight — group highlight channel handles this
+      if (this.highlightAtom >= 0) this.setHighlight(-1);
+    } else {
+      const targetAtom = activeAtom >= 0 ? activeAtom : hoverAtom;
+      if (targetAtom !== this.highlightAtom) {
+        this.setHighlight(targetAtom);
+      }
+      // Active Atom drag gets stronger highlight
+      if (isDragging && activeAtom >= 0 && this._highlightMesh && this._highlightMat) {
         this._highlightMat.emissive.set(0x446655);
         (this.forceLine.material as THREE.LineBasicMaterial).color.set(0x66ffaa);
+        this._highlightMat.emissiveIntensity = 1.2;
+        this._highlightMesh.scale.setScalar(1.2);
       }
-      this._highlightMat.emissiveIntensity = 1.2;
-      this._highlightMesh.scale.setScalar(1.2);
+    }
+
+    // Force-line color: blue for Move, green for Atom/Rotate
+    if (isActive && activeAtom >= 0) {
+      if (isMoving) {
+        (this.forceLine.material as THREE.LineBasicMaterial).color.set(0x66aaff);
+      } else {
+        (this.forceLine.material as THREE.LineBasicMaterial).color.set(0x66ffaa);
+      }
     }
 
     // Force line visibility tied to active interaction state

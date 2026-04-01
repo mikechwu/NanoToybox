@@ -47,9 +47,9 @@ The dock has a three-way segmented mode selector: **Atom** | **Move** | **Rotate
 
 | Mode | Physics behavior |
 |------|-----------------|
-| Atom (default) | Spring force on single atom (camera plane) |
-| Move | Uniform force on connected component, normalized by component size. Blue highlight/force line. Detached fragments are unaffected. Force line originates from picked atom (v1 limitation) |
-| Rotate | Torque via diagonal inertia tensor, distributed as tangential forces |
+| Atom (default) | Spring force on single atom (camera plane). Single-atom highlight. |
+| Move | Uniform force on connected component, normalized by component size. **Full bonded group highlighted** (blue). Force line originates from picked atom. Detached fragments are unaffected. |
+| Rotate | Torque via diagonal inertia tensor, distributed as tangential forces. **Full bonded group highlighted.** |
 
 ### Speed & Pause
 

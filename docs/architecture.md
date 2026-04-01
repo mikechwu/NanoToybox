@@ -75,7 +75,8 @@ NanoToybox/
 │   │   │   ├── restart-state-adapter.ts      # Serialization/application/capture of RestartState
 │   │   │   ├── reconciled-steps.ts           # Deduplication helper for worker snapshot step counting
 │   │   │   ├── orbit-follow-update.ts        # Per-frame orbit-follow camera tracking from displayed bounds
-│   │   │   └── drag-target-refresh.ts        # Per-frame drag target reprojection during active interactions
+│   │   │   ├── drag-target-refresh.ts        # Per-frame drag target reprojection during active interactions
+│   │   │   └── interaction-highlight-runtime.ts # Mode-aware highlight resolver (atom vs bonded group for Move/Rotate)
 │   │   ├── scene.ts              # Scene commit/clear/load (transaction-safe)
 │   │   ├── placement.ts          # Placement lifecycle, tangent computation, canvas listeners
 │   │   ├── interaction.ts        # Command dispatch, screen-to-physics projection
@@ -215,7 +216,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 
 ### Composition Root Pattern
 
-`main.ts` (~1150 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 24 modules in `page/js/runtime/`:
+`main.ts` (~1150 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 25 modules in `page/js/runtime/`:
 
 - **scene-runtime.ts** — scene mutation wrappers, scene-to-store projection, worker scene mirroring
 - **worker-lifecycle.ts** — worker bridge creation, init, stall detection (5s warning / 15s fatal), teardown
@@ -241,6 +242,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 - **reconciled-steps.ts** — deduplication helper for worker snapshot step counting
 - **orbit-follow-update.ts** — per-frame orbit-follow camera tracking from displayed molecule bounds
 - **drag-target-refresh.ts** — per-frame reprojection of pointer intent during active drag/move/rotate interactions
+- **interaction-highlight-runtime.ts** — mode-aware highlight resolver: Atom → single atom, Move/Rotate → bonded group from live physics topology
 
 **Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons, TimelineActionHint. Imperative controllers remain only for PlacementController and StatusController (hint-only).
 
@@ -268,6 +270,7 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | UI chrome (sheets, theme, etc.) | Zustand store (`app-store.ts`) | React components |
 | `session.theme` | main.ts (via settings callback) | React SettingsSheet (theme segmented) |
 | Drag target (spring anchor) | physics.ts (`dragTarget`, `dragAtom`) + drag-target-refresh.ts (screen coords) | interaction-dispatch (event-driven), drag-target-refresh (per-frame reprojection) |
+| Interaction highlight | renderer (`_interactionHighlightIndices`) resolved by interaction-highlight-runtime.ts | main.ts frame loop (resolveInteractionHighlight); separate from panel highlight |
 | placement state | placement.ts (`_state`) | React DockBar (add/cancel via dockCallbacks) |
 | scheduler / effectsGate | main.ts (frame loop only) | — |
 | Timeline state (`mode`, `currentTimePs`, `reviewTimePs`, `rangePs`, etc.) | simulation-timeline-coordinator.ts (via store) | TimelineBar (scrub, restart), timeline-recording-orchestrator (range updates) |

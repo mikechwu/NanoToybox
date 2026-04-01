@@ -29,6 +29,7 @@ import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecy
 import { createOnboardingController, subscribeOnboardingReadiness } from './runtime/onboarding';
 import { updateOrbitFollowFromStore } from './runtime/orbit-follow-update';
 import { createDragTargetRefresh, dragRefreshAction } from './runtime/drag-target-refresh';
+import { resolveInteractionHighlight } from './runtime/interaction-highlight-runtime';
 import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-group-runtime';
 import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from './runtime/bonded-group-highlight-runtime';
 import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './runtime/bonded-group-coordinator';
@@ -1119,7 +1120,20 @@ function frameLoop(timestamp) {
     // Skip live hover/selection feedback during review — review is display-only,
     // and live hit-testing against historical positions would highlight wrong atoms.
     if (!inReview) {
-      renderer.updateFeedback(stateMachine.getFeedbackState());
+      const feedback = stateMachine.getFeedbackState();
+      renderer.updateFeedback(feedback, session.interactionMode as 'atom' | 'move' | 'rotate');
+
+      // Resolve mode-aware interaction highlight (group for Move/Rotate)
+      const highlight = resolveInteractionHighlight(feedback, session.interactionMode as 'atom' | 'move' | 'rotate', physics);
+      if (highlight && highlight.groupAtomIndices) {
+        renderer.setInteractionHighlightedAtoms(highlight.groupAtomIndices, highlight.intensity);
+      } else {
+        renderer.clearInteractionHighlight();
+      }
+    } else {
+      // Review mode: clear all stale live interaction feedback
+      renderer.clearInteractionHighlight();
+      renderer.setHighlight(-1);
     }
     const updateEnd = performance.now();
     scheduler.prof.updatePosMs += alpha * ((updateEnd - updateStart) - scheduler.prof.updatePosMs);
