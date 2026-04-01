@@ -28,6 +28,7 @@ import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/sna
 import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecycle';
 import { createOnboardingController, subscribeOnboardingReadiness } from './runtime/onboarding';
 import { updateOrbitFollowFromStore } from './runtime/orbit-follow-update';
+import { createDragTargetRefresh, dragRefreshAction } from './runtime/drag-target-refresh';
 import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-group-runtime';
 import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from './runtime/bonded-group-highlight-runtime';
 import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './runtime/bonded-group-coordinator';
@@ -164,6 +165,9 @@ let _pauseSyncPromise: Promise<void> | null = null;
 // Interaction dispatch (created in init)
 let _dispatch: ((cmd: import('./state-machine').Command, sx?: number, sy?: number) => { dragTarget?: number[] }) | null = null;
 
+// Per-frame drag target refresh (fixes stale world-space target when atom moves under spring)
+let _dragRefresh: import('./runtime/drag-target-refresh').DragTargetRefresh | null = null;
+
 /** Register a global listener and track it for teardown. Options forwarded to both add/remove. */
 function addGlobalListener(target: EventTarget, event: string, handler: EventListener, options?: boolean | AddEventListenerOptions) {
   target.addEventListener(event, handler, options);
@@ -214,6 +218,7 @@ function _teardownRuntime() {
   // Null remaining refs
   _overlay = null;
   _dispatch = null;
+  _dragRefresh = null;
   _snapshotReconciler = null;
   _scene = null;
   physics = null;
@@ -520,6 +525,9 @@ async function init() {
     updateSceneStatus: () => _scene!.updateSceneStatus(),
   });
 
+  // ── Drag target refresh (per-frame reprojection of pointer intent) ──
+  _dragRefresh = createDragTargetRefresh();
+
   // ── Snapshot reconciler (worker-to-main position sync + reconciliation) ──
   _snapshotReconciler = createSnapshotReconciler({
     physics, renderer, stateMachine,
@@ -532,7 +540,22 @@ async function init() {
     getPlacement: () => placement,
     getStateMachine: () => stateMachine,
     getSessionInteractionMode: () => session.interactionMode,
-    dispatch: (cmd, sx, sy) => _dispatch!(cmd, sx, sy),
+    dispatch: (cmd, sx, sy) => {
+      const result = _dispatch!(cmd, sx, sy);
+      // Hook drag refresh: track pointer and manage activation
+      if (_dragRefresh) {
+        const action = dragRefreshAction(cmd.action);
+        if (action === 'activate') {
+          _dragRefresh.activate();
+          if (sx !== undefined && sy !== undefined) _dragRefresh.updatePointer(sx, sy);
+        } else if (action === 'update-pointer') {
+          if (sx !== undefined && sy !== undefined) _dragRefresh.updatePointer(sx, sy);
+        } else if (action === 'deactivate') {
+          _dragRefresh.deactivate();
+        }
+      }
+      return result;
+    },
     onAchievement: (key) => _onboarding?.recordAchievement(key),
   });
 
@@ -1080,6 +1103,19 @@ function frameLoop(timestamp) {
         }
       }
     }
+    // Per-frame drag target refresh: reproject pointer intent from current atom position
+    if (!inReview && _dragRefresh?.isActive() && _inputBindings) {
+      const im = _inputBindings.getManager();
+      if (im) {
+        _dragRefresh.refresh(
+          physics, renderer, im,
+          (_workerRuntime && _workerRuntime.isActive())
+            ? (wx, wy, wz) => _workerRuntime!.sendInteraction({ type: 'updateDrag', worldX: wx, worldY: wy, worldZ: wz })
+            : undefined,
+        );
+      }
+    }
+
     // Skip live hover/selection feedback during review — review is display-only,
     // and live hit-testing against historical positions would highlight wrong atoms.
     if (!inReview) {

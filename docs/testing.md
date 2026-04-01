@@ -166,6 +166,7 @@ npm run dev
 | 1 | Page loads | C60 renders with atoms and bonds visible |
 | 2 | Switch structure | New structure loads, old one clears completely |
 | 3 | Atom mode: left-drag on atom | Highlight (green), spring line shows, atom follows cursor |
+| 3a | Hold pointer still during drag | Force line endpoint keeps updating as atom moves under spring tension (per-frame reprojection) |
 | 4 | Release drag | Atom retains momentum, structure vibrates naturally |
 | 5 | Ctrl+click on atom (any mode) | Molecule rotates, spring line visible |
 | 6 | Right-drag | Camera orbits around structure |

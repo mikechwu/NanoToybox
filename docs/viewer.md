@@ -153,7 +153,7 @@ The page runs a full analytical Tersoff (1988) potential in JavaScript:
 - Neighbor list rebuilt every 10 steps
 - Velocity Verlet integration with proper eV/Å → Å/fs² unit conversion
 - **NVE by default** — no artificial damping; energy injected by user persists as thermal vibration. User-adjustable damping available (0 = NVE, up to 0.5 = heavy viscous drag, cubic slider scale)
-- Drag (Atom mode): spring force `F = K_DRAG × (target - atom)` on the selected atom, in camera-perpendicular plane
+- Drag (Atom mode): spring force `F = K_DRAG × (target - atom)` on the selected atom, in camera-perpendicular plane. The drag target is reprojected every frame from the latest pointer screen position and the atom's current world position (`drag-target-refresh.ts`), so the force line and spring response stay consistent even when the pointer is held still while the atom moves.
 - Translation (Move mode): uniform force applied to all atoms in the picked atom's **connected component** (patch), normalized by component size. Total force is `K_DRAG × displacement`, independent of patch size. Detached fragments are not affected. Components are recomputed from the bond graph via Union-Find after each bond refresh (~every 5 frames)
 - Rotation (Rotate mode): spring force → torque → angular acceleration via diagonal inertia tensor → distributed tangential forces, scoped to the picked atom's **connected component**. COM and inertia are computed over the component only. Inertia-normalized so `K_ROTATE` feels consistent across patch sizes
 - Safety guards: per-atom velocity hard cap and total KE cap (only trigger on extreme inputs)

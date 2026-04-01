@@ -73,7 +73,9 @@ NanoToybox/
 │   │   │   ├── timeline-recording-orchestrator.ts # Owns recording cadence, authority-aware capture from reconciled physics
 │   │   │   ├── timeline-subsystem.ts         # Factory that creates the full subsystem, exposes high-level interface to main.ts
 │   │   │   ├── restart-state-adapter.ts      # Serialization/application/capture of RestartState
-│   │   │   └── reconciled-steps.ts           # Deduplication helper for worker snapshot step counting
+│   │   │   ├── reconciled-steps.ts           # Deduplication helper for worker snapshot step counting
+│   │   │   ├── orbit-follow-update.ts        # Per-frame orbit-follow camera tracking from displayed bounds
+│   │   │   └── drag-target-refresh.ts        # Per-frame drag target reprojection during active interactions
 │   │   ├── scene.ts              # Scene commit/clear/load (transaction-safe)
 │   │   ├── placement.ts          # Placement lifecycle, tangent computation, canvas listeners
 │   │   ├── interaction.ts        # Command dispatch, screen-to-physics projection
@@ -93,7 +95,8 @@ NanoToybox/
 │   │   │   ├── OnboardingOverlay.tsx # Page-load welcome card with sink-to-Settings animation
 │   │   │   ├── Icons.tsx         # Shared inline SVG icon utility (supporting component)
 │   │   │   ├── BondedGroupsPanel.tsx # Bonded cluster inspection panel (selection + hover highlight)
-│   │   │   ├── TimelineActionHint.tsx # Tooltip hint wrapper (supporting component)
+│   │   │   ├── ActionHint.tsx     # Shared hover/focus tooltip (supporting component)
+│   │   │   ├── TimelineActionHint.tsx # Re-export of ActionHint for backwards compatibility
 │   │   │   └── TimelineBar.tsx       # Bottom timeline UI inside DockLayout with FeatureBoundary
 │   │   ├── store/
 │   │   │   ├── app-store.ts      # Zustand store for UI state
@@ -212,7 +215,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 
 ### Composition Root Pattern
 
-`main.ts` (~1150 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 22 modules in `page/js/runtime/`:
+`main.ts` (~1150 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 24 modules in `page/js/runtime/`:
 
 - **scene-runtime.ts** — scene mutation wrappers, scene-to-store projection, worker scene mirroring
 - **worker-lifecycle.ts** — worker bridge creation, init, stall detection (5s warning / 15s fatal), teardown
@@ -236,6 +239,8 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 - **timeline-subsystem.ts** — factory that creates the full timeline subsystem, exposes high-level interface to main.ts
 - **restart-state-adapter.ts** — serialization, application, and capture of RestartState
 - **reconciled-steps.ts** — deduplication helper for worker snapshot step counting
+- **orbit-follow-update.ts** — per-frame orbit-follow camera tracking from displayed molecule bounds
+- **drag-target-refresh.ts** — per-frame reprojection of pointer intent during active drag/move/rotate interactions
 
 **Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons, TimelineActionHint. Imperative controllers remain only for PlacementController and StatusController (hint-only).
 
@@ -262,6 +267,7 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | Onboarding phase (`onboardingPhase`) | Zustand store (`app-store.ts`) | OnboardingOverlay consumer; `subscribeOnboardingReadiness` producer |
 | UI chrome (sheets, theme, etc.) | Zustand store (`app-store.ts`) | React components |
 | `session.theme` | main.ts (via settings callback) | React SettingsSheet (theme segmented) |
+| Drag target (spring anchor) | physics.ts (`dragTarget`, `dragAtom`) + drag-target-refresh.ts (screen coords) | interaction-dispatch (event-driven), drag-target-refresh (per-frame reprojection) |
 | placement state | placement.ts (`_state`) | React DockBar (add/cancel via dockCallbacks) |
 | scheduler / effectsGate | main.ts (frame loop only) | — |
 | Timeline state (`mode`, `currentTimePs`, `reviewTimePs`, `rangePs`, etc.) | simulation-timeline-coordinator.ts (via store) | TimelineBar (scrub, restart), timeline-recording-orchestrator (range updates) |

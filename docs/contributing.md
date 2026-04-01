@@ -70,7 +70,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - Dock + sheet navigation — responsive two-tier UI with React components (`page/js/components/`)
 - React UI migration — primary surfaces (DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar) are React-authoritative with Zustand store. Supporting subcomponents: Segmented, Icons, TimelineActionHint
 - Web Worker physics — off-thread simulation via `page/js/simulation-worker.ts` with automatic JS fallback
-- Runtime module extraction — 22 modules in `page/js/runtime/` (summary: scene, worker, snapshot, overlay, interaction, input, UI bindings, focus, onboarding, bonded-groups, timeline, restart, reconciled-steps); see `docs/architecture.md` for the full module-by-module inventory. main.ts reduced to composition-root-only
+- Runtime module extraction — 24 modules in `page/js/runtime/` (summary: scene, worker, snapshot, overlay, interaction, input, UI bindings, focus, onboarding, bonded-groups, timeline, restart, reconciled-steps, orbit-follow-update, drag-target-refresh); see `docs/architecture.md` for the full module-by-module inventory. main.ts reduced to composition-root-only
 - Object View panel — Center + Follow buttons with inline SVG icons, positioned below status block
 - Page-load onboarding overlay — welcome card with sink-to-Settings animation, page-lifetime dismissal
 
