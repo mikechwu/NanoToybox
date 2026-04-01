@@ -23,10 +23,10 @@ import { createInputBindings, type InputBindings } from './runtime/input-binding
 import { registerStoreCallbacks } from './runtime/ui-bindings';
 import { createAtomSource } from './runtime/atom-source';
 import { createSceneRuntime, type SceneRuntime } from './runtime/scene-runtime';
-import { handleCenterObject as _handleCenterObject, resolveReturnTarget } from './runtime/focus-runtime';
+import { handleCenterObject as _handleCenterObject, ensureFollowTarget, resolveReturnTarget } from './runtime/focus-runtime';
 import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/snapshot-reconciler';
 import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecycle';
-import { createOnboardingController } from './runtime/onboarding';
+import { createOnboardingController, subscribeOnboardingReadiness } from './runtime/onboarding';
 import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-group-runtime';
 import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from './runtime/bonded-group-highlight-runtime';
 import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './runtime/bonded-group-coordinator';
@@ -143,6 +143,7 @@ let _inputBindings: InputBindings | null = null;
 
 // Onboarding controller (created in init, cleared on teardown)
 let _onboarding: import('./runtime/onboarding').OnboardingController | null = null;
+let _unsubOnboardingOverlay: (() => void) | null = null;
 
 // Bonded group subsystem
 let _bondedGroups: BondedGroupRuntime | null = null;
@@ -193,6 +194,7 @@ function _teardownRuntime() {
   _lastReconciledSnapshotVersion = -1;
   // Destroy onboarding controller (clears coachmark timers + listeners)
   if (_onboarding) { _onboarding.destroy(); _onboarding = null; }
+  if (_unsubOnboardingOverlay) { _unsubOnboardingOverlay(); _unsubOnboardingOverlay = null; }
   // Bonded group subsystem teardown (coordinator owns the sequence)
   if (_bondedGroupCoordinator) { _bondedGroupCoordinator.teardown(); _bondedGroupCoordinator = null; }
   _bondedGroupHighlight = null;
@@ -440,10 +442,7 @@ async function init() {
         placement.invalidatePendingLoads();
         _scene!.updateSceneStatus();
         e.preventDefault();
-      } else if (
-        useAppStore.getState().activeSheet !== null ||
-        useAppStore.getState().cameraHelpOpen
-      ) {
+      } else if (useAppStore.getState().activeSheet !== null) {
         _overlay!.close();
         e.preventDefault();
       } else if (CONFIG.camera.freeLookEnabled && useAppStore.getState().cameraMode === 'freelook') {
@@ -465,7 +464,7 @@ async function init() {
     const pe = e as PointerEvent;
     const target = pe.target as Node;
     const _s = useAppStore.getState();
-    if (_s.activeSheet === null && !_s.cameraHelpOpen) return;
+    if (_s.activeSheet === null) return;
 
     // Only primary pointer — reject second touch in multi-touch, and
     // non-left mouse buttons (right-click, middle, stylus barrel).
@@ -585,6 +584,9 @@ async function init() {
   });
   _onboarding.scheduleInitialCoachmarks();
 
+  // ── Page-load onboarding overlay (reactive readiness gate) ──
+  _unsubOnboardingOverlay = subscribeOnboardingReadiness();
+
   // ── Bonded group subsystem ──
   _bondedGroups = createBondedGroupRuntime({
     getPhysics: () => physics,
@@ -641,6 +643,9 @@ async function init() {
       theme: s.theme,
       atomCount: s.atomCount,
       activeBonds: renderer.getActiveBondCount(),
+      orbitFollowEnabled: s.orbitFollowEnabled,
+      onboardingVisible: s.onboardingVisible,
+      onboardingPhase: s.onboardingPhase,
     };
   };
 
@@ -733,6 +738,11 @@ async function init() {
   // Center Object logic lives in focus-runtime.ts (shared with tests)
   useAppStore.getState().setCameraCallbacks({
     onCenterObject: () => { _handleCenterObject(renderer); },
+    onEnableFollow: () => {
+      if (!ensureFollowTarget(renderer)) return false;
+      _handleCenterObject(renderer);
+      return true;
+    },
     onReturnToObject: () => {
       renderer.animateToFocusedObject({
         levelUp: true,

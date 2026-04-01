@@ -169,7 +169,7 @@ export class InputManager {
     const tag = el.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'A') return true;
     if (el.isContentEditable || el.getAttribute('role') === 'button') return true;
-    if (el.closest('[data-camera-controls], .quick-help-card, .sheet')) return true;
+    if (el.closest('[data-camera-controls], .sheet')) return true;
     return false;
   }
 

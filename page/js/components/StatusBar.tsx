@@ -18,7 +18,7 @@ export function StatusBar() {
   if (!displayText) return null;
 
   return (
-    <div className="react-info">
+    <div className="react-info" data-status-root>
       <span className="status-text">{displayText}</span>
     </div>
   );

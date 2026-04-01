@@ -16,6 +16,7 @@ import React, { useCallback, useLayoutEffect, useRef } from 'react';
 import { useAppStore } from '../store/app-store';
 import { selectDockSurface } from '../store/selectors/dock';
 import { Segmented } from './Segmented';
+import { IconAdd, IconCheck, IconCancel, IconPause, IconResume, IconSettings } from './Icons';
 
 const MODES = [
   { value: 'atom', label: 'Atom' },
@@ -91,7 +92,7 @@ export function DockBar() {
         className={`dock-item dock-add-btn${isPlacement ? ' dock-placement-accent' : ''}`}
         onClick={handleAdd}
       >
-        <span className="dock-icon">{isPlacement ? '✓' : '+'}</span>
+        <span className="dock-icon">{isPlacement ? <IconCheck /> : <IconAdd />}</span>
         <span className="dock-label">{isPlacement ? 'Place' : 'Add'}</span>
       </button>
 
@@ -110,26 +111,29 @@ export function DockBar() {
       {/* Cancel button — only in placement surface */}
       {isPlacement && (
         <button className="dock-item dock-cancel" onClick={handleCancel}>
-          <span className="dock-icon">&#x2715;</span>
+          <span className="dock-icon"><IconCancel /></span>
           <span className="dock-label">Cancel</span>
         </button>
       )}
 
       {/* Pause / Resume */}
       <button
-        className="dock-item dock-text-only"
+        className="dock-item"
         onClick={handlePause}
         disabled={isPlacement}
       >
+        <span className="dock-icon">{paused ? <IconResume /> : <IconPause />}</span>
         <span className="dock-label">{paused ? 'Resume' : 'Pause'}</span>
       </button>
 
       {/* Settings */}
       <button
-        className="dock-item dock-text-only"
+        className="dock-item"
         onClick={handleSettings}
         disabled={isPlacement}
+        data-dock-settings
       >
+        <span className="dock-icon"><IconSettings /></span>
         <span className="dock-label">Settings</span>
       </button>
     </div>

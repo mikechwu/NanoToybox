@@ -68,15 +68,17 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - C/Wasm Tersoff kernel — ~11% faster than JS JIT, enabled by default, automatic JS fallback (`sim/wasm/`, `page/js/tersoff-wasm.ts`)
 - Containment boundary — dynamic soft harmonic wall (`page/js/physics.ts`), Contain/Remove toggle, live atom count, auto-scaling radius with hysteresis shrinkage
 - Dock + sheet navigation — responsive two-tier UI with React components (`page/js/components/`)
-- React UI migration — all UI surfaces (DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay) are React-authoritative with Zustand store
+- React UI migration — primary surfaces (DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar) are React-authoritative with Zustand store. Supporting subcomponents: Segmented, Icons, TimelineActionHint
 - Web Worker physics — off-thread simulation via `page/js/simulation-worker.ts` with automatic JS fallback
-- Runtime module extraction — 14 modules in `page/js/runtime/` (scene, worker lifecycle, snapshot reconciler, overlay layout/runtime, interaction dispatch, input bindings, UI bindings, atom source, focus resolution, onboarding, bonded-group projection, bonded-group highlight, bonded-group coordinator); main.ts reduced to composition-root-only
+- Runtime module extraction — 22 modules in `page/js/runtime/` (summary: scene, worker, snapshot, overlay, interaction, input, UI bindings, focus, onboarding, bonded-groups, timeline, restart, reconciled-steps); see `docs/architecture.md` for the full module-by-module inventory. main.ts reduced to composition-root-only
+- Object View panel — Center + Follow buttons with inline SVG icons, positioned below status block
+- Page-load onboarding overlay — welcome card with sink-to-Settings animation, page-lifetime dismissal
 
 ## Architecture Rules
 
 See `docs/architecture.md` for the full module map and state ownership model.
 
-- **React components are the sole UI authority.** All UI surfaces (DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, StatusBar, FPSDisplay, SheetOverlay) are React components driven by the Zustand store.
+- **React components are the sole UI authority.** Primary surfaces (DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar) are React-authoritative. Supporting subcomponents (Segmented, Icons, TimelineActionHint) are composed by those surfaces; some are pure prop-driven helpers.
 - **Imperative controllers** remain only for PlacementController (canvas touch listeners) and StatusController (hint/coachmark surface). Both expose `destroy()`.
 - **Callbacks flow through the store.** React components invoke imperative callbacks (dockCallbacks, settingsCallbacks, chooserCallbacks) registered by main.ts into the Zustand store.
 - **New globals require teardown.** Register via `addGlobalListener()` in main.ts.
@@ -105,10 +107,22 @@ See `docs/architecture.md` for the full module map and state ownership model.
 1. npm run dev                    # Vite dev server with HMR
 2. Make changes to page/js/ code
 3. npm run typecheck              # TypeScript type-checking
-4. npm run test:unit              # Vitest unit tests (582 tests)
-5. npm run test:e2e               # Playwright E2E browser tests (19 tests)
+4. npm run test:unit              # Vitest unit suite
+5. npm run test:e2e               # Playwright E2E suite
 6. npm run build                  # Production build → dist/
 ```
+
+### Debug Query Params
+
+The app supports URL-based debug overrides via `getDebugParam()` in `config.ts`.
+All debug params must be routed through this single reader.
+
+| Param | Effect | Used by |
+|-------|--------|---------|
+| `?kernel=js\|wasm` | Force physics kernel | `physics.ts` |
+| `?e2e=1` | Suppress onboarding overlay | `runtime/onboarding.ts` |
+
+E2E tests inject `?e2e=1` via `gotoApp()` from `tests/e2e/helpers.ts`.
 
 ### Python (simulation engine)
 
@@ -130,7 +144,9 @@ See `docs/architecture.md` for the full module map and state ownership model.
 | Web Worker / bridge | `page/js/simulation-worker.ts`, `page/js/worker-bridge.ts`, `src/types/worker-protocol.ts` |
 | Runtime modules (scene, worker, input) | `page/js/runtime/scene-runtime.ts`, `page/js/runtime/worker-lifecycle.ts`, `page/js/runtime/snapshot-reconciler.ts`, `page/js/runtime/input-bindings.ts`, `page/js/runtime/interaction-dispatch.ts` |
 | Overlay layout & open/close policy | `page/js/runtime/overlay-layout.ts`, `page/js/runtime/overlay-runtime.ts` |
-| Focus resolution & onboarding | `page/js/runtime/focus-runtime.ts`, `page/js/runtime/onboarding.ts` |
+| Focus resolution & onboarding | `page/js/runtime/focus-runtime.ts`, `page/js/runtime/onboarding.ts`, `page/js/components/OnboardingOverlay.tsx` |
+| Object View & icons | `page/js/components/CameraControls.tsx`, `page/js/components/Icons.tsx` |
+| E2E test helpers | `tests/e2e/helpers.ts` (gotoApp), `tests/e2e/camera-onboarding.spec.ts` |
 | Bonded clusters (panel + highlight) | `page/js/runtime/bonded-group-runtime.ts`, `page/js/runtime/bonded-group-highlight-runtime.ts`, `page/js/runtime/bonded-group-coordinator.ts`, `page/js/components/BondedGroupsPanel.tsx` |
 | Store callback wiring | `page/js/runtime/ui-bindings.ts`, `page/js/store/app-store.ts` |
 | Scene / placement | `page/js/scene.ts`, `page/js/placement.ts` |

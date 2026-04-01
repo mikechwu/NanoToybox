@@ -123,6 +123,39 @@ export function focusNewestPlacedMolecule(
 }
 
 /**
+ * Ensure a valid follow target exists before enabling orbit-follow.
+ * Returns true if a target was resolved (follow may proceed).
+ * Returns false if no molecules exist (follow should stay off).
+ *
+ * This is the explicit contract for the Follow button: resolve first, enable second.
+ */
+export function ensureFollowTarget(renderer: FocusRendererSurface): boolean {
+  const store = useAppStore.getState();
+  const molecules = store.molecules;
+  if (molecules.length === 0) return false;
+
+  // If lastFocusedMoleculeId is already valid, keep it
+  if (store.lastFocusedMoleculeId !== null) {
+    const mol = molecules.find(m => m.id === store.lastFocusedMoleculeId);
+    if (mol) return true;
+  }
+
+  // Resolve: single molecule → use it; multiple → nearest to camera
+  if (molecules.length === 1) {
+    store.setLastFocusedMoleculeId(molecules[0].id);
+    return true;
+  }
+
+  const target = resolveReturnTarget(renderer, renderer.getSceneRadius());
+  if (target.kind === 'molecule' && target.moleculeId != null) {
+    store.setLastFocusedMoleculeId(target.moleculeId);
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Center Object action: animate camera to the best focus target.
  * Priority: valid last-focused → single molecule → nearest molecule to camera.
  * No-op if no molecules exist. No pick-focus mode — always resolves immediately.

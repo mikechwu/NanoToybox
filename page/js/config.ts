@@ -182,6 +182,20 @@ export const CONFIG = {
   },
 };
 
+/**
+ * Query-param debug hooks — centralized reader for URL-based overrides.
+ *
+ * Approved debug params (append to URL for dev/test use):
+ * - ?kernel=js|wasm   — force physics kernel (see physics.ts)
+ * - ?e2e=1            — suppress onboarding overlay (see runtime/onboarding.ts)
+ *
+ * E2E tests inject these via gotoApp() from tests/e2e/helpers.ts.
+ */
+export function getDebugParam(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location?.search).get(key);
+}
+
 /** Derive consistent physics timing from the canonical config.
  *  If dt changes, call this to get the correct derived step rate. */
 export function getPhysicsTiming() {

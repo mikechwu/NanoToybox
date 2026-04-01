@@ -27,7 +27,7 @@ npm run dev
 | Multi-molecule | Add multiple structures to the scene via Add Molecule + placement mode |
 | Placement mode | Tangent placement near target molecule, translucent preview, drag to adjust, Place/Cancel |
 | Interact modes | Atom (drag single atom), Move (translate connected component), Rotate (torque on component) |
-| Camera | Two modes: Orbit (default) and Free-Look (advanced). Mode chip near triad. See controls table below |
+| Camera | Orbit mode (default). Object View panel: Center + Follow buttons. Free-Look available as advanced gated mode (`CONFIG.camera.freeLookEnabled`). See controls table below |
 | Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame, component-aware forces |
 | Rendering | InstancedMesh (2 draw calls for atoms+bonds), MeshStandardMaterial (PBR), camera-mounted 3-light rig (SpotLight headlight + DirectionalLight fill + ambient), axis triad |
 | Themes | Dark (default) / Light |
@@ -118,26 +118,31 @@ StatusBar is now message-only (no persistent scene summary). It shows `statusErr
 | 2-finger pinch | Zoom |
 | 2-finger drag | Pan camera |
 
-**Free-Look Mode** — yaw+pitch camera rotation in place, atoms are focus-select only.
+**Object View controls** (positioned below status block): Center (frame focused molecule) and Follow (continuous tracking) buttons with inline SVG icons. Help is available via Settings > Controls.
 
-| Gesture (Desktop) | Action |
-|--------------------|--------|
+**Onboarding:** A welcome overlay appears on each page load when the scene is ready. Dismisses on any tap with a sink animation toward the Settings button, teaching that guidance lives in Settings.
+
+**Free-Look Mode** *(advanced, gated off by default — `CONFIG.camera.freeLookEnabled = false`)*
+
+When enabled, a mode toggle button appears in the Object View panel. Free-Look provides yaw+pitch camera rotation; atoms are focus-select only.
+
+| Gesture / Control (Desktop) | Action |
+|-----------------------------|--------|
 | Right-drag | Look around (yaw+pitch) |
 | Left-click on atom | Focus-select molecule (sets orbit target, no manipulation) |
 | Scroll wheel | Move forward/back along look direction |
 | WASD | Translate camera (local plane) |
 | R | Level camera (reset orientation) |
 | Esc | Return to Orbit mode |
+| Return button (↩) | Fly back to focused molecule, enter Orbit |
+| Freeze button (✕) | Stop flight velocity (visible when moving) |
 
-| Gesture (Mobile) | Action |
-|-------------------|--------|
+| Gesture / Control (Mobile) | Action |
+|-----------------------------|--------|
 | 1-finger drag on background | Look around (yaw+pitch) |
 | Tap molecule | Focus-select molecule (sets orbit target) |
 | Drag triad | Look around (same as background) |
 | Double-tap triad center | Return to Orbit + reset view |
-| Axis-snap taps | Disabled in Free-Look |
-
-**Camera control cluster** (near triad): mode chip ("Orbit" / "Free"), "?" help glyph (opens QuickHelp gesture card), action slot (Center Object in Orbit, Return to Object in Free-Look).
 
 ### Physics Engine
 
@@ -166,14 +171,14 @@ The interactive page uses a composition root pattern with React-authoritative UI
 ### Technology
 
 - Vite (v8) build pipeline: TypeScript + React (JSX) compiled and bundled. Dev server via `npm run dev`
-- React 19 (`createRoot`) — authoritative UI: DockLayout, DockBar, TimelineBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay
+- React 19 (`createRoot`) — primary UI surfaces: DockLayout, DockBar, TimelineBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel. Supporting: Segmented, Icons, TimelineActionHint
 - Zustand (`app-store.ts`) — reactive UI state store; imperative callbacks from `main.ts` registered via store slots
 - Web Worker (`simulation-worker.ts`) + bridge (`worker-bridge.ts`) — physics runs off the main thread
 - Three.js v0.170 (npm, bundled by Vite)
 - InstancedMesh for atoms and bonds (2 draw calls, geometric capacity growth)
 - OrbitControls for Orbit-mode camera (zoom, pan; rotation handled by custom quaternion orbit)
 - Interactive axis triad (ArrowHelper + sprites, scissor-test viewport, device-aware sizing 96–200px via `setOverlayLayout()`; drag=orbit/look, tap=snap, double-tap=reset on touch devices)
-- Camera control cluster: React CameraControls (mode chip + "?" + action slot) + QuickHelp (gesture reference card)
+- Object View controls: React CameraControls (Center + Follow action buttons) + OnboardingOverlay (page-load welcome card with sink animation)
 - MeshStandardMaterial with roughness 0.7, metalness 0 (PBR)
 - Camera-mounted 3-light rig (SpotLight headlight + DirectionalLight fill + AmbientLight)
 

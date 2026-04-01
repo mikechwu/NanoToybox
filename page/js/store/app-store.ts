@@ -100,18 +100,20 @@ export interface AppStore {
   cameraMode: 'orbit' | 'freelook';
   setCameraMode: (mode: 'orbit' | 'freelook') => void;
 
-  // Camera help state (participates in transient-UI mutual exclusivity)
-  cameraHelpOpen: boolean;
-  setCameraHelpOpen: (open: boolean) => void;
-
   // Orbit follow mode: camera target tracks the focused molecule continuously.
-  // Toggled by long-press on ⊕. Short tap remains one-shot center.
+  // Toggled via Follow button. Direct toggle, no long-press discovery.
   orbitFollowEnabled: boolean;
   setOrbitFollowEnabled: (enabled: boolean) => void;
 
+  // Onboarding overlay (page-load welcome card, page-lifetime dismissal)
+  // onboardingVisible is derived from onboardingPhase — use setOnboardingPhase only.
+  onboardingVisible: boolean;
+  onboardingPhase: 'visible' | 'exiting' | 'dismissed';
+  setOnboardingPhase: (phase: 'visible' | 'exiting' | 'dismissed') => void;
+
   // Camera control callbacks (registered by main.ts, consumed by CameraControls)
-  cameraCallbacks: { onCenterObject: () => void; onReturnToObject?: () => void; onFreeze?: () => void } | null;
-  setCameraCallbacks: (cbs: { onCenterObject: () => void; onReturnToObject?: () => void; onFreeze?: () => void }) => void;
+  cameraCallbacks: { onCenterObject: () => void; onEnableFollow?: () => boolean; onReturnToObject?: () => void; onFreeze?: () => void } | null;
+  setCameraCallbacks: (cbs: { onCenterObject: () => void; onEnableFollow?: () => boolean; onReturnToObject?: () => void; onFreeze?: () => void }) => void;
 
   // Focus handle for camera pivot (validated before use — molecule may be removed)
   lastFocusedMoleculeId: number | null;
@@ -303,8 +305,9 @@ export const useAppStore = create<AppStore>((set) => ({
   activeSheet: null,
   interactionMode: 'atom',
   cameraMode: 'orbit',
-  cameraHelpOpen: false,
   orbitFollowEnabled: false,
+  onboardingVisible: false,
+  onboardingPhase: 'dismissed' as const,
   cameraCallbacks: null,
   lastFocusedMoleculeId: null,
   bondedGroups: [],
@@ -364,7 +367,7 @@ export const useAppStore = create<AppStore>((set) => ({
   // Actions
   setTheme: (theme) => set({ theme }),
   setTextSize: (size) => set({ textSize: size }),
-  openSheet: (sheet) => set({ activeSheet: sheet, cameraHelpOpen: false }),
+  openSheet: (sheet) => set({ activeSheet: sheet }),
   closeSheet: () => set({ activeSheet: null }),
   setInteractionMode: (mode) => set({ interactionMode: mode }),
   setCameraMode: (mode) => {
@@ -372,12 +375,11 @@ export const useAppStore = create<AppStore>((set) => ({
     if (mode === 'freelook' && !CONFIG.camera.freeLookEnabled) return;
     set({ cameraMode: mode });
   },
-  setCameraHelpOpen: (open) => set((s) => {
-    // Mutual exclusivity: opening help closes sheets
-    if (open && s.activeSheet !== null) return { cameraHelpOpen: open, activeSheet: null };
-    return { cameraHelpOpen: open };
-  }),
   setOrbitFollowEnabled: (enabled) => set({ orbitFollowEnabled: enabled }),
+  setOnboardingPhase: (phase) => set({
+    onboardingPhase: phase,
+    onboardingVisible: phase !== 'dismissed',
+  }),
   setCameraCallbacks: (cbs) => set({ cameraCallbacks: cbs }),
   setLastFocusedMoleculeId: (id) => set({ lastFocusedMoleculeId: id }),
   setTargetSpeed: (speed) => set({ targetSpeed: speed }),
@@ -471,8 +473,9 @@ export const useAppStore = create<AppStore>((set) => ({
     recentStructure: null,
     interactionMode: 'atom',
     cameraMode: 'orbit',
-    cameraHelpOpen: false,
     orbitFollowEnabled: false,
+    onboardingVisible: false,
+    onboardingPhase: 'dismissed' as const,
     cameraCallbacks: null,
     lastFocusedMoleculeId: null,
     // Bonded groups (side preference preserved across reset)

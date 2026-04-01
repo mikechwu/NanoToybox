@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { gotoApp } from './helpers'
 
 /**
  * C.2 Integration Test — verifies the live main app runs with worker-driven physics.
@@ -26,7 +27,7 @@ test.describe('C.2 Integration — Worker-Driven Main App', () => {
     const errors: string[] = []
     page.on('pageerror', err => errors.push(err.message))
 
-    await page.goto(`${baseURL}/page/`)
+    await gotoApp(page, baseURL!, '/page/')
 
     // Wait for app to fully initialize (React StatusBar renders scene info)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 15000 })
@@ -70,7 +71,7 @@ test.describe('C.2 Integration — Worker-Driven Main App', () => {
   })
 
   test('worker snapshot drives rendering (atoms visible)', async ({ page, baseURL }) => {
-    await page.goto(`${baseURL}/page/`)
+    await gotoApp(page, baseURL!, '/page/')
 
     // Wait for app to initialize (dock visible = React mounted)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 15000 })
@@ -86,7 +87,7 @@ test.describe('C.2 Integration — Worker-Driven Main App', () => {
   })
 
   test('stalled-worker detection: 5s warning triggers workerStalled flag and status text', async ({ page, baseURL }) => {
-    await page.goto(`${baseURL}/page/`)
+    await gotoApp(page, baseURL!, '/page/')
 
     // Wait for worker to be active
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 15000 })

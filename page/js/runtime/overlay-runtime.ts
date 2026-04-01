@@ -24,10 +24,6 @@ export function createOverlayRuntime(deps: {
 }): OverlayRuntime {
   function close() {
     const store = useAppStore.getState();
-    // Close camera help (transient-UI mutual exclusivity)
-    if (store.cameraHelpOpen) {
-      store.setCameraHelpOpen(false);
-    }
     if (store.activeSheet === 'settings' && store.helpPageActive) {
       store.setHelpPageActive(false);
     }

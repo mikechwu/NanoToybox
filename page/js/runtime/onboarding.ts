@@ -16,7 +16,8 @@
  */
 
 import { useAppStore } from '../store/app-store';
-import { CONFIG } from '../config';
+import { CONFIG, getDebugParam } from '../config';
+
 
 /** Rendering surface provided by StatusController. */
 export interface CoachmarkSurface {
@@ -137,7 +138,6 @@ export function createOnboardingController(deps: OnboardingDeps): OnboardingCont
     if (s.activeSheet !== null) return false;
     if (s.placementActive) return false;
     if (s.atomCount === 0) return false;
-    if (s.cameraHelpOpen) return false;
     return true;
   }
 
@@ -248,4 +248,48 @@ export function createOnboardingController(deps: OnboardingDeps): OnboardingCont
       clearCancelListeners();
     },
   };
+}
+
+// ── Page-load onboarding overlay gate (reactive) ──
+// Onboarding shows on every page load (page-lifetime dismissal).
+// Dismissed via in-memory Zustand state, reappears on reload.
+
+/**
+ * Check whether onboarding overlay is eligible to show.
+ * Pure readiness check — no side effects.
+ * Suppressed by ?e2e=1 (see getDebugParam in config.ts for approved debug params).
+ */
+export function isOnboardingEligible(): boolean {
+  if (getDebugParam('e2e') === '1') return false;
+  const s = useAppStore.getState();
+  if (s.activeSheet !== null) return false;
+  if (s.placementActive) return false;
+  if (s.timelineMode === 'review') return false;
+  if (s.atomCount === 0) return false;
+  if (s.onboardingPhase !== 'dismissed') return false; // already showing or exiting
+  return true;
+}
+
+/**
+ * Subscribe to store and show onboarding when the app reaches ready state.
+ * Page-lifetime: fires at most once per page load (once-only flag).
+ * Returns unsubscribe function for teardown.
+ */
+export function subscribeOnboardingReadiness(): () => void {
+  // Check immediately (may already be ready)
+  if (isOnboardingEligible()) {
+    useAppStore.getState().setOnboardingPhase('visible');
+    return () => {};
+  }
+
+  let _fired = false;
+  const unsub = useAppStore.subscribe(() => {
+    if (_fired) return;
+    if (isOnboardingEligible()) {
+      _fired = true;
+      useAppStore.getState().setOnboardingPhase('visible');
+      unsub();
+    }
+  });
+  return unsub;
 }

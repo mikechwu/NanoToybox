@@ -126,20 +126,23 @@ Key strategic and technical decisions made during development, with rationale.
 
 ## D17: Two-Mode Camera System (Orbit + Free-Look)
 
-**Decision:** Add a two-mode camera system with a near-triad control cluster: mode chip, help ("?") glyph, and action slot. Orbit is default; Free-Look is advanced. Supersedes D16's "no dedicated camera mode button" position.
+**Decision:** Two-mode camera system with Orbit as default. Object View panel provides Center + Follow buttons. Free-Look is an advanced feature-gated path (`CONFIG.camera.freeLookEnabled`).
 
-**Rationale:** Free-Look requires mode switching that the triad alone cannot express. The triad remains the primary orbit control; the chip adds mode awareness. The two modes have fundamentally different camera models, controls, and recovery paths:
+*Supersedes the original D17 design which used a mode chip, "?" help glyph, and QuickHelp card. Those are removed.*
 
-- **Orbit** (default): rotate around a focus target (pivot). Atoms are directly manipulable (drag/move/rotate). Focus-aware pivot with "Center Object" action.
-- **Free-Look** (advanced): yaw+pitch camera rotation in place, no mandatory pivot. Atoms are focus-select only (tap/click marks orbit target, no manipulation). Recovery via Return to Object, Esc, double-tap center, or mode chip.
+**Default shipped UI:**
 
-**Store is sole authority for camera mode** (`cameraMode: 'orbit' | 'freelook'`). Renderer, input, and UI are consumers only. Recovery actions write mode back through the store.
+- **Orbit** (default): rotate around a focus target (pivot). Atoms are directly manipulable (drag/move/rotate). Object View panel provides Center (one-shot frame) and Follow (continuous tracking via `ensureFollowTarget` — resolve target first, enable second). No long-press discovery.
+- **Onboarding:** Dual-layer system in `runtime/onboarding.ts`: (1) page-load welcome overlay shown via `subscribeOnboardingReadiness()`, page-lifetime dismissal, sink animation toward Settings; (2) coachmark system with achievement-triggered progressive hints and max-one-per-session pacing.
+- **Help:** Settings > Controls drill-in only. No floating help button.
 
-**Onboarding:** Coachmark system extracted to `runtime/onboarding.ts` (Phase 4A). Achievement-triggered progressive coachmarks with max-one-per-session pacing (Phase 4B). Three distinct help layers: initial onboarding (time-delayed), progressive coachmarks (achievement-triggered), reference (QuickHelp "?" card).
+**Advanced gated path (not default):**
 
-**Phase 5 (post-launch):** 6DOF/Roll sub-mode — opt-in via "Enable Roll" toggle, not default.
+- **Free-Look** (when `CONFIG.camera.freeLookEnabled = true`): yaw+pitch camera rotation in place. Atoms are focus-select only. Recovery via Return to Object, Freeze, Esc, or mode toggle.
 
-**Evidence:** `page/js/components/CameraControls.tsx`, `page/js/components/QuickHelp.tsx`, `page/js/renderer.ts` (applyFreeLookDelta, resetOrientation, returnToOrbitFromFreeLook, setOrbitControlsForMode), `page/js/input.ts` (mode-aware routing, WASD, wheel, keyboard guards), `page/js/runtime/onboarding.ts`, `page/js/runtime/focus-runtime.ts`, `page/js/store/app-store.ts` (cameraMode, cameraHelpOpen, cameraCallbacks), `page/js/orbit-math.ts` (rigid arcball delta math), `.reports/2026-03-26-camera-ux-improvements-plan.md`
+**Store is sole authority for camera mode** (`cameraMode: 'orbit' | 'freelook'`). Renderer, input, and UI are consumers only.
+
+**Evidence:** `page/js/components/CameraControls.tsx`, `page/js/components/OnboardingOverlay.tsx`, `page/js/renderer.ts` (applyFreeLookDelta, resetOrientation, setOrbitControlsForMode), `page/js/input.ts` (mode-aware routing), `page/js/runtime/onboarding.ts`, `page/js/runtime/focus-runtime.ts` (ensureFollowTarget), `page/js/store/app-store.ts` (cameraMode, orbitFollowEnabled, onboardingPhase, cameraCallbacks)
 
 ## D18: Simulation Timeline with Review and Restart
 
@@ -162,3 +165,27 @@ Key strategic and technical decisions made during development, with rationale.
 **Update:** The original implementation incorrectly armed on `startPlacement` and on several non-atom callbacks (pause, speed, physics settings). This was narrowed to atom-interaction-only arming, the method was renamed from `markUserEngaged()` to `markAtomInteractionStarted()`, and arming was moved from the `sendWorkerInteraction` callback (which was gated by `isWorkerActive`) into the dispatch function itself (unconditional). This ensures recording arms in both worker and sync/local modes.
 
 **Evidence:** `page/js/runtime/timeline-recording-policy.ts`, `page/js/runtime/interaction-dispatch.ts`, `tests/unit/interaction-dispatch-arming.test.ts`, `tests/unit/store-callbacks-arming.test.ts`
+
+## D21: Object View Panel
+
+**Decision:** Replace the old camera chip cluster (Orbit label + "?" + ⊕) with an explicit Object View panel containing Center and Follow buttons with inline SVG icons.
+
+**Rationale:** The old cluster relied on hidden gestures (long-press for follow, "?" glyph for help) that were not discoverable. Center and Follow are now separate visible buttons. Follow uses `ensureFollowTarget()`: resolve a valid target first, then enable tracking. If no molecules exist, follow stays off. Touch devices show secondary hint text; desktop uses title tooltips. The panel is positioned below the status block via `[data-status-root]` layout anchor with named tokens (`STATUS_TO_OBJECT_VIEW_GAP`, `OBJECT_VIEW_FALLBACK_TOP`, `SAFE_EDGE_INSET`).
+
+**Evidence:** `page/js/components/CameraControls.tsx`, `page/js/components/Icons.tsx`, `page/js/runtime/focus-runtime.ts` (ensureFollowTarget), `page/js/runtime/overlay-layout.ts`, `tests/unit/camera-controls-render.test.tsx`, `tests/unit/focus-runtime.test.ts`
+
+## D22: Page-Load Onboarding Overlay
+
+**Decision:** Show a welcome overlay on each page load. Page-lifetime dismissal only (no localStorage persistence). Reappears on reload.
+
+**Rationale:** The overlay teaches that guidance lives in Settings via a two-phase sink animation (~950ms) toward the Settings button. A reactive readiness gate (`subscribeOnboardingReadiness()`) waits for atomCount > 0 and no blockers (sheets, placement, review) before showing. The Settings button receives a highlight class during the sink animation. `?e2e=1` debug param suppresses in E2E tests (via `getDebugParam()`).
+
+**Evidence:** `page/js/components/OnboardingOverlay.tsx`, `page/js/runtime/onboarding.ts` (isOnboardingEligible, subscribeOnboardingReadiness), `page/js/store/app-store.ts` (onboardingPhase), `page/js/config.ts` (getDebugParam), `tests/unit/onboarding-overlay.test.tsx`, `tests/e2e/camera-onboarding.spec.ts`
+
+## D23: Inline SVG Icon System
+
+**Decision:** Shared `Icons.tsx` with 10 inline SVG icon components used across DockBar and CameraControls.
+
+**Rationale:** Consistent visual language with accessibility defaults (`aria-hidden`, `focusable={false}`). Icons use a 20x20 viewBox with currentColor stroke. Optional `size`, `strokeWidth`, `title`, `className` props for responsive refinement. DockBar uses Add, Check, Cancel, Pause, Resume, Settings. CameraControls uses Center, Follow, Freeze, Return.
+
+**Evidence:** `page/js/components/Icons.tsx`, `page/js/components/DockBar.tsx`, `page/js/components/CameraControls.tsx`

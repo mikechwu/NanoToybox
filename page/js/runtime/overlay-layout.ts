@@ -16,6 +16,14 @@
 /** Single source of truth for the dock measurement root selector. */
 const DOCK_ROOT_SELECTOR = '[data-dock-root]';
 
+// ── Layout design tokens (named constants for cross-device tuning) ──
+/** Vertical gap between status block bottom and object-view controls top. */
+const STATUS_TO_OBJECT_VIEW_GAP = 8;
+/** Fallback top position when status bar is not in DOM. */
+const OBJECT_VIEW_FALLBACK_TOP = 48;
+/** Horizontal inset from safe area when status bar is absent. */
+const SAFE_EDGE_INSET = 12;
+
 export interface OverlayLayout {
   /** Run layout computation. No-op if dock not yet in DOM. */
   doLayout(): void;
@@ -82,11 +90,13 @@ export function createOverlayLayout(renderer: {
 
     renderer.setOverlayLayout({ triadSize, triadLeft, triadBottom });
 
-    // Camera controls positioning (above the triad, between triad and scene)
-    // triadBottom is CSS-bottom-based. Controls sit above the triad.
-    const camCtrlBottom = triadBottom + triadSize + 4; // 4px gap above triad
-    const camCtrlLeft = triadLeft;
-    document.documentElement.style.setProperty('--cam-ctrl-bottom', camCtrlBottom + 'px');
+    // Camera controls positioning (below top status block, aligned to its left edge)
+    // Uses data-status-root contract (StatusBar.tsx) — stable layout anchor
+    const statusBlock = document.querySelector('[data-status-root]') as HTMLElement;
+    const statusRect = statusBlock ? statusBlock.getBoundingClientRect() : null;
+    const camCtrlTop = statusRect ? statusRect.bottom + STATUS_TO_OBJECT_VIEW_GAP : OBJECT_VIEW_FALLBACK_TOP;
+    const camCtrlLeft = statusRect ? statusRect.left : safeLeft + SAFE_EDGE_INSET;
+    document.documentElement.style.setProperty('--cam-ctrl-top', camCtrlTop + 'px');
     document.documentElement.style.setProperty('--cam-ctrl-left', camCtrlLeft + 'px');
   }
 

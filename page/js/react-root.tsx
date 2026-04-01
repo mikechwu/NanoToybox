@@ -19,6 +19,7 @@ import { SettingsSheet } from './components/SettingsSheet';
 import { StructureChooser } from './components/StructureChooser';
 import { BondedGroupsPanel } from './components/BondedGroupsPanel';
 import { TimelineBar } from './components/TimelineBar';
+import { OnboardingOverlay } from './components/OnboardingOverlay';
 
 /**
  * Lightweight error boundary — prevents a crash in one optional surface
@@ -64,6 +65,7 @@ export function mountReactUI() {
       <SheetOverlay />
       <SettingsSheet />
       <StructureChooser />
+      <OnboardingOverlay />
     </React.StrictMode>
   );
 }

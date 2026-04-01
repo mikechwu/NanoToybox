@@ -95,7 +95,9 @@ Each test writes results to `outputs/testN_*/`:
 
 ## Frontend Unit Tests
 
-Automated unit tests live in `tests/unit/` and run via Vitest. Total suite: **582 tests**.
+Automated unit tests live in `tests/unit/` and run via Vitest (`npm run test:unit`). Playwright E2E tests live in `tests/e2e/` (`npm run test:e2e`).
+
+*Per-section test counts below are approximate guides. Contributor-facing docs (contributing.md) omit exact counts entirely to avoid maintenance churn. Run `npx vitest run` for the authoritative total.*
 
 ```bash
 # Run all unit tests
@@ -338,31 +340,50 @@ Test after changes to applyOrbitDelta, resetView, fitCamera, or desktop input ro
 | E5 | Desktop orbit at canvas edge | Right-drag orbit, move pointer outside canvas → orbit continues (pointer capture). Release mouse → orbit ends cleanly. |
 | E6 | Snap after free rotation | Orbit to an arbitrary orientation, tap axis end → snap works correctly from any starting orientation. |
 
-### Camera Control Cluster (Phases 2-4)
+### Object View Controls and Onboarding
 
-Test after changes to CameraControls, QuickHelp, onboarding, or mode switching:
+Test after changes to CameraControls, OnboardingOverlay, or object-view controls.
+
+#### A. Manual Behavior Checks
 
 | # | Check | How to verify |
 |---|---|---|
-| F1 | Mode chip | When freeLookEnabled: tap chip toggles "Orbit"/"Free", camera changes immediately. When disabled (default): static "Orbit" label, no toggle. |
-| F2 | "?" opens help card | Tap "?" glyph → QuickHelp card appears with mode-appropriate gestures. Tap close → card dismisses. |
-| F3 | Help + sheet mutual exclusivity | Open settings → tap "?" → settings closes, help opens. Open help → open settings → help closes. |
-| F4 | Center Object (Orbit) | Tap ⊕ → camera centers on last-focused molecule, or single molecule, or nearest molecule. Long-press ⊕ → enables orbit follow (latch); next tap disables it. |
-| | **F5–F15 require `CONFIG.camera.freeLookEnabled = true` (disabled by default)** | |
-| F5 | Return to Object (Free-Look) | In Free-Look, tap ↩ → camera flies to last focused molecule, returns to Orbit mode. |
-| F6 | Free-Look look-around | In Free-Look, drag background (mobile) or right-drag (desktop) → camera yaw/pitch in place. Horizon stays stable. |
-| F7 | Free-Look focus-select | In Free-Look, tap/click atom → molecule marked as orbit target (focus indicator). No drag/move/rotate interaction starts. |
-| F8 | Free-Look WASD (desktop) | In Free-Look, WASD translates camera. Keys ignored when input/button/sheet focused. |
-| F9 | Free-Look R key (desktop) | In Free-Look, R levels the camera. Ignored when form control focused. |
-| F10 | Free-Look scroll wheel (desktop) | In Free-Look, scroll moves camera forward/back. |
-| F11 | Free-Look recovery: Esc | In Free-Look with nothing else open, Esc returns to Orbit. |
-| F12 | Free-Look recovery: double-tap center | In Free-Look, double-tap triad center → returns to Orbit + resets view. |
-| F13 | Free-Look triad drag | In Free-Look, triad drag → look-around (not orbit). Same feel as background drag. |
-| F14 | Free-Look axis-snap disabled | In Free-Look, tap axis end on triad → no snap. Only center double-tap works. |
-| F15 | First-use tutorial | First time entering Free-Look → hint shows: "drag to look · tap molecule to mark target · ↩ or double-tap to return". Only once (localStorage gated). |
-| F16 | Progressive coachmark: snap hint | After first orbit drag on mobile → "Tap an axis end on the triad to snap to that view" appears (once per session, idle-gated). |
-| F17 | Onboarding + overlay exclusivity | Coachmark visible → open settings → coachmark dismissed immediately (no hint text restored underneath). |
-| F18 | Keyboard guard | In Free-Look, focus a settings slider → type WASD → camera does NOT move. |
+| F1 | Center button | Tap Center → camera frames the focused molecule (or nearest if none focused). |
+| F2 | Follow button (enable) | Tap Follow → resolves a target and begins continuous tracking. Button shows active visual state. |
+| F3 | Follow button (disable) | While following, tap Follow → tracking stops. Button returns to inactive state. |
+| F4 | Follow with no molecules | Tap Follow on empty scene → nothing happens (follow stays off). |
+| F5 | Onboarding overlay appears | On page load, after scene content loads, a welcome overlay appears centered on screen. |
+| F6 | Onboarding dismisses on tap | Tap anywhere on the overlay → it animates toward the Settings button and disappears. |
+| F7 | Onboarding reappears on reload | After dismissing, reload the page → overlay reappears. |
+| F8 | Settings help includes Object View | Open Settings > Controls → "Object View" section lists Center and Follow. |
+| F9 | Progressive coachmark: snap hint | After first orbit drag on mobile → "Tap an axis end on the triad to snap to that view" appears (once per session, idle-gated). |
+| F10 | Coachmark + overlay exclusivity | Coachmark visible → open settings → coachmark dismissed immediately. |
+| | **F11–F18 require `CONFIG.camera.freeLookEnabled = true` (disabled by default)** | |
+| F11 | Mode toggle | When freeLookEnabled: tap mode button toggles "Free"/"Orbit". When disabled (default): no mode button renders. |
+| F12 | Return to Object (Free-Look) | In Free-Look, tap Return → camera flies to last focused molecule, returns to Orbit mode. |
+| F13 | Free-Look look-around | In Free-Look, drag background (mobile) or right-drag (desktop) → camera yaw/pitch in place. |
+| F14 | Free-Look WASD (desktop) | In Free-Look, WASD translates camera. Keys ignored when input/button/sheet focused. |
+| F15 | Free-Look R key (desktop) | In Free-Look, R levels the camera. Ignored when form control focused. |
+| F16 | Free-Look Freeze | When moving in Free-Look, Freeze button (✕) appears → tap stops flight velocity. |
+| F17 | Free-Look recovery: Esc | In Free-Look with nothing else open, Esc returns to Orbit. |
+| F18 | Free-Look axis-snap disabled | In Free-Look, tap axis end on triad → no snap. |
+| F19 | Free-Look focus-select | In Free-Look, tap/click atom → molecule marked as orbit target. No drag interaction starts. |
+| F20 | Keyboard guard | In Free-Look, focus a settings slider → type WASD → camera does NOT move. |
+
+#### B. Engineering Verification
+
+| # | Invariant | What to check |
+|---|-----------|--------------|
+| G1 | Follow returns false with no molecules | `onEnableFollow()` returns false and `orbitFollowEnabled` stays false when molecule list is empty. |
+| G2 | Onboarding readiness gate | `isOnboardingEligible()` requires atomCount > 0, no open sheets, no placement, no review mode. |
+| G3 | Onboarding E2E suppression | Adding `?e2e=1` to the URL suppresses the onboarding overlay entirely. |
+| G4 | Sink animation timing | `SINK_DURATION_MS` in OnboardingOverlay.tsx matches CSS `--onboarding-sink-duration`. |
+
+### E2E Test Conventions
+
+- **`gotoApp(page, baseURL, path)`** from `tests/e2e/helpers.ts` — appends `?e2e=1` for onboarding suppression. All `/page/` navigation in non-onboarding specs must use `gotoApp()`.
+- **`dismissOnboardingIfPresent(page)`** — local helper in `camera-onboarding.spec.ts` that waits for the overlay, clicks to dismiss, and waits for removal. Used by onboarding tests that need the overlay to appear first.
+- **Why:** Page-lifetime onboarding blocks pointer events until dismissed. Tests that don't test onboarding need the `?e2e=1` bypass via `gotoApp()`.
 
 ### Code Review Invariants
 

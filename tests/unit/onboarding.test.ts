@@ -231,21 +231,6 @@ describe('onboarding controller', () => {
     });
   });
 
-  // ── Idle gate: camera help and pick-focus ──
-
-  describe('idle gate for camera UI states', () => {
-    it('does not show when cameraHelpOpen is true', () => {
-      useAppStore.getState().setCameraHelpOpen(true);
-      createController();
-      controller.scheduleInitialCoachmarks();
-
-      vi.advanceTimersByTime(5000);
-      expect(surface.showCoachmark).not.toHaveBeenCalled();
-    });
-
-    // (focus-mode coachmark suppression removed in earlier cleanup)
-  });
-
   // ── Overlay dismiss ──
 
   describe('dismissActive', () => {

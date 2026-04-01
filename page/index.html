@@ -400,7 +400,6 @@ fieldset.segmented {
 /* ── Dock extras ── */
 .dock-icon { font-size: 18px; line-height: 1; }
 .dock-label { font-size: var(--font-xs); }
-.dock-item.dock-text-only { justify-content: center; }
 .dock-mode { max-width: var(--dock-mode-max-width); }
 /* Placement surface styling — structure handled by JSX conditional rendering */
 .dock-add-btn.dock-placement-accent { color: var(--color-accent-text); }
@@ -496,50 +495,16 @@ fieldset.segmented {
 .bonded-groups-panel.side-left { left: 12px; top: 48px; }
 .bonded-groups-panel.side-right { right: 12px; top: 48px; }
 
-/* ── Camera controls overlay (positioned by overlay-layout.ts) ── */
+/* ── Camera controls overlay (object-view panel below status block) ── */
 .camera-controls {
   position: fixed;
-  bottom: var(--cam-ctrl-bottom, 80px);
-  left: var(--cam-ctrl-left, 6px);
+  top: var(--cam-ctrl-top, 48px);
+  left: var(--cam-ctrl-left, 12px);
   display: flex;
   flex-direction: column;
   gap: 4px;
   z-index: 150;
   pointer-events: auto;
-}
-.camera-chip {
-  display: flex;
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  background: var(--panel-bg);
-  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
-  border: 1px solid var(--color-border);
-}
-.camera-chip-body {
-  min-width: 36px;
-  min-height: 28px;
-  padding: 2px 8px;
-  border: none;
-  background: none;
-  color: var(--color-text-secondary);
-  font-size: var(--font-xs);
-  font-family: var(--font-family);
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-.camera-chip-help {
-  min-width: 28px;
-  min-height: 28px;
-  padding: 2px 6px;
-  border: none;
-  border-left: 1px solid var(--color-border);
-  background: none;
-  color: var(--color-text-secondary);
-  font-size: var(--font-xs);
-  font-family: var(--font-family);
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
 }
 .camera-action {
   min-width: 28px;
@@ -555,63 +520,102 @@ fieldset.segmented {
   font-family: var(--font-family);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
-/* Suppress iOS Safari long-press text selection / callout on the ⊕/◎ button */
-.camera-action-center {
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
-  touch-action: manipulation;
+.camera-action svg { flex-shrink: 0; }
+.camera-action-active {
+  color: var(--color-accent-text);
+  border-color: var(--color-accent-text);
 }
-.quick-help-card {
+.camera-action-label {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.camera-action-hint {
+  font-size: var(--font-xxs, 9px);
+  opacity: 0.6;
+}
+/* Hide secondary hints on desktop (title tooltips handle discoverability) */
+@media (hover: hover) and (pointer: fine) {
+  .camera-action-hint { display: none; }
+}
+
+/* ── Onboarding overlay ── */
+/* --onboarding-sink-duration is set from JS (OnboardingOverlay.tsx SINK_DURATION_MS).
+   CSS fallback 0.95s is used only if JS hasn't run yet — keep in sync with SINK_DURATION_MS. */
+
+.onboarding-backdrop {
   position: fixed;
-  bottom: calc(var(--cam-ctrl-bottom, 80px) + 40px);
-  left: var(--cam-ctrl-left, 6px);
-  width: 220px;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  opacity: 1;
+  transition: opacity 0.3s ease-out;
+}
+.onboarding-backdrop.onboarding-exit {
+  opacity: 0;
+  transition: opacity var(--onboarding-sink-duration, 0.95s) ease-out;
+}
+.onboarding-card {
+  max-width: 320px;
+  width: 90%;
   background: var(--panel-bg);
   backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding: var(--space-md);
-  z-index: 210;
-  font-size: var(--font-xs);
-  line-height: 1.6;
+  padding: var(--space-lg);
+  text-align: center;
 }
-.quick-help-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+/* Two-phase exit: distort/compress (0–50%) then translate/absorb (50–100%) */
+.onboarding-card.onboarding-card-exit {
+  --sink-x: 0px;
+  --sink-y: 100px;
+  animation: onboarding-sink var(--onboarding-sink-duration, 0.95s) ease-in forwards;
+}
+@keyframes onboarding-sink {
+  0%   { opacity: 1; transform: scale(1, 1) translate(0, 0); border-radius: var(--radius-md); }
+  25%  { opacity: 0.9; transform: scale(0.85, 0.6) translate(0, 0); border-radius: 16px; }
+  50%  { opacity: 0.6; transform: scale(0.35, 0.25) translate(calc(var(--sink-x) * 0.3), calc(var(--sink-y) * 0.3)); border-radius: 50%; }
+  80%  { opacity: 0.2; transform: scale(0.12, 0.12) translate(var(--sink-x), var(--sink-y)); border-radius: 50%; }
+  100% { opacity: 0; transform: scale(0.05, 0.05) translate(var(--sink-x), var(--sink-y)); border-radius: 50%; }
+}
+/* Sink destination highlight on Settings button */
+.onboarding-sink-target {
+  animation: onboarding-absorb var(--onboarding-sink-duration, 0.95s) ease-out;
+}
+@keyframes onboarding-absorb {
+  0%   { box-shadow: none; }
+  40%  { box-shadow: none; }
+  60%  { box-shadow: 0 0 12px 3px var(--color-accent-text); }
+  80%  { box-shadow: 0 0 6px 1px var(--color-accent-text); }
+  100% { box-shadow: none; }
+}
+.onboarding-title {
+  font-size: var(--font-md);
   font-weight: bold;
-  margin-bottom: var(--space-sm);
-}
-.quick-help-close {
-  background: none;
-  border: none;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  font-size: var(--font-sm);
-  padding: 2px 4px;
-}
-.quick-help-section {
-  color: var(--color-accent-text);
-  font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-bottom: var(--space-xs);
-}
-.quick-help-row {
-  color: var(--color-text-secondary);
-}
-.quick-help-row b {
   color: var(--color-text);
-  display: inline-block;
-  min-width: 80px;
+  margin-bottom: var(--space-md);
 }
-
-.camera-action-pick {
-  color: var(--color-accent-text);
+.onboarding-body {
+  font-size: var(--font-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.8;
+  margin-bottom: var(--space-md);
+}
+.onboarding-body b {
+  color: var(--color-text);
+}
+.onboarding-hint {
   font-size: var(--font-xs);
+  color: var(--color-text-secondary);
+  opacity: 0.7;
 }
 
 /* ── Sheet pages (drill-in navigation) ── */

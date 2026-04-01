@@ -13,26 +13,16 @@ import { createOverlayRuntime } from '../../page/js/runtime/overlay-runtime';
 
 // ── overlay-runtime.close() behavior ──
 
-describe('overlay-runtime.close() clears camera transient UI', () => {
+describe('overlay-runtime.close() clears transient UI', () => {
   beforeEach(() => {
     useAppStore.getState().resetTransientState();
   });
 
-  it('clears cameraHelpOpen when help is open', () => {
-    useAppStore.getState().setCameraHelpOpen(true);
-    const overlay = createOverlayRuntime({ getStatusCtrl: () => null });
-    overlay.close();
-    expect(useAppStore.getState().cameraHelpOpen).toBe(false);
-  });
-
-
-  it('also closes active sheet', () => {
+  it('closes active sheet', () => {
     useAppStore.getState().openSheet('settings');
-    useAppStore.getState().setCameraHelpOpen(true);
     const overlay = createOverlayRuntime({ getStatusCtrl: () => null });
     overlay.close();
     expect(useAppStore.getState().activeSheet).toBeNull();
-    expect(useAppStore.getState().cameraHelpOpen).toBe(false);
   });
 });
 

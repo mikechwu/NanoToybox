@@ -162,3 +162,110 @@ describe('Scene-runtime caller contracts', () => {
     expect(useAppStore.getState().lastFocusedMoleculeId).toBeNull();
   });
 });
+
+// ── Follow enable with no prior target (Phase 2) ──
+
+import { handleCenterObject, ensureFollowTarget } from '../../page/js/runtime/focus-runtime';
+
+describe('ensureFollowTarget contract', () => {
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+  });
+
+  it('returns false when no molecules exist', () => {
+    useAppStore.getState().setMolecules([]);
+    const r = mockRenderer();
+    expect(ensureFollowTarget(r)).toBe(false);
+  });
+
+  it('returns true and keeps existing valid lastFocusedMoleculeId', () => {
+    useAppStore.getState().setMolecules([
+      { id: 1, name: 'A', structureFile: 'a.xyz', atomCount: 60, atomOffset: 0 },
+    ]);
+    useAppStore.getState().setLastFocusedMoleculeId(1);
+    const r = mockRenderer();
+    expect(ensureFollowTarget(r)).toBe(true);
+    expect(useAppStore.getState().lastFocusedMoleculeId).toBe(1);
+  });
+
+  it('returns true and sets focus for single molecule', () => {
+    useAppStore.getState().setMolecules([
+      { id: 5, name: 'C60', structureFile: 'c60.xyz', atomCount: 60, atomOffset: 0 },
+    ]);
+    const r = mockRenderer();
+    expect(ensureFollowTarget(r)).toBe(true);
+    expect(useAppStore.getState().lastFocusedMoleculeId).toBe(5);
+  });
+
+  it('returns true and resolves nearest for multiple molecules with no prior focus', () => {
+    useAppStore.getState().setMolecules([
+      { id: 1, name: 'A', structureFile: 'a.xyz', atomCount: 60, atomOffset: 0 },
+      { id: 2, name: 'B', structureFile: 'b.xyz', atomCount: 40, atomOffset: 60 },
+    ]);
+    const r = mockRenderer();
+    expect(ensureFollowTarget(r)).toBe(true);
+    expect(useAppStore.getState().lastFocusedMoleculeId).not.toBeNull();
+  });
+
+  it('returns true and resolves when lastFocusedMoleculeId is stale', () => {
+    useAppStore.getState().setMolecules([
+      { id: 1, name: 'A', structureFile: 'a.xyz', atomCount: 60, atomOffset: 0 },
+    ]);
+    useAppStore.getState().setLastFocusedMoleculeId(99); // stale
+    const r = mockRenderer();
+    expect(ensureFollowTarget(r)).toBe(true);
+    expect(useAppStore.getState().lastFocusedMoleculeId).toBe(1);
+  });
+});
+
+describe('Follow enable resolves a target', () => {
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+  });
+
+  it('handleCenterObject sets lastFocusedMoleculeId for single molecule (follow prerequisite)', () => {
+    useAppStore.getState().setMolecules([
+      { id: 5, name: 'C60', structureFile: 'c60.xyz', atomCount: 60, atomOffset: 0 },
+    ]);
+    const r = mockRenderer(new THREE.Vector3(1, 2, 3));
+    handleCenterObject(r);
+    expect(useAppStore.getState().lastFocusedMoleculeId).toBe(5);
+  });
+
+  it('handleCenterObject resolves nearest molecule when no prior focus', () => {
+    useAppStore.getState().setMolecules([
+      { id: 1, name: 'A', structureFile: 'a.xyz', atomCount: 60, atomOffset: 0 },
+      { id: 2, name: 'B', structureFile: 'b.xyz', atomCount: 40, atomOffset: 60 },
+    ]);
+    const r = mockRenderer(new THREE.Vector3(1, 2, 3));
+    handleCenterObject(r);
+    expect(useAppStore.getState().lastFocusedMoleculeId).not.toBeNull();
+    expect(r.animateToFocusedObject).toHaveBeenCalled();
+  });
+
+  it('follow enable + handleCenterObject gives the per-frame loop a valid target', () => {
+    useAppStore.getState().setMolecules([
+      { id: 10, name: 'C60', structureFile: 'c60.xyz', atomCount: 60, atomOffset: 0 },
+    ]);
+    useAppStore.getState().setOrbitFollowEnabled(true);
+    const r = mockRenderer(new THREE.Vector3(1, 2, 3));
+    handleCenterObject(r);
+    // Per-frame follow loop needs both: orbitFollowEnabled AND lastFocusedMoleculeId
+    const s = useAppStore.getState();
+    expect(s.orbitFollowEnabled).toBe(true);
+    expect(s.lastFocusedMoleculeId).toBe(10);
+  });
+
+  it('focusMoleculeByAtom does not change target when follow is active', () => {
+    useAppStore.getState().setMolecules([
+      { id: 1, name: 'A', structureFile: 'a.xyz', atomCount: 60, atomOffset: 0 },
+      { id: 2, name: 'B', structureFile: 'b.xyz', atomCount: 40, atomOffset: 60 },
+    ]);
+    useAppStore.getState().setOrbitFollowEnabled(true);
+    useAppStore.getState().setLastFocusedMoleculeId(1);
+    const r = mockRenderer();
+    focusMoleculeByAtom(80, r); // atom in molecule 2
+    // Should NOT change target — follow freezes the tracked molecule
+    expect(useAppStore.getState().lastFocusedMoleculeId).toBe(1);
+  });
+});

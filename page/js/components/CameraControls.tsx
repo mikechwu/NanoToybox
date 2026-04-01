@@ -1,188 +1,117 @@
 /**
- * CameraControls — React-owned camera control cluster near the triad.
+ * CameraControls — Object View panel with Center and Follow actions.
  *
- * Positioned above the triad via CSS custom properties set by overlay-layout.ts.
- * Contains: mode chip (with embedded ?) + action slot (Center Object).
+ * Phase 1: Replaces old Orbit chip + ? + ⊕ cluster with explicit buttons.
+ * Positioned by CSS custom properties set by overlay-layout.ts.
  *
- * Ownership: React-owned overlay. Triad stays renderer-owned (WebGL scissor).
- * Store is sole authority for cameraMode and cameraHelpOpen.
+ * - Center: one-shot camera animate to best focus target
+ * - Follow: toggle orbit-follow tracking on/off
+ *
+ * No onboarding or help surface — guidance lives in Settings > Controls.
+ * Store is sole authority for orbitFollowEnabled.
  */
 
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 import { CONFIG } from '../config';
-import { QuickHelp } from './QuickHelp';
-
-/** Session flag to show "Coming soon" only once. */
-let _comingSoonShown = false;
-
-// Long-press threshold from CONFIG (tunable)
+import { IconCenter, IconFollow, IconFreeze, IconReturn } from './Icons';
 
 export function CameraControls() {
   const cameraMode = useAppStore((s) => s.cameraMode);
-  const cameraHelpOpen = useAppStore((s) => s.cameraHelpOpen);
   const orbitFollowEnabled = useAppStore((s) => s.orbitFollowEnabled);
   const flightActive = useAppStore((s) => s.flightActive);
   const farDrift = useAppStore((s) => s.farDrift);
   const cameraCallbacks = useAppStore((s) => s.cameraCallbacks);
-
-  // Long-press detection for ⊕ (follow mode toggle)
-  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const wasLongPressRef = useRef(false);
-  const activatedByCurrentPressRef = useRef(false);
-
-  // Chip body tap: toggle camera mode
-  const handleChipTap = useCallback(() => {
-    const store = useAppStore.getState();
-    if (store.cameraMode === 'orbit') {
-      store.setCameraMode('freelook');
-      // Show first-use tutorial once
-      if (!localStorage.getItem('freelook-tutorial-shown')) {
-        localStorage.setItem('freelook-tutorial-shown', '1');
-        const hint = document.getElementById('hint');
-        if (hint) {
-          hint.textContent = 'Free-Look: drag to look · WASD to fly (drifts!) · tap molecule to mark target · ↩ to return';
-          hint.style.display = '';
-          hint.classList.remove('fade');
-          setTimeout(() => {
-            hint.classList.add('fade');
-            setTimeout(() => { hint.style.display = 'none'; }, 2000);
-          }, 3000);
-        }
-      }
-    } else {
-      // Return to Orbit
-      store.setCameraMode('orbit');
-    }
-  }, []);
-
-  // Help via store state (mutual exclusivity enforced by store)
-  const handleHelpOpen = useCallback(() => {
-    useAppStore.getState().setCameraHelpOpen(true);
-  }, []);
-
-  const handleHelpClose = useCallback(() => {
-    useAppStore.getState().setCameraHelpOpen(false);
-  }, []);
 
   // Center Object: dispatched through registered callback
   const handleCenterObject = useCallback(() => {
     cameraCallbacks?.onCenterObject?.();
   }, [cameraCallbacks]);
 
-  // ⊕ button behavior depends on follow state:
-  // - follow OFF: short tap = center, long press = enable follow
-  // - follow ON: any tap = disable follow (low-friction off switch)
-  const handleCenterPointerDown = useCallback(() => {
-    activatedByCurrentPressRef.current = false;
-    if (useAppStore.getState().orbitFollowEnabled) {
-      // Follow already active — pointerUp will disable it
-      return;
-    }
-    wasLongPressRef.current = false;
-    holdTimerRef.current = setTimeout(() => {
-      holdTimerRef.current = null;
-      wasLongPressRef.current = true;
-      activatedByCurrentPressRef.current = true;
-      useAppStore.getState().setOrbitFollowEnabled(true);
-    }, CONFIG.camera.followLongPressMs);
-  }, []);
-
-  const handleCenterPointerUp = useCallback(() => {
-    if (holdTimerRef.current) {
-      clearTimeout(holdTimerRef.current);
-      holdTimerRef.current = null;
-    }
-    // If this press just activated follow, do nothing on release (latch)
-    if (activatedByCurrentPressRef.current) {
-      activatedByCurrentPressRef.current = false;
-      return;
-    }
-    if (useAppStore.getState().orbitFollowEnabled) {
-      // Follow was already active before this press — tap disables it
-      useAppStore.getState().setOrbitFollowEnabled(false);
-      return;
-    }
-    // Short tap (not long press) → one-shot center
-    if (!wasLongPressRef.current) {
-      cameraCallbacks?.onCenterObject?.();
+  // Follow toggle: resolve target first, then enable
+  const handleFollowToggle = useCallback(() => {
+    const store = useAppStore.getState();
+    if (store.orbitFollowEnabled) {
+      store.setOrbitFollowEnabled(false);
+    } else {
+      // ensureFollowTarget resolves a target and centers; only enable if successful
+      const resolved = cameraCallbacks?.onEnableFollow?.() ?? false;
+      if (resolved) {
+        store.setOrbitFollowEnabled(true);
+      }
     }
   }, [cameraCallbacks]);
 
-  const handleCenterPointerCancel = useCallback(() => {
-    if (holdTimerRef.current) {
-      clearTimeout(holdTimerRef.current);
-      holdTimerRef.current = null;
-    }
+  // Mode toggle: only shown when Free-Look feature flag is enabled
+  const handleModeToggle = useCallback(() => {
+    const store = useAppStore.getState();
+    store.setCameraMode(store.cameraMode === 'orbit' ? 'freelook' : 'orbit');
   }, []);
 
   return (
-    <>
-      <div className="camera-controls" data-camera-controls>
-        {/* Mode chip with embedded ? */}
-        <div className="camera-chip">
-          {CONFIG.camera.freeLookEnabled ? (
-            <button
-              className="camera-chip-body"
-              onClick={handleChipTap}
-              aria-label={`Camera mode: ${cameraMode === 'orbit' ? 'Orbit' : 'Free-Look'}`}
-            >
-              {cameraMode === 'orbit' ? 'Orbit' : 'Free'}
-            </button>
-          ) : (
-            <span className="camera-chip-body" aria-label="Camera mode: Orbit">
-              Orbit
-            </span>
-          )}
-          <button
-            className="camera-chip-help"
-            onClick={handleHelpOpen}
-            aria-label="Open camera controls help"
-          >
-            ?
-          </button>
-        </div>
+    <div className="camera-controls" data-camera-controls>
+      {/* Mode toggle — only when Free-Look is enabled */}
+      {CONFIG.camera.freeLookEnabled && (
+        <button
+          className="camera-action"
+          onClick={handleModeToggle}
+          aria-label={`Switch to ${cameraMode === 'orbit' ? 'Free-Look' : 'Orbit'}`}
+        >
+          {cameraMode === 'orbit' ? 'Free' : 'Orbit'}
+        </button>
+      )}
 
-        {/* Action slot — mode-dependent */}
-        {cameraMode === 'orbit' && (
-          <button
-            className={`camera-action camera-action-center${orbitFollowEnabled ? ' camera-action-follow' : ''}`}
-            onPointerDown={handleCenterPointerDown}
-            onPointerUp={handleCenterPointerUp}
-            onPointerCancel={handleCenterPointerCancel}
-            onPointerLeave={handleCenterPointerCancel}
-            onContextMenu={(e) => e.preventDefault()}
-            aria-label={orbitFollowEnabled ? 'Following target (tap to stop)' : 'Center Object (long-press to follow)'}
-          >
-            {orbitFollowEnabled ? '◎' : '⊕'}
-          </button>
-        )}
-        {/* Free-Look actions (gated by feature flag) */}
-        {CONFIG.camera.freeLookEnabled && cameraMode === 'freelook' && flightActive && (
+      {/* Orbit mode: Center + Follow */}
+      {cameraMode === 'orbit' && (
+        <>
           <button
             className="camera-action"
-            onClick={() => cameraCallbacks?.onFreeze?.()}
-            aria-label="Freeze"
+            onClick={handleCenterObject}
+            aria-label="Center Object"
+            title="Frame focused molecule"
           >
-            ✕
+            <IconCenter />
+            <span className="camera-action-label">
+              Center
+              <span className="camera-action-hint">Frame molecule</span>
+            </span>
           </button>
-        )}
-        {CONFIG.camera.freeLookEnabled && cameraMode === 'freelook' && (
           <button
-            className={`camera-action${farDrift ? ' camera-action-pulse' : ''}`}
-            onClick={() => {
-              // Single-entry: onReturnToObject owns animation + mode switch
-              cameraCallbacks?.onReturnToObject?.();
-            }}
-            aria-label="Return to Object"
+            className={`camera-action${orbitFollowEnabled ? ' camera-action-active' : ''}`}
+            onClick={handleFollowToggle}
+            aria-label={orbitFollowEnabled ? 'Following target (tap to stop)' : 'Follow'}
+            title={orbitFollowEnabled ? 'Tap to stop tracking' : 'Track focused molecule'}
           >
-            ↩
+            <IconFollow />
+            <span className="camera-action-label">
+              Follow
+              <span className="camera-action-hint">{orbitFollowEnabled ? 'Tap to stop' : 'Track molecule'}</span>
+            </span>
           </button>
-        )}
-      </div>
+        </>
+      )}
 
-      {/* Help card (store-driven, mutually exclusive with sheets) */}
-      <QuickHelp open={cameraHelpOpen} onClose={handleHelpClose} />
-    </>
+      {/* Free-Look actions (gated by feature flag) */}
+      {CONFIG.camera.freeLookEnabled && cameraMode === 'freelook' && flightActive && (
+        <button
+          className="camera-action"
+          onClick={() => cameraCallbacks?.onFreeze?.()}
+          aria-label="Freeze"
+        >
+          <IconFreeze />
+        </button>
+      )}
+      {CONFIG.camera.freeLookEnabled && cameraMode === 'freelook' && (
+        <button
+          className={`camera-action${farDrift ? ' camera-action-pulse' : ''}`}
+          onClick={() => {
+            cameraCallbacks?.onReturnToObject?.();
+          }}
+          aria-label="Return to Object"
+        >
+          <IconReturn />
+        </button>
+      )}
+    </div>
   );
 }

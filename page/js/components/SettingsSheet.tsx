@@ -328,6 +328,9 @@ export function SettingsSheet() {
           <div><b>1-finger drag on background</b> — orbit camera</div>
           <div><b>2-finger pinch</b> — zoom</div>
           <div><b>2-finger drag</b> — pan camera</div>
+          <div className="help-section-title" style={{ marginTop: 12 }}>Object View</div>
+          <div><b>Center</b> — frame the focused molecule in view</div>
+          <div><b>Follow</b> — continuously track the focused molecule</div>
           <div className="help-section-title" style={{ marginTop: 12 }}>Playground</div>
           <div><b>Add</b> — place a new molecule in the scene</div>
           <div><b>Clear</b> — remove all molecules</div>

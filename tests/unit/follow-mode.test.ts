@@ -1,13 +1,11 @@
 /**
- * Tests for orbit follow-mode latch behavior.
+ * Tests for orbit follow-mode behavior.
  *
- * - Short tap → one-shot center (follow stays off)
- * - Long press → follow enabled after release (latch)
- * - Next tap → follow disabled
+ * - Direct toggle: Follow button enables/disables tracking
+ * - Target freeze: interaction does not change target while following
  */
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useAppStore } from '../../page/js/store/app-store';
-import { CONFIG } from '../../page/js/config';
 
 describe('orbit follow mode store', () => {
   beforeEach(() => {
@@ -76,82 +74,27 @@ describe('follow mode freezes target', () => {
   });
 });
 
-// ── Gesture latch logic (mirrors CameraControls pointer behavior) ──
+// ── Direct toggle (replaces old long-press gesture latch) ──
 
-describe('follow mode gesture latch', () => {
-  let wasLongPress: boolean;
-  let activatedByCurrentPress: boolean;
-  let centerCalled: boolean;
-
+describe('follow mode direct toggle', () => {
   beforeEach(() => {
-    vi.useFakeTimers();
     useAppStore.getState().resetTransientState();
-    wasLongPress = false;
-    activatedByCurrentPress = false;
-    centerCalled = false;
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
+  it('toggle on: sets orbitFollowEnabled to true', () => {
+    useAppStore.getState().setOrbitFollowEnabled(true);
+    expect(useAppStore.getState().orbitFollowEnabled).toBe(true);
   });
 
-  // Mirror the CameraControls pointer logic as a pure state machine
-  function pointerDown() {
-    activatedByCurrentPress = false;
-    if (useAppStore.getState().orbitFollowEnabled) return; // already active
-    wasLongPress = false;
-    // Start long-press timer
-    setTimeout(() => {
-      wasLongPress = true;
-      activatedByCurrentPress = true;
-      useAppStore.getState().setOrbitFollowEnabled(true);
-    }, CONFIG.camera.followLongPressMs);
-  }
-
-  function pointerUp() {
-    vi.clearAllTimers(); // cancel any pending timer
-    if (activatedByCurrentPress) {
-      activatedByCurrentPress = false;
-      return; // latch: don't disable on same gesture
-    }
-    if (useAppStore.getState().orbitFollowEnabled) {
-      useAppStore.getState().setOrbitFollowEnabled(false);
-      return;
-    }
-    if (!wasLongPress) {
-      centerCalled = true;
-    }
-  }
-
-  it('short tap → center, follow stays off', () => {
-    pointerDown();
-    vi.advanceTimersByTime(100); // well below threshold
-    pointerUp();
-
-    expect(centerCalled).toBe(true);
+  it('toggle off: sets orbitFollowEnabled to false', () => {
+    useAppStore.getState().setOrbitFollowEnabled(true);
+    useAppStore.getState().setOrbitFollowEnabled(false);
     expect(useAppStore.getState().orbitFollowEnabled).toBe(false);
   });
 
-  it('long press → follow enabled, release does NOT disable', () => {
-    pointerDown();
-    vi.advanceTimersByTime(CONFIG.camera.followLongPressMs + 50);
-    expect(useAppStore.getState().orbitFollowEnabled).toBe(true);
-
-    pointerUp(); // same gesture — latch prevents disable
-    expect(useAppStore.getState().orbitFollowEnabled).toBe(true);
-    expect(centerCalled).toBe(false);
-  });
-
-  it('next tap after long-press → follow disabled', () => {
-    // First: enable via long press
-    pointerDown();
-    vi.advanceTimersByTime(CONFIG.camera.followLongPressMs + 50);
-    pointerUp();
-    expect(useAppStore.getState().orbitFollowEnabled).toBe(true);
-
-    // Second: tap to disable
-    pointerDown();
-    pointerUp();
+  it('double toggle: off → on → off', () => {
+    useAppStore.getState().setOrbitFollowEnabled(true);
+    useAppStore.getState().setOrbitFollowEnabled(false);
     expect(useAppStore.getState().orbitFollowEnabled).toBe(false);
   });
 });

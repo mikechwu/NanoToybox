@@ -61,8 +61,8 @@ NanoToybox/
 │   │   │   ├── input-bindings.ts     # InputManager construction, sync, callback wiring
 │   │   │   ├── ui-bindings.ts        # Zustand store callback registration
 │   │   │   ├── atom-source.ts        # Renderer-to-input atom-picking adapter
-│   │   │   ├── focus-runtime.ts     # Focus resolution: molecule lookup, centroid, pivot update
-│   │   │   ├── onboarding.ts        # Coachmark scheduling, pacing, persistence, achievements
+│   │   │   ├── focus-runtime.ts     # Focus resolution: molecule lookup, centroid, pivot update; ensureFollowTarget for follow-mode validation
+│   │   │   ├── onboarding.ts        # Coachmark scheduling + page-load onboarding overlay gate (isOnboardingEligible, subscribeOnboardingReadiness)
 │   │   │   ├── bonded-group-runtime.ts     # Live connected-component projection + stable ID reconciliation
 │   │   │   ├── bonded-group-highlight-runtime.ts # Persistent atom tracking + hover preview resolution
 │   │   │   ├── bonded-group-coordinator.ts # Coordinated projection + highlight lifecycle
@@ -89,9 +89,11 @@ NanoToybox/
 │   │   │   ├── SheetOverlay.tsx  # Sheet backdrop
 │   │   │   ├── StatusBar.tsx     # Scene status display
 │   │   │   ├── FPSDisplay.tsx    # FPS/simulation status
-│   │   │   ├── CameraControls.tsx # Mode chip, "?" help glyph, Center Object / Return action
-│   │   │   ├── QuickHelp.tsx    # Mode-aware gesture reference card
+│   │   │   ├── CameraControls.tsx # Object View panel: Center + Follow buttons (default); mode toggle when Free-Look gate is on
+│   │   │   ├── OnboardingOverlay.tsx # Page-load welcome card with sink-to-Settings animation
+│   │   │   ├── Icons.tsx         # Shared inline SVG icon utility (supporting component)
 │   │   │   ├── BondedGroupsPanel.tsx # Bonded cluster inspection panel (selection + hover highlight)
+│   │   │   ├── TimelineActionHint.tsx # Tooltip hint wrapper (supporting component)
 │   │   │   └── TimelineBar.tsx       # Bottom timeline UI inside DockLayout with FeatureBoundary
 │   │   ├── store/
 │   │   │   ├── app-store.ts      # Zustand store for UI state
@@ -210,19 +212,19 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 
 ### Composition Root Pattern
 
-`main.ts` (~1150 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 23 modules in `page/js/runtime/`:
+`main.ts` (~1150 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 22 modules in `page/js/runtime/`:
 
 - **scene-runtime.ts** — scene mutation wrappers, scene-to-store projection, worker scene mirroring
 - **worker-lifecycle.ts** — worker bridge creation, init, stall detection (5s warning / 15s fatal), teardown
 - **snapshot-reconciler.ts** — worker snapshot → physics position sync, atom-remap handling, bond refresh
-- **overlay-layout.ts** — hint clearance and triad sizing/positioning (RAF-coalesced, ResizeObserver)
+- **overlay-layout.ts** — hint clearance, triad sizing, object-view positioning below status block via `[data-status-root]` (RAF-coalesced, ResizeObserver)
 - **overlay-runtime.ts** — overlay open/close policy (Escape, outside-click, device-mode switch)
 - **interaction-dispatch.ts** — interaction command side effects, worker mirroring (flick ordering), and timeline arming (unconditional on startDrag/startMove/startRotate/flick)
 - **input-bindings.ts** — InputManager construction, sync (scene-mutation resync contract)
 - **ui-bindings.ts** — Zustand store callback registration (React intents → imperative commands)
 - **atom-source.ts** — shared renderer-to-input atom-picking adapter
-- **focus-runtime.ts** — focus resolution: molecule lookup, centroid computation, camera pivot update
-- **onboarding.ts** — coachmark scheduling, pacing, persistence, achievement-triggered progressive hints
+- **focus-runtime.ts** — focus resolution: molecule lookup, centroid computation, camera pivot update; `ensureFollowTarget()` for follow-mode validation
+- **onboarding.ts** — coachmark scheduling + page-load onboarding overlay gate (`isOnboardingEligible`, `subscribeOnboardingReadiness`)
 - **bonded-group-runtime.ts** — live connected-component projection with overlap-reconciled stable IDs
 - **bonded-group-highlight-runtime.ts** — persistent atom tracking, hover preview, renderer highlight resolution
 - **bonded-group-coordinator.ts** — coordinated projection + highlight lifecycle (update + teardown)
@@ -235,7 +237,13 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 - **restart-state-adapter.ts** — serialization, application, and capture of RestartState
 - **reconciled-steps.ts** — deduplication helper for worker snapshot step counting
 
-React components (DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, QuickHelp, BondedGroupsPanel, TimelineBar) are authoritative for all UI surfaces. Imperative controllers remain only for PlacementController and StatusController (hint-only).
+**Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons, TimelineActionHint. Imperative controllers remain only for PlacementController and StatusController (hint-only).
+
+**Camera callbacks** registered by main.ts via `cameraCallbacks` in the store:
+- `onCenterObject()` — one-shot camera center
+- `onEnableFollow?() → boolean` — resolve target via `ensureFollowTarget` + center; returns false if no molecules
+- `onReturnToObject?()` — fly back to orbit target *(Free-Look only, when `freeLookEnabled` is true)*
+- `onFreeze?()` — stop flight velocity *(Free-Look only)*
 
 `main.ts` must not be re-grown: new runtime logic goes into `page/js/runtime/`, new UI surfaces into `page/js/components/`.
 
@@ -248,8 +256,10 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | `session.scene` | scene-runtime.ts (commit/clear/add) | React SettingsSheet (clear), PlacementController (commit) |
 | `session.playback` | main.ts (frame loop) | React DockBar (pause), React SettingsSheet (speed) |
 | `session.interactionMode` | main.ts (via store callback) | React DockBar (mode segmented) |
-| Camera mode (`cameraMode`) | Zustand store (`app-store.ts`) | CameraControls chip, Esc key, double-tap center, overlay close |
+| Camera mode (`cameraMode`) | Zustand store (`app-store.ts`) | CameraControls mode toggle (feature-gated), Esc key, Free-Look recovery callbacks |
 | Camera focus (`lastFocusedMoleculeId`) | focus-runtime.ts (via store) | interaction-dispatch (orbit), input-bindings (free-look), placement |
+| Orbit follow (`orbitFollowEnabled`) | Zustand store (`app-store.ts`) | CameraControls Follow button; per-frame orbit-follow loop in main.ts |
+| Onboarding phase (`onboardingPhase`) | Zustand store (`app-store.ts`) | OnboardingOverlay consumer; `subscribeOnboardingReadiness` producer |
 | UI chrome (sheets, theme, etc.) | Zustand store (`app-store.ts`) | React components |
 | `session.theme` | main.ts (via settings callback) | React SettingsSheet (theme segmented) |
 | placement state | placement.ts (`_state`) | React DockBar (add/cancel via dockCallbacks) |
@@ -268,6 +278,7 @@ Unified outside-click dismiss rule (all devices): a capture-phase `pointerdown` 
 
 - **Hint** (`--hint-bottom` CSS var): always clears the dock top edge + gap
 - **Triad** (`renderer.setOverlayLayout({ triadSize, triadLeft, triadBottom })`): interactive camera orbit control on touch devices (drag=rotate, tap=snap-to-axis, double-tap=reset). Phone clears full-width dock; tablet/desktop uses safe-area corner margins. `triadLeft` accounts for `env(safe-area-inset-left)`. Sizes 96–140px on phone, 120–200px on tablet/desktop. `CONFIG.orbit` defines `rotateSpeed` and `triadHitPadding`.
+- **Object View controls** (`--cam-ctrl-top`, `--cam-ctrl-left` CSS vars): positioned below the top status block via `[data-status-root]` (StatusBar.tsx). Named tokens: `STATUS_TO_OBJECT_VIEW_GAP` (8px), `OBJECT_VIEW_FALLBACK_TOP` (48px when status bar is hidden), `SAFE_EDGE_INSET` (12px).
 
 Layout updates are triggered by `window.resize` and a `ResizeObserver` on the `[data-dock-root]` element (DockLayout's root), coalesced to one computation per frame. All dock child surfaces must be in normal document flow inside the measured root so `getBoundingClientRect()` reflects the total bottom-control footprint.
 
