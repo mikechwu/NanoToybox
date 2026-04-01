@@ -62,6 +62,11 @@ export class Renderer {
   // Physics reference (read-only access to positions for rendering)
   _physicsRef: { n: number; pos: Float64Array; getBonds?: () => any[] } | null;
 
+  // Display-source state for review-aware queries
+  _displaySource: 'live' | 'review';
+  _reviewPositions: Float64Array | null;
+  _reviewAtomCount: number;
+
   // Geometry and material (created in loadStructure / appendMeshes)
   _atomGeom!: THREE.SphereGeometry;
   _atomMat!: THREE.MeshStandardMaterial;
@@ -133,6 +138,11 @@ export class Renderer {
 
     // Current physics reference for position reads (set each updatePositions call)
     this._physicsRef = null;
+
+    // Display-source state: 'live' (default) or 'review' (during timeline review)
+    this._displaySource = 'live';
+    this._reviewPositions = null;
+    this._reviewAtomCount = 0;
 
     this._initScene();
     this._initCameraLightRig();
@@ -438,6 +448,10 @@ export class Renderer {
   updatePositions(physics) {
     // Reacquire physics reference each call (pos may be reallocated on appendMolecule)
     this._physicsRef = physics;
+    // Restore live display source (clears any review cache)
+    this._displaySource = 'live';
+    this._reviewPositions = null;
+    this._reviewAtomCount = 0;
     const pos = physics.pos;
     const n = physics.n;
 
@@ -526,6 +540,10 @@ export class Renderer {
    * The existing updatePositions() remains the active rendering path during B.
    */
   updateFromSnapshot(positions: Float64Array, n: number, _bonds: Int32Array | null = null, _bondCount: number = 0): void {
+    // Live snapshot → restore live display source
+    this._displaySource = 'live';
+    this._reviewPositions = null;
+    this._reviewAtomCount = 0;
     if (!this._instancedAtoms || n === 0) return;
     const m = new THREE.Matrix4();
     const count = Math.min(n, this._atomCapacity);
@@ -574,7 +592,13 @@ export class Renderer {
    * using the supplied review positions, not physics.pos.
    */
   updateReviewFrame(positions: Float64Array, n: number): void {
+    // Cache review positions for display-aware queries (before mesh guard)
+    this._displaySource = 'review';
+    this._reviewPositions = positions;
+    this._reviewAtomCount = n;
+
     if (!this._instancedAtoms || n === 0) return;
+
     const m = new THREE.Matrix4();
     const count = Math.min(n, this._atomCapacity);
     for (let i = 0; i < count; i++) {
@@ -1369,6 +1393,59 @@ export class Renderer {
     const pos = this._physicsRef!.pos;
     let maxDistSq = 0;
     const end = Math.min(atomOffset + atomCount, this._physicsRef!.n);
+    for (let i = atomOffset; i < end; i++) {
+      const dx = pos[i * 3] - centroid.x;
+      const dy = pos[i * 3 + 1] - centroid.y;
+      const dz = pos[i * 3 + 2] - centroid.z;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > maxDistSq) maxDistSq = d2;
+    }
+    return { center: centroid, radius: Math.sqrt(maxDistSq) + CONFIG.camera.atomVisualRadius };
+  }
+
+  // ── Display-aware position queries ──
+  // Use these instead of getMoleculeCentroid/getMoleculeBounds when the result
+  // must reflect what the user currently sees (live OR review positions).
+
+  /** Position source for display-aware queries. */
+  private _getDisplayedPositions(): { pos: Float64Array; n: number } | null {
+    if (this._displaySource === 'review' && this._reviewPositions) {
+      return { pos: this._reviewPositions, n: this._reviewAtomCount };
+    }
+    if (this._physicsRef) {
+      return { pos: this._physicsRef.pos, n: this._physicsRef.n };
+    }
+    return null;
+  }
+
+  /** True when the renderer is showing a historical review frame, not live physics. */
+  isDisplayingReviewFrame(): boolean {
+    return this._displaySource === 'review' && this._reviewPositions !== null;
+  }
+
+  getDisplayedMoleculeCentroid(atomOffset: number, atomCount: number): THREE.Vector3 | null {
+    const src = this._getDisplayedPositions();
+    if (!src || src.n === 0) return null;
+    const { pos } = src;
+    let cx = 0, cy = 0, cz = 0;
+    const end = Math.min(atomOffset + atomCount, src.n);
+    for (let i = atomOffset; i < end; i++) {
+      cx += pos[i * 3];
+      cy += pos[i * 3 + 1];
+      cz += pos[i * 3 + 2];
+    }
+    const n = end - atomOffset;
+    if (n <= 0) return null;
+    return new THREE.Vector3(cx / n, cy / n, cz / n);
+  }
+
+  getDisplayedMoleculeBounds(atomOffset: number, atomCount: number): { center: THREE.Vector3; radius: number } | null {
+    const centroid = this.getDisplayedMoleculeCentroid(atomOffset, atomCount);
+    if (!centroid) return null;
+    const src = this._getDisplayedPositions()!;
+    const { pos } = src;
+    let maxDistSq = 0;
+    const end = Math.min(atomOffset + atomCount, src.n);
     for (let i = atomOffset; i < end; i++) {
       const dx = pos[i * 3] - centroid.x;
       const dy = pos[i * 3 + 1] - centroid.y;

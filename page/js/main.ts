@@ -27,6 +27,7 @@ import { handleCenterObject as _handleCenterObject, ensureFollowTarget, resolveR
 import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/snapshot-reconciler';
 import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecycle';
 import { createOnboardingController, subscribeOnboardingReadiness } from './runtime/onboarding';
+import { updateOrbitFollowFromStore } from './runtime/orbit-follow-update';
 import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-group-runtime';
 import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from './runtime/bonded-group-highlight-runtime';
 import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './runtime/bonded-group-coordinator';
@@ -1118,16 +1119,7 @@ function frameLoop(timestamp) {
     const shouldRender = wasForced || scheduler.renderSkipCounter >= scheduler.renderSkipLevel;
 
     // Orbit follow mode: smoothly track focused molecule with framing
-    if (useAppStore.getState().orbitFollowEnabled && useAppStore.getState().cameraMode === 'orbit') {
-      const s = useAppStore.getState();
-      if (s.lastFocusedMoleculeId !== null) {
-        const mol = s.molecules.find(m => m.id === s.lastFocusedMoleculeId);
-        if (mol) {
-          const bounds = renderer.getMoleculeBounds(mol.atomOffset, mol.atomCount);
-          if (bounds) renderer.updateOrbitFollow(frameDtMs, bounds);
-        }
-      }
-    }
+    updateOrbitFollowFromStore(renderer, frameDtMs);
 
     // Free-Look flight update (before render, after physics)
     if (CONFIG.camera.freeLookEnabled && useAppStore.getState().cameraMode === 'freelook' && _inputBindings) {

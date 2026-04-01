@@ -11,12 +11,14 @@ import {
   focusMoleculeByAtom,
   focusNewestPlacedMolecule,
   findMoleculeForAtom,
+  resolveReturnTarget,
 } from '../../page/js/runtime/focus-runtime';
 
 function mockRenderer(centroid: THREE.Vector3 | null = new THREE.Vector3(1, 2, 3)) {
+  const bounds = centroid ? { center: centroid, radius: 3.5 } : null;
   return {
-    getMoleculeCentroid: vi.fn(() => centroid),
-    getMoleculeBounds: vi.fn(() => centroid ? { center: centroid, radius: 3.5 } : null),
+    getDisplayedMoleculeCentroid: vi.fn(() => centroid),
+    getDisplayedMoleculeBounds: vi.fn(() => bounds),
     setCameraFocusTarget: vi.fn(),
     animateToFocusedObject: vi.fn(),
     camera: { position: new THREE.Vector3(0, 0, 15) },
@@ -100,7 +102,7 @@ describe('focusNewestPlacedMolecule', () => {
     ]);
     const r = mockRenderer(new THREE.Vector3(10, 20, 30));
     focusNewestPlacedMolecule(r);
-    expect(r.getMoleculeCentroid).toHaveBeenCalledWith(60, 40);
+    expect(r.getDisplayedMoleculeCentroid).toHaveBeenCalledWith(60, 40);
     expect(r.setCameraFocusTarget).toHaveBeenCalledWith(new THREE.Vector3(10, 20, 30));
     expect(useAppStore.getState().lastFocusedMoleculeId).toBe(2);
   });
@@ -166,6 +168,42 @@ describe('Scene-runtime caller contracts', () => {
 // ── Follow enable with no prior target (Phase 2) ──
 
 import { handleCenterObject, ensureFollowTarget } from '../../page/js/runtime/focus-runtime';
+
+describe('display-aware focus resolution (review mode)', () => {
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+  });
+
+  it('resolveReturnTarget uses getDisplayedMoleculeBounds', () => {
+    useAppStore.getState().setMolecules([
+      { id: 1, name: 'A', structureFile: 'a.xyz', atomCount: 60, atomOffset: 0 },
+    ]);
+    useAppStore.getState().setLastFocusedMoleculeId(1);
+
+    // Mock: displayed bounds return review-frame position, live returns different
+    const reviewCenter = new THREE.Vector3(10, 20, 30);
+    const liveCenter = new THREE.Vector3(1, 2, 3);
+    const r = {
+      ...mockRenderer(liveCenter),
+      getDisplayedMoleculeBounds: vi.fn(() => ({ center: reviewCenter, radius: 5 })),
+      getDisplayedMoleculeCentroid: vi.fn(() => reviewCenter),
+    };
+
+    const target = resolveReturnTarget(r, 10);
+    expect(target.position).toBe(reviewCenter);
+    expect(r.getDisplayedMoleculeBounds).toHaveBeenCalledWith(0, 60);
+  });
+
+  it('handleCenterObject uses displayed bounds for animation', () => {
+    useAppStore.getState().setMolecules([
+      { id: 5, name: 'C60', structureFile: 'c60.xyz', atomCount: 60, atomOffset: 0 },
+    ]);
+    const r = mockRenderer(new THREE.Vector3(1, 2, 3));
+    handleCenterObject(r);
+    expect(r.animateToFocusedObject).toHaveBeenCalled();
+    expect(useAppStore.getState().lastFocusedMoleculeId).toBe(5);
+  });
+});
 
 describe('ensureFollowTarget contract', () => {
   beforeEach(() => {

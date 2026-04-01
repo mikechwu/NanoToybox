@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import React from 'react';
-import { render, cleanup, fireEvent } from '@testing-library/react';
+import { render, cleanup, fireEvent, act } from '@testing-library/react';
 import { useAppStore } from '../../page/js/store/app-store';
 import { CameraControls } from '../../page/js/components/CameraControls';
 
@@ -106,6 +106,77 @@ describe('CameraControls touch hints', () => {
     const { getByLabelText } = render(<CameraControls />);
     const btn = getByLabelText('Following target (tap to stop)');
     expect(btn.querySelector('.camera-action-hint')?.textContent).toBe('Tap to stop');
+  });
+});
+
+// ── Desktop tooltip (ActionHint) presence and interaction ──
+
+describe('CameraControls desktop tooltips', () => {
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('Center button is wrapped with a tooltip anchor', () => {
+    const { getByLabelText } = render(<CameraControls />);
+    const btn = getByLabelText('Center Object');
+    const anchor = btn.closest('.timeline-hint-anchor');
+    expect(anchor).not.toBeNull();
+  });
+
+  it('Follow button is wrapped with a tooltip anchor', () => {
+    const { getByLabelText } = render(<CameraControls />);
+    const btn = getByLabelText('Follow');
+    const anchor = btn.closest('.timeline-hint-anchor');
+    expect(anchor).not.toBeNull();
+  });
+
+  it('Center tooltip has descriptive text', () => {
+    const { container } = render(<CameraControls />);
+    const tooltips = container.querySelectorAll('[role="tooltip"]');
+    const texts = Array.from(tooltips).map(t => t.textContent);
+    expect(texts.some(t => t?.includes('Frame the current molecule'))).toBe(true);
+  });
+
+  it('Follow tooltip has descriptive text', () => {
+    const { container } = render(<CameraControls />);
+    const tooltips = container.querySelectorAll('[role="tooltip"]');
+    const texts = Array.from(tooltips).map(t => t.textContent);
+    expect(texts.some(t => t?.includes('Keep the current molecule centered'))).toBe(true);
+  });
+
+  it('no title attributes on Center/Follow (tooltip replaces them)', () => {
+    const { getByLabelText } = render(<CameraControls />);
+    expect(getByLabelText('Center Object').getAttribute('title')).toBeNull();
+    expect(getByLabelText('Follow').getAttribute('title')).toBeNull();
+  });
+
+  it('hover on Center anchor shows tooltip (visible class)', async () => {
+    vi.useFakeTimers();
+    const { getByLabelText } = render(<CameraControls />);
+    const anchor = getByLabelText('Center Object').closest('.timeline-hint-anchor')!;
+    fireEvent.mouseEnter(anchor);
+    act(() => { vi.advanceTimersByTime(150); }); // past HINT_DELAY_MS (130)
+    const tooltip = anchor.querySelector('[role="tooltip"]');
+    expect(tooltip?.classList.contains('timeline-hint--visible')).toBe(true);
+    fireEvent.mouseLeave(anchor);
+    expect(tooltip?.classList.contains('timeline-hint--visible')).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it('focus on Follow anchor shows tooltip, blur hides it', async () => {
+    vi.useFakeTimers();
+    const { getByLabelText } = render(<CameraControls />);
+    const anchor = getByLabelText('Follow').closest('.timeline-hint-anchor')!;
+    fireEvent.focus(anchor);
+    act(() => { vi.advanceTimersByTime(150); });
+    const tooltip = anchor.querySelector('[role="tooltip"]');
+    expect(tooltip?.classList.contains('timeline-hint--visible')).toBe(true);
+    fireEvent.blur(anchor);
+    expect(tooltip?.classList.contains('timeline-hint--visible')).toBe(false);
+    vi.useRealTimers();
   });
 });
 

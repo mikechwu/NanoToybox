@@ -20,10 +20,12 @@
 import type * as THREE from 'three';
 import { useAppStore, type MoleculeMetadata } from '../store/app-store';
 
-/** Minimal renderer surface needed for focus operations. */
+/** Minimal renderer surface needed for focus operations.
+ *  All position queries are display-aware: they resolve from the currently
+ *  displayed frame (live or review) via the renderer's display-source state. */
 export interface FocusRendererSurface {
-  getMoleculeCentroid(atomOffset: number, atomCount: number): THREE.Vector3 | null;
-  getMoleculeBounds(atomOffset: number, atomCount: number): { center: THREE.Vector3; radius: number } | null;
+  getDisplayedMoleculeCentroid(atomOffset: number, atomCount: number): THREE.Vector3 | null;
+  getDisplayedMoleculeBounds(atomOffset: number, atomCount: number): { center: THREE.Vector3; radius: number } | null;
   setCameraFocusTarget(target: THREE.Vector3): void;
   animateToFocusedObject(opts?: { levelUp?: boolean; onComplete?: () => void }): void;
   camera: { position: THREE.Vector3 };
@@ -50,29 +52,29 @@ export function resolveReturnTarget(
   const store = useAppStore.getState();
   const molecules = store.molecules;
 
-  // Priority 1: valid last-focused molecule
+  // Priority 1: valid last-focused molecule (display-aware)
   if (store.lastFocusedMoleculeId !== null) {
     const mol = molecules.find(m => m.id === store.lastFocusedMoleculeId);
     if (mol) {
-      const bounds = renderer.getMoleculeBounds(mol.atomOffset, mol.atomCount);
+      const bounds = renderer.getDisplayedMoleculeBounds(mol.atomOffset, mol.atomCount);
       if (bounds) {
         return { kind: 'molecule', position: bounds.center, radius: bounds.radius, moleculeId: mol.id, guardrailEligible: true };
       }
     }
   }
 
-  // Priority 2: nearest molecule to camera
+  // Priority 2: nearest molecule to camera (display-aware)
   if (molecules.length > 0) {
     let bestMol = molecules[0];
     let bestDist = Infinity;
     const camPos = renderer.camera.position;
     for (const mol of molecules) {
-      const c = renderer.getMoleculeCentroid(mol.atomOffset, mol.atomCount);
+      const c = renderer.getDisplayedMoleculeCentroid(mol.atomOffset, mol.atomCount);
       if (!c) continue;
       const d = camPos.distanceToSquared(c);
       if (d < bestDist) { bestDist = d; bestMol = mol; }
     }
-    const bounds = renderer.getMoleculeBounds(bestMol.atomOffset, bestMol.atomCount);
+    const bounds = renderer.getDisplayedMoleculeBounds(bestMol.atomOffset, bestMol.atomCount);
     if (bounds) {
       return { kind: 'molecule', position: bounds.center, radius: bounds.radius, moleculeId: bestMol.id, guardrailEligible: true };
     }
@@ -116,7 +118,7 @@ export function focusNewestPlacedMolecule(
   const molecules = useAppStore.getState().molecules;
   if (molecules.length === 0) return;
   const newest = molecules[molecules.length - 1];
-  const centroid = renderer.getMoleculeCentroid(newest.atomOffset, newest.atomCount);
+  const centroid = renderer.getDisplayedMoleculeCentroid(newest.atomOffset, newest.atomCount);
   if (!centroid) return;
   useAppStore.getState().setLastFocusedMoleculeId(newest.id);
   renderer.setCameraFocusTarget(centroid);

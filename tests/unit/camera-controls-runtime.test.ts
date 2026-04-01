@@ -33,13 +33,13 @@ describe('overlay-runtime.close() clears transient UI', () => {
 import { handleCenterObject } from '../../page/js/runtime/focus-runtime';
 
 describe('Center Object (handleCenterObject from focus-runtime)', () => {
-  let mockRenderer: { getMoleculeCentroid: any; getMoleculeBounds: any; setCameraFocusTarget: any; animateToFocusedObject: any; camera: any; getSceneRadius: () => number };
+  let mockRenderer: any;
 
   beforeEach(() => {
     useAppStore.getState().resetTransientState();
     mockRenderer = {
-      getMoleculeCentroid: vi.fn(() => new THREE.Vector3(1, 2, 3)),
-      getMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(1, 2, 3), radius: 3.5 })),
+      getDisplayedMoleculeCentroid: vi.fn(() => new THREE.Vector3(1, 2, 3)),
+      getDisplayedMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(1, 2, 3), radius: 3.5 })),
       setCameraFocusTarget: vi.fn(),
       animateToFocusedObject: vi.fn(),
       camera: { position: new THREE.Vector3(0, 0, 15) },

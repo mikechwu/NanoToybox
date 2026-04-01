@@ -1,13 +1,10 @@
 /**
  * CameraControls — Object View panel with Center and Follow actions.
  *
- * Phase 1: Replaces old Orbit chip + ? + ⊕ cluster with explicit buttons.
  * Positioned by CSS custom properties set by overlay-layout.ts.
+ * Desktop: hover/focus tooltips via ActionHint.
+ * Mobile: inline .camera-action-hint secondary text.
  *
- * - Center: one-shot camera animate to best focus target
- * - Follow: toggle orbit-follow tracking on/off
- *
- * No onboarding or help surface — guidance lives in Settings > Controls.
  * Store is sole authority for orbitFollowEnabled.
  */
 
@@ -15,6 +12,7 @@ import React, { useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 import { CONFIG } from '../config';
 import { IconCenter, IconFollow, IconFreeze, IconReturn } from './Icons';
+import { ActionHint } from './ActionHint';
 
 export function CameraControls() {
   const cameraMode = useAppStore((s) => s.cameraMode);
@@ -23,18 +21,15 @@ export function CameraControls() {
   const farDrift = useAppStore((s) => s.farDrift);
   const cameraCallbacks = useAppStore((s) => s.cameraCallbacks);
 
-  // Center Object: dispatched through registered callback
   const handleCenterObject = useCallback(() => {
     cameraCallbacks?.onCenterObject?.();
   }, [cameraCallbacks]);
 
-  // Follow toggle: resolve target first, then enable
   const handleFollowToggle = useCallback(() => {
     const store = useAppStore.getState();
     if (store.orbitFollowEnabled) {
       store.setOrbitFollowEnabled(false);
     } else {
-      // ensureFollowTarget resolves a target and centers; only enable if successful
       const resolved = cameraCallbacks?.onEnableFollow?.() ?? false;
       if (resolved) {
         store.setOrbitFollowEnabled(true);
@@ -42,11 +37,14 @@ export function CameraControls() {
     }
   }, [cameraCallbacks]);
 
-  // Mode toggle: only shown when Free-Look feature flag is enabled
   const handleModeToggle = useCallback(() => {
     const store = useAppStore.getState();
     store.setCameraMode(store.cameraMode === 'orbit' ? 'freelook' : 'orbit');
   }, []);
+
+  const followHintText = orbitFollowEnabled
+    ? 'Following current molecule. Tap to stop.'
+    : 'Keep the current molecule centered as it moves.';
 
   return (
     <div className="camera-controls" data-camera-controls>
@@ -64,30 +62,32 @@ export function CameraControls() {
       {/* Orbit mode: Center + Follow */}
       {cameraMode === 'orbit' && (
         <>
-          <button
-            className="camera-action"
-            onClick={handleCenterObject}
-            aria-label="Center Object"
-            title="Frame focused molecule"
-          >
-            <IconCenter />
-            <span className="camera-action-label">
-              Center
-              <span className="camera-action-hint">Frame molecule</span>
-            </span>
-          </button>
-          <button
-            className={`camera-action${orbitFollowEnabled ? ' camera-action-active' : ''}`}
-            onClick={handleFollowToggle}
-            aria-label={orbitFollowEnabled ? 'Following target (tap to stop)' : 'Follow'}
-            title={orbitFollowEnabled ? 'Tap to stop tracking' : 'Track focused molecule'}
-          >
-            <IconFollow />
-            <span className="camera-action-label">
-              Follow
-              <span className="camera-action-hint">{orbitFollowEnabled ? 'Tap to stop' : 'Track molecule'}</span>
-            </span>
-          </button>
+          <ActionHint text="Frame the current molecule once." placement="right">
+            <button
+              className="camera-action"
+              onClick={handleCenterObject}
+              aria-label="Center Object"
+            >
+              <IconCenter />
+              <span className="camera-action-label">
+                Center
+                <span className="camera-action-hint">Frame molecule</span>
+              </span>
+            </button>
+          </ActionHint>
+          <ActionHint text={followHintText} placement="right">
+            <button
+              className={`camera-action${orbitFollowEnabled ? ' camera-action-active' : ''}`}
+              onClick={handleFollowToggle}
+              aria-label={orbitFollowEnabled ? 'Following target (tap to stop)' : 'Follow'}
+            >
+              <IconFollow />
+              <span className="camera-action-label">
+                Follow
+                <span className="camera-action-hint">{orbitFollowEnabled ? 'Tap to stop' : 'Track molecule'}</span>
+              </span>
+            </button>
+          </ActionHint>
         </>
       )}
 

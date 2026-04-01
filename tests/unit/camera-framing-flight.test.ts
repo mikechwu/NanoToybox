@@ -242,11 +242,8 @@ describe('flight physics', () => {
 describe('resolveReturnTarget', () => {
   function mockRendererForResolve() {
     return {
-      getMoleculeCentroid: vi.fn(() => new THREE.Vector3(5, 5, 5)),
-      getMoleculeBounds: vi.fn((offset: number, count: number) => ({
-        center: new THREE.Vector3(5, 5, 5),
-        radius: 3.5,
-      })),
+      getDisplayedMoleculeCentroid: vi.fn(() => new THREE.Vector3(5, 5, 5)),
+      getDisplayedMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(5, 5, 5), radius: 3.5 })),
       setCameraFocusTarget: vi.fn(),
       animateToFocusedObject: vi.fn(),
       camera: { position: new THREE.Vector3(0, 0, 15) },
@@ -492,13 +489,13 @@ describe('focus helper ordering (store ID before setCameraFocusTarget)', () => {
     useAppStore.getState().setLastFocusedMoleculeId(1);
 
     const r = {
-      getMoleculeCentroid: vi.fn(() => new THREE.Vector3(5, 5, 5)),
-      getMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(5, 5, 5), radius: 5 })),
+      getDisplayedMoleculeCentroid: vi.fn(() => new THREE.Vector3(5, 5, 5)),
+      getDisplayedMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(5, 5, 5), radius: 5 })),
       setCameraFocusTarget: vi.fn(),
       animateToFocusedObject: vi.fn(),
       camera: { position: new THREE.Vector3(0, 0, 15) },
       getSceneRadius: () => 10,
-    };
+    } as any;
 
     // Focus atom 70 (belongs to molecule 2, offset 60, count 100)
     focusMoleculeByAtom(70, r);

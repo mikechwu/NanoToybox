@@ -768,7 +768,8 @@ fieldset.segmented {
   .timeline-row1 { grid-template-columns: 64px 50px 1fr; }
   .timeline-row2 { flex-wrap: wrap; justify-content: center; }
 }
-/* ── Timeline action hints (hover/focus tooltips) ── */
+/* ── Action hints — shared hover/focus tooltips (used by TimelineBar + CameraControls) ──
+   Class family .timeline-hint-* is retained as shared infrastructure despite the name. */
 .timeline-hint-anchor { position: relative; display: inline-flex; }
 .timeline-hint {
   position: absolute;
@@ -817,6 +818,23 @@ fieldset.segmented {
   left: auto;
   right: 12px;
   transform: translateY(-50%) rotate(45deg);
+}
+/* Right-side placement for left-edge controls (Object View panel) */
+.timeline-hint--right {
+  bottom: auto;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-4px);
+  min-width: 120px;
+}
+.timeline-hint--right.timeline-hint--visible {
+  transform: translateY(-50%) translateX(0);
+}
+.timeline-hint--right .timeline-hint-arrow {
+  top: 50%;
+  left: auto;
+  right: 100%;
+  transform: translateY(-50%) translateX(50%) rotate(45deg);
 }
 @media (hover: none), (pointer: coarse) {
   .timeline-hint { display: none; }
