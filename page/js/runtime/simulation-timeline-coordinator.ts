@@ -47,7 +47,9 @@ export function createTimelineCoordinator(deps: TimelineCoordinatorDeps): Timeli
     if (frame.n !== renderer.getAtomCount()) {
       renderer.setAtomCount(frame.n);
     }
-    renderer.updateReviewFrame(frame.positions, frame.n);
+    // Resolve historical bond topology for the reviewed time (empty = no bonds visible)
+    const reviewBonds = deps.timeline.getReviewBondTopology(frame.timePs) ?? [];
+    renderer.updateReviewFrame(frame.positions, frame.n, reviewBonds);
     deps.forceRender();
   }
 

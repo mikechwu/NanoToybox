@@ -588,10 +588,10 @@ export class Renderer {
    * bond visuals from the given positions WITHOUT touching physics.pos or any
    * physics state. Used exclusively by the timeline review path.
    *
-   * Bonds are rendered from the physics topology (getBonds) but positioned
-   * using the supplied review positions, not physics.pos.
+   * Bonds are rendered from explicit historical topology (reviewBonds) supplied
+   * by the coordinator, not from live physics.getBonds().
    */
-  updateReviewFrame(positions: Float64Array, n: number): void {
+  updateReviewFrame(positions: Float64Array, n: number, reviewBonds: [number, number, number][] = []): void {
     // Cache review positions for display-aware queries (before mesh guard)
     this._displaySource = 'review';
     this._reviewPositions = positions;
@@ -608,12 +608,9 @@ export class Renderer {
     this._instancedAtoms.count = count;
     this._instancedAtoms.instanceMatrix.needsUpdate = true;
 
-    // Render bonds from topology + review positions (no physics.pos write)
-    if (this._physicsRef?.getBonds) {
-      const bonds = this._physicsRef.getBonds();
-      this._ensureBondCapacity(bonds.length);
-      this._updateBondTransformsInstanced(bonds, positions, null);
-    }
+    // Render bonds from explicit historical review topology only — never from live physics
+    this._ensureBondCapacity(reviewBonds.length);
+    this._updateBondTransformsInstanced(reviewBonds, positions, null);
 
     // Suppress highlights — review is not interactive
     if (this._highlightMesh) this._highlightMesh.visible = false;

@@ -150,9 +150,14 @@ export interface SimulationTimeline {
   returnToLive(): void;
 
   // ── Restart ──
-  /** Find the best restart source at or before the given time.
-   *  Prefers restart frames (positions + velocities) over sparse checkpoints. */
+  /** Find the nearest historical source at or before the given time.
+   *  Chooses whichever (restart frame or checkpoint) is closer to timePs.
+   *  Restart frames are denser (10 Hz) so they typically win over sparse checkpoints (1/sec). */
   findRestartSource(timePs: number): { kind: 'restartFrame'; frame: TimelineRestartFrame } | { kind: 'checkpoint'; checkpoint: TimelineCheckpoint } | null;
+  /** Look up historical bond topology for a reviewed time.
+   *  Returns bonds from the nearest restart frame or checkpoint at or before timePs.
+   *  Returns null if no historical source exists. */
+  getReviewBondTopology(timePs: number): [number, number, number][] | null;
   /** Find the nearest full checkpoint at or before the given time (for bond topology). */
   findCheckpointAtOrBefore(timePs: number): TimelineCheckpoint | null;
   findFrameAtOrBefore(timePs: number): TimelineFrame | null;
@@ -288,7 +293,7 @@ export function createSimulationTimeline(
   // ── Restart ──
 
   function findRestartSource(timePs: number): { kind: 'restartFrame'; frame: TimelineRestartFrame } | { kind: 'checkpoint'; checkpoint: TimelineCheckpoint } | null {
-    // Prefer restart frame (positions + velocities, denser) over sparse checkpoint
+    // Choose whichever source is nearest to timePs (restart frames are denser, so they typically win)
     const rf = _bsearchAtOrBefore(_restartFrames, timePs);
     const cp = _bsearchAtOrBefore(_checkpoints, timePs);
 
@@ -322,6 +327,13 @@ export function createSimulationTimeline(
       config: cp.config,
       interaction: cp.interaction, boundary: cp.boundary,
     };
+  }
+
+  function getReviewBondTopology(timePs: number): [number, number, number][] | null {
+    const source = findRestartSource(timePs);
+    if (!source) return null;
+    if (source.kind === 'restartFrame') return source.frame.bonds;
+    return source.checkpoint.physics.bonds as [number, number, number][];
   }
 
   // ── State ──
@@ -393,6 +405,7 @@ export function createSimulationTimeline(
     findCheckpointAtOrBefore: (timePs) => _bsearchAtOrBefore(_checkpoints, timePs),
     findFrameAtOrBefore: (timePs) => _bsearchAtOrBefore(_frames, timePs),
     getRestartState,
+    getReviewBondTopology,
     truncateAfter,
     getState,
     getCurrentReviewFrame,
