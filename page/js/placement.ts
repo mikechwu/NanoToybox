@@ -13,6 +13,7 @@ import type { Renderer } from './renderer';
 import type { PhysicsEngine } from './physics';
 import type { StateMachine } from './state-machine';
 import type { InputManager } from './input';
+import { solvePlacement, type SceneAtom } from './runtime/placement-solver';
 
 /** A parsed atom from an XYZ structure file. */
 export interface StructureAtom {
@@ -175,21 +176,44 @@ export class PlacementController {
         if (d > pR) pR = d;
       });
 
-      // Choose placement offset via tangent placement
-      const offset = this._computeTangentPlacement(pR);
-      this._state.previewOffset = offset;
-      this._state.lastOffset = offset;
-
-      // Set placement plane
+      // Solve placement via rigid-transform solver
       const camState = this._renderer.getCameraState();
+      const sceneMols = this._commands.getSceneMolecules();
+      const sceneAtoms: SceneAtom[] = [];
+      const physics = this._physics;
+      for (let i = 0; i < physics.n; i++) {
+        sceneAtoms.push({ x: physics.pos[i * 3], y: physics.pos[i * 3 + 1], z: physics.pos[i * 3 + 2] });
+      }
+
+      // Find target molecule (nearest to viewport center)
+      let targetCOM: THREE.Vector3 | undefined;
+      let targetRadius: number | undefined;
+      if (sceneMols.length > 0) {
+        const target = this._findTargetMolecule();
+        if (target) {
+          const com = this._getMoleculeCOM(target);
+          targetCOM = new THREE.Vector3(com[0], com[1], com[2]);
+          targetRadius = this._getMoleculeRadius(target, com);
+        }
+      }
+
+      const solverResult = solvePlacement(atoms, sceneAtoms, physics.n, camState, targetCOM, targetRadius);
+      const offset = solverResult.offset;
+
+      // Store pre-transformed atoms (world-space from solver) for preview + commit parity
+      this._state.previewAtoms = solverResult.transformedAtoms as StructureAtom[];
+      this._state.previewOffset = [0, 0, 0]; // atoms already at world position
+      this._state.lastOffset = [0, 0, 0];
+
+      // Set placement plane at the solver's computed center
       const camDir = new THREE.Vector3(...camState.direction);
       this._state.placementPlane = {
         normal: camDir,
         point: new THREE.Vector3(offset[0], offset[1], offset[2]),
       };
 
-      // Show preview
-      this._renderer.showPreview(atoms, bonds, offset);
+      // Show preview: transformed atoms are already in world space, group at origin
+      this._renderer.showPreview(solverResult.transformedAtoms, bonds, [0, 0, 0]);
 
       // Show placement UI
       this._commands.setDockPlacementMode(true);
@@ -227,13 +251,26 @@ export class PlacementController {
 
     // Capture data before clearing state — commitMolecule may throw
     const shouldCommit = commit && this._state.previewAtoms;
-    const commitData = shouldCommit ? {
-      file: this._state.structureFile,
-      name: this._state.structureName,
-      atoms: this._state.previewAtoms,
-      bonds: this._state.previewBonds,
-      offset: [...this._state.previewOffset],
-    } : null;
+    // Atoms are pre-transformed to world space by solver. Drag offset (previewOffset)
+    // is the group displacement from the user's drag. Bake drag offset into atom
+    // positions so commit receives final world-space atoms with zero physics offset.
+    let commitData: { file: string | null; name: string | null; atoms: StructureAtom[]; bonds: StructureBond[] | null; offset: number[] } | null = null;
+    if (shouldCommit && this._state.previewAtoms) {
+      const dragOff = this._state.previewOffset;
+      const worldAtoms = this._state.previewAtoms.map(a => ({
+        ...a,
+        x: a.x + dragOff[0],
+        y: a.y + dragOff[1],
+        z: a.z + dragOff[2],
+      }));
+      commitData = {
+        file: this._state.structureFile,
+        name: this._state.structureName,
+        atoms: worldAtoms,
+        bonds: this._state.previewBonds,
+        offset: [0, 0, 0], // atoms already in final world position
+      };
+    }
 
     // Helper: finalize placement exit (called after commit succeeds or on cancel).
     // Tears down listeners + bumps commit generation to invalidate pending async commits.
@@ -299,96 +336,6 @@ export class PlacementController {
   invalidatePendingLoads() {
     this._generation++;
     this._loading = false;
-  }
-
-  // --- Tangent placement algorithm ---
-  _computeTangentPlacement(previewRadius) {
-    // Freeze tangent recomputation when snapshot data is stale
-    if (!this._commands.isSnapshotFresh()) {
-      return this._state.lastOffset || [0, 0, 0];
-    }
-
-    const molecules = this._commands.getSceneMolecules();
-    const camState = this._renderer.getCameraState();
-    const camPos = new THREE.Vector3(...camState.position);
-    const camDir = new THREE.Vector3(...camState.direction);
-
-    if (molecules.length === 0) {
-      // Empty scene: place at center of current viewport at a default depth.
-      const defaultDepth = previewRadius * 2.5 + 5;
-      return [
-        camPos.x + camDir.x * defaultDepth,
-        camPos.y + camDir.y * defaultDepth,
-        camPos.z + camDir.z * defaultDepth,
-      ];
-    }
-
-    // Find target molecule: nearest projected COM to viewport center
-    const target = this._findTargetMolecule();
-    const tCOM = this._getMoleculeCOM(target);
-    const tR = this._getMoleculeRadius(target, tCOM);
-
-    // Gap: adaptive, proportional to smaller radius
-    const gap = Math.max(1.0, 0.3 * Math.min(tR, previewRadius));
-    const tangentDist = tR + previewRadius + gap;
-
-    // Camera-plane directions
-    const camRight = new THREE.Vector3();
-    const camUp = new THREE.Vector3(...camState.up);
-    camRight.crossVectors(camDir, camUp).normalize();
-    camUp.crossVectors(camRight, camDir).normalize();
-
-    // 8 candidate directions
-    const dirs = [
-      camRight, camRight.clone().negate(),
-      camUp, camUp.clone().negate(),
-      camRight.clone().add(camUp).normalize(),
-      camRight.clone().negate().add(camUp).normalize(),
-      camRight.clone().add(camUp.clone().negate()).normalize(),
-      camRight.clone().negate().add(camUp.clone().negate()).normalize(),
-    ];
-
-    // Score each candidate
-    let bestDir = dirs[0];
-    let bestScore = Infinity;
-    for (const d of dirs) {
-      const cx = tCOM[0] + d.x * tangentDist;
-      const cy = tCOM[1] + d.y * tangentDist;
-      const cz = tCOM[2] + d.z * tangentDist;
-
-      // Project to NDC for viewport checks
-      const proj = this._renderer.projectToNDC([cx, cy, cz]);
-      let score = 0;
-
-      // Viewport margin penalty
-      const margin = 0.8;
-      if (Math.abs(proj[0]) > margin) score += (Math.abs(proj[0]) - margin) * 10;
-      if (Math.abs(proj[1]) > margin) score += (Math.abs(proj[1]) - margin) * 10;
-
-      // Overlap penalty with existing molecules
-      for (const mol of molecules) {
-        const mCOM = this._getMoleculeCOM(mol);
-        const mR = this._getMoleculeRadius(mol, mCOM);
-        const dx = cx - mCOM[0], dy = cy - mCOM[1], dz = cz - mCOM[2];
-        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        const overlap = (mR + previewRadius) - dist;
-        if (overlap > 0) score += overlap * 5;
-      }
-
-      // Directional bias: prefer right/left
-      if (d === dirs[0] || d === dirs[1]) score -= 0.1;
-
-      if (score < bestScore) {
-        bestScore = score;
-        bestDir = d;
-      }
-    }
-
-    return [
-      tCOM[0] + bestDir.x * tangentDist,
-      tCOM[1] + bestDir.y * tangentDist,
-      tCOM[2] + bestDir.z * tangentDist,
-    ];
   }
 
   _findTargetMolecule() {

@@ -197,3 +197,56 @@ Key strategic and technical decisions made during development, with rationale.
 **Rationale:** Physics applies force to the full connected component in Move and Rotate modes. Highlighting only the picked atom made the interaction appear narrower than it actually was. The resolver (`interaction-highlight-runtime.ts`) maps interaction state + session mode to the correct highlight target using live `physics.componentId` / `physics.components`. The renderer has separate interaction and panel highlight channels so bonded-group panel selection is not clobbered. Interaction highlight takes visual priority; panel highlight restores automatically when interaction ends. Review mode clears both channels.
 
 **Evidence:** `page/js/runtime/interaction-highlight-runtime.ts`, `page/js/renderer.ts` (setInteractionHighlightedAtoms, clearInteractionHighlight, updateFeedback with sessionMode), `page/js/main.ts` (resolveInteractionHighlight in frame loop), `tests/unit/interaction-highlight.test.ts`, `tests/unit/renderer-interaction-highlight.test.ts`
+
+## D25: Placement Orientation — Camera-First Vertical-Preferred Policy
+
+**Decision:** `chooseCameraFamily()` uses a camera-first vertical-preferred policy as the base orientation preference. It prefers `camera.up` unless the molecule's primary axis has a vertical fraction below 0.25 (`VERT_READABLE_THRESHOLD`), in which case it falls to `camera.right`.
+
+**Rationale:** Molecules displayed upright relative to the user's viewport are the most immediately readable default. The threshold prevents degenerate near-horizontal alignments from being forced vertical — when m1 is nearly parallel to the camera's right axis, the vertical family would produce a foreshortened, unreadable orientation. If the primary axis is foreshortened in the camera plane entirely (`PROJ_WEAK`), an m2 fallback is attempted before defaulting to vertical.
+
+**Evidence:** `page/js/runtime/placement-solver.ts` (chooseCameraFamily, VERT_READABLE_THRESHOLD = 0.25)
+
+## D26: Geometry-Aware Family Selection as Final Runtime Arbiter
+
+**Decision:** `selectOrientationByGeometry()` is the final runtime arbiter for orientation family. It evaluates both candidate families (up and right) by projecting atoms under each candidate rotation and scoring projected readability (extent along the target axis). Vertical wins ties — the right family must score more than `GEOMETRY_FAMILY_SWITCH_MARGIN` (20%) higher than up to override the vertical preference.
+
+**Rationale:** `chooseCameraFamily()` operates on the molecule's intrinsic frame axes and the camera, without seeing how the actual atom cloud appears after rotation. The geometry-aware selector closes this gap by scoring what the user will actually see. Both candidate rotations are fully built and projected before comparison, so the decision is grounded in observable readability, not axis algebra alone. The 20% margin prevents jittery family flipping when both orientations are similarly readable.
+
+**Evidence:** `page/js/runtime/placement-solver.ts` (selectOrientationByGeometry, GEOMETRY_FAMILY_SWITCH_MARGIN = 0.2, scoreProjectedReadability)
+
+## D27: Perspective-Projected 2D PCA Geometry Refinement
+
+**Decision:** After family selection, `refineOrientationFromGeometry()` applies a corrective twist around `camera.forward` using perspective-projected 2D PCA of the atom cloud. The refinement is adaptive (up to 2 convergence passes) with correction clamped to `BASE_GEOMETRY_CORRECTION` (~6.9 deg), doubled for high-anisotropy shapes (ratio > 3). Convergence exits early when residual error drops below 0.17 deg.
+
+**Rationale:** The frame-alignment rotation places the molecule's intrinsic axis near the policy target, but residual twist can leave the visible silhouette rotated away from the intended screen-space direction. Perspective projection (not orthographic) is used so the refinement optimizes exactly what the user sees. The clamp prevents over-rotation from noisy PCA on near-circular projections. Two passes handle cases where the first correction shifts the silhouette enough to reveal a second-order error.
+
+**Evidence:** `page/js/runtime/placement-solver.ts` (refineOrientationFromGeometry, computeGeometryError, projected2DPCA, BASE_GEOMETRY_CORRECTION = 0.12)
+
+## D28: Scored Regime Classification (Planarity Wins Ties)
+
+**Decision:** `classifyFrameMode()` uses scored comparison of planarity (mid/minor eigenvalue ratio) and elongation (major/mid eigenvalue ratio). Both scores are normalized against their respective thresholds. When both exceed 1.0, the higher score wins, with planarity winning ties.
+
+**Rationale:** The original threshold-order classification checked elongation first, causing thin sheets like graphene to misroute through the line-dominant solver when their major/mid ratio happened to exceed the elongation threshold. Scored comparison fixes this: graphene's mid/minor ratio (planarity) is much stronger than its major/mid ratio (elongation), so it correctly routes through the plane-facing solver. Planarity wins ties because thin sheets benefit more from the plane-facing solver than near-round rods benefit from the line solver.
+
+**Evidence:** `page/js/runtime/placement-solver.ts` (classifyFrameMode, lineScore, planeScore)
+
+## D29: No Vertical Bias — Purely Readability-Driven Solver
+
+**Decision:** The placement solver contains no vertical styling bias or override. Orientation is determined entirely by readability scoring (D25–D28). There is no additive score bonus, no post-hoc rotation toward vertical, and no user-facing "prefer upright" toggle.
+
+**Rationale:** An earlier iteration applied a vertical bias to make molecules "look nicer" by tilting them upright regardless of geometry. This created incorrect orientations for molecules whose readable axis was horizontal in the camera frame (e.g., a CNT viewed from the side). The vertical preference in `chooseCameraFamily()` (D25) provides a soft default, but it is overridable by geometry scoring (D26), keeping the solver purely readability-driven.
+
+**Evidence:** `page/js/runtime/placement-solver.ts` (no VERTICAL_BIAS constant, no bias term in scoring)
+
+## D30: Placement Test Suite — 3-Layer Acceptance Architecture
+
+**Decision:** The placement solver test suite uses a 3-layer acceptance architecture: [policy conformance], [external oracle], [observable behavior].
+
+**Rationale:** Each layer tests a different contract:
+- **[policy conformance]** — proves the solver matches `chooseCameraFamily()`'s declared family for each frame mode and camera angle. These tests break if the policy rule changes, acting as a change-detection gate.
+- **[external oracle]** — hand-written canonical backstop with independently computed expected orientations. These are immune to refactoring because they encode the "right answer" from first principles, not from the code's own logic.
+- **[observable behavior]** — policy-independent user-facing sanity: readability (projected extent), stability (determinism across repeated calls), and plane-shape correctness. These survive policy changes as long as the user-visible result remains acceptable.
+
+This layering ensures that a policy change triggers conformance failures (intentional), oracle tests catch regression in canonical cases, and behavior tests confirm the user experience is preserved regardless of internal refactoring.
+
+**Evidence:** `tests/unit/placement-solver.test.ts` ([policy conformance], [external oracle], [observable behavior] describe blocks)

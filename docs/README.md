@@ -68,7 +68,7 @@ Browser                          Web Worker
 │  StatusController    │          └──────────────────────┘
 │  (hint-only)         │
 │                      │
-│  runtime/ (14 modules):│
+│  runtime/ (26 modules):│
 │  ├── SceneRuntime     │
 │  ├── WorkerLifecycle  │
 │  ├── SnapshotReconc.  │
@@ -79,7 +79,15 @@ Browser                          Web Worker
 │  ├── UIBindings       │
 │  ├── AtomSource       │
 │  ├── FocusRuntime     │
-│  └── Onboarding       │
+│  ├── Onboarding       │
+│  ├── BondedGroup×3    │
+│  ├── Timeline×5       │
+│  ├── RestartAdapter   │
+│  ├── ReconciledSteps  │
+│  ├── OrbitFollow      │
+│  ├── DragTargetRefr.  │
+│  ├── InteractionHi.   │
+│  └── PlacementSolver  │
 └─────────────────────┘
 ```
 
@@ -89,7 +97,7 @@ Browser                          Web Worker
 - **Worker-first physics** — simulation runs off-thread via Web Worker with snapshot protocol. Automatic fallback to sync-mode if worker fails (5s warning, 15s fatal).
 - **Dual Tersoff kernels** — JS fallback + C/Wasm kernel (compiled with Emscripten). Wasm enabled by default, ~11% faster. Force via `?kernel=js` for debugging.
 - **Momentum-conserving force clamp** — global scaling (not per-atom) preserves Newton's 3rd law and force field shape. Interaction forces added after clamp.
-- **Runtime module extraction** — main.ts delegates to 14 focused modules in `page/js/runtime/` (scene, worker lifecycle, snapshot reconciler, overlay layout/runtime, interaction dispatch, input bindings, UI bindings, atom source, focus resolution, onboarding, bonded-group projection, bonded-group highlight, bonded-group coordinator). main.ts is composition-root-only (~1150 lines).
+- **Runtime module extraction** — main.ts delegates to 26 focused modules in `page/js/runtime/` (scene, worker lifecycle, snapshot reconciler, overlay layout/runtime, interaction dispatch, input bindings, UI bindings, atom source, focus resolution, onboarding, bonded-groups, timeline, restart, reconciled-steps, orbit-follow-update, drag-target-refresh, interaction-highlight, placement-solver). main.ts is composition-root-only (~1150 lines).
 
 ## Current Status
 

@@ -70,7 +70,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - Dock + sheet navigation — responsive two-tier UI with React components (`page/js/components/`)
 - React UI migration — primary surfaces (DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar) are React-authoritative with Zustand store. Supporting subcomponents: Segmented, Icons, TimelineActionHint
 - Web Worker physics — off-thread simulation via `page/js/simulation-worker.ts` with automatic JS fallback
-- Runtime module extraction — 25 modules in `page/js/runtime/` (summary: scene, worker, snapshot, overlay, interaction, input, UI bindings, focus, onboarding, bonded-groups, timeline, restart, reconciled-steps, orbit-follow-update, drag-target-refresh, interaction-highlight); see `docs/architecture.md` for the full module-by-module inventory. main.ts reduced to composition-root-only
+- Runtime module extraction — 26 modules in `page/js/runtime/` (summary: scene, worker, snapshot, overlay, interaction, input, UI bindings, focus, onboarding, bonded-groups, timeline, restart, reconciled-steps, orbit-follow-update, drag-target-refresh, interaction-highlight, placement-solver); see `docs/architecture.md` for the full module-by-module inventory. main.ts reduced to composition-root-only
 - Object View panel — Center + Follow buttons with inline SVG icons, positioned below status block
 - Page-load onboarding overlay — welcome card with sink-to-Settings animation, page-lifetime dismissal
 
@@ -84,6 +84,24 @@ See `docs/architecture.md` for the full module map and state ownership model.
 - **New globals require teardown.** Register via `addGlobalListener()` in main.ts.
 - **Do not re-grow main.ts.** Extract new runtime logic into `page/js/runtime/` and new UI surfaces into `page/js/components/`.
 - **State writes go through authoritative writers.** See state ownership table in architecture.md.
+
+### Placement Solver Policy (3-Surface Architecture)
+
+The placement solver (`page/js/runtime/placement-solver.ts`) uses a 3-surface architecture that must be kept in sync. The module header documents this, but the key constraint is:
+
+| Surface | Role |
+|---------|------|
+| `chooseCameraFamily()` | Base policy preference (vertical-first heuristic) |
+| `selectOrientationByGeometry()` | Final runtime arbiter (geometry-scored) |
+| Test layers: `[policy conformance]`, `[external oracle]`, `[observable behavior]` | Layered acceptance tests in `tests/unit/placement-solver.test.ts` |
+
+When changing placement policy:
+
+1. **Update `chooseCameraFamily()` first** — this is the base preference rule.
+2. **Update `[policy conformance]` tests** — these prove the solver matches the current rule, not that the rule is correct.
+3. **Update `[external oracle]` notes/expectations** where applicable — these are hand-written canonical backstops that catch accidental policy drift.
+4. **Review `selectOrientationByGeometry()` comments** if override semantics change — this is the final arbiter and may score candidates differently from the base policy.
+5. **`[observable behavior]` tests are policy-independent** — they check user-facing sanity (readability, stability, plane shape) and should not need updating for most policy changes.
 
 ## Next Steps (Priority Order)
 
@@ -149,7 +167,7 @@ E2E tests inject `?e2e=1` via `gotoApp()` from `tests/e2e/helpers.ts`.
 | E2E test helpers | `tests/e2e/helpers.ts` (gotoApp), `tests/e2e/camera-onboarding.spec.ts` |
 | Bonded clusters (panel + highlight) | `page/js/runtime/bonded-group-runtime.ts`, `page/js/runtime/bonded-group-highlight-runtime.ts`, `page/js/runtime/bonded-group-coordinator.ts`, `page/js/components/BondedGroupsPanel.tsx` |
 | Store callback wiring | `page/js/runtime/ui-bindings.ts`, `page/js/store/app-store.ts` |
-| Scene / placement | `page/js/scene.ts`, `page/js/placement.ts` |
+| Scene / placement | `page/js/scene.ts`, `page/js/placement.ts`, `page/js/runtime/placement-solver.ts`, `tests/unit/placement-solver.test.ts` |
 | Browser physics | `page/js/physics.ts` (JS Tersoff), `sim/wasm/tersoff.c` (Wasm kernel) |
 | Force calculation (Python) | `sim/potentials/tersoff.py`, `tersoff_fast.py` |
 | Running simulations | `sim/integrators/velocity_verlet.py`, `sim/atoms.py` |

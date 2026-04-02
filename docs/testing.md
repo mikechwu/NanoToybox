@@ -149,6 +149,32 @@ npx vitest run tests/unit/simulation-timeline.test.ts
 
 Previously-skipped StatusBar tests have been unskipped and now pass.
 
+### Placement Solver (117 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `placement-solver.test.ts` | 117 | PCA shape classification, camera frame, molecule frame, orientation selection, no-initial-bond feasibility, rigid transform, full solver integration, continuity sweeps, roll stability, 3-layer acceptance gates |
+
+Tests use perspective projection via the shared `projectToScreen()` (matches renderer FOV=50 deg) and 2D PCA via `projected2DPCA()` for stable visible-axis measurement.
+
+Real library structure data is used alongside synthetic shapes: CNT (20 atoms spanning all Y rings from `cnt_5_5_5cells.xyz`) and graphene (18 atoms from `graphene_6x6.xyz`).
+
+#### 3-Layer Acceptance Architecture
+
+The acceptance tests use three intentionally overlapping layers. All three must pass; each catches a different class of regression.
+
+| Layer | What it proves | Failure means |
+|-------|---------------|---------------|
+| **[policy conformance]** | Solver output matches `chooseCameraFamily()` | Implementation disagrees with the current product rule. Does NOT prove the rule itself is correct. |
+| **[external oracle]** | Hand-written canonical backstop with stable expected families | Policy helper or geometry selector changed behavior on a case that was previously validated by hand. NOT derived from policy helpers. |
+| **[observable behavior]** | Policy-independent user-facing sanity: readability ratios, orbit stability, plane projected shape | Preview may look wrong to the user regardless of which family the solver chose. Can detect a bad product rule. |
+
+**[policy conformance]** tests assert the solver's visible long-axis angle matches the family returned by `chooseCameraFamily()`. They prove implementation conformance to the current rule, not product correctness. Covers both line-dominant and plane-dominant regimes across front, side, and oblique views.
+
+**[external oracle]** tests are an independent canonical backstop: a small set of stable hand-written expected families. Currently mostly vertical-family because the scorer architecture (pure target-axis extent) makes stable horizontal line cases rare. This is a known property of the scorer, not a test gap. Failure here warrants investigating whether a policy change was intentional.
+
+**[observable behavior]** tests validate what the user actually sees without referencing any policy helper: readability ratios (visible extent vs 3D extent), orbit stability (angle drift under small camera perturbation), and plane projected shape (2D PCA aspect ratio confirms face-on presentation). These can detect a bad product rule that the other two layers would miss.
+
 ## Frontend Smoke Test
 
 Manual verification checklist for the interactive page (`page/index.html`). Run after any changes to `page/` code.

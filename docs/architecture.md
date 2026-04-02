@@ -76,9 +76,11 @@ NanoToybox/
 │   │   │   ├── reconciled-steps.ts           # Deduplication helper for worker snapshot step counting
 │   │   │   ├── orbit-follow-update.ts        # Per-frame orbit-follow camera tracking from displayed bounds
 │   │   │   ├── drag-target-refresh.ts        # Per-frame drag target reprojection during active interactions
-│   │   │   └── interaction-highlight-runtime.ts # Mode-aware highlight resolver (atom vs bonded group for Move/Rotate)
+│   │   │   ├── interaction-highlight-runtime.ts # Mode-aware highlight resolver (atom vs bonded group for Move/Rotate)
+│   │   │   └── placement-solver.ts  # Placement solver: PCA shape analysis, molecule frame, chooseCameraFamily, selectOrientationByGeometry, refineOrientationFromGeometry, projectToScreen/projected2DPCA helpers, translation optimization with no-initial-bond constraint
 │   │   ├── scene.ts              # Scene commit/clear/load (transaction-safe)
 │   │   ├── placement.ts          # Placement lifecycle, tangent computation, canvas listeners
+│   │   │                           #   → delegates rigid-transform computation to placement-solver.ts
 │   │   ├── interaction.ts        # Command dispatch, screen-to-physics projection
 │   │   ├── status.ts             # Hint fade + contextual coachmarks (hint-only)
 │   │   ├── ui/
@@ -205,6 +207,61 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 - Timeline recording disarmed until first atom interaction (placement, pause, speed, and settings do not arm)
 - Scheduler timing derived live from engine `dtFs`, not cached constants
 
+### Placement Solver
+
+`placement-solver.ts` computes the rigid transform (rotation + translation) for molecule preview placement. PlacementController (`placement.ts`) calls `solvePlacement()` and consumes the result; the solver does not own preview lifecycle, drag-plane, or commit flow.
+
+```
+placement.ts (lifecycle)
+       │
+       ▼
+placement-solver.ts
+       │
+       ├── 1. Local frame analysis
+       │       computeLocalFrame()    — 3D PCA → eigenvalues + shape class
+       │       buildMoleculeFrame()   — robust Msys: m1 (PCA primary), m2 (cross-section PCA), frameMode
+       │       classifyFrameMode()    — scored regime: line_dominant / plane_dominant / volumetric
+       │
+       ├── 2. Camera frame
+       │       buildCameraFrame()     — orthonormal right/up/forward from renderer camera state
+       │
+       ├── 3. Multi-stage orientation pipeline
+       │       selectOrientationByGeometry()   — geometry-aware family selection (final arbiter)
+       │         ├─ buildFamilyTarget()         — signed camera-axis target per family
+       │         ├─ buildFamilyRotation()        — candidate rotation per family
+       │         ├─ scoreProjectedReadability()  — perspective-projected extent along target
+       │         └─ refineOrientationFromGeometry() — 2D PCA corrective twist
+       │
+       ├── 4. Feasibility check
+       │       checkNoInitialBond()   — hard constraint: no bonds at placement
+       │       minCrossDistance()     — nearest inter-molecule distance
+       │
+       └── 5. Translation optimization
+               8-direction search (camera-plane) → collision readiness scoring
+```
+
+**Orientation pipeline (step 3 in detail):**
+
+1. **Frame-based target** — `chooseCameraFamily()` determines the base policy preference: vertical (camera.up) unless the molecule's primary axis is unreadably foreshortened vertically, then horizontal (camera.right). When the primary axis is fully foreshortened, falls back through the secondary axis (m2 perpendicular), then defaults to vertical. This is the centralized policy helper exported for both runtime and test use.
+
+2. **Geometry-aware family selection** — `selectOrientationByGeometry()` is the final family arbiter at runtime. It builds both candidate orientations (up and right) using `buildFamilyTarget()`, scores each by projected readability (perspective-projected atom extent along the target axis via `scoreProjectedReadability()`), and applies a switch margin: vertical wins unless right scores meaningfully higher (`GEOMETRY_FAMILY_SWITCH_MARGIN`).
+
+3. **Within-family refinement** — `refineOrientationFromGeometry()` uses 2D PCA (`projected2DPCA()`) of perspective-projected atoms to compute the visible principal axis, compares it with the declared policy target direction, and applies a bounded corrective twist around `camera.forward`. Adaptive correction: high-anisotropy shapes allow up to 2x the base correction. Runs up to 2 passes for convergence.
+
+4. **Unified twist resolution** — within each candidate rotation, `resolveUnifiedTwist()` blends the roll target between camera-defined (perpendicular to the primary alignment axis) and shape-defined (projected m2) using smoothstep confidence based on `transverseAsymmetry`. At asymmetry=0 (symmetric tube), the twist is purely camera-defined; at asymmetry=1, it follows the molecule's intrinsic secondary axis.
+
+**Frame mode classification** — `classifyFrameMode()` uses scored regime selection: both line (major/mid eigenvalue ratio) and plane (mid/minor ratio) scores are computed against their respective thresholds (`LINE_DOMINANT_RATIO`, `PLANE_DOMINANT_RATIO`). Planarity wins over elongation via scored comparison because thin sheets benefit more from the plane-facing solver.
+
+**Exported utilities:**
+- `projectToScreen()` — shared perspective projection matching the renderer FOV (50 degrees), used by both solver refinement and test QA gates
+- `projected2DPCA()` — 2D principal component analysis of projected point clouds, returns dominant axis angle and eigenvalue ratio
+- `chooseCameraFamily()` — centralized policy helper for axis-family selection (vertical-first rule)
+
+**Policy architecture** (keep in sync when editing):
+- `chooseCameraFamily()` — base policy preference (vertical-first)
+- `selectOrientationByGeometry()` — final runtime arbiter (geometry-scored)
+- Tests enforce: policy conformance, external oracle backstop, observable behavior
+
 ## Key Design Decisions
 
 1. **Python reference + Numba acceleration** — pure Python for correctness, Numba for speed
@@ -216,7 +273,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 
 ### Composition Root Pattern
 
-`main.ts` (~1150 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 25 modules in `page/js/runtime/`:
+`main.ts` (~1150 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 26 modules in `page/js/runtime/`:
 
 - **scene-runtime.ts** — scene mutation wrappers, scene-to-store projection, worker scene mirroring
 - **worker-lifecycle.ts** — worker bridge creation, init, stall detection (5s warning / 15s fatal), teardown
@@ -243,6 +300,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 - **orbit-follow-update.ts** — per-frame orbit-follow camera tracking from displayed molecule bounds
 - **drag-target-refresh.ts** — per-frame reprojection of pointer intent during active drag/move/rotate interactions
 - **interaction-highlight-runtime.ts** — mode-aware highlight resolver: Atom → single atom, Move/Rotate → bonded group from live physics topology
+- **placement-solver.ts** — placement solver module: PCA shape analysis and molecule frame construction, camera-first orientation policy (`chooseCameraFamily`), geometry-aware family selection (`selectOrientationByGeometry`), perspective-projected geometry refinement (`refineOrientationFromGeometry`), shared projection helpers (`projectToScreen`, `projected2DPCA`), translation optimization with no-initial-bond constraint
 
 **Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons, TimelineActionHint. Imperative controllers remain only for PlacementController and StatusController (hint-only).
 

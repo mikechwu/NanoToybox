@@ -25,7 +25,7 @@ npm run dev
 | Feature | Details |
 |---------|---------|
 | Multi-molecule | Add multiple structures to the scene via Add Molecule + placement mode |
-| Placement mode | Tangent placement near target molecule, translucent preview, drag to adjust, Place/Cancel |
+| Placement mode | Geometry-aware orientation + tangent placement near target molecule, translucent preview, drag to adjust, Place/Cancel. Preview and commit both use pre-transformed atoms from `solvePlacement()` for parity |
 | Interact modes | Atom (drag single atom), Move (translate connected component), Rotate (torque on component) |
 | Camera | Orbit mode (default). Object View panel: Center + Follow buttons. Free-Look available as advanced gated mode (`CONFIG.camera.freeLookEnabled`). See controls table below |
 | Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame, component-aware forces |
@@ -96,6 +96,49 @@ Recording is disarmed until the first direct atom interaction (drag, move, rotat
 ### StatusBar
 
 StatusBar is now message-only (no persistent scene summary). It shows `statusError` or `statusText` and returns `null` otherwise.
+
+### Placement Solver
+
+The placement solver (`page/js/runtime/placement-solver.ts`) computes a rigid transform (rotation + translation) for molecule preview placement in the user's current camera frame. `PlacementController` calls `solvePlacement()` and consumes the result; the solver does not own preview lifecycle, drag-plane, or commit flow.
+
+**Orientation Pipeline**
+
+The solver uses a multi-stage orientation pipeline:
+
+| Stage | Function | Role |
+|-------|----------|------|
+| PCA shape analysis | `computeLocalFrame()` → `buildMoleculeFrame()` | Builds molecule intrinsic frame (Msys) with axes m1/m2/m3. m1 from 3D PCA primary direction; m2 from transverse cross-section PCA (permutation-stable, geometry-only). Computes `lineConfidence` and `transverseAsymmetry` confidence metrics |
+| Scored regime classification | `classifyFrameMode()` | Scores both line and plane regimes by how far above threshold each eigenvalue ratio is. Picks the stronger regime; planarity wins ties (thin sheets benefit more from face-on placement). Result: `line_dominant` / `plane_dominant` / `volumetric` |
+| Camera-first vertical-preferred policy | `chooseCameraFamily()` | Base policy preference: prefer vertical (camera.up) unless the molecule would be unreadably foreshortened vertically, then use horizontal (camera.right). Falls back through m2 perpendicular, then default vertical. This is the base preference, not the final decision |
+| Geometry-aware family selection | `selectOrientationByGeometry()` | Final runtime arbiter. Builds both candidate orientations (up and right) via `buildFamilyTarget()` + `buildFamilyRotation()`, scores each by projected readability (extent along target axis via perspective projection), vertical wins unless right scores > 20% higher (`GEOMETRY_FAMILY_SWITCH_MARGIN`) |
+| 2D PCA refinement | `refineOrientationFromGeometry()` | Perspective-projects atoms through the camera (matching renderer FOV=50), computes visible principal axis via `projected2DPCA()`, applies corrective twist around camera.forward. Adaptive: high-anisotropy shapes allow 2x correction. Up to 2 passes for convergence |
+| Unified twist | `resolveUnifiedTwist()` | Blends twist target between camera-defined and shape-defined, weighted by `transverseAsymmetry` via smoothstep(0.2, 0.7) confidence curve. At asymmetry=0 (symmetric tube): camera perpendicular. At asymmetry=1 (strongly asymmetric): projected m2 |
+
+**View-Policy Targets by Frame Mode**
+
+| Frame mode | Orientation strategy |
+|------------|---------------------|
+| `line_dominant` | Align m1 to the most readable camera axis (up preferred); m2 fills remaining in-plane direction; m3 goes into depth |
+| `plane_dominant` | Rotate m3 (least-variance axis) into depth so the sheet faces the camera; in-plane twist maximizes m1 readability |
+| `volumetric` | Preserve library orientation (identity rotation) |
+
+**Translation Optimization**
+
+After orientation is fixed, the solver optimizes translation. It searches 8 camera-relative directions (cardinal + diagonal) for the best offset from the anchor point (target molecule COM or a default camera-forward position). Hard constraint: no-initial-bond (`checkNoInitialBond()` enforces bond cutoff + 0.5 A safety margin). Soft scoring: proximity to desired "ready to collide" distance, preference for screen-centered placement, slight preference for camera-right directions.
+
+**Shared Helpers**
+
+The solver exports helpers used by both the runtime and test QA:
+
+| Export | Purpose |
+|--------|---------|
+| `projectToScreen()` | Perspective projection matching the renderer camera (FOV=50). Position + basis + FOV + depth divide |
+| `projected2DPCA()` | 2D PCA on screen-space points. Returns dominant eigenvector angle and eigenvalue ratio |
+| `chooseCameraFamily()` | Base vertical-preferred policy decision. Returns family, target direction, and reason |
+
+**Preview/Commit Parity**
+
+`solvePlacement()` returns `transformedAtoms` — the authoritative pre-transformed atom positions in world space. Both preview rendering and commit-to-scene consume these same positions, eliminating double-transform divergence.
 
 ### Interaction Model
 

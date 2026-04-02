@@ -1141,6 +1141,7 @@ export class Renderer {
     }
   }
 
+
   hidePreview() {
     if (this._previewGroup) {
       this.scene.remove(this._previewGroup);
@@ -1189,8 +1190,21 @@ export class Renderer {
 
   getPreviewWorldCenter() {
     if (!this._previewGroup) return [0, 0, 0];
-    const p = this._previewGroup.position;
-    return [p.x, p.y, p.z];
+    // Compute centroid from preview atom meshes (world-space)
+    const meshes = this._previewAtomMeshes;
+    if (!meshes || meshes.length === 0) {
+      const p = this._previewGroup.position;
+      return [p.x, p.y, p.z];
+    }
+    let cx = 0, cy = 0, cz = 0;
+    const gp = this._previewGroup.position;
+    for (const m of meshes) {
+      cx += m.position.x + gp.x;
+      cy += m.position.y + gp.y;
+      cz += m.position.z + gp.z;
+    }
+    cx /= meshes.length; cy /= meshes.length; cz /= meshes.length;
+    return [cx, cy, cz];
   }
 
   _fitCamera() {
