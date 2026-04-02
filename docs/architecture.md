@@ -317,8 +317,16 @@ placement-solver.ts
 **Composition root** (`main.ts`):
 - Creates all subsystems (renderer, physics, stateMachine)
 - Owns the frame loop and RAF scheduling
-- Wires global listeners and teardown
-- Does NOT own per-frame business logic — delegates to runtime modules
+- Wires teardown by constructing `TeardownSurface` and delegating to `app/app-lifecycle.ts`
+- All Zustand subscriptions are tracked and unsubscribed in teardown
+- Does NOT own per-frame business logic — delegates to `app/frame-runtime.ts`
+- Does NOT own teardown sequencing — delegates to `app/app-lifecycle.ts`
+
+**Teardown orchestration** (`page/js/app/app-lifecycle.ts:teardownAllSubsystems()`):
+- Owns the ordered teardown sequence (13 steps, dependency-ordered)
+- Sequence: frame loop → listeners → debug hooks → timeline → onboarding + subscriptions → bonded groups → overlay → controllers → input → worker → renderer → helpers → state reset
+- Subsystem-specific cleanup stays inside each subsystem's own destroy/teardown
+- Tested by `tests/unit/app-lifecycle.test.ts` — full sequence verified
 
 **Frame-loop orchestration** (`page/js/app/frame-runtime.ts:executeFrame()`):
 - Owns the per-frame update pipeline sequence (physics → reconciliation → feedback → highlight → recording → render)

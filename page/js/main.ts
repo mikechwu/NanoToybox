@@ -32,6 +32,7 @@ import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } f
 import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './runtime/bonded-group-coordinator';
 import { createTimelineSubsystem, type TimelineSubsystem } from './runtime/timeline-subsystem';
 import { executeFrame, type FrameRuntimeSurface } from './app/frame-runtime';
+import { teardownAllSubsystems, resetSchedulerState, resetSessionState, resetEffectsGate, type TeardownSurface } from './app/app-lifecycle';
 import { serializeForWorkerRestore } from './runtime/restart-state-adapter';
 
 // --- Globals ---
@@ -144,6 +145,7 @@ let _inputBindings: InputBindings | null = null;
 // Onboarding controller (created in init, cleared on teardown)
 let _onboarding: import('./runtime/onboarding').OnboardingController | null = null;
 let _unsubOnboardingOverlay: (() => void) | null = null;
+let _unsubCameraMode: (() => void) | null = null;
 
 // Bonded group subsystem
 let _bondedGroups: BondedGroupRuntime | null = null;
@@ -178,84 +180,55 @@ function addGlobalListener(target: EventTarget, event: string, handler: EventLis
  * so that any visible status (e.g., statusError) is preserved.
  */
 function _teardownRuntime() {
-  // Stop frame loop
-  _appRunning = false;
-  if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
-  // Remove global listeners
-  for (const [event, handler, target, options] of _globalListeners) {
-    target.removeEventListener(event, handler, options);
-  }
-  _globalListeners.length = 0;
-  // Clean up debug hooks
-  delete window._setUiEffectsMode;
-  delete (window as unknown as Record<string, unknown>)._getWorkerDebugState;
-  delete (window as unknown as Record<string, unknown>)._simulateWorkerStall;
-  delete (window as unknown as Record<string, unknown>)._setTestStalledThreshold;
-  delete (window as unknown as Record<string, unknown>)._getUIState;
-  // Destroy timeline subsystem
-  if (_timelineSub) { _timelineSub.teardown(); _timelineSub = null; }
-  _lastReconciledSnapshotVersion = -1;
-  // Destroy onboarding controller (clears coachmark timers + listeners)
-  if (_onboarding) { _onboarding.destroy(); _onboarding = null; }
-  if (_unsubOnboardingOverlay) { _unsubOnboardingOverlay(); _unsubOnboardingOverlay = null; }
-  // Bonded group subsystem teardown (coordinator owns the sequence)
-  if (_bondedGroupCoordinator) { _bondedGroupCoordinator.teardown(); _bondedGroupCoordinator = null; }
-  _bondedGroupHighlight = null;
-  _bondedGroups = null;
-  // Destroy overlay layout runtime (observer, pending RAF)
-  if (_overlayLayout) { _overlayLayout.destroy(); _overlayLayout = null; }
-  // Tear down controllers (consumers) before input bindings (provider)
-  if (placement) { placement.destroy(); placement = null; }
-  if (statusCtrl) { statusCtrl.destroy(); statusCtrl = null; }
-  // Destroy input bindings after controllers
-  if (_inputBindings) { _inputBindings.destroy(); _inputBindings = null; }
-  // Tear down worker transport before renderer (worker callbacks may read renderer state)
-  if (_workerRuntime) { _workerRuntime.destroy(); _workerRuntime = null; }
-  // Tear down subsystems
-  if (renderer) { renderer.destroy(); renderer = null; }
-  // Null remaining refs
-  _overlay = null;
-  _dispatch = null;
-  _dragRefresh = null;
-  _snapshotReconciler = null;
-  _scene = null;
-  physics = null;
-  stateMachine = null;
-  manifest = null;
-  // Reset runtime state for potential re-init
-  effectsGate.slowCount = 0;
-  effectsGate.fastCount = 0;
-  effectsGate.reduced = false;
-  effectsGate.mode = 'auto';
-  Object.assign(scheduler, {
-    lastFrameTs: 0, simBudgetMs: 0, mode: 'normal', overloadCount: 0,
-    totalStepsProfiled: 0, forceRenderThisTick: false,
-    stableTicks: 0, prevPhysStepMs: 1, prevRenderMs: 1, warmUpComplete: false,
-    lastMaxSpeedUpdateTs: 0, skipPressure: 0, comfortTicks: 0,
-    renderSkipLevel: 1, renderSkipCounter: 0, renderCount: 0,
-    lastRenderCountTs: 0, hasRenderSample: false, lastStatusUpdateTs: 0,
-    recoveringStartMax: 0, recoveringBlendRemaining: 0,
-    effectiveSpeedWindow: [],
-  });
-  Object.assign(scheduler.prof, {
-    physStepMs: 1, updatePosMs: 0.1, renderMs: 1, otherMs: 0.1,
-    rafIntervalMs: 16.67, actualRendersPerSec: 60,
-  });
-  // Reset session state (theme + textSize preserved intentionally for re-init continuity)
-  session.isLoading = false;
-  session.interactionMode = 'atom';
-  session.scene.molecules = [];
-  session.scene.nextId = 1;
-  session.scene.totalAtoms = 0;
-  Object.assign(session.playback, {
-    selectedSpeed: CONFIG.playback.defaultSpeed,
-    speedMode: 'fixed',
-    effectiveSpeed: 1.0,
-    maxSpeed: 1.0,
-    paused: false,
-  });
-  // Clear root UI effect state
-  delete document.documentElement.dataset.uiEffects;
+  // Construct narrow teardown surface from module-scoped variables
+  const surface: TeardownSurface = {
+    stopFrameLoop: () => {
+      _appRunning = false;
+      if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
+    },
+    removeAllGlobalListeners: () => {
+      for (const [event, handler, target, options] of _globalListeners) {
+        target.removeEventListener(event, handler, options);
+      }
+      _globalListeners.length = 0;
+    },
+    cleanupDebugHooks: () => {
+      delete window._setUiEffectsMode;
+      delete (window as unknown as Record<string, unknown>)._getWorkerDebugState;
+      delete (window as unknown as Record<string, unknown>)._simulateWorkerStall;
+      delete (window as unknown as Record<string, unknown>)._setTestStalledThreshold;
+      delete (window as unknown as Record<string, unknown>)._getUIState;
+    },
+    timelineSub: _timelineSub,
+    onboarding: _onboarding,
+    unsubOnboardingOverlay: _unsubOnboardingOverlay,
+    unsubCameraMode: _unsubCameraMode,
+    bondedGroupCoordinator: _bondedGroupCoordinator,
+    overlayLayout: _overlayLayout,
+    placement,
+    statusCtrl,
+    inputBindings: _inputBindings,
+    workerRuntime: _workerRuntime,
+    renderer,
+    dragRefresh: _dragRefresh,
+    snapshotReconciler: _snapshotReconciler,
+    resetRuntimeState: () => {
+      // Null all refs (main.ts owns these module-scoped variables)
+      _timelineSub = null; _lastReconciledSnapshotVersion = -1;
+      _onboarding = null; _unsubOnboardingOverlay = null; _unsubCameraMode = null;
+      _bondedGroupCoordinator = null; _bondedGroupHighlight = null; _bondedGroups = null;
+      _overlayLayout = null; placement = null; statusCtrl = null;
+      _inputBindings = null; _workerRuntime = null; renderer = null;
+      _overlay = null; _dispatch = null; _dragRefresh = null;
+      _snapshotReconciler = null; _scene = null; physics = null;
+      stateMachine = null; manifest = null;
+      // Reset runtime state via lifecycle helpers
+      resetSchedulerState(scheduler);
+      resetSessionState(session);
+      resetEffectsGate(effectsGate); // also clears DOM uiEffects attribute
+    },
+  };
+  teardownAllSubsystems(surface);
 }
 
 /** Full app teardown: unmount React, reset store, and tear down runtime. */
@@ -783,7 +756,7 @@ async function init() {
 
   // Subscribe to camera mode changes → configure OrbitControls + achievement
   let _prevCameraMode = useAppStore.getState().cameraMode;
-  useAppStore.subscribe((s) => {
+  _unsubCameraMode = useAppStore.subscribe((s) => {
     if (s.cameraMode !== _prevCameraMode) {
       _prevCameraMode = s.cameraMode;
       // Normalize: if Free-Look disabled, treat any freelook state as orbit
