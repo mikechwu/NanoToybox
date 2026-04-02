@@ -3,6 +3,11 @@
  *
  * Resolves the tracked molecule's displayed bounds (live or review)
  * and smoothly tracks it via the renderer's orbit-follow camera.
+ *
+ * Owns: per-frame orbit-follow resolution (store read, bounds lookup, camera call).
+ * Depends on: app-store (orbitFollowEnabled, cameraMode, molecules), Renderer (bounds + camera).
+ * Called by: app/frame-runtime.ts (executeFrame, per-frame).
+ * Teardown: stateless function — no teardown needed. Lifetime tied to caller.
  */
 
 import type * as THREE from 'three';

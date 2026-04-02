@@ -1,14 +1,17 @@
 /**
  * Scene runtime — owns scene mutation wrappers and scene-to-UI projection.
  *
- * Responsibilities:
- * - Molecule commit, clear, add (transaction-safe wrappers around scene.ts)
- * - Scene metadata projection to Zustand store
- * - Active/removed count projection
- * - Chooser recent-row state projection
- * - Worker scene mirroring (append, clear, wall center sync)
- * - Placement mode coachmark policy
- * - Worker config building and scene serialization
+ * Owns: molecule commit/clear/add wrappers, scene-to-store projection
+ *       (metadata, active/removed counts, chooser recent row), worker scene
+ *       mirroring (append, clear, wall center sync), placement coachmark policy,
+ *       worker config building, and scene serialization.
+ * Depends on: scene.ts (commitMolecule, clearPlayground, addMoleculeToScene),
+ *             loader (loadStructure), app-store, focus-runtime, coachmarks,
+ *             PhysicsEngine, Renderer, StateMachine, PlacementController,
+ *             WorkerRuntime, InputBindings, SnapshotReconciler.
+ * Called by: main.ts composition root, ui-bindings.ts (commit/clear actions),
+ *           placement callbacks.
+ * Teardown: no persistent resources — stateless wrappers over injected deps.
  *
  * Does NOT own the frame loop, scheduler, or interaction dispatch.
  * Does NOT attach global listeners or write to window.

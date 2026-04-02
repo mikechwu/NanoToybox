@@ -10,7 +10,15 @@
  * user-interactive. React components must remain null-safe for callback
  * slots via optional chaining (dockCallbacks?.onAdd()).
  *
- * Does NOT attach global listeners or write to window.
+ * Owns:        registerStoreCallbacks() — one-shot wiring of dock, settings,
+ *              chooser, and overlay callback slots on the Zustand store.
+ * Depends on:  app-store (setDockCallbacks, setSettingsCallbacks, etc.),
+ *              OverlayRuntime (open/close overlays), WorkerBridge (forwarding
+ *              interaction commands to worker).
+ * Called by:   main.ts (called once during init, after subsystems are created).
+ *              Tests: store-callbacks-arming.test.ts.
+ * Teardown:    none — callbacks are replaced on next registerStoreCallbacks()
+ *              call. Does not attach global listeners or write to window.
  */
 
 import { useAppStore } from '../store/app-store';

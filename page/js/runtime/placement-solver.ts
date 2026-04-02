@@ -2,15 +2,12 @@
  * Placement solver — computes rigid transform (rotation + translation) for
  * molecule preview placement in the user's current camera frame.
  *
- * Responsibilities:
- * - Molecule local-frame analysis (PCA, shape classification)
- * - Camera-frame construction (right/up/forward)
- * - Shape-aware orientation candidate generation
- * - Hard no-initial-bond feasibility check
- * - Translation/depth optimization for collision readiness
- *
- * PlacementController calls this solver and consumes the result.
- * This module does not own preview lifecycle, drag-plane, or commit flow.
+ * Owns: PCA local-frame analysis, camera-frame construction, shape-aware
+ *       orientation candidates, no-initial-bond feasibility check,
+ *       translation/depth optimization for collision readiness.
+ * Depends on: THREE.js (Vector3, Matrix3, Quaternion), CONFIG (placement thresholds).
+ * Called by: PlacementController (consumes PlacementResult).
+ * Teardown: stateless pure functions — no teardown needed.
  *
  * Policy architecture (keep in sync when editing):
  *   chooseCameraFamily()            — base policy preference (vertical-first)

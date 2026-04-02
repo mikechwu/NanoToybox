@@ -8,6 +8,21 @@
  * Two enable paths:
  *   - installAndEnable() — passive startup: enters ready, auto-arms on first atom interaction
  *   - startRecordingNow() — explicit button: enters active immediately with a seed frame
+ *
+ * Owns:        SimulationTimeline instance, TimelineRecordingPolicy instance,
+ *              RecordingOrchestrator instance, TimelineCoordinator instance,
+ *              store sync helpers (syncStoreState, publishOffState),
+ *              installAndEnable / teardown lifecycle.
+ * Depends on:  simulation-timeline (frame storage), timeline-recording-policy,
+ *              timeline-recording-orchestrator, simulation-timeline-coordinator,
+ *              restart-state-adapter (captureRestartFrameData for seed frames),
+ *              app-store (timeline UI state, recording mode, install/uninstall).
+ * Called by:   main.ts (creates subsystem, wires into UI events);
+ *              app/frame-runtime.ts (recordAfterReconciliation, isInReview, per-frame).
+ *              Tests: timeline-subsystem.test.ts, store-callbacks-arming.test.ts,
+ *              timeline-arming-wiring.test.ts.
+ * Teardown:    teardown() — clears timeline buffers, resets orchestrator,
+ *              uninstalls timeline UI from store.
  */
 
 import { createSimulationTimeline } from './simulation-timeline';

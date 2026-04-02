@@ -312,6 +312,38 @@ placement-solver.ts
 
 `main.ts` must not be re-grown: new runtime logic goes into `page/js/runtime/`, new UI surfaces into `page/js/components/`.
 
+### Runtime Responsibility Classes
+
+**Composition root** (`main.ts`):
+- Creates all subsystems (renderer, physics, stateMachine)
+- Owns the frame loop and RAF scheduling
+- Wires global listeners and teardown
+- Does NOT own per-frame business logic — delegates to runtime modules
+
+**Frame-loop orchestration** (`page/js/app/frame-runtime.ts:executeFrame()`):
+- Owns the per-frame update pipeline sequence (physics → reconciliation → feedback → highlight → recording → render)
+- `main.ts:frameLoop()` is a thin wrapper that constructs the `FrameRuntimeSurface` and delegates
+- Ordering matters: recording MUST happen after reconciliation; highlights MUST happen after feedback
+- Depends on: physics, renderer, stateMachine, scheduler, worker runtime, timeline, drag-target-refresh, interaction-highlight-runtime
+
+**Feature runtimes** (`page/js/runtime/*.ts`):
+- Each module owns one concern (e.g., bonded-group projection, drag refresh, timeline recording)
+- Each module documents: owns / depends on / called by / teardown
+- Modules do NOT attach global listeners or write to `window` — main.ts wires those
+- Teardown is the creator's responsibility (main.ts or the module's coordinator)
+
+**Default runtime module shape** (for new modules):
+```
+/**
+ * Module name — one-sentence purpose.
+ *
+ * Owns: [what state/behavior this module is authoritative for]
+ * Depends on: [what it reads or calls]
+ * Called by: [what invokes it — main.ts, frame loop, store callback, etc.]
+ * Teardown: [how cleanup works — stateless, dispose(), coordinator, etc.]
+ */
+```
+
 ### State Ownership
 
 Each state slice has one authoritative writer. Other modules emit intents via callbacks; the authoritative writer applies mutations.

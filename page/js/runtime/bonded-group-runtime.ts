@@ -9,6 +9,15 @@
  *
  * Update policy: called after scene mutations and at throttled cadence during
  * simulation. Only publishes when the projection actually changes.
+ *
+ * @module bonded-group-runtime
+ *
+ * Owns:        BondedGroupSummary[] projection, stable group IDs, freshId counter,
+ *              overlap-reconciled ID assignment.
+ * Depends on:  physics.components (bond-graph connected components),
+ *              app-store (BondedGroupSummary[], write via setBondedGroups).
+ * Called by:   bonded-group-coordinator (projectNow, reset).
+ * Teardown:    reset() — clears previous summaries and ID state; store is set to [].
  */
 
 import { useAppStore, type BondedGroupSummary } from '../store/app-store';

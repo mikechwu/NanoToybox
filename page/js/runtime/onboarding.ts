@@ -13,6 +13,18 @@
  *
  * Does NOT own the #hint DOM element — StatusController does.
  * Does NOT own placement coachmarks — scene-runtime does.
+ *
+ * @module onboarding
+ *
+ * Owns:        Coachmark scheduling timers, session pacing state, achievement
+ *              flags, localStorage persistence for one-time coachmarks.
+ * Depends on:  app-store (cameraMode read), CONFIG / getDebugParam,
+ *              CoachmarkSurface (showCoachmark, hideCoachmark, dismissCoachmark),
+ *              OnboardingRendererSurface (pulseTriad).
+ * Called by:   main lifecycle (scheduleInitialCoachmarks after init),
+ *              input-bindings / interaction layer (recordAchievement on user actions),
+ *              overlay open (dismissActive).
+ * Teardown:    destroy() — clears all pending timers and active display timeouts.
  */
 
 import { useAppStore } from '../store/app-store';

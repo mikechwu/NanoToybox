@@ -7,10 +7,16 @@
  * Solution: store latest pointer screen coords, reproject every frame from
  * current atom world position + camera plane, and update physics + renderer.
  *
- * Ownership:
- * - This module owns the latest-pointer tracking and per-frame refresh
- * - interaction.ts / interaction-dispatch.ts still own the event-driven fast path
- * - Both paths feed the same physics.updateDrag() and renderer.showForceLine()
+ * @module drag-target-refresh
+ *
+ * Owns:        Latest pointer screen coords, active-interaction flag,
+ *              per-frame world-space reprojection of drag target.
+ * Depends on:  DragPhysicsSurface (dragAtom, updateDrag),
+ *              DragRendererSurface (getAtomWorldPosition, showForceLine),
+ *              InputManager (screenToWorldOnPlane).
+ * Called by:   interaction-dispatch (activate/updatePointer/deactivate via dragRefreshAction),
+ *              render loop (refresh each frame while active).
+ * Teardown:    deactivate() — clears active flag, pointer coords, and hasPointer state.
  */
 
 import type { InputManager } from '../input';

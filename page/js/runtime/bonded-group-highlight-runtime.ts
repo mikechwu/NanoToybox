@@ -11,6 +11,19 @@
  *
  * Store owns lightweight UI flags only (hasTrackedBondedHighlight: boolean).
  * Heavy atom arrays stay in this runtime, never in the store.
+ *
+ * @module bonded-group-highlight-runtime
+ *
+ * Owns:        _trackedAtoms (persistent highlight atom set),
+ *              highlight priority resolution (tracked > hover > none),
+ *              renderer setHighlightedAtoms calls.
+ * Depends on:  bonded-group-runtime (getAtomIndicesForGroup for ID→atoms lookup),
+ *              app-store (hoveredBondedGroupId read, hasTrackedBondedHighlight write),
+ *              physics.n (for invalid-index filtering),
+ *              HighlightRenderer (setHighlightedAtoms).
+ * Called by:   bonded-group-coordinator (syncAfterTopologyChange, clearHighlight),
+ *              store callbacks (toggleSelectedGroup, setHoveredGroup via UI).
+ * Teardown:    clearHighlight() — nulls _trackedAtoms, clears store flag, clears renderer.
  */
 
 import { useAppStore } from '../store/app-store';

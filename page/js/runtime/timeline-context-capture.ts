@@ -5,7 +5,14 @@
  * Keeps timeline logic clean by isolating context extraction from
  * the physics engine's internal representation.
  *
- * Does NOT own or mutate physics, renderer, or store state.
+ * Owns:        TimelineInteractionState / TimelineBoundaryState type
+ *              definitions, captureInteractionState(), captureBoundaryState(),
+ *              restoreInteractionState() pure functions.
+ * Depends on:  PhysicsEngine (reads drag/boundary state for capture,
+ *              writes drag state for restore).
+ * Called by:   restart-state-adapter.ts (captureInteractionState,
+ *              captureBoundaryState, types re-exported for restart frames).
+ * Teardown:    stateless pure functions — no teardown needed.
  */
 
 import type { PhysicsEngine } from '../physics';

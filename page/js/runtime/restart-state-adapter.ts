@@ -2,10 +2,13 @@
  * Restart state adapter — owns serialization, capture, and application
  * of RestartState across the timeline subsystem.
  *
- * Three responsibilities:
- *   1. captureRestartFrameData — capture from current reconciled physics
- *   2. applyRestartState — restore physics for main-thread restart
- *   3. serializeForWorkerRestore — serialize for worker restoreState command
+ * Owns: serializeForWorkerRestore, applyRestartState, captureRestartFrameData —
+ *       the three restart-state translation surfaces.
+ * Depends on: PhysicsEngine (pos/vel/bonds/boundary read + restoreCheckpoint),
+ *             simulation-timeline types (RestartState, TimelinePhysicsConfig),
+ *             timeline-context-capture (interaction + boundary snapshot capture).
+ * Called by: simulation-timeline-coordinator.ts (capture + restore), worker-lifecycle.ts (serialize).
+ * Teardown: stateless functions — no teardown needed.
  *
  * Restart restores physical state (pos, vel, bonds, boundary, config)
  * but NOT active interaction (drag/move/rotate). Restoring interaction

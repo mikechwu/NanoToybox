@@ -26,6 +26,16 @@
  *   - Pause / resume
  *   - Speed changes
  *   - Physics settings (wall mode, drag/rotate strength, damping)
+ *
+ * Owns:        _mode state variable (off/ready/active), all transition methods
+ *              (turnOn, startNow, turnOff, markAtomInteractionStarted, disarm).
+ * Depends on:  nothing — pure state machine with no external dependencies.
+ * Called by:   timeline-subsystem.ts (creates policy, drives transitions),
+ *              timeline-recording-orchestrator.ts (reads isArmed, calls disarm).
+ *              Tests: timeline-recording-policy.test.ts,
+ *              timeline-recording-orchestrator.test.ts.
+ * Teardown:    disarm() / turnOff() — resets _mode to 'off'. No listeners
+ *              or globals.
  */
 
 export type RecordingMode = 'off' | 'ready' | 'active';

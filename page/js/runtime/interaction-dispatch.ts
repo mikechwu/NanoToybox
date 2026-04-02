@@ -8,6 +8,18 @@
  *
  * Does NOT own InputManager construction — that is input-bindings.ts.
  * Does NOT attach global listeners or write to window.
+ *
+ * @module interaction-dispatch
+ *
+ * Owns:        Command side-effect dispatch (local physics + renderer updates),
+ *              worker interaction mirroring, flick ordering guarantee,
+ *              drag-target-refresh lifecycle signaling.
+ * Depends on:  interaction.ts (handleCommand), PhysicsEngine, Renderer,
+ *              StateMachine, InputManager, worker-bridge (WorkerInteractionCommand),
+ *              app-store (timelineMode read), focus-runtime (focusMoleculeByAtom).
+ * Called by:   input-bindings (dispatch callback wired into InputManager events).
+ * Teardown:    Stateless factory — no instance teardown; InputManager teardown
+ *              removes the event sources that feed dispatch.
  */
 
 import { handleCommand as dispatchInteraction } from '../interaction';

@@ -8,7 +8,17 @@
  * NOT the requested/budgeted substep count. This prevents sim time from
  * advancing faster than positions, which caused frame discontinuities.
  *
- * Does NOT own: review mode, restart flow, UI state, renderer updates.
+ * Owns:        _simTimePs accumulator, tick() frame/checkpoint recording loop,
+ *              reset() (clears sim time and disarms policy).
+ * Depends on:  SimulationTimeline (recordFrame, recordRestartFrame,
+ *              recordCheckpoint, shouldRecord*), TimelineRecordingPolicy
+ *              (isArmed, disarm), PhysicsEngine (positions, checkpoint),
+ *              restart-state-adapter (captureRestartFrameData).
+ * Called by:   timeline-subsystem.ts (creates orchestrator, calls tick() via
+ *              recordAfterReconciliation, reset via clearAndDisarm/teardown).
+ *              Tests: timeline-recording-orchestrator.test.ts.
+ * Teardown:    reset() — zeroes _simTimePs and disarms recording policy.
+ *              No listeners or globals.
  */
 
 import type { SimulationTimeline } from './simulation-timeline';

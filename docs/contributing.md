@@ -85,6 +85,27 @@ See `docs/architecture.md` for the full module map and state ownership model.
 - **Do not re-grow main.ts.** Extract new runtime logic into `page/js/runtime/` and new UI surfaces into `page/js/components/`.
 - **State writes go through authoritative writers.** See state ownership table in architecture.md.
 
+### New Runtime Module Contract
+
+Every `page/js/runtime/*.ts` module must start with a contract header:
+
+```
+/**
+ * Module name — one-sentence purpose.
+ *
+ * Owns: [what state/behavior this module is authoritative for]
+ * Depends on: [what it reads or calls]
+ * Called by: [what invokes it — main.ts, frame loop, store callback, etc.]
+ * Teardown: [how cleanup works — stateless, dispose(), coordinator, etc.]
+ */
+```
+
+Rules:
+- One active owner per concern — if two modules write the same state, the boundary is wrong
+- Modules do NOT attach global listeners or write to `window` — main.ts wires those
+- Teardown is the creator's responsibility
+- Comments must never be stronger than code (no "single source of truth" without test evidence)
+
 ### Placement Solver Policy (3-Surface Architecture)
 
 The placement solver (`page/js/runtime/placement-solver.ts`) uses a 3-surface architecture that must be kept in sync. The module header documents this, but the key constraint is:

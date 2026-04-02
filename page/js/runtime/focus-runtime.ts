@@ -13,8 +13,17 @@
  * - scene-runtime.ts: clears lastFocusedMoleculeId on clearPlayground
  *   (scene lifecycle reset, not focus resolution).
  *
- * Does NOT own the store fields — reads molecules and writes
- * lastFocusedMoleculeId via the store API.
+ * @module focus-runtime
+ *
+ * Owns:        Focus resolution logic (molecule lookup, centroid computation,
+ *              camera target update), return-target resolution for guardrail.
+ * Depends on:  app-store (molecules read, lastFocusedMoleculeId read/write),
+ *              FocusRendererSurface (getDisplayedMoleculeCentroid,
+ *              getDisplayedMoleculeBounds, setCameraFocusTarget, animateToFocusedObject).
+ * Called by:   interaction-dispatch (focusMoleculeByAtom on drag/move/rotate start),
+ *              scene-runtime (focusNewestPlacedMolecule on placement commit,
+ *              clearLastFocusedMoleculeId on clearPlayground).
+ * Teardown:    Stateless module (pure functions) — no instance teardown needed.
  */
 
 import type * as THREE from 'three';

@@ -4,6 +4,16 @@
  *
  * This module exists because review/restart touches multiple subsystems that
  * should not know about each other directly.
+ *
+ * Owns:        review-enter/scrub/return-to-live/restart-from-here flows,
+ *              _wasPausedBeforeReview flag, _isRestarting guard.
+ * Depends on:  SimulationTimeline (frame storage, review state),
+ *              PhysicsEngine and Renderer (via deps), restart-state-adapter
+ *              (applyRestartState for physics restore on restart).
+ * Called by:   timeline-subsystem.ts (sole consumer, wires coordinator into
+ *              subsystem facade and store callbacks).
+ * Teardown:    stateless closure — no teardown needed. Lifetime tied to the
+ *              enclosing TimelineSubsystem.
  */
 
 import type { SimulationTimeline, TimelineFrame } from './simulation-timeline';

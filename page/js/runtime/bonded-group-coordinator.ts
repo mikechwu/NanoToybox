@@ -5,6 +5,16 @@
  * Also owns the complete teardown path: highlight → callbacks → projection runtime.
  *
  * No other code should call projectNow() or syncAfterTopologyChange() independently.
+ *
+ * @module bonded-group-coordinator
+ *
+ * Owns:        Coordinated update sequencing (project then reconcile),
+ *              complete teardown ordering (highlight → callbacks → projection).
+ * Depends on:  bonded-group-runtime (projectNow, reset),
+ *              bonded-group-highlight-runtime (syncAfterTopologyChange, clearHighlight),
+ *              app-store (setBondedGroupCallbacks).
+ * Called by:   scene-runtime / main lifecycle (update after topology change, teardown on clear).
+ * Teardown:    teardown() — clears highlight, nulls store callbacks, resets projection runtime.
  */
 
 import { useAppStore } from '../store/app-store';

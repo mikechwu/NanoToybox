@@ -3,6 +3,11 @@
  *
  * Prevents the same worker snapshot from being counted multiple times,
  * which would cause sim time to advance faster than actual physics.
+ *
+ * Owns: snapshot-version deduplication logic (version comparison, step gating).
+ * Depends on: nothing — pure function with no imports.
+ * Called by: simulation-timeline-coordinator.ts (per-frame reconciliation).
+ * Teardown: stateless pure function — no teardown needed.
  */
 
 /** Resolve how many steps to count from a worker snapshot.

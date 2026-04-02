@@ -1,9 +1,11 @@
 /**
  * Overlay layout runtime — owns hint clearance + triad sizing/positioning.
  *
- * Reads dock geometry via [data-dock-root] and computes layout outputs for
- * the renderer. Owns: RAF coalescing state, ResizeObserver, double-RAF
- * first-layout, and glass-UI activation flag.
+ * Owns: RAF coalescing state, ResizeObserver, double-RAF first-layout,
+ *       glass-UI activation flag, dock measurement and triad layout output.
+ * Depends on: Renderer (setOverlayLayout), DOM ([data-dock-root], status bar).
+ * Called by: main.ts (wires onViewportResize via addGlobalListener), React dock mount.
+ * Teardown: destroy() — disconnects ResizeObserver, cancels pending RAFs, resets state.
  *
  * Layout contract: measures [data-dock-root] (the outermost dock container).
  * All dock child surfaces must be in normal flow so getBoundingClientRect()

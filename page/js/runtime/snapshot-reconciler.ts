@@ -3,14 +3,18 @@
  *
  * This is NOT a render utility. It owns the full worker-to-main
  * reconciliation contract, including side effects that go beyond rendering:
- * - Position sync from snapshot to physics.pos
- * - Atom-count mismatch detection (wall removal in worker)
- * - Renderer atom-count update and physics-ref rebinding
- * - Active interaction invalidation on atom remap
- * - Periodic bond refresh (counter owned internally)
- * - Renderer updateFromSnapshot() call
+ * position sync, atom-count mismatch detection (wall removal), renderer
+ * atom-count update, physics-ref rebinding, active interaction invalidation
+ * on atom remap, periodic bond refresh, and renderer updateFromSnapshot().
  *
- * Does NOT attach global listeners or write to window.
+ * Owns:        apply() reconciliation pipeline, _bondRefreshCounter (periodic
+ *              topology refresh every 20 frames), reset() for counter state.
+ * Depends on:  PhysicsEngine (pos/vel/n sync, refreshTopology),
+ *              Renderer (atom count, setPhysicsRef, updateFromSnapshot),
+ *              StateMachine (forceIdle on atom remap during active drag).
+ * Called by:   main.ts (created and invoked each frame after worker snapshot
+ *              arrival), scene-runtime.ts (type import only).
+ * Teardown:    reset() — clears _bondRefreshCounter. No listeners or globals.
  */
 
 import type { PhysicsEngine } from '../physics';

@@ -13,7 +13,6 @@ import { applyThemeTokens, applyTextSizeTokens } from './themes';
 import { CONFIG, DEFAULT_THEME } from './config';
 import { StatusController } from './status';
 import { PlacementController } from './placement';
-import { computeTargetSpeed, computeSubstepCount, updateOverloadState, computeEffectiveSpeed, shouldSkipRender, updateMaxSpeedEstimate } from './scheduler-pure';
 import { mountReactUI, unmountReactUI } from './react-root';
 import { useAppStore } from './store/app-store';
 import { createOverlayLayout, type OverlayLayout } from './runtime/overlay-layout';
@@ -27,15 +26,13 @@ import { handleCenterObject as _handleCenterObject, ensureFollowTarget, resolveR
 import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/snapshot-reconciler';
 import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecycle';
 import { createOnboardingController, subscribeOnboardingReadiness } from './runtime/onboarding';
-import { updateOrbitFollowFromStore } from './runtime/orbit-follow-update';
 import { createDragTargetRefresh, dragRefreshAction } from './runtime/drag-target-refresh';
-import { resolveInteractionHighlight } from './runtime/interaction-highlight-runtime';
 import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-group-runtime';
 import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from './runtime/bonded-group-highlight-runtime';
 import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './runtime/bonded-group-coordinator';
 import { createTimelineSubsystem, type TimelineSubsystem } from './runtime/timeline-subsystem';
+import { executeFrame, type FrameRuntimeSurface } from './app/frame-runtime';
 import { serializeForWorkerRestore } from './runtime/restart-state-adapter';
-import { resolveReconciledSteps } from './runtime/reconciled-steps';
 
 // --- Globals ---
 let renderer, physics, stateMachine;
@@ -933,361 +930,36 @@ function partialProfilerReset() {
 }
 
 
-// --- Frame Loop (accumulator-driven) ---
-function frameLoop(timestamp) {
-  const alpha = CONFIG.playback.profilerAlpha;
-  const tickStart = performance.now();
-  const { stepWallMs, baseStepsPerSecond: _bsps } = _getStepTiming();
-
-  // RAF interval
-  const frameDtMs = scheduler.lastFrameTs > 0
-    ? Math.min(timestamp - scheduler.lastFrameTs, CONFIG.playback.gapThreshold)
-    : 16.67;
-  scheduler.lastFrameTs = timestamp;
-  scheduler.prof.rafIntervalMs += alpha * (frameDtMs - scheduler.prof.rafIntervalMs);
-
-  try {
-    let substepsThisFrame = 0;
-    /** Steps actually applied to physics this tick (from worker snapshot or local stepping).
-     *  Used for timeline sim-time advancement — must match the positions in physics.pos. */
-    let stepsReconciled = 0;
-
-    // Physics: accumulator-driven stepping
-    const shouldStep = !session.playback.paused && !(placement && placement.active) && physics.n > 0;
-    if (shouldStep) {
-      // Compute target speed (delegates clamping to pure function)
-      const pb = session.playback;
-
-      // Warm-up: adaptive — 30 steps OR 10 stable ticks
-      if (!scheduler.warmUpComplete) {
-        const physDelta = Math.abs(scheduler.prof.physStepMs - scheduler.prevPhysStepMs);
-        const physStable = scheduler.prevPhysStepMs > 0 && physDelta / scheduler.prevPhysStepMs < CONFIG.playback.stabilityThreshold;
-        // Include renderMs stability only when we've seen a real render sample
-        const renderDelta = Math.abs(scheduler.prof.renderMs - scheduler.prevRenderMs);
-        const renderStable = !scheduler.hasRenderSample || // no valid sample yet — suspend
-          (scheduler.prevRenderMs > 0 && renderDelta / scheduler.prevRenderMs < CONFIG.playback.stabilityThreshold);
-        scheduler.prevPhysStepMs = scheduler.prof.physStepMs;
-        scheduler.prevRenderMs = scheduler.prof.renderMs;
-        if (physStable && renderStable) scheduler.stableTicks++; else scheduler.stableTicks = 0;
-        if (scheduler.totalStepsProfiled >= CONFIG.playback.warmUpSteps || scheduler.stableTicks >= CONFIG.playback.warmUpStableTicks) {
-          scheduler.warmUpComplete = true;
-                }
-      }
-
-      const targetSpeed = computeTargetSpeed(pb.speedMode, pb.selectedSpeed, pb.maxSpeed, scheduler.warmUpComplete);
-
-      // Accumulate
-      scheduler.simBudgetMs += frameDtMs * targetSpeed;
-
-      // Budget cap based on overload mode
-      const hardCap = CONFIG.playback.maxSubstepsPerTick * stepWallMs;
-      if (scheduler.mode === 'overloaded') {
-        scheduler.simBudgetMs = Math.min(scheduler.simBudgetMs, hardCap);
-      } else {
-        scheduler.simBudgetMs = Math.min(scheduler.simBudgetMs, hardCap * 1.5);
-      }
-
-      // Run substeps (count determined by pure function)
-      substepsThisFrame = computeSubstepCount(scheduler.simBudgetMs, stepWallMs, CONFIG.playback.maxSubstepsPerTick);
-
-      if (_workerRuntime && _workerRuntime.isActive()) {
-        // C.2 Phase 2 — Worker mode: don't step locally; send request to worker
-        // One-in-flight: only send if no outstanding request
-        scheduler.simBudgetMs -= substepsThisFrame * stepWallMs;
-        if (substepsThisFrame > 0 && _workerRuntime!.canSendRequest()) {
-          _workerRuntime!.sendRequestFrame(substepsThisFrame);
-        }
-      } else {
-        // Sync mode: step locally
-        const physStart = performance.now();
-        for (let i = 0; i < substepsThisFrame; i++) {
-          physics.stepOnce();
-          scheduler.simBudgetMs -= stepWallMs;
-        }
-        const physEnd = performance.now();
-
-        if (substepsThisFrame > 0) {
-          physics.applySafetyControls();
-          stepsReconciled = substepsThisFrame; // sync mode: all requested steps completed
-          const msPerStep = (physEnd - physStart) / substepsThisFrame;
-          scheduler.prof.physStepMs += alpha * (msPerStep - scheduler.prof.physStepMs);
-          scheduler.totalStepsProfiled += substepsThisFrame;
-        }
-      }
-
-      // Overloaded in overloaded mode: discard residual budget
-      if (scheduler.mode === 'overloaded') {
-        scheduler.simBudgetMs = Math.min(scheduler.simBudgetMs, 0);
-      }
-
-      // Overload FSM (pure function computes new state)
-      const prevMode = scheduler.mode;
-      const overloadResult = updateOverloadState({
-        mode: scheduler.mode,
-        overloadCount: scheduler.overloadCount,
-        substepsThisFrame,
-        maxSubsteps: CONFIG.playback.maxSubstepsPerTick,
-        entryTicks: CONFIG.playback.overloadEntryTicks,
-        exitTicks: CONFIG.playback.overloadExitTicks,
-      });
-      scheduler.mode = overloadResult.mode;
-      scheduler.overloadCount = overloadResult.overloadCount;
-      // Side effects that depend on transitions
-      if (prevMode !== 'overloaded' && scheduler.mode === 'overloaded') {
-        scheduler.simBudgetMs = 0;
-      }
-      if (prevMode === 'overloaded' && scheduler.mode === 'recovering') {
-        scheduler.recoveringStartMax = pb.maxSpeed; // capture for blend
-        scheduler.recoveringBlendRemaining = 2;     // two update windows
-      }
-
-      // Effective speed (pure sliding-window computation)
-      if (frameDtMs > 0) {
-        const instantSpeed = (substepsThisFrame * 1000 / frameDtMs) / _bsps;
-        const speedResult = computeEffectiveSpeed(scheduler.effectiveSpeedWindow, instantSpeed, frameDtMs, 10);
-        scheduler.effectiveSpeedWindow = speedResult.window;
-        pb.effectiveSpeed = speedResult.effectiveSpeed;
-      }
-
-      // Max speed estimation (pure function in scheduler-pure.ts)
-      const maxResult = updateMaxSpeedEstimate({
-        now: performance.now(),
-        mode: scheduler.mode as 'normal' | 'overloaded' | 'recovering',
-        warmUpComplete: scheduler.warmUpComplete,
-        maxSpeed: pb.maxSpeed,
-        effectiveSpeed: pb.effectiveSpeed,
-        lastMaxSpeedUpdateTs: scheduler.lastMaxSpeedUpdateTs,
-        recoveringStartMax: scheduler.recoveringStartMax,
-        recoveringBlendRemaining: scheduler.recoveringBlendRemaining,
-        profilerAlpha: alpha,
-        prof: scheduler.prof,
-        config: { ...CONFIG.playback, baseStepsPerSecond: _bsps },
-      });
-      if (maxResult) {
-        pb.maxSpeed = maxResult.maxSpeed;
-        scheduler.lastMaxSpeedUpdateTs = maxResult.lastMaxSpeedUpdateTs;
-        scheduler.recoveringStartMax = maxResult.recoveringStartMax;
-        scheduler.recoveringBlendRemaining = maxResult.recoveringBlendRemaining;
-      }
-    }
-
-    // ── Stalled-worker detection (per-frame, not throttled) ──
-    if (_workerRuntime) _workerRuntime.checkStalled(session.playback.paused);
-
-    // Update positions + feedback (every tick)
-    // Skip live position sync during timeline review — review frames are display-only,
-    // applied by the timeline coordinator. Live sync would overwrite them.
-    const inReview = _timelineSub?.isInReview();
-    const updateStart = performance.now();
-    if (!inReview) {
-      if (_workerRuntime && _workerRuntime.isActive()) {
-        // Worker mode: reconcile snapshot (position sync, remap, bond refresh)
-        const snapshot = _workerRuntime.getLatestSnapshot();
-        if (snapshot && snapshot.n > 0 && _snapshotReconciler) {
-          _snapshotReconciler.apply(snapshot);
-          const resolved = resolveReconciledSteps(snapshot.snapshotVersion, _lastReconciledSnapshotVersion, snapshot.stepsCompleted);
-          stepsReconciled = resolved.steps;
-          _lastReconciledSnapshotVersion = resolved.newLastVersion;
-        }
-      } else {
-        // Sync mode: render from local physics
-        // Sync renderer if atoms were removed by containment wall
-        if (physics.n !== renderer.getAtomCount()) {
-          renderer.setAtomCount(physics.n);
-          // Force full visual sync after boundary removal: update bonds immediately
-          // so atom and bond visuals are consistent even if rendering is delayed.
-          physics.updateBondList();
-          physics.rebuildComponents();
-        }
-        if (renderer.getAtomCount() > 0 && physics.n > 0) {
-          renderer.updatePositions(physics);
-        }
-      }
-    }
-    // Per-frame drag target refresh: reproject pointer intent from current atom position
-    if (!inReview && _dragRefresh?.isActive() && _inputBindings) {
-      const im = _inputBindings.getManager();
-      if (im) {
-        _dragRefresh.refresh(
-          physics, renderer, im,
-          (_workerRuntime && _workerRuntime.isActive())
-            ? (wx, wy, wz) => _workerRuntime!.sendInteraction({ type: 'updateDrag', worldX: wx, worldY: wy, worldZ: wz })
-            : undefined,
-        );
-      }
-    }
-
-    // Skip live hover/selection feedback during review — review is display-only,
-    // and live hit-testing against historical positions would highlight wrong atoms.
-    if (!inReview) {
-      const feedback = stateMachine.getFeedbackState();
-      renderer.updateFeedback(feedback, session.interactionMode as 'atom' | 'move' | 'rotate');
-
-      // Resolve mode-aware interaction highlight (group for Move/Rotate)
-      const highlight = resolveInteractionHighlight(feedback, session.interactionMode as 'atom' | 'move' | 'rotate', physics);
-      if (highlight && highlight.groupAtomIndices) {
-        renderer.setInteractionHighlightedAtoms(highlight.groupAtomIndices, highlight.intensity);
-      } else {
-        renderer.clearInteractionHighlight();
-      }
-    } else {
-      // Review mode: clear all stale live interaction feedback
-      renderer.clearInteractionHighlight();
-      renderer.setHighlight(-1);
-    }
-    const updateEnd = performance.now();
-    scheduler.prof.updatePosMs += alpha * ((updateEnd - updateStart) - scheduler.prof.updatePosMs);
-
-    // ── Timeline recording (delegated to orchestrator) ──
-    // Record after reconciliation — pass actual completed steps, not budgeted.
-    // In worker mode, positions lag behind requests; recording must match positions.
-    _timelineSub?.recordAfterReconciliation(stepsReconciled);
-
-    // Render decision: budget-driven with hysteresis (pure function)
-    const usedMs = (substepsThisFrame * scheduler.prof.physStepMs) + scheduler.prof.updatePosMs + scheduler.prof.otherMs;
-    const canRender = !shouldSkipRender(usedMs, scheduler.prof.renderMs, scheduler.prof.rafIntervalMs);
-
-    if (canRender) {
-      scheduler.skipPressure = 0;
-      scheduler.comfortTicks++;
-      if (scheduler.comfortTicks > 10 && scheduler.renderSkipLevel > 1) {
-        scheduler.renderSkipLevel--;
-        scheduler.comfortTicks = 0;
-      }
-    } else {
-      scheduler.comfortTicks = 0;
-      scheduler.skipPressure++;
-      if (scheduler.skipPressure > 5 && scheduler.renderSkipLevel < 4) {
-        scheduler.renderSkipLevel++;
-        scheduler.skipPressure = 0;
-      }
-    }
-
-    scheduler.renderSkipCounter++;
-    const wasForced = scheduler.forceRenderThisTick;
-    scheduler.forceRenderThisTick = false; // always consumed
-    const shouldRender = wasForced || scheduler.renderSkipCounter >= scheduler.renderSkipLevel;
-
-    // Orbit follow mode: smoothly track focused molecule with framing
-    updateOrbitFollowFromStore(renderer, frameDtMs);
-
-    // Free-Look flight update (before render, after physics)
-    if (CONFIG.camera.freeLookEnabled && useAppStore.getState().cameraMode === 'freelook' && _inputBindings) {
-      const dtSec = frameDtMs / 1000;
-      const axes = _inputBindings.getManager()?.getFlightInput();
-      if (axes) renderer.updateFlight(dtSec, axes.x, axes.z);
-      // Update flightActive store flag (transition-gated)
-      const speed = renderer._flightVelocity.length();
-      const maxSpd = renderer.getSceneRadius() * CONFIG.freeLook.maxSpeedScale;
-      const showT = Math.min(Math.max(maxSpd * CONFIG.freeLook.freezeShowScale, CONFIG.freeLook.freezeShowMin), CONFIG.freeLook.freezeShowMax);
-      const hideT = showT * CONFIG.freeLook.freezeHideRatio;
-      const store = useAppStore.getState();
-      if (!store.flightActive && speed > showT) useAppStore.getState().setFlightActive(true);
-      else if (store.flightActive && speed < hideT) useAppStore.getState().setFlightActive(false);
-
-      // Far-drift guardrail via shared resolveReturnTarget (transition-gated)
-      const rt = resolveReturnTarget(renderer, renderer.getSceneRadius());
-      if (rt.guardrailEligible) {
-        const distToTarget = renderer.camera.position.distanceTo(rt.position);
-        const threshold = Math.min(Math.max(rt.radius * CONFIG.freeLook.farDriftTargetMult, CONFIG.freeLook.farDriftMinDistance), renderer.getSceneRadius() * CONFIG.freeLook.farDriftSceneMult);
-        if (!store.farDrift && distToTarget > threshold) useAppStore.getState().setFarDrift(true);
-        else if (store.farDrift && distToTarget < threshold * 0.8) useAppStore.getState().setFarDrift(false);
-      } else if (store.farDrift) {
-        useAppStore.getState().setFarDrift(false);
-      }
-    }
-
-    if (shouldRender) {
-      scheduler.renderSkipCounter = 0;
-      const renderStart = performance.now();
-      renderer.render();
-      const renderEnd = performance.now();
-      // Exclude forced renders from both renderMs EMA and cadence counter
-      // so render-budget estimation (actualRendersPerSec * renderMs) stays coherent
-      if (!wasForced) {
-        scheduler.prof.renderMs += alpha * ((renderEnd - renderStart) - scheduler.prof.renderMs);
-        scheduler.hasRenderSample = true;
-        scheduler.renderCount++;
-      }
-      // Update actual render rate every ~1s from real counter
-      const renderElapsed = performance.now() - scheduler.lastRenderCountTs;
-      if (renderElapsed > 1000) {
-        scheduler.prof.actualRendersPerSec = scheduler.renderCount * 1000 / renderElapsed;
-        scheduler.renderCount = 0;
-        scheduler.lastRenderCountTs = performance.now();
-      }
-    }
-
-    // Other overhead
-    const tickEnd = performance.now();
-    scheduler.prof.otherMs += alpha * (Math.max(0, (tickEnd - tickStart) - (substepsThisFrame * scheduler.prof.physStepMs) - scheduler.prof.updatePosMs - (shouldRender ? scheduler.prof.renderMs : 0)) - scheduler.prof.otherMs);
-
-    // Update status display — throttled to statusUpdateHz (default 5 Hz)
-    const statusIntervalMs = 1000 / CONFIG.playback.statusUpdateHz;
-    const statusNow = performance.now();
-    if (wasForced || (statusNow - scheduler.lastStatusUpdateTs) >= statusIntervalMs) {
-      scheduler.lastStatusUpdateTs = statusNow;
-      const pb = session.playback;
-      const isIdle = pb.paused || (placement && placement.active) || physics.n === 0;
-      const displaySpeed = isIdle ? 0 : pb.effectiveSpeed;
-      const fps = Math.round(1000 / scheduler.prof.rafIntervalMs);
-      const isPlacementActive = !!(placement && placement.active);
-      const isPlacementStale = isPlacementActive && _workerRuntime != null && _workerRuntime.isActive() && _workerRuntime.getSnapshotAge() > 500;
-      const isOverloaded = scheduler.mode === 'overloaded' || pb.maxSpeed < CONFIG.playback.minSpeed;
-
-      // Feed Zustand store — coalesced at 5 Hz; React FPSDisplay renders via formatStatusText()
-      // placementActive and paused are event-driven, not throttled here
-      useAppStore.getState().updatePlaybackMetrics({
-        maxSpeed: pb.maxSpeed,
-        effectiveSpeed: displaySpeed,
-        fps,
-        placementStale: isPlacementStale,
-        warmUpComplete: scheduler.warmUpComplete,
-        overloaded: isOverloaded,
-        workerStalled: _workerRuntime ? _workerRuntime.isStalled() : false,
-        rafIntervalMs: scheduler.prof.rafIntervalMs,
-      });
-
-      // Project bonded groups at the same 5 Hz cadence (throttled, only publishes on change)
-      _bondedGroupCoordinator?.update();
-
-    // ── Auto FPS gate for UI effects ──
-    // Only runs when glass UI is visible AND mode is 'auto' (not forced by developer).
-    const frameMs = scheduler.prof.rafIntervalMs;
-    const glassVisible = _overlayLayout ? _overlayLayout.isGlassActive() : false;
-    if (glassVisible && effectsGate.mode === 'auto' && !effectsGate.reduced) {
-      if (frameMs > effectsGate.SLOW_THRESHOLD) {
-        effectsGate.slowCount++;
-        effectsGate.fastCount = 0;
-        if (effectsGate.slowCount >= effectsGate.ENTER_COUNT) {
-          effectsGate.reduced = true;
-          document.documentElement.dataset.uiEffects = 'reduced';
-        }
-      } else {
-        effectsGate.slowCount = 0;
-      }
-    } else if (glassVisible && effectsGate.mode === 'auto') {
-      if (frameMs < effectsGate.FAST_THRESHOLD) {
-        effectsGate.fastCount++;
-        if (effectsGate.fastCount >= effectsGate.EXIT_COUNT) {
-          effectsGate.reduced = false;
-          delete document.documentElement.dataset.uiEffects;
-          effectsGate.slowCount = 0;
-        }
-      } else {
-        effectsGate.fastCount = 0;
-      }
-    }
-
-      // Update Active row in settings sheet (live boundary removal tracking)
-      _scene!.updateActiveCountRow();
-    }
-
-  } catch (e) {
-    console.error('[frameLoop] ERROR:', e);
-  }
+// --- Frame Loop (thin wrapper — delegates to frame-runtime.ts) ---
+// main.ts owns RAF lifecycle; frame-runtime.ts owns the sequenced update pipeline.
+function frameLoop(timestamp: number) {
+  // Construct the narrow surface for frame-runtime (reads module-scoped variables)
+  const surface: FrameRuntimeSurface = {
+    physics, renderer, stateMachine, session, scheduler,
+    workerRuntime: _workerRuntime,
+    snapshotReconciler: _snapshotReconciler,
+    timelineSub: _timelineSub,
+    dragRefresh: _dragRefresh,
+    inputBindings: _inputBindings,
+    bondedGroupCoordinator: _bondedGroupCoordinator,
+    overlayLayout: _overlayLayout,
+    placement,
+    scene: _scene,
+    effectsGate,
+    lastReconciledSnapshotVersion: _lastReconciledSnapshotVersion,
+    setLastReconciledSnapshotVersion: (v: number) => { _lastReconciledSnapshotVersion = v; },
+    appRunning: _appRunning,
+    getStepTiming: _getStepTiming,
+  };
+  executeFrame(timestamp, surface);
   if (_appRunning) _rafId = requestAnimationFrame(frameLoop);
 }
+
+// ── Frame loop body extracted to page/js/app/frame-runtime.ts ──
+// (~350 lines of sequenced update pipeline moved to executeFrame())
+
+// Frame loop body (~350 lines) extracted to page/js/app/frame-runtime.ts.
+// main.ts retains only RAF lifecycle (start/stop/teardown).
 
 // --- Start ---
 init();

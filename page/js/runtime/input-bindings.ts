@@ -7,6 +7,18 @@
  *
  * Does NOT own interaction dispatch — that is interaction-dispatch.ts.
  * Does NOT attach global listeners or write to window.
+ *
+ * @module input-bindings
+ *
+ * Owns:        InputManager instance lifecycle (construction, lazy init, sync,
+ *              callback wiring for hover/down/up/pinch/cancel).
+ * Depends on:  InputManager, Renderer (canvas, camera), StateMachine,
+ *              app-store (timelineMode, interactionMode reads),
+ *              focus-runtime (focusMoleculeByAtom), atom-source (createAtomSource),
+ *              interaction-dispatch (dispatch callback from deps).
+ * Called by:   scene-runtime (sync on scene commit/clear/placement),
+ *              main lifecycle (getManager, destroy).
+ * Teardown:    destroy() — calls InputManager.destroy(), nulls the reference.
  */
 
 import { InputManager } from '../input';

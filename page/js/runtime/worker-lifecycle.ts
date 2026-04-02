@@ -9,7 +9,17 @@
  * - Scene serialization — _collectSceneAtoms/Bonds stay in main.ts
  * - Bond refresh counter — render-side reconciliation, stays in frame loop
  *
- * Does NOT attach global listeners or write to window.
+ * Owns:        WorkerBridge instance, _initialized / _stalled / _recoveryAttempted
+ *              flags, _progressTs / _lastRequestSentTs timestamps, stall-detection
+ *              logic (checkStalled), test hooks (simulateStall, setTestStalledThreshold).
+ * Depends on:  WorkerBridge (worker-bridge.ts — Web Worker transport layer),
+ *              PhysicsConfig / WorkerCommand types (worker-protocol),
+ *              AtomXYZ / BondTuple domain types.
+ * Called by:   main.ts (creates runtime, calls init/destroy/sendRequestFrame
+ *              per frame, checkStalled per frame). scene-runtime.ts (type import).
+ * Teardown:    destroy() — calls bridge.destroy(), nulls _bridge, resets all
+ *              internal flags and timestamps. Does not attach global listeners
+ *              or write to window.
  */
 
 import { WorkerBridge, type WorkerInteractionCommand } from '../worker-bridge';

@@ -11,6 +11,16 @@
  * This module resolves levels 1-2 only. Panel highlight (3-4) is owned by
  * bonded-group-highlight-runtime.ts. The renderer consumes both channels
  * via separate APIs: setInteractionHighlightedAtoms vs setHighlightedAtoms.
+ *
+ * @module interaction-highlight-runtime
+ *
+ * Owns:        Interaction highlight resolution (levels 1-2: active interaction
+ *              and hover preview), mode-aware group expansion for move/rotate.
+ * Depends on:  InteractionHighlightPhysicsSurface (componentId, components for
+ *              group membership lookup).
+ * Called by:   app/frame-runtime.ts (resolveInteractionHighlight per frame),
+ *              renderer (consumes result via setInteractionHighlightedAtoms).
+ * Teardown:    Stateless module (pure function) — no instance teardown needed.
  */
 
 /** Minimal physics surface for component lookup. */

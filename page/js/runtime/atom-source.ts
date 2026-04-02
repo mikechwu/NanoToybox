@@ -1,8 +1,10 @@
 /**
- * Shared atom-source factory — single source of truth for the
- * renderer-to-input/placement atom picking adapter.
+ * Shared atom-source factory — renderer-to-input/placement atom picking adapter.
  *
- * Used by input-bindings.ts and PlacementController wiring in main.ts.
+ * Owns: read-only adapter surface (count, world position, raycast target).
+ * Depends on: Renderer (delegates all reads).
+ * Called by: input-bindings.ts, PlacementController wiring in main.ts.
+ * Teardown: stateless factory — no teardown needed. Lifetime tied to Renderer.
  */
 
 import type { Renderer } from '../renderer';

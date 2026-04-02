@@ -1,6 +1,15 @@
 /**
  * Simulation timeline — runtime module for recording, review, and restart.
  *
+ * Owns: timeline data model (TimelineFrame, RestartState, TimelinePhysicsConfig),
+ *       three storage layers (dense review frames, dense restart frames,
+ *       sparse full checkpoints), frame recording, scrub index management,
+ *       and restart-state retrieval.
+ * Depends on: PhysicsCheckpoint (interfaces), timeline-context-capture
+ *             (TimelineInteractionState, TimelineBoundaryState).
+ * Called by: simulation-timeline-coordinator.ts (record/review/restart orchestration).
+ * Teardown: clear() — drops all stored frames, checkpoints, and resets indices.
+ *
  * Three data layers:
  *  1. Dense review frames (~10 Hz) — positions only, for smooth scrub playback
  *  2. Dense restart frames (~10 Hz) — positions + velocities, for restart-to-viewed-state
@@ -9,8 +18,6 @@
  * Review frames and restart frames are recorded at the same cadence but stored
  * separately: review frames are lightweight (no velocities), restart frames
  * carry enough state for physically consistent continuation.
- *
- * Does NOT own: raw physics stepping, renderer internals, worker bridge, React.
  */
 
 import type { PhysicsCheckpoint } from '../../../src/types/interfaces';
