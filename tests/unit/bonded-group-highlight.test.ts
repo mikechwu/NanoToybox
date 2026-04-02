@@ -250,6 +250,7 @@ describe('renderer alignment with persistent tracking', () => {
   it('_updateGroupHighlight tracks positions for frozen atom set', async () => {
     const { Renderer } = await import('../../page/js/renderer');
     const update = (Renderer.prototype as any)._updateGroupHighlight;
+    const applyLayer = (Renderer.prototype as any)._applyHighlightLayer;
     const THREE = await import('three');
 
     const atomGeom = new THREE.SphereGeometry(0.35, 4, 4);
@@ -258,29 +259,35 @@ describe('renderer alignment with persistent tracking', () => {
     const pos = new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
     const ctx: any = {
-      _groupHighlightIndices: [0, 2],
-      _groupHighlightIntensity: 'selected',
-      _groupHighlightMesh: null,
-      _groupHighlightMat: new THREE.MeshStandardMaterial(),
-      _groupHighlightCapacity: 0,
+      _panelHighlightIndices: [0, 2],
+      _panelHighlightIntensity: 'selected',
+      _panelHighlightMesh: null,
+      _panelHighlightMat: null,
+      _panelHighlightCapacity: 0,
+      _interactionHighlightIndices: null,
+      _interactionHighlightIntensity: 'hover',
+      _interactionHighlightMesh: null,
+      _interactionHighlightMat: null,
+      _interactionHighlightCapacity: 0,
       _physicsRef: { pos, n: 3 },
       _atomGeom: atomGeom,
       _dummyObj: dummyObj,
       scene,
     };
+    ctx._applyHighlightLayer = applyLayer.bind(ctx);
 
     update.call(ctx);
     const m = new THREE.Matrix4();
-    ctx._groupHighlightMesh.getMatrixAt(0, m);
+    ctx._panelHighlightMesh.getMatrixAt(0, m);
     expect(m.elements[12]).toBeCloseTo(1, 5);
 
     // Move atoms — positions change but indices are frozen
     pos[0] = 100; pos[6] = 700;
     update.call(ctx);
 
-    ctx._groupHighlightMesh.getMatrixAt(0, m);
+    ctx._panelHighlightMesh.getMatrixAt(0, m);
     expect(m.elements[12]).toBeCloseTo(100, 5);
-    ctx._groupHighlightMesh.getMatrixAt(1, m);
+    ctx._panelHighlightMesh.getMatrixAt(1, m);
     expect(m.elements[12]).toBeCloseTo(700, 5);
 
     atomGeom.dispose();

@@ -34,7 +34,7 @@ npm run dev
 | Text size | Normal (default) / Large — Appearance section in settings. CSS-only token override via `[data-text-size]` attribute |
 | Settings sheet | Adjustable drag strength, rotation strength, damping, speed, boundary mode, theme, and text size — organized in grouped sections (Scene, Simulation, Interaction, Appearance, Boundary, Help) |
 | Containment boundary | Contain mode (soft harmonic wall bounces atoms back) or Remove mode (atoms deleted past boundary). Live atom count in Settings sheet (Scene section). Wall radius auto-scales with atom count (CONFIG.wall.density). Toggle in Settings sheet (Boundary section). |
-| Bonded clusters | Side panel showing live connected components. Click to select (persistent frozen highlight), hover to preview (desktop). Two-level expand: large clusters + collapsible small clusters. Clear Highlight button when tracked set exists. |
+| Bonded clusters | Side panel showing live connected components. Click to select (persistent panel-layer highlight, warm amber), hover to preview (pale yellow, desktop). Two-level expand: large clusters + collapsible small clusters. Clear Highlight button when tracked set exists. |
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
 | Pause | Primary control — freezes physics, camera/UI remain active |
 | Timeline | TimelineBar with scrub track, review mode (display-only playback of history), and restart from dense frames. Recording arms on first atom interaction (drag/move/rotate/flick) |
@@ -47,9 +47,31 @@ The dock has a three-way segmented mode selector: **Atom** | **Move** | **Rotate
 
 | Mode | Physics behavior |
 |------|-----------------|
-| Atom (default) | Spring force on single atom (camera plane). Single-atom highlight. |
-| Move | Uniform force on connected component, normalized by component size. **Full bonded group highlighted** (blue). Force line originates from picked atom. Detached fragments are unaffected. |
-| Rotate | Torque via diagonal inertia tensor, distributed as tangential forces. **Full bonded group highlighted.** |
+| Atom (default) | Spring force on single atom (camera plane). Single-atom interaction highlight (cool blue). |
+| Move | Uniform force on connected component, normalized by component size. **Full bonded group highlighted** on interaction layer (cool blue). Force line originates from picked atom. Detached fragments are unaffected. Overlap atoms with an active panel selection get both halos (warm outer + cool inner). |
+| Rotate | Torque via diagonal inertia tensor, distributed as tangential forces. **Full bonded group highlighted** on interaction layer (cool blue). |
+
+### Highlight Composition
+
+The renderer uses two independent highlight layers, each backed by its own InstancedMesh halo ring. Setters update state only; a single compositor renders both layers each frame.
+
+| Layer | Role | Color | renderOrder |
+|-------|------|-------|-------------|
+| **Panel layer** | Persistent bonded-group highlight (click-select in side panel) | Warm amber | 2 |
+| **Interaction layer** | Transient Move/Rotate highlight (active during drag) | Cool blue | 3 |
+
+Overlap atoms (selected in the panel AND being interacted with) receive both halos: warm outer (panel) + cool inner (interaction). The panel layer persists during interaction — there is no save/restore pattern.
+
+**CONFIG tokens**
+
+| Token | Variant | Color | Scale | Opacity |
+|-------|---------|-------|-------|---------|
+| `panelHighlight` | selected | amber | 1.2 | 0.6 |
+| `panelHighlight` | hover | pale yellow | 1.1 | 0.4 |
+| `interactionHighlight` | active | blue | 1.15 | 0.3 |
+| `interactionHighlight` | hover | blue | 1.08 | 0.2 |
+
+**Lifecycle:** `_disposeHighlightLayers()` is called on `loadStructure` and `resetToEmpty` to tear down both layers cleanly.
 
 ### Speed & Pause
 
@@ -209,7 +231,7 @@ The interactive page uses a composition root pattern with React-authoritative UI
 **Key rules:**
 - Modules import from `config.ts` for shared constants. Data flows through `main.ts` orchestration and the Zustand store.
 - **Interaction mode coordination:** React DockBar (mode segmented via shared Segmented component) → store callback → main.ts (applies interactionMode) → input.ts (reads mode). The state machine maps mode → state (e.g., `'atom'` → `DRAG`).
-- **Known v1 limitation:** In Move mode, the force line still originates from the picked atom rather than the center of mass, so the visual cue partly reads as "drag this atom." The blue color and immediate whole-molecule motion mitigate this, but a COM-origin force line or bounding indicator would be a stronger signal.
+- **Known v1 limitation:** In Move mode, the force line still originates from the picked atom rather than the center of mass, so the visual cue partly reads as "drag this atom." The cool-blue interaction highlight and immediate whole-molecule motion mitigate this, but a COM-origin force line or bounding indicator would be a stronger signal.
 
 ### Technology
 

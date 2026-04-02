@@ -112,7 +112,7 @@ NanoToybox/
 │   │   ├── react-root.tsx        # React mount/unmount entry point
 │   │   ├── config.ts             # Centralized page configuration
 │   │   ├── physics.ts            # Tersoff force engine + interaction forces
-│   │   ├── renderer.ts           # Three.js scene, InstancedMesh, PBR materials, orbit + interactive triad
+│   │   ├── renderer.ts           # Three.js scene, InstancedMesh, PBR materials, dual highlight layers, orbit + interactive triad
 │   │   ├── orbit-math.ts         # Pure orbit math: arcball deltas, rigid rotation, shared constants
 │   │   ├── input.ts              # Mouse/touch input, raycasting, triad drag/tap/snap, background orbit
 │   │   ├── state-machine.ts      # Interaction state transitions
@@ -287,7 +287,7 @@ placement-solver.ts
 - **focus-runtime.ts** — focus resolution: molecule lookup, centroid computation, camera pivot update; `ensureFollowTarget()` for follow-mode validation
 - **onboarding.ts** — coachmark scheduling + page-load onboarding overlay gate (`isOnboardingEligible`, `subscribeOnboardingReadiness`)
 - **bonded-group-runtime.ts** — live connected-component projection with overlap-reconciled stable IDs
-- **bonded-group-highlight-runtime.ts** — persistent atom tracking, hover preview, renderer highlight resolution
+- **bonded-group-highlight-runtime.ts** — persistent atom tracking, hover preview, panel highlight resolution (warm palette via `setHighlightedAtoms`)
 - **bonded-group-coordinator.ts** — coordinated projection + highlight lifecycle (update + teardown)
 - **simulation-timeline.ts** — ring buffers for dense review frames, restart frames, and checkpoints; RestartState contract; frozen review range; truncation on restart
 - **simulation-timeline-coordinator.ts** — orchestrates review/restart across physics, renderer, worker, store
@@ -299,7 +299,7 @@ placement-solver.ts
 - **reconciled-steps.ts** — deduplication helper for worker snapshot step counting
 - **orbit-follow-update.ts** — per-frame orbit-follow camera tracking from displayed molecule bounds
 - **drag-target-refresh.ts** — per-frame reprojection of pointer intent during active drag/move/rotate interactions
-- **interaction-highlight-runtime.ts** — mode-aware highlight resolver: Atom → single atom, Move/Rotate → bonded group from live physics topology
+- **interaction-highlight-runtime.ts** — mode-aware highlight resolver: Atom → single atom, Move/Rotate → bonded group from live physics topology (cool palette via `setInteractionHighlightedAtoms` / `clearInteractionHighlight`)
 - **placement-solver.ts** — placement solver module: PCA shape analysis and molecule frame construction, camera-first orientation policy (`chooseCameraFamily`), geometry-aware family selection (`selectOrientationByGeometry`), perspective-projected geometry refinement (`refineOrientationFromGeometry`), shared projection helpers (`projectToScreen`, `projected2DPCA`), translation optimization with no-initial-bond constraint
 
 **Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons, TimelineActionHint. Imperative controllers remain only for PlacementController and StatusController (hint-only).
@@ -328,7 +328,8 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | UI chrome (sheets, theme, etc.) | Zustand store (`app-store.ts`) | React components |
 | `session.theme` | main.ts (via settings callback) | React SettingsSheet (theme segmented) |
 | Drag target (spring anchor) | physics.ts (`dragTarget`, `dragAtom`) + drag-target-refresh.ts (screen coords) | interaction-dispatch (event-driven), drag-target-refresh (per-frame reprojection) |
-| Interaction highlight | renderer (`_interactionHighlightIndices`) resolved by interaction-highlight-runtime.ts | main.ts frame loop (resolveInteractionHighlight); separate from panel highlight |
+| Panel highlight | renderer (`_panelHighlightMesh`, renderOrder 2) — state via `setHighlightedAtoms()` | bonded-group-highlight-runtime.ts (persistent bonded-group selection/hover) |
+| Interaction highlight | renderer (`_interactionHighlightMesh`, renderOrder 3) — state via `setInteractionHighlightedAtoms()` / `clearInteractionHighlight()` | interaction-highlight-runtime.ts (transient Move/Rotate); both layers composed by `_updateGroupHighlight()` |
 | placement state | placement.ts (`_state`) | React DockBar (add/cancel via dockCallbacks) |
 | scheduler / effectsGate | main.ts (frame loop only) | — |
 | Timeline state (`mode`, `currentTimePs`, `reviewTimePs`, `rangePs`, etc.) | simulation-timeline-coordinator.ts (via store) | TimelineBar (scrub, restart), timeline-recording-orchestrator (range updates) |
@@ -356,6 +357,42 @@ Layout updates are triggered by `window.resize` and a `ResizeObserver` on the `[
 - **Teardown:** `destroyApp()` stops the frame loop, removes all global listeners (including capture-phase), disconnects the dock `ResizeObserver`, cancels any pending layout RAF, destroys all controllers and subsystems, nulls refs, and resets session/scheduler/effectsGate state
 - All controllers expose `destroy()` for listener cleanup
 - Renderer GPU disposal is intentionally deferred (browser reclaims on page unload)
+
+### Highlight Composition
+
+The renderer uses two independent InstancedMesh layers for group highlights, composed additively rather than replacing each other:
+
+```
+bonded-group-highlight-runtime.ts          interaction-highlight-runtime.ts
+  (persistent selection/hover)                (transient Move/Rotate)
+         │                                           │
+         ▼                                           ▼
+  setHighlightedAtoms()                 setInteractionHighlightedAtoms()
+  (state-only setter)                   clearInteractionHighlight()
+         │                              (state-only setters)
+         │                                           │
+         └──────────────┬────────────────────────────┘
+                        ▼
+              _updateGroupHighlight()
+              (single compositor — called each frame)
+                        │
+           ┌────────────┴────────────┐
+           ▼                         ▼
+  _panelHighlightMesh         _interactionHighlightMesh
+  renderOrder 2               renderOrder 3
+  CONFIG.panelHighlight       CONFIG.interactionHighlight
+  warm amber palette          cool blue palette
+```
+
+**Layers:**
+- **Panel highlight** (`_panelHighlightMesh`) — warm amber palette (`CONFIG.panelHighlight`, formerly `groupHighlight`), renderOrder 2. Driven by bonded-group-highlight-runtime for persistent bonded-group selection and hover preview.
+- **Interaction highlight** (`_interactionHighlightMesh`) — cool blue palette (`CONFIG.interactionHighlight`), renderOrder 3. Driven by interaction-highlight-runtime for transient Move/Rotate mode feedback.
+
+**Additive composition:** When both layers are active, the compositor computes overlap (atoms present in both index sets). Overlap atoms appear on *both* layers: the panel layer renders panelOnly + overlap, the interaction layer renders interactionOnly + overlap. This ensures neither highlight visually disappears when the other is set.
+
+**Setter/compositor split:** `setHighlightedAtoms()`, `setInteractionHighlightedAtoms()`, and `clearInteractionHighlight()` are state-only — they store indices and intensity but do not touch meshes directly. All mesh creation, capacity management, material styling, and transform updates flow through `_updateGroupHighlight()`, the single rendering truth path.
+
+**Lifecycle cleanup:** `_disposeHighlightLayers()` disposes both InstancedMesh layers and resets all associated state. It is called from `loadStructure()` and `resetToEmpty()` to prevent stale highlight geometry from surviving across structure transitions. The old save/restore pattern (`_restorePanelHighlight`) has been removed entirely.
 
 ## External Dependencies
 

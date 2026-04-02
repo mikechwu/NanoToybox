@@ -52,20 +52,19 @@ export class Renderer {
   _highlightMesh: THREE.Mesh | null;
   _highlightMat: THREE.MeshStandardMaterial | null;
 
-  // Group highlight overlay (bonded cluster panel selection/hover) — persistent, updated each frame
-  _groupHighlightMesh: THREE.InstancedMesh | null;
-  _groupHighlightMat: THREE.MeshStandardMaterial | null;
-  _groupHighlightIndices: number[] | null;
-  _groupHighlightIntensity: 'selected' | 'hover';
-  _groupHighlightCapacity: number;
-
-  // Interaction group highlight (Move/Rotate mode — separate channel from panel highlight)
-  _interactionHighlightIndices: number[] | null;
-  _interactionHighlightIntensity: 'hover' | 'active';
-
-  // Panel highlight state (saved for restore after interaction ends)
+  // Panel highlight layer (bonded group selection/hover) — persistent, warm palette
+  _panelHighlightMesh: THREE.InstancedMesh | null;
+  _panelHighlightMat: THREE.MeshStandardMaterial | null;
   _panelHighlightIndices: number[] | null;
   _panelHighlightIntensity: 'selected' | 'hover';
+  _panelHighlightCapacity: number;
+
+  // Interaction highlight layer (Move/Rotate mode) — transient, cool palette
+  _interactionHighlightMesh: THREE.InstancedMesh | null;
+  _interactionHighlightMat: THREE.MeshStandardMaterial | null;
+  _interactionHighlightIndices: number[] | null;
+  _interactionHighlightIntensity: 'hover' | 'active';
+  _interactionHighlightCapacity: number;
 
   // Physics reference (read-only access to positions for rendering)
   _physicsRef: { n: number; pos: Float64Array; getBonds?: () => any[] } | null;
@@ -137,18 +136,19 @@ export class Renderer {
     this._highlightMesh = null;
     this._highlightMat = null;
 
-    // Group highlight overlay — persistent, updated each frame
-    this._groupHighlightMesh = null;
-    this._groupHighlightMat = null;
-    this._groupHighlightIndices = null;
-    this._groupHighlightIntensity = 'selected';
-    this._groupHighlightCapacity = 0;
-
-    // Interaction group highlight (separate from panel highlight)
-    this._interactionHighlightIndices = null;
-    this._interactionHighlightIntensity = 'hover';
+    // Panel highlight layer (bonded group — persistent, warm)
+    this._panelHighlightMesh = null;
+    this._panelHighlightMat = null;
     this._panelHighlightIndices = null;
     this._panelHighlightIntensity = 'selected';
+    this._panelHighlightCapacity = 0;
+
+    // Interaction highlight layer (Move/Rotate — transient, cool)
+    this._interactionHighlightMesh = null;
+    this._interactionHighlightMat = null;
+    this._interactionHighlightIndices = null;
+    this._interactionHighlightIntensity = 'hover';
+    this._interactionHighlightCapacity = 0;
 
     // Current physics reference for position reads (set each updatePositions call)
     this._physicsRef = null;
@@ -374,7 +374,7 @@ export class Renderer {
 
   loadStructure(atoms, bonds) {
     this.highlightAtom = -1;
-    // Dispose highlight mesh before geometry — it shares _atomGeom
+    // Dispose all highlight meshes before geometry — they share _atomGeom
     if (this._highlightMesh) {
       this.scene.remove(this._highlightMesh);
       this._highlightMesh = null;
@@ -383,6 +383,7 @@ export class Renderer {
       this._highlightMat.dispose();
       this._highlightMat = null;
     }
+    this._disposeHighlightLayers();
 
     // Dispose old instanced meshes
     this._disposeInstanced();
@@ -628,7 +629,8 @@ export class Renderer {
 
     // Suppress highlights — review is not interactive
     if (this._highlightMesh) this._highlightMesh.visible = false;
-    if (this._groupHighlightMesh) this._groupHighlightMesh.visible = false;
+    if (this._panelHighlightMesh) this._panelHighlightMesh.visible = false;
+    if (this._interactionHighlightMesh) this._interactionHighlightMesh.visible = false;
   }
 
   /**
@@ -740,152 +742,108 @@ export class Renderer {
    * Pass null to clear. Reuses overlay mesh when possible to avoid GC churn.
    */
   setHighlightedAtoms(atomIndices: number[] | null, intensity: 'selected' | 'hover' = 'selected') {
-    // Save panel state for restore after interaction highlight ends
     this._panelHighlightIndices = atomIndices;
     this._panelHighlightIntensity = intensity;
-    // If interaction highlight is active, don't overwrite the visual — panel state is saved for later
-    if (this._interactionHighlightIndices && this._interactionHighlightIndices.length > 0) return;
-    if (!atomIndices || atomIndices.length === 0) {
-      this._groupHighlightIndices = null;
-      if (this._groupHighlightMesh) {
-        this.scene.remove(this._groupHighlightMesh);
-        this._groupHighlightMesh.dispose();
-        this._groupHighlightMesh = null;
-        this._groupHighlightCapacity = 0;
-      }
-      if (this._groupHighlightMat) {
-        this._groupHighlightMat.dispose();
-        this._groupHighlightMat = null;
-      }
-      return;
-    }
-    this._groupHighlightIndices = atomIndices;
-    this._groupHighlightIntensity = intensity;
-    // Mutate material style in place (no dispose/recreate churn)
-    this._applyGroupHighlightStyle(intensity);
-    // Initial position sync
+    // Rendering delegated to _updateGroupHighlight() — single rendering truth path
     this._updateGroupHighlight();
   }
 
-  // ── Interaction group highlight (Move/Rotate — separate from panel) ──
+  // ── Interaction group highlight (Move/Rotate — independent layer) ──
 
-  /**
-   * Set interaction-level group highlight for Move/Rotate mode.
-   * This is a separate channel from panel highlight (setHighlightedAtoms).
-   * Interaction highlight takes visual priority when active.
-   */
+  /** Set interaction-level group highlight. State-only — rendering via compositor. */
   setInteractionHighlightedAtoms(atomIndices: number[] | null, intensity: 'hover' | 'active' = 'hover'): void {
     this._interactionHighlightIndices = atomIndices;
     this._interactionHighlightIntensity = intensity;
-    // Reuse the group highlight mesh for rendering — interaction takes priority
-    if (atomIndices && atomIndices.length > 0) {
-      const style = intensity === 'active'
-        ? { color: 0x336688, emissive: 0x445566, emissiveIntensity: 1.2, opacity: 0.3 }
-        : { color: 0x336688, emissive: 0x445566, emissiveIntensity: 0.8, opacity: 0.2 };
-      this._applyGroupHighlightStyleDirect(style);
-      this._groupHighlightIndices = atomIndices;
-      // Set intensity to a compatible key for _updateGroupHighlight scale lookup
-      this._groupHighlightIntensity = intensity === 'active' ? 'selected' : 'hover';
-      this._updateGroupHighlight();
-    } else if (!this._groupHighlightIndices || this._interactionHighlightIndices === null) {
-      // Interaction cleared — restore panel highlight if it exists
-      this._restorePanelHighlight();
-    }
+    this._updateGroupHighlight();
   }
 
   clearInteractionHighlight(): void {
     this._interactionHighlightIndices = null;
-    this._restorePanelHighlight();
+    this._updateGroupHighlight();
   }
 
-  /** Restore panel highlight after interaction highlight ends. */
-  private _restorePanelHighlight(): void {
-    if (this._panelHighlightIndices && this._panelHighlightIndices.length > 0) {
-      this._groupHighlightIndices = this._panelHighlightIndices;
-      this._applyGroupHighlightStyle(this._panelHighlightIntensity);
-      this._updateGroupHighlight();
-    } else {
-      this.setHighlightedAtoms(null);
+  /** Dispose both highlight layers completely. Called on structure reload/reset. */
+  private _disposeHighlightLayers(): void {
+    if (this._panelHighlightMesh) {
+      this.scene.remove(this._panelHighlightMesh);
+      this._panelHighlightMesh.dispose();
+      this._panelHighlightMesh = null;
     }
+    if (this._panelHighlightMat) {
+      this._panelHighlightMat.dispose();
+      this._panelHighlightMat = null;
+    }
+    this._panelHighlightIndices = null;
+    this._panelHighlightIntensity = 'selected';
+    this._panelHighlightCapacity = 0;
+
+    if (this._interactionHighlightMesh) {
+      this.scene.remove(this._interactionHighlightMesh);
+      this._interactionHighlightMesh.dispose();
+      this._interactionHighlightMesh = null;
+    }
+    if (this._interactionHighlightMat) {
+      this._interactionHighlightMat.dispose();
+      this._interactionHighlightMat = null;
+    }
+    this._interactionHighlightIndices = null;
+    this._interactionHighlightIntensity = 'hover';
+    this._interactionHighlightCapacity = 0;
   }
 
-  /** Apply a raw style to the group highlight material. */
-  private _applyGroupHighlightStyleDirect(style: { color: number; emissive: number; emissiveIntensity: number; opacity: number }): void {
-    if (!this._groupHighlightMat) {
-      this._groupHighlightMat = new THREE.MeshStandardMaterial({
-        color: style.color, emissive: style.emissive,
-        emissiveIntensity: style.emissiveIntensity,
-        transparent: true, opacity: style.opacity,
-        roughness: CONFIG.atomMaterial.roughness,
-        metalness: CONFIG.atomMaterial.metalness,
-        depthWrite: false,
-      });
-    } else {
-      this._groupHighlightMat.color.set(style.color);
-      (this._groupHighlightMat.emissive as THREE.Color).set(style.emissive);
-      this._groupHighlightMat.emissiveIntensity = style.emissiveIntensity;
-      this._groupHighlightMat.opacity = style.opacity;
-    }
-    if (this._groupHighlightMesh && this._groupHighlightMesh.material !== this._groupHighlightMat) {
-      this._groupHighlightMesh.material = this._groupHighlightMat;
-    }
-  }
+  // ── Shared highlight layer helper ──
 
-  /** Create or update group highlight material to match current intensity style.
-   *  Mutates in place when possible — avoids dispose/recreate and stale material refs.
-   *  Colors from CONFIG.groupHighlight for centralized tuning. */
-  private _applyGroupHighlightStyle(intensity: 'selected' | 'hover') {
-    const style = CONFIG.groupHighlight[intensity];
-
-    if (!this._groupHighlightMat) {
-      this._groupHighlightMat = new THREE.MeshStandardMaterial({
-        color: style.color, emissive: style.emissive,
-        emissiveIntensity: style.emissiveIntensity,
-        transparent: true, opacity: style.opacity,
-        roughness: CONFIG.atomMaterial.roughness,
-        metalness: CONFIG.atomMaterial.metalness,
-        depthWrite: false,
-      });
-    } else {
-      // Mutate existing material — keeps mesh.material reference valid
-      this._groupHighlightMat.color.set(style.color);
-      (this._groupHighlightMat.emissive as THREE.Color).set(style.emissive);
-      this._groupHighlightMat.emissiveIntensity = style.emissiveIntensity;
-      this._groupHighlightMat.opacity = style.opacity;
-    }
-
-    // Sync mesh material reference if mesh exists (handles intensity switch)
-    if (this._groupHighlightMesh && this._groupHighlightMesh.material !== this._groupHighlightMat) {
-      this._groupHighlightMesh.material = this._groupHighlightMat;
-    }
-  }
-
-  /** Update group highlight overlay transforms from current positions. Called each frame. */
-  _updateGroupHighlight() {
-    const indices = this._groupHighlightIndices;
-    if (!indices || indices.length === 0) return;
+  /** Apply style and update transforms for a highlight layer (panel or interaction). */
+  private _applyHighlightLayer(
+    layer: 'panel' | 'interaction',
+    indices: number[],
+    style: { color: number; emissive: number; emissiveIntensity: number; opacity: number },
+    scale: number,
+    renderOrder: number,
+  ): void {
     if (!this._physicsRef || !this._atomGeom) return;
-
     const pos = this._physicsRef.pos;
     const count = indices.length;
-    const scale = CONFIG.groupHighlight[this._groupHighlightIntensity].scale;
 
-    // Allocate or grow mesh if needed (compare against allocated capacity, not active count)
-    if (!this._groupHighlightMesh || this._groupHighlightCapacity < count) {
-      if (this._groupHighlightMesh) {
-        this.scene.remove(this._groupHighlightMesh);
-        this._groupHighlightMesh.dispose();
-      }
-      if (!this._groupHighlightMat) this._applyGroupHighlightStyle(this._groupHighlightIntensity);
-      this._groupHighlightCapacity = Math.max(count, 64);
-      this._groupHighlightMesh = new THREE.InstancedMesh(
-        this._atomGeom, this._groupHighlightMat!, this._groupHighlightCapacity,
-      );
-      this._groupHighlightMesh.frustumCulled = false;
-      this._groupHighlightMesh.renderOrder = 2;
-      this.scene.add(this._groupHighlightMesh);
+    // Resolve layer-specific state
+    const isPanel = layer === 'panel';
+    let mesh = isPanel ? this._panelHighlightMesh : this._interactionHighlightMesh;
+    let mat = isPanel ? this._panelHighlightMat : this._interactionHighlightMat;
+    const capacity = isPanel ? this._panelHighlightCapacity : this._interactionHighlightCapacity;
+
+    // Create or update material
+    if (!mat) {
+      mat = new THREE.MeshStandardMaterial({
+        color: style.color, emissive: style.emissive,
+        emissiveIntensity: style.emissiveIntensity,
+        transparent: true, opacity: style.opacity,
+        roughness: CONFIG.atomMaterial.roughness,
+        metalness: CONFIG.atomMaterial.metalness,
+        depthWrite: false,
+      });
+      if (isPanel) this._panelHighlightMat = mat;
+      else this._interactionHighlightMat = mat;
+    } else {
+      mat.color.set(style.color);
+      (mat.emissive as THREE.Color).set(style.emissive);
+      mat.emissiveIntensity = style.emissiveIntensity;
+      mat.opacity = style.opacity;
     }
 
+    // Allocate or grow mesh if needed
+    if (!mesh || capacity < count) {
+      if (mesh) { this.scene.remove(mesh); mesh.dispose(); }
+      const newCapacity = Math.max(count, 64);
+      mesh = new THREE.InstancedMesh(this._atomGeom, mat, newCapacity);
+      mesh.frustumCulled = false;
+      mesh.renderOrder = renderOrder;
+      this.scene.add(mesh);
+      if (isPanel) { this._panelHighlightMesh = mesh; this._panelHighlightCapacity = newCapacity; }
+      else { this._interactionHighlightMesh = mesh; this._interactionHighlightCapacity = newCapacity; }
+    }
+    if (mesh.material !== mat) mesh.material = mat;
+
+    // Update transforms
     const dummy = this._dummyObj;
     for (let i = 0; i < count; i++) {
       const ai = indices[i];
@@ -894,10 +852,84 @@ export class Renderer {
       dummy.scale.setScalar(scale);
       dummy.quaternion.identity();
       dummy.updateMatrix();
-      this._groupHighlightMesh.setMatrixAt(i, dummy.matrix);
+      mesh.setMatrixAt(i, dummy.matrix);
     }
-    this._groupHighlightMesh.count = count;
-    this._groupHighlightMesh.instanceMatrix.needsUpdate = true;
+    mesh.count = count;
+    mesh.visible = true; // restore visibility after review mode hide
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /** Update both highlight layers from current positions. Called each frame.
+   *
+   *  Overlap composition:
+   *    panelOnly     = panel - interaction  → panel layer (warm outer halo)
+   *    interactionOnly = interaction - panel → interaction layer (cool inner halo)
+   *    overlap       = panel ∩ interaction  → BOTH layers (outer warm + inner cool)
+   *
+   *  Panel layer renders: panelOnly + overlap
+   *  Interaction layer renders: interactionOnly + overlap */
+  private _updateGroupHighlight() {
+    const panelAll = this._panelHighlightIndices;
+    const interAll = this._interactionHighlightIndices;
+    const hasPanel = panelAll && panelAll.length > 0;
+    const hasInter = interAll && interAll.length > 0;
+
+    if (hasPanel && hasInter) {
+      // Compute all three named sets explicitly
+      const interSet = new Set(interAll);
+      const panelSet = new Set(panelAll);
+      const panelOnly = panelAll.filter(i => !interSet.has(i));
+      const interactionOnly = interAll.filter(i => !panelSet.has(i));
+      const overlap = panelAll.filter(i => interSet.has(i));
+
+      // Panel layer: panelOnly + overlap (warm outer halo)
+      const panelRender = panelOnly.concat(overlap);
+      if (panelRender.length > 0) {
+        this._applyHighlightLayer(
+          'panel', panelRender,
+          CONFIG.panelHighlight[this._panelHighlightIntensity],
+          CONFIG.panelHighlight[this._panelHighlightIntensity].scale, 2,
+        );
+      } else if (this._panelHighlightMesh) {
+        this._panelHighlightMesh.count = 0;
+        this._panelHighlightMesh.instanceMatrix.needsUpdate = true;
+      }
+
+      // Interaction layer: interactionOnly + overlap (cool inner halo)
+      const interactionRender = interactionOnly.concat(overlap);
+      if (interactionRender.length > 0) {
+        this._applyHighlightLayer(
+          'interaction', interactionRender,
+          CONFIG.interactionHighlight[this._interactionHighlightIntensity],
+          CONFIG.interactionHighlight[this._interactionHighlightIntensity].scale, 3,
+        );
+      } else if (this._interactionHighlightMesh) {
+        this._interactionHighlightMesh.count = 0;
+        this._interactionHighlightMesh.instanceMatrix.needsUpdate = true;
+      }
+    } else {
+      // Single-layer: no overlap computation needed
+      if (hasPanel) {
+        this._applyHighlightLayer(
+          'panel', panelAll!,
+          CONFIG.panelHighlight[this._panelHighlightIntensity],
+          CONFIG.panelHighlight[this._panelHighlightIntensity].scale, 2,
+        );
+      } else if (this._panelHighlightMesh) {
+        this._panelHighlightMesh.count = 0;
+        this._panelHighlightMesh.instanceMatrix.needsUpdate = true;
+      }
+      if (hasInter) {
+        this._applyHighlightLayer(
+          'interaction', interAll!,
+          CONFIG.interactionHighlight[this._interactionHighlightIntensity],
+          CONFIG.interactionHighlight[this._interactionHighlightIntensity].scale, 3,
+        );
+      } else if (this._interactionHighlightMesh) {
+        this._interactionHighlightMesh.count = 0;
+        this._interactionHighlightMesh.instanceMatrix.needsUpdate = true;
+      }
+    }
   }
 
   showForceLine(fromAtomIndex, toWorldX, toWorldY, toWorldZ) {
@@ -1277,6 +1309,7 @@ export class Renderer {
   /** Hard reset: reclaims instanced capacity. Reserved for debug/explicit reset only. */
   resetToEmpty() {
     this._disposeInstanced();
+    this._disposeHighlightLayers();
     this.highlightAtom = -1;
     if (this._highlightMesh) this._highlightMesh.visible = false;
     this.resetCamera();

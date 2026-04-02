@@ -140,6 +140,29 @@ npx vitest run tests/unit/simulation-timeline.test.ts
 |------|------:|-------------------|
 | `physics-timing.test.ts` | 10 | Derived simulation rate, damping invariance across speed changes, setTimeConfig parameter application, engine parameterization consistency |
 
+### Highlight Composition (13 tests in 1 file + shared helpers)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `renderer-interaction-highlight.test.ts` | 13 | Panel/interaction layer independence, real InstancedMesh creation, overlap counts, review-visibility restoration, disposal cleanup, multi-molecule regression |
+| `highlight-test-utils.ts` | — | Shared helpers: `makeStateFake()` (minimal state-only renderer fake), `makeRealMeshCtx()` (real THREE geometry context) |
+
+Tests are organized in 3 layers, each catching a different class of regression:
+
+| Layer | Tests | What it proves |
+|-------|------:|----------------|
+| **State-level channel** | 6 | Panel and interaction state are independent channels. Setting one does not clobber, clear, or overwrite the other. Clearing interaction leaves panel intact. Panel updates during active interaction do not corrupt interaction state. |
+| **Real-mesh** | 5 | Actual `InstancedMesh` objects created via real THREE geometry. Both meshes coexist with correct `.count`. Partial overlap: atom in both sets rendered on both layers with exact counts. Review hide followed by live `_updateGroupHighlight()` restores `mesh.visible`. `disposeHighlightLayers` resets all state including intensity defaults (`'selected'` / `'hover'`). |
+| **Integration regression** | 1 | Reproduces the original bug: bonded-group selection on molecule A (panel channel) + rotate molecule B (interaction channel). Both highlights must remain visible and independently clearable. |
+
+Key test scenarios:
+
+- Panel stays visible during interaction (concurrent coexistence)
+- Partial overlap: atom in both sets rendered on both layers with exact counts
+- Review hide then live update restores `mesh.visible`
+- `disposeHighlightLayers` resets all state including intensity defaults
+- Multi-molecule regression: select group A, rotate group B, both visible
+
 ### UI Components (10 tests across 2 files)
 
 | File | Tests | What it validates |

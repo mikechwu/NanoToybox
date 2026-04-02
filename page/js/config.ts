@@ -35,10 +35,16 @@ export const CONFIG = {
     metalness: 0.0,
   },
 
-  // Bonded group highlight colors — centralized for easy tuning
-  groupHighlight: {
+  // Panel highlight (bonded group selection/hover) — warm palette, persistent
+  panelHighlight: {
     selected: { color: 0xffe45c, emissive: 0xffcc33, emissiveIntensity: 1.5, opacity: 0.6, scale: 1.2 },
     hover:    { color: 0xfff0a0, emissive: 0xffdd66, emissiveIntensity: 0.8, opacity: 0.4, scale: 1.1 },
+  },
+
+  // Interaction highlight (Move/Rotate mode) — cool palette, transient
+  interactionHighlight: {
+    active: { color: 0x336688, emissive: 0x445566, emissiveIntensity: 1.2, opacity: 0.3, scale: 1.15 },
+    hover:  { color: 0x336688, emissive: 0x445566, emissiveIntensity: 0.8, opacity: 0.2, scale: 1.08 },
   },
 
   picker: {

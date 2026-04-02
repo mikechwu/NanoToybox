@@ -250,3 +250,35 @@ Key strategic and technical decisions made during development, with rationale.
 This layering ensures that a policy change triggers conformance failures (intentional), oracle tests catch regression in canonical cases, and behavior tests confirm the user experience is preserved regardless of internal refactoring.
 
 **Evidence:** `tests/unit/placement-solver.test.ts` ([policy conformance], [external oracle], [observable behavior] describe blocks)
+
+## D31: Two-Layer Highlight Composition
+
+**Decision:** Two-layer highlight composition replaces single-mesh priority system. Panel and interaction highlights use separate InstancedMesh instances (renderOrder 2 and 3). The old save/restore pattern is removed — panel layer stays rendered during interaction.
+
+**Rationale:** The single-mesh approach required saving and restoring panel highlight state around interaction highlights, creating fragile ordering dependencies and edge cases where restore could silently clobber an updated panel selection. Two independent meshes eliminate the save/restore lifecycle entirely — each layer writes to its own mesh, and the GPU composites them via renderOrder. The panel mesh (renderOrder 2) is always visible; the interaction mesh (renderOrder 3) draws on top without touching panel state.
+
+**Evidence:** `page/js/renderer.ts` (panel and interaction InstancedMesh instances, renderOrder 2 and 3)
+
+## D32: Highlight Setters Are State-Only — Single Compositor
+
+**Decision:** Highlight setters are state-only — all rendering flows through a single compositor (`_updateGroupHighlight`). This gives one rendering truth path and makes overlap computation deterministic.
+
+**Rationale:** When setters both stored state and directly mutated mesh attributes, multiple code paths could produce highlight visuals, making it impossible to reason about what the user actually sees. Separating concerns — setters write to state arrays, a single compositor reads them and writes to both meshes — ensures every visual update goes through one code path. Overlap computation (atoms in both panel and interaction sets) happens in exactly one place, eliminating the class of bugs where two renderers disagree.
+
+**Evidence:** `page/js/renderer.ts` (`_updateGroupHighlight` as sole rendering path for both highlight meshes)
+
+## D33: Overlap Atoms Rendered on Both Layers
+
+**Decision:** Overlap atoms rendered on both layers (panelOnly + overlap on panel mesh, interactionOnly + overlap on interaction mesh). This makes "same atom in both states" a first-class visual behavior.
+
+**Rationale:** When an atom belongs to both the panel selection and the interaction highlight, it must be visually present on both meshes so that neither layer appears to have a hole. The compositor partitions atoms into three sets: panelOnly, interactionOnly, and overlap. Overlap atoms are written to both meshes with their respective colors, ensuring that removing the interaction highlight reveals the panel highlight underneath without a flash or gap. This partition is computed from the state arrays on every compositor pass, so it is always consistent with the current selection.
+
+**Evidence:** `page/js/renderer.ts` (`_updateGroupHighlight` overlap set computation and dual-mesh writes)
+
+## D34: CONFIG.groupHighlight Renamed to CONFIG.panelHighlight
+
+**Decision:** `CONFIG.groupHighlight` renamed to `CONFIG.panelHighlight`. Interaction highlight tokens moved from hardcoded renderer values to `CONFIG.interactionHighlight`. Vocabulary now matches architecture.
+
+**Rationale:** The old name `groupHighlight` was ambiguous — it could refer to any group-level highlight, but it only controlled the panel selection appearance. Renaming to `panelHighlight` makes the config key self-documenting for the two-layer architecture. Extracting interaction highlight parameters (color, opacity) from hardcoded values in the renderer into `CONFIG.interactionHighlight` makes both layers configurable in the same way and discoverable in the same config namespace. The vocabulary (panel vs. interaction) now matches the mesh layer names, the compositor logic, and the public API.
+
+**Evidence:** `page/js/config.ts` (`CONFIG.panelHighlight`, `CONFIG.interactionHighlight`)

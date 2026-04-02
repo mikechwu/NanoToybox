@@ -103,6 +103,43 @@ When changing placement policy:
 4. **Review `selectOrientationByGeometry()` comments** if override semantics change — this is the final arbiter and may score candidates differently from the base policy.
 5. **`[observable behavior]` tests are policy-independent** — they check user-facing sanity (readability, stability, plane shape) and should not need updating for most policy changes.
 
+### Highlight Composition Policy (Dual-Channel Architecture)
+
+The highlight system uses two independent visual channels composed by the renderer. Never collapse them back into a single mutable "current group highlight".
+
+**Ownership boundaries:**
+
+| Owner | Responsibility |
+|-------|----------------|
+| `bonded-group-highlight-runtime.ts` | Persistent panel state (calls `renderer.setHighlightedAtoms` only) |
+| `interaction-highlight-runtime.ts` | Pure resolver (returns data, never calls renderer directly) |
+| `renderer.ts` (`_updateGroupHighlight`) | Private compositor — merges both channels into the final visual |
+
+When changing highlight behavior:
+
+1. **Panel highlight goes through `bonded-group-highlight-runtime`** — it owns selection/hover state for the BondedGroupsPanel. It calls `renderer.setHighlightedAtoms()` and nothing else.
+2. **Interaction highlight is a pure resolver** — `interaction-highlight-runtime` returns atom indices for Move/Rotate modes. The renderer consumes this data via `setInteractionHighlightedAtoms()` / `clearInteractionHighlight()`.
+3. **Composition lives in the renderer** — `_updateGroupHighlight()` is the single private compositor that merges panel (renderOrder 2) and interaction (renderOrder 3) layers. Do not add composition logic elsewhere.
+4. **Never reintroduce a single mutable highlight channel.** The dual-channel design exists so panel selection and interaction preview can coexist without stomping each other.
+
+**Highlight config tokens (in `config.ts`):**
+
+| Token | Palette | Purpose |
+|-------|---------|---------|
+| `CONFIG.panelHighlight` | Warm (renamed from `groupHighlight`) | BondedGroupsPanel selection/hover |
+| `CONFIG.interactionHighlight` | Cool | Move/Rotate interaction preview |
+
+Future style changes (colors, opacity, scale) go in `config.ts` config tokens, not scattered through renderer code.
+
+**Test helpers (`tests/unit/highlight-test-utils.ts`):**
+
+| Helper | Use case |
+|--------|----------|
+| `makeStateFake()` | State-only fake renderer for channel-state tests (no real meshes) |
+| `makeRealMeshCtx()` | Real THREE geometry context for mesh behavior tests |
+
+Both are shared across `bonded-group-highlight.test.ts` and `renderer-interaction-highlight.test.ts`. New highlight tests should import from this shared module rather than duplicating setup.
+
 ## Next Steps (Priority Order)
 
 ### 1. Expand Structure Library
@@ -165,7 +202,8 @@ E2E tests inject `?e2e=1` via `gotoApp()` from `tests/e2e/helpers.ts`.
 | Focus resolution & onboarding | `page/js/runtime/focus-runtime.ts`, `page/js/runtime/onboarding.ts`, `page/js/components/OnboardingOverlay.tsx` |
 | Object View & icons | `page/js/components/CameraControls.tsx`, `page/js/components/Icons.tsx` |
 | E2E test helpers | `tests/e2e/helpers.ts` (gotoApp), `tests/e2e/camera-onboarding.spec.ts` |
-| Bonded clusters (panel + highlight) | `page/js/runtime/bonded-group-runtime.ts`, `page/js/runtime/bonded-group-highlight-runtime.ts`, `page/js/runtime/bonded-group-coordinator.ts`, `page/js/components/BondedGroupsPanel.tsx` |
+| Bonded clusters (panel + highlight) | `page/js/runtime/bonded-group-runtime.ts`, `page/js/runtime/bonded-group-highlight-runtime.ts`, `page/js/runtime/bonded-group-coordinator.ts`, `page/js/components/BondedGroupsPanel.tsx`, `page/js/runtime/interaction-highlight-runtime.ts` |
+| Highlight tests | `tests/unit/bonded-group-highlight.test.ts`, `tests/unit/renderer-interaction-highlight.test.ts`, `tests/unit/highlight-test-utils.ts` |
 | Store callback wiring | `page/js/runtime/ui-bindings.ts`, `page/js/store/app-store.ts` |
 | Scene / placement | `page/js/scene.ts`, `page/js/placement.ts`, `page/js/runtime/placement-solver.ts`, `tests/unit/placement-solver.test.ts` |
 | Browser physics | `page/js/physics.ts` (JS Tersoff), `sim/wasm/tersoff.c` (Wasm kernel) |
