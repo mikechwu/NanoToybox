@@ -76,6 +76,10 @@ export interface PlacementResult {
   /** Pre-transformed atoms in world space (authoritative for both preview and commit).
    *  Preserves all original atom properties (element, etc.) with updated positions. */
   transformedAtoms: Array<StructureAtom & Record<string, any>>;
+  /** Whether the solver found a feasible non-overlapping placement.
+   *  false means the placement is a fallback — the preview may still be usable
+   *  but was not validated by checkNoInitialBond. */
+  feasible: boolean;
 }
 
 export interface SceneAtom {
@@ -1076,6 +1080,16 @@ function scoreProjectedReadability(
 /**
  * Solve for optimal rigid transform (rotation + translation) for preview placement.
  *
+ * Translation policy:
+ *   1. Orient preview via geometry-aware family selection
+ *   2. Compute conservative gap (≥ bond cutoff + safety + ready margins)
+ *   3. Search 8 lateral directions at progressively wider radii:
+ *      [tangentDist, +1×safeStartDist, +2×safeStartDist, +4×safeStartDist]
+ *   4. Stop at the first radius band with at least one feasible candidate
+ *      (nearest-valid-placement policy)
+ *   5. If all bands fail: fall back to camera.right at maximum radius,
+ *      set feasible=false so the controller can show a warning
+ *
  * @param previewAtoms Library-coordinate atoms to place
  * @param sceneAtoms Current scene atoms (for no-bond + proximity scoring)
  * @param sceneN Number of scene atoms
@@ -1124,7 +1138,10 @@ export function solvePlacement(
     cameraFrame.forward.clone().multiplyScalar(previewRadius * 2.5 + 5)
   );
 
-  const gap = Math.max(1.0, 0.3 * Math.min(targetRadius ?? previewRadius, previewRadius));
+  // Conservative gap: must exceed the no-initial-bond threshold to guarantee
+  // at least one feasible direction on the first ring.
+  const safeGap = CONFIG.bonds.cutoff + SAFETY_MARGIN + READY_MARGIN;
+  const gap = Math.max(safeGap, 0.3 * Math.min(targetRadius ?? previewRadius, previewRadius));
   const tangentDist = (targetRadius ?? 0) + previewRadius + gap;
 
   const searchDirs = [
@@ -1138,40 +1155,66 @@ export function solvePlacement(
     cameraFrame.right.clone().negate().add(cameraFrame.up.clone().negate()).normalize(),
   ];
 
+  // Staged radius expansion: try progressively farther rings if closer ones fail.
+  const candidateRadii = [
+    tangentDist,
+    tangentDist + safeStartDist,
+    tangentDist + 2 * safeStartDist,
+    tangentDist + 4 * safeStartDist,
+  ];
+
   let bestPlacementScore = Infinity;
-  let bestOffset = new THREE.Vector3();
+  let bestOffset: THREE.Vector3 | null = null;
+  let feasible = false;
 
-  for (const dir of searchDirs) {
-    const offset = anchor.clone().add(dir.clone().multiplyScalar(tangentDist));
-    const transformed = applyRigidTransform(previewAtoms, localFrame.centroid, bestRotation, offset);
+  for (const radius of candidateRadii) {
+    for (const dir of searchDirs) {
+      const offset = anchor.clone().add(dir.clone().multiplyScalar(radius));
+      const transformed = applyRigidTransform(previewAtoms, localFrame.centroid, bestRotation, offset);
 
-    // Hard constraint: no initial bond
-    if (sceneN > 0 && !checkNoInitialBond(transformed, previewAtoms.length, sceneAtoms, sceneN)) {
-      continue;
+      // Hard constraint: no initial bond
+      if (sceneN > 0 && !checkNoInitialBond(transformed, previewAtoms.length, sceneAtoms, sceneN)) {
+        continue;
+      }
+
+      // Score: placement quality only (orientation already decided)
+      let score = 0;
+      if (sceneN > 0) {
+        const minDist = minCrossDistance(transformed, previewAtoms.length, sceneAtoms, sceneN);
+        score += Math.abs(minDist - desiredReadyDist) * 2.0;
+      }
+
+      const projX = offset.clone().sub(cameraFrame.position).dot(cameraFrame.right);
+      const projY = offset.clone().sub(cameraFrame.position).dot(cameraFrame.up);
+      const projDist = offset.clone().sub(cameraFrame.position).dot(cameraFrame.forward);
+      if (projDist > 0) {
+        const ndcX = projX / (projDist * 0.5);
+        const ndcY = projY / (projDist * 0.5);
+        if (Math.abs(ndcX) > 0.8 || Math.abs(ndcY) > 0.8) score += 10.0;
+      }
+
+      if (Math.abs(dir.dot(cameraFrame.right)) > 0.9) score -= 0.1;
+
+      if (score < bestPlacementScore) {
+        bestPlacementScore = score;
+        bestOffset = offset.clone();
+      }
     }
-
-    // Score: placement quality only (orientation already decided)
-    let score = 0;
-    if (sceneN > 0) {
-      const minDist = minCrossDistance(transformed, previewAtoms.length, sceneAtoms, sceneN);
-      score += Math.abs(minDist - desiredReadyDist) * 2.0;
+    // Policy: stop on the first radius band with at least one feasible candidate.
+    // This prefers "nearest valid placement" over "globally best across all bands."
+    // If globally optimal placement is needed later, score across all bands and
+    // add a distance penalty so farther bands only win when materially better.
+    if (bestOffset !== null) {
+      feasible = true;
+      break;
     }
+  }
 
-    const projX = offset.clone().sub(cameraFrame.position).dot(cameraFrame.right);
-    const projY = offset.clone().sub(cameraFrame.position).dot(cameraFrame.up);
-    const projDist = offset.clone().sub(cameraFrame.position).dot(cameraFrame.forward);
-    if (projDist > 0) {
-      const ndcX = projX / (projDist * 0.5);
-      const ndcY = projY / (projDist * 0.5);
-      if (Math.abs(ndcX) > 0.8 || Math.abs(ndcY) > 0.8) score += 10.0;
-    }
-
-    if (Math.abs(dir.dot(cameraFrame.right)) > 0.9) score -= 0.1;
-
-    if (score < bestPlacementScore) {
-      bestPlacementScore = score;
-      bestOffset = offset.clone();
-    }
+  // Last-resort fallback: if all radii failed, place along camera.right at maximum distance
+  if (bestOffset === null) {
+    const fallbackRadius = tangentDist + 4 * safeStartDist;
+    bestOffset = anchor.clone().add(cameraFrame.right.clone().multiplyScalar(fallbackRadius));
+    feasible = false;
   }
 
   // Compute authoritative transformed atoms (used by both preview and commit)
@@ -1189,6 +1232,7 @@ export function solvePlacement(
     centroid: localFrame.centroid,
     shapeClass: localFrame.shapeClass,
     transformedAtoms,
+    feasible,
   };
 }
 

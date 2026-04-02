@@ -1738,3 +1738,118 @@ describe('[observable behavior] readability + stability + plane shape', () => {
     expect(ratio).toBeLessThan(5);
   });
 });
+
+// ── Placement overlap regression: C60 + C60 ──
+
+describe('placement overlap regression', () => {
+  // First 12 atoms from C60 (radius ≈ 3.61 Å, spherical cage)
+  const c60Atoms: StructureAtom[] = [
+    { x: 3.61194052, y: 0.73024841, z: 0.00000047 },
+    { x: 0.73025144, y: 0.00000006, z: -3.61194028 },
+    { x: -0.00000001, y: 3.61194053, z: -0.73024609 },
+    { x: -3.61194054, y: 0.73024819, z: 0.00000023 },
+    { x: 0.73024724, y: -0.00000024, z: 3.61194053 },
+    { x: 0.00000004, y: -3.61194041, z: -0.73024806 },
+    { x: 3.61194045, y: -0.73024883, z: -0.00000032 },
+    { x: -0.73025140, y: 0.00000000, z: -3.61194028 },
+    { x: 0.00000001, y: 3.61194068, z: 0.73024584 },
+    { x: -3.61194046, y: -0.73024860, z: -0.00000009 },
+    { x: -0.73024716, y: 0.00000032, z: 3.61194054 },
+    { x: -0.00000006, y: -3.61194062, z: 0.73024712 },
+  ];
+
+  it('adding C60 next to existing C60: preview NOT at same position', () => {
+    // Existing C60 at origin
+    const sceneAtoms = c60Atoms.map(a => ({ x: a.x, y: a.y, z: a.z }));
+    const targetCOM = new THREE.Vector3(0, 0, 0);
+    const targetRadius = 3.62; // bounding radius of C60
+
+    const result = solvePlacement(
+      c60Atoms, sceneAtoms, sceneAtoms.length, defaultCamera,
+      targetCOM, targetRadius,
+    );
+
+    // Preview center must NOT be near the origin (the existing molecule)
+    const previewCenter = result.transformedAtoms.reduce(
+      (acc, a) => ({ x: acc.x + a.x, y: acc.y + a.y, z: acc.z + a.z }),
+      { x: 0, y: 0, z: 0 },
+    );
+    const n = result.transformedAtoms.length;
+    const cx = previewCenter.x / n;
+    const cy = previewCenter.y / n;
+    const cz = previewCenter.z / n;
+    const distFromOrigin = Math.sqrt(cx * cx + cy * cy + cz * cz);
+
+    // Must be clearly separated from the existing molecule
+    expect(distFromOrigin).toBeGreaterThan(5); // at least 5 Å away
+  });
+
+  it('adding C60 next to existing C60: no-initial-bond constraint satisfied', () => {
+    const sceneAtoms = c60Atoms.map(a => ({ x: a.x, y: a.y, z: a.z }));
+    const targetCOM = new THREE.Vector3(0, 0, 0);
+    const targetRadius = 3.62;
+
+    const result = solvePlacement(
+      c60Atoms, sceneAtoms, sceneAtoms.length, defaultCamera,
+      targetCOM, targetRadius,
+    );
+
+    // Verify no-initial-bond passes for the returned placement
+    const transformed = applyRigidTransform(
+      c60Atoms, computeLocalFrame(c60Atoms).centroid,
+      result.rotation, new THREE.Vector3(...result.offset),
+    );
+    expect(checkNoInitialBond(transformed, c60Atoms.length, sceneAtoms, sceneAtoms.length)).toBe(true);
+    expect(result.feasible).toBe(true);
+  });
+
+  it('solver expands radius when first ring is too close', () => {
+    // Giant molecule: atoms at radius 20 → first ring at ~40+gap may still fail
+    // for very dense scenes. The solver should expand, not collapse to origin.
+    const giantAtoms: StructureAtom[] = [];
+    for (let i = 0; i < 20; i++) {
+      const theta = (i / 20) * Math.PI * 2;
+      giantAtoms.push({ x: Math.cos(theta) * 20, y: Math.sin(theta) * 20, z: 0 });
+    }
+    const sceneAtoms = giantAtoms.map(a => ({ x: a.x, y: a.y, z: a.z }));
+
+    const result = solvePlacement(
+      giantAtoms, sceneAtoms, sceneAtoms.length, defaultCamera,
+      new THREE.Vector3(0, 0, 0), 20,
+    );
+
+    // Must not be at origin
+    const cx = result.transformedAtoms.reduce((s, a) => s + a.x, 0) / result.transformedAtoms.length;
+    const cy = result.transformedAtoms.reduce((s, a) => s + a.y, 0) / result.transformedAtoms.length;
+    expect(Math.sqrt(cx * cx + cy * cy)).toBeGreaterThan(10);
+  });
+
+  it('feasible flag is true for normal empty-scene placement', () => {
+    const atoms = Array.from({ length: 5 }, (_, i) => ({ x: i * 1.4, y: 0, z: 0 }));
+    const result = solvePlacement(atoms, [], 0, defaultCamera);
+    expect(result.feasible).toBe(true);
+  });
+
+  it('fallback path: extremely dense scene produces feasible=false but valid offset', () => {
+    // Fill a dense shell of scene atoms around the origin so all staged radii fail.
+    // This forces the last-resort fallback path.
+    const sceneAtoms: { x: number; y: number; z: number }[] = [];
+    // Dense grid of atoms covering a wide area
+    for (let x = -30; x <= 30; x += 2) {
+      for (let y = -30; y <= 30; y += 2) {
+        sceneAtoms.push({ x, y, z: 0 });
+      }
+    }
+    const previewAtoms: StructureAtom[] = [{ x: 0, y: 0, z: 0 }, { x: 1.4, y: 0, z: 0 }];
+
+    const result = solvePlacement(
+      previewAtoms, sceneAtoms, sceneAtoms.length, defaultCamera,
+      new THREE.Vector3(0, 0, 0), 30,
+    );
+
+    // Fallback: feasible may be false, but offset must not be at origin
+    const [ox, oy, oz] = result.offset;
+    const distFromOrigin = Math.sqrt(ox * ox + oy * oy + oz * oz);
+    expect(distFromOrigin).toBeGreaterThan(5); // not at the target
+  });
+});

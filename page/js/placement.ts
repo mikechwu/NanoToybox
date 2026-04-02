@@ -74,6 +74,9 @@ export class PlacementController {
     lastStructureFile: string | null;
     lastStructureName: string | null;
     lastOffset: number[] | null;
+    /** Whether the solver found a feasible non-overlapping placement.
+     *  false = fallback placement, may need user adjustment. */
+    previewFeasible: boolean;
   };
 
   constructor({ renderer, physics, stateMachine, inputManager, loadStructure, commands }: {
@@ -122,10 +125,13 @@ export class PlacementController {
       lastStructureFile: null,
       lastStructureName: null,
       lastOffset: null,
+      previewFeasible: true,
     };
   }
 
   get active() { return this._state.active; }
+  /** Whether the current preview was placed at a validated (non-fallback) position. */
+  get previewFeasible() { return this._state.previewFeasible; }
   get loading() { return this._loading; }
   hasLastStructure() { return !!this._state.lastStructureFile; }
   getLastStructureFile() { return this._state.lastStructureFile; }
@@ -204,6 +210,7 @@ export class PlacementController {
       this._state.previewAtoms = solverResult.transformedAtoms as StructureAtom[];
       this._state.previewOffset = [0, 0, 0]; // atoms already at world position
       this._state.lastOffset = [0, 0, 0];
+      this._state.previewFeasible = solverResult.feasible;
 
       // Set placement plane at the solver's computed center
       const camDir = new THREE.Vector3(...camState.direction);
@@ -218,7 +225,9 @@ export class PlacementController {
       // Show placement UI
       this._commands.setDockPlacementMode(true);
       const targetName = this._getTargetMoleculeName();
-      if (targetName) {
+      if (!this._state.previewFeasible) {
+        this._commands.updateStatus(`Placing ${name} · preview placed farther out (could not find a closer safe location)`);
+      } else if (targetName) {
         this._commands.updateStatus(`Placing ${name} near ${targetName} · target: center of view`);
       } else {
         this._commands.updateStatus(`Placing ${name}`);
@@ -287,6 +296,7 @@ export class PlacementController {
       this._state.previewOffset = [0, 0, 0];
       this._state.placementPlane = null;
       this._state.grabOffset = [0, 0, 0];
+      this._state.previewFeasible = true;
       this._commands.setDockPlacementMode(false);
       this._commands.updateSceneStatus();
     };
