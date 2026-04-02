@@ -37,25 +37,25 @@ export interface SceneMolecule {
 
 const DEBUG_LOAD = CONFIG.debug.load;
 
+/** Narrow command interface for PlacementController — only methods it actually uses. */
+export interface PlacementControllerCommands {
+  setDockPlacementMode: (active: boolean) => void;
+  commitToScene: (file: string, name: string, atoms: StructureAtom[], bonds: StructureBond[], offset: number[]) => void | Promise<void>;
+  updateStatus: (text: string) => void;
+  updateSceneStatus: () => void;
+  forceIdle: () => void;
+  forceRender: () => void;
+  buildAtomSource: () => { count: number; getWorldPosition: (i: number, out: THREE.Vector3) => THREE.Vector3; raycastTarget: THREE.Object3D | THREE.InstancedMesh | null };
+  getSceneMolecules: () => SceneMolecule[];
+}
+
 export class PlacementController {
   _renderer: Renderer;
   _physics: PhysicsEngine;
   _stateMachine: StateMachine;
   _inputManager: InputManager;
   _loadStructure: (filename: string) => Promise<{ atoms: StructureAtom[]; bonds: StructureBond[] }>;
-  _commands: {
-    setDockPlacementMode: (active: boolean) => void;
-    commitToScene: (file: string, name: string, atoms: StructureAtom[], bonds: StructureBond[], offset: number[]) => void | Promise<void>;
-    updateStatus: (text: string) => void;
-    updateSceneStatus: () => void;
-    forceIdle: () => void;
-    syncInput: () => void;
-    forceRender: () => void;
-    buildAtomSource: () => { count: number; getWorldPosition: (i: number, out: THREE.Vector3) => THREE.Vector3; raycastTarget: THREE.Object3D | THREE.InstancedMesh | null };
-    getSceneMolecules: () => SceneMolecule[];
-    /** Returns true if the physics snapshot is fresh enough for placement computation. */
-    isSnapshotFresh: () => boolean;
-  };
+  _commands: PlacementControllerCommands;
   _generation: number;
   _commitGeneration: number;
   _loading: boolean;
@@ -85,7 +85,7 @@ export class PlacementController {
     stateMachine: StateMachine;
     inputManager: InputManager;
     loadStructure: (filename: string) => Promise<{ atoms: StructureAtom[]; bonds: StructureBond[] }>;
-    commands: PlacementController['_commands'];
+    commands: PlacementControllerCommands;
   }) {
     this._renderer = renderer;
     this._physics = physics;
@@ -95,15 +95,6 @@ export class PlacementController {
     // Commands: all required at construction
     this._commands = commands;
     // commands.setDockPlacementMode(active)
-    // commands.commitToScene(file, name, atoms, bonds, offset)
-    // commands.updateStatus(text)
-    // commands.updateSceneStatus()
-    // commands.forceIdle()
-    // commands.syncInput()
-    // commands.forceRender()
-    // commands.buildAtomSource()
-    // commands.getSceneMolecules()
-
     // Internal state
     this._generation = 0;
     this._commitGeneration = 0;
@@ -133,6 +124,14 @@ export class PlacementController {
   /** Whether the current preview was placed at a validated (non-fallback) position. */
   get previewFeasible() { return this._state.previewFeasible; }
   get loading() { return this._loading; }
+  /** Whether a commit is currently in progress (blocks duplicate Place). */
+  get isCommitting() { return this._state.isCommitting; }
+  /** Current structure file being placed (null if not active). */
+  get structureFile() { return this._state.structureFile; }
+  /** Current structure name being placed (null if not active). */
+  get structureName() { return this._state.structureName; }
+  /** Whether the user is currently dragging the preview. */
+  get isDraggingPreview() { return this._state.isDraggingPreview; }
   hasLastStructure() { return !!this._state.lastStructureFile; }
   getLastStructureFile() { return this._state.lastStructureFile; }
   getLastStructureName() { return this._state.lastStructureName; }

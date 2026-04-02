@@ -118,11 +118,9 @@ describe('PlacementController async commit (real controller)', () => {
       updateStatus: vi.fn(),
       updateSceneStatus: vi.fn(),
       forceIdle: vi.fn(),
-      syncInput: vi.fn(),
       forceRender: vi.fn(),
       buildAtomSource: vi.fn(() => ({ count: 0, getWorldPosition: vi.fn(), raycastTarget: null })),
       getSceneMolecules: vi.fn(() => []),
-      isSnapshotFresh: vi.fn(() => true),
     };
     const renderer = {
       hidePreview: vi.fn(),
@@ -159,13 +157,13 @@ describe('PlacementController async commit (real controller)', () => {
     const { ctrl } = createController(asyncCommit);
 
     ctrl.exit(true);
-    expect((ctrl as any)._state.active).toBe(true); // still active (async pending)
+    expect(ctrl.active).toBe(true); // still active (async pending)
 
     resolveCommit!();
     await new Promise(r => setTimeout(r, 10));
 
-    expect((ctrl as any)._state.active).toBe(false); // finalized
-    expect((ctrl as any)._state.lastStructureFile).toBe('c60.xyz');
+    expect(ctrl.active).toBe(false); // finalized
+    expect(ctrl.getLastStructureFile()).toBe('c60.xyz');
   });
 
   it('async commit reject → placement stays open with intact state', async () => {
@@ -176,9 +174,9 @@ describe('PlacementController async commit (real controller)', () => {
     await new Promise(r => setTimeout(r, 10));
 
     // Placement stays open for retry
-    expect((ctrl as any)._state.active).toBe(true);
-    expect((ctrl as any)._state.lastStructureFile).toBeNull();
-    expect((ctrl as any)._state.isCommitting).toBe(false); // re-enabled for retry
+    expect(ctrl.active).toBe(true);
+    expect(ctrl.getLastStructureFile()).toBeNull();
+    expect(ctrl.isCommitting).toBe(false); // re-enabled for retry
   });
 
   it('sync commit failure → placement stays open with intact state', () => {
@@ -188,9 +186,9 @@ describe('PlacementController async commit (real controller)', () => {
     ctrl.exit(true);
 
     expect(commands.updateStatus).toHaveBeenCalledWith('Placement failed: physics error');
-    expect((ctrl as any)._state.active).toBe(true);
-    expect((ctrl as any)._state.lastStructureFile).toBeNull();
-    expect((ctrl as any)._state.isCommitting).toBe(false); // re-enabled for retry
+    expect(ctrl.active).toBe(true);
+    expect(ctrl.getLastStructureFile()).toBeNull();
+    expect(ctrl.isCommitting).toBe(false); // re-enabled for retry
   });
 
   it('isCommitting blocks duplicate exit(true)', async () => {
@@ -199,14 +197,14 @@ describe('PlacementController async commit (real controller)', () => {
     const { ctrl } = createController(asyncCommit);
 
     ctrl.exit(true); // first commit
-    expect((ctrl as any)._state.isCommitting).toBe(true);
+    expect(ctrl.isCommitting).toBe(true);
 
     ctrl.exit(true); // duplicate — should be blocked
     expect(asyncCommit).toHaveBeenCalledTimes(1); // only one commit
 
     resolveCommit!();
     await new Promise(r => setTimeout(r, 10));
-    expect((ctrl as any)._state.isCommitting).toBe(false);
+    expect(ctrl.isCommitting).toBe(false);
   });
 
   it('cancel during pending async commit → late resolve is no-op', async () => {
@@ -228,7 +226,7 @@ describe('PlacementController async commit (real controller)', () => {
     await new Promise(r => setTimeout(r, 10));
 
     // lastStructureFile should NOT be c60.xyz (stale commit ignored)
-    expect((ctrl as any)._state.lastStructureFile).not.toBe('c60.xyz');
+    expect(ctrl.getLastStructureFile()).not.toBe('c60.xyz');
   });
 
   it('interaction frozen while isCommitting — real handler ignored', async () => {
@@ -241,7 +239,7 @@ describe('PlacementController async commit (real controller)', () => {
     (ctrl as any)._registerListeners();
 
     ctrl.exit(true); // start async commit
-    expect((ctrl as any)._state.isCommitting).toBe(true);
+    expect(ctrl.isCommitting).toBe(true);
 
     // Invoke the real captured pointerdown handler while committing
     const handlers = (ctrl as any)._listeners;
@@ -250,7 +248,7 @@ describe('PlacementController async commit (real controller)', () => {
       handlers.pointerdown({ button: 0, clientX: 400, clientY: 300, stopPropagation: vi.fn(), preventDefault: vi.fn() });
     }
     // isDraggingPreview should NOT have changed — handler returned early
-    expect((ctrl as any)._state.isDraggingPreview).toBe(false);
+    expect(ctrl.isDraggingPreview).toBe(false);
 
     // Invoke pointermove handler — should also be ignored
     if (handlers?.pointermove) {
@@ -261,7 +259,7 @@ describe('PlacementController async commit (real controller)', () => {
     if (handlers?.touchstart) {
       handlers.touchstart({ touches: [{ clientX: 400, clientY: 300 }], stopPropagation: vi.fn(), preventDefault: vi.fn() });
     }
-    expect((ctrl as any)._state.isDraggingPreview).toBe(false);
+    expect(ctrl.isDraggingPreview).toBe(false);
 
     // Invoke touchmove handler — should also be ignored
     if (handlers?.touchmove) {
@@ -274,7 +272,7 @@ describe('PlacementController async commit (real controller)', () => {
     // Resolve commit + verify recovery
     resolveCommit!();
     await new Promise(r => setTimeout(r, 10));
-    expect((ctrl as any)._state.isCommitting).toBe(false);
+    expect(ctrl.isCommitting).toBe(false);
   });
 
   it('async failure shows status message', async () => {
@@ -285,7 +283,7 @@ describe('PlacementController async commit (real controller)', () => {
     await new Promise(r => setTimeout(r, 10));
 
     expect(commands.updateStatus).toHaveBeenCalledWith(expect.stringContaining('network error'));
-    expect((ctrl as any)._state.isCommitting).toBe(false);
+    expect(ctrl.isCommitting).toBe(false);
   });
 
   it('previewFeasible=false state propagates warning + resets on finalize', () => {
@@ -303,7 +301,7 @@ describe('PlacementController async commit (real controller)', () => {
     expect(ctrl.previewFeasible).toBe(true);
   });
 
-  it('start() with infeasible solver: previewFeasible=false + warning shown', async () => {
+  it('infeasible preview state is observable via getter and resets on finalize', async () => {
     // This test verifies the controller handoff by directly setting the state
     // that solvePlacement would produce, then checking the controller reacts.
     // (Module-level mocking of solvePlacement requires vi.mock() at file top,
@@ -324,6 +322,6 @@ describe('PlacementController async commit (real controller)', () => {
     // Cancel → finalize resets feasibility
     ctrl.exit(false);
     expect(ctrl.previewFeasible).toBe(true);
-    expect((ctrl as any)._state.active).toBe(false);
+    expect(ctrl.active).toBe(false);
   });
 });

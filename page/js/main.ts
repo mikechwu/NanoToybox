@@ -542,11 +542,9 @@ async function init() {
       updateStatus: (text) => _scene!.updateStatus(text),
       updateSceneStatus: () => _scene!.updateSceneStatus(),
       forceIdle: () => _dispatch!(stateMachine.forceIdle()),
-      syncInput: () => { if (_inputBindings) _inputBindings.sync(); },
       forceRender: () => { scheduler.forceRenderThisTick = true; },
       buildAtomSource: () => createAtomSource(renderer),
       getSceneMolecules: () => session.scene.molecules,
-      isSnapshotFresh: () => !(_workerRuntime && _workerRuntime.isActive()) || _workerRuntime!.getSnapshotAge() < 500,
     },
   });
 
