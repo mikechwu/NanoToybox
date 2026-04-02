@@ -70,7 +70,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - Dock + sheet navigation — responsive two-tier UI with React components (`page/js/components/`)
 - React UI migration — primary surfaces (DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar) are React-authoritative with Zustand store. Supporting subcomponents: Segmented, Icons, TimelineActionHint
 - Web Worker physics — off-thread simulation via `page/js/simulation-worker.ts` with automatic JS fallback
-- Runtime module extraction — 26 modules in `page/js/runtime/` (summary: scene, worker, snapshot, overlay, interaction, input, UI bindings, focus, onboarding, bonded-groups, timeline, restart, reconciled-steps, orbit-follow-update, drag-target-refresh, interaction-highlight, placement-solver); see `docs/architecture.md` for the full module-by-module inventory. main.ts reduced to composition-root-only
+- Runtime module extraction — feature modules in `page/js/runtime/`, orchestration modules in `page/js/app/` (frame-runtime, app-lifecycle); see `docs/architecture.md` for the full inventory. main.ts is the composition root
 - Object View panel — Center + Follow buttons with inline SVG icons, positioned below status block
 - Page-load onboarding overlay — welcome card with sink-to-Settings animation, page-lifetime dismissal
 
@@ -82,12 +82,25 @@ See `docs/architecture.md` for the full module map and state ownership model.
 - **Imperative controllers** remain only for PlacementController (canvas touch listeners) and StatusController (hint/coachmark surface). Both expose `destroy()`.
 - **Callbacks flow through the store.** React components invoke imperative callbacks (dockCallbacks, settingsCallbacks, chooserCallbacks) registered by main.ts into the Zustand store.
 - **New globals require teardown.** Register via `addGlobalListener()` in main.ts.
-- **Do not re-grow main.ts.** Extract new runtime logic into `page/js/runtime/` and new UI surfaces into `page/js/components/`.
+- **Do not re-grow main.ts.** Route new code by kind:
+  - **Feature-specific runtime behavior** → `page/js/runtime/` (e.g. highlight resolver, placement solver, snapshot reconciler)
+  - **Orchestration (frame sequencing, teardown order)** → `page/js/app/` (e.g. frame-runtime.ts, app-lifecycle.ts)
+  - **New UI surfaces** → `page/js/components/` (React components, Zustand-driven)
 - **State writes go through authoritative writers.** See state ownership table in architecture.md.
+
+### Owner Map / Routing Guide
+
+| File / Folder | Owns | Notes |
+|---------------|------|-------|
+| `main.ts` | Composition root — wires subsystems, owns RAF start/stop, registers global listeners | Nothing else should attach `window` listeners or call `requestAnimationFrame` directly |
+| `app/frame-runtime.ts` | Per-frame sequencing (physics → reconcile → feedback → highlight → record → render → status) | Ordering invariants live here, not in main.ts |
+| `app/app-lifecycle.ts` | Teardown sequencing (ordered destroy of all runtime subsystems) | Dependency-aware order; see numbered list in its module header |
+| `runtime/*` | Feature-specific runtime behavior (one module per concern) | Each module has its own contract header (see below) |
+| `components/*` | React UI surfaces — sole authority for their DOM subtree | Communicate with runtime via Zustand store + registered callbacks |
 
 ### New Runtime Module Contract
 
-Every `page/js/runtime/*.ts` module must start with a contract header:
+Every `page/js/runtime/*.ts` **and** `page/js/app/*.ts` module must start with a contract header:
 
 ```
 /**
@@ -174,6 +187,14 @@ Both are shared across `bonded-group-highlight.test.ts` and `renderer-interactio
 ### 4. ML (Future, When Needed)
 - GNN architecture for >5,000 atoms where Wasm is too slow
 - Use existing data pipeline and force decomposition code
+
+### Deferred Architecture Work
+
+The following items are intentionally deferred — do not start them without an explicit decision:
+
+- **Phase 3B-D: Interface narrowing** — further narrowing the dependency surfaces passed between modules.
+- **Phase 4: Folder reorganization** — restructuring `page/js/` subdirectories beyond the current `app/`, `runtime/`, `components/` split.
+- **Phase 5: Workspace assessment** — evaluating monorepo / workspace tooling changes.
 
 ## Development Workflow
 

@@ -163,6 +163,15 @@ Key test scenarios:
 - `disposeHighlightLayers` resets all state including intensity defaults
 - Multi-molecule regression: select group A, rotate group B, both visible
 
+### App Orchestration Tests
+
+Architecture extractions should be guarded at the extracted owner, not only through indirect helper tests.
+
+| File | Purpose |
+|------|---------|
+| `frame-runtime.test.ts` | Per-frame pipeline ordering (worker-mode sequencing proof, review-mode gating, drag-refresh gating, sync-mode fallback) |
+| `app-lifecycle.test.ts` | Teardown sequence ordering (exact dependency-ordered call sequence, subscription cleanup, partial-init safety) |
+
 ### UI Components (10 tests across 2 files)
 
 | File | Tests | What it validates |

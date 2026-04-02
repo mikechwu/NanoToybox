@@ -28,8 +28,8 @@ npm run dev
 
 # Run all checks
 npm run typecheck       # TypeScript type-checking
-npm run test:unit       # Vitest unit tests (427 tests)
-npm run test:e2e        # Playwright E2E browser tests (19 tests)
+npm run test:unit       # Vitest unit tests
+npm run test:e2e        # Playwright E2E browser tests
 npm run build           # Production build → dist/
 
 # Python physics tests (requires numpy, numba)
@@ -68,6 +68,14 @@ Browser                          Web Worker
 │  StatusController    │          └──────────────────────┘
 │  (hint-only)         │
 │                      │
+│  app/ (2 modules):     │
+│  ├── frame-runtime.ts  │
+│  │   (per-frame update │
+│  │    pipeline seq.)   │
+│  └── app-lifecycle.ts  │
+│      (teardown seq.    │
+│       and reset helpers)│
+│                        │
 │  runtime/ (26 modules):│
 │  ├── SceneRuntime     │
 │  ├── WorkerLifecycle  │
@@ -97,7 +105,7 @@ Browser                          Web Worker
 - **Worker-first physics** — simulation runs off-thread via Web Worker with snapshot protocol. Automatic fallback to sync-mode if worker fails (5s warning, 15s fatal).
 - **Dual Tersoff kernels** — JS fallback + C/Wasm kernel (compiled with Emscripten). Wasm enabled by default, ~11% faster. Force via `?kernel=js` for debugging.
 - **Momentum-conserving force clamp** — global scaling (not per-atom) preserves Newton's 3rd law and force field shape. Interaction forces added after clamp.
-- **Runtime module extraction** — main.ts delegates to 26 focused modules in `page/js/runtime/` (scene, worker lifecycle, snapshot reconciler, overlay layout/runtime, interaction dispatch, input bindings, UI bindings, atom source, focus resolution, onboarding, bonded-groups, timeline, restart, reconciled-steps, orbit-follow-update, drag-target-refresh, interaction-highlight, placement-solver). main.ts is composition-root-only (~1150 lines).
+- **Runtime module extraction** — main.ts delegates to feature modules in `page/js/runtime/` and orchestration modules in `page/js/app/` (frame-runtime.ts, app-lifecycle.ts). See `docs/architecture.md` for the full module inventory.
 
 ## Current Status
 
@@ -106,7 +114,7 @@ Browser                          Web Worker
 - **React UI** — all 11 UI components are React-authoritative with Zustand store, glassmorphic CSS, responsive layout (phone/tablet/desktop)
 - **Performance optimized** — InstancedMesh rendering (2 draw calls), on-the-fly Tersoff kernel (45% faster), spatial-hash neighbor/bond search (O(N))
 - **Wasm Tersoff kernel** — deployed and enabled by default, automatic JS fallback
-- **CI/CD** — GitHub Actions: typecheck, unit tests (427), build, E2E (19), deploy smoke, Python physics tests
+- **CI/CD** — GitHub Actions: typecheck, unit tests, build, E2E, deploy smoke, Python physics tests
 - **Containment boundary** — dynamic soft wall with Contain/Remove modes, live atom count, auto-scaling radius
 - Structure library: 15 canonical relaxed structures (60–720 atoms)
 - Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)

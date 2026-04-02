@@ -80,8 +80,9 @@ NanoToybox/
 ├── page/                       # Interactive playground (main app)
 │   ├── index.html
 │   └── js/
-│       ├── main.ts             # Composition root — wires subsystems, delegates to runtime/
-│       ├── runtime/            # Extracted runtime modules (scene, worker, overlay, input, UI)
+│       ├── main.ts             # Composition root — RAF lifecycle, global wiring, delegates to app/ and runtime/
+│       ├── app/                # App-level orchestration (frame sequencing, teardown)
+│       ├── runtime/            # Feature runtime modules (scene, worker, overlay, input, UI)
 │       ├── components/         # React UI components (Dock, SettingsSheet, etc.)
 │       ├── store/              # Zustand state management
 │       ├── hooks/              # React hooks (sheet animation)

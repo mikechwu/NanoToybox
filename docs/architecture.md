@@ -50,7 +50,10 @@ NanoToybox/
 │   │   ├── tersoff.wasm          # Compiled C Tersoff kernel
 │   │   └── tersoff.js            # Emscripten glue code
 │   ├── js/
-│   │   ├── main.ts               # Composition root — wires subsystems, delegates to runtime/
+│   │   ├── main.ts               # Composition root — RAF lifecycle, global wiring, delegates to app/ and runtime/
+│   │   ├── app/                  # App-level orchestration extracted from main.ts
+│   │   │   ├── frame-runtime.ts      # Per-frame update pipeline sequencing
+│   │   │   └── app-lifecycle.ts      # Teardown sequencing and reset helpers
 │   │   ├── runtime/              # Runtime modules extracted from main.ts
 │   │   │   ├── scene-runtime.ts      # Scene mutation wrappers + scene-to-UI projection
 │   │   │   ├── worker-lifecycle.ts   # Worker bridge creation, init, stall detection, teardown
@@ -237,7 +240,7 @@ placement-solver.ts
        │       minCrossDistance()     — nearest inter-molecule distance
        │
        └── 5. Translation optimization
-               8-direction search (camera-plane) → collision readiness scoring
+               staged ring search (4 progressively wider radii) → first-feasible-band stop → fallback with feasible=false
 ```
 
 **Orientation pipeline (step 3 in detail):**
@@ -273,7 +276,7 @@ placement-solver.ts
 
 ### Composition Root Pattern
 
-`main.ts` (~1150 lines) is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns the frame loop and scheduler, and wires global listeners. Runtime responsibilities are delegated to 26 modules in `page/js/runtime/`:
+`main.ts` is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns RAF start/stop, and wires global listeners. Per-frame sequencing is delegated to `app/frame-runtime.ts` and teardown sequencing to `app/app-lifecycle.ts`. Feature-level runtime responsibilities are delegated to modules in `page/js/runtime/`:
 
 - **scene-runtime.ts** — scene mutation wrappers, scene-to-store projection, worker scene mirroring
 - **worker-lifecycle.ts** — worker bridge creation, init, stall detection (5s warning / 15s fatal), teardown
@@ -314,31 +317,40 @@ placement-solver.ts
 
 ### Runtime Responsibility Classes
 
-**Composition root** (`main.ts`):
+Four-tier layering (top to bottom):
+
+**1. Composition root** (`main.ts`):
 - Creates all subsystems (renderer, physics, stateMachine)
-- Owns the frame loop and RAF scheduling
+- Owns RAF start/stop lifecycle
 - Wires teardown by constructing `TeardownSurface` and delegating to `app/app-lifecycle.ts`
 - All Zustand subscriptions are tracked and unsubscribed in teardown
 - Does NOT own per-frame business logic — delegates to `app/frame-runtime.ts`
 - Does NOT own teardown sequencing — delegates to `app/app-lifecycle.ts`
 
-**Teardown orchestration** (`page/js/app/app-lifecycle.ts:teardownAllSubsystems()`):
-- Owns the ordered teardown sequence (13 steps, dependency-ordered)
-- Sequence: frame loop → listeners → debug hooks → timeline → onboarding + subscriptions → bonded groups → overlay → controllers → input → worker → renderer → helpers → state reset
-- Subsystem-specific cleanup stays inside each subsystem's own destroy/teardown
-- Tested by `tests/unit/app-lifecycle.test.ts` — full sequence verified
+**2. App orchestration** (`page/js/app/`):
 
-**Frame-loop orchestration** (`page/js/app/frame-runtime.ts:executeFrame()`):
-- Owns the per-frame update pipeline sequence (physics → reconciliation → feedback → highlight → recording → render)
-- `main.ts:frameLoop()` is a thin wrapper that constructs the `FrameRuntimeSurface` and delegates
-- Ordering matters: recording MUST happen after reconciliation; highlights MUST happen after feedback
-- Depends on: physics, renderer, stateMachine, scheduler, worker runtime, timeline, drag-target-refresh, interaction-highlight-runtime
+- **`frame-runtime.ts`** (`executeFrame()`):
+  - Owns the per-frame update pipeline sequence (physics → reconciliation → feedback → highlight → recording → render)
+  - `main.ts:frameLoop()` is a thin wrapper that constructs the `FrameRuntimeSurface` and delegates
+  - Ordering matters: recording MUST happen after reconciliation; highlights MUST happen after feedback
+  - Depends on: physics, renderer, stateMachine, scheduler, worker runtime, timeline, drag-target-refresh, interaction-highlight-runtime
 
-**Feature runtimes** (`page/js/runtime/*.ts`):
+- **`app-lifecycle.ts`** (`teardownAllSubsystems()`):
+  - Owns the ordered teardown sequence (dependency-ordered; test verifies exact call sequence)
+  - Sequence: frame loop → listeners → debug hooks → timeline → onboarding + subscriptions → bonded groups → overlay → controllers → input → worker → renderer → helpers → state reset
+  - Subsystem-specific cleanup stays inside each subsystem's own destroy/teardown
+  - Tested by `tests/unit/app-lifecycle.test.ts` — full sequence verified
+
+**3. Feature runtimes** (`page/js/runtime/*.ts`):
 - Each module owns one concern (e.g., bonded-group projection, drag refresh, timeline recording)
 - Each module documents: owns / depends on / called by / teardown
 - Modules do NOT attach global listeners or write to `window` — main.ts wires those
 - Teardown is the creator's responsibility (main.ts or the module's coordinator)
+
+**4. Pure helpers / store / React surfaces**:
+- Pure helpers (`scheduler-pure.ts`, `orbit-math.ts`, `format-status.ts`, etc.) — stateless computation, no side effects
+- Store (`store/app-store.ts`, `store/selectors/`) — Zustand state, derived selectors
+- React components (`components/`) — declarative UI surfaces, emit intents via store callbacks
 
 **Default runtime module shape** (for new modules):
 ```
@@ -359,11 +371,11 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | State slice | Authoritative writer | Intent sources |
 |-------------|---------------------|---------------|
 | `session.scene` | scene-runtime.ts (commit/clear/add) | React SettingsSheet (clear), PlacementController (commit) |
-| `session.playback` | main.ts (frame loop) | React DockBar (pause), React SettingsSheet (speed) |
+| `session.playback` | app/frame-runtime.ts (per-frame) | React DockBar (pause), React SettingsSheet (speed) |
 | `session.interactionMode` | main.ts (via store callback) | React DockBar (mode segmented) |
 | Camera mode (`cameraMode`) | Zustand store (`app-store.ts`) | CameraControls mode toggle (feature-gated), Esc key, Free-Look recovery callbacks |
 | Camera focus (`lastFocusedMoleculeId`) | focus-runtime.ts (via store) | interaction-dispatch (orbit), input-bindings (free-look), placement |
-| Orbit follow (`orbitFollowEnabled`) | Zustand store (`app-store.ts`) | CameraControls Follow button; per-frame orbit-follow loop in main.ts |
+| Orbit follow (`orbitFollowEnabled`) | Zustand store (`app-store.ts`) | CameraControls Follow button; per-frame via `app/frame-runtime.ts` → `runtime/orbit-follow-update.ts` |
 | Onboarding phase (`onboardingPhase`) | Zustand store (`app-store.ts`) | OnboardingOverlay consumer; `subscribeOnboardingReadiness` producer |
 | UI chrome (sheets, theme, etc.) | Zustand store (`app-store.ts`) | React components |
 | `session.theme` | main.ts (via settings callback) | React SettingsSheet (theme segmented) |
@@ -371,7 +383,7 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | Panel highlight | renderer (`_panelHighlightMesh`, renderOrder 2) — state via `setHighlightedAtoms()` | bonded-group-highlight-runtime.ts (persistent bonded-group selection/hover) |
 | Interaction highlight | renderer (`_interactionHighlightMesh`, renderOrder 3) — state via `setInteractionHighlightedAtoms()` / `clearInteractionHighlight()` | interaction-highlight-runtime.ts (transient Move/Rotate); both layers composed by `_updateGroupHighlight()` |
 | placement state | placement.ts (`_state`) | React DockBar (add/cancel via dockCallbacks) |
-| scheduler / effectsGate | main.ts (frame loop only) | — |
+| scheduler / effectsGate | app/frame-runtime.ts (per-frame) | — |
 | Timeline state (`mode`, `currentTimePs`, `reviewTimePs`, `rangePs`, etc.) | simulation-timeline-coordinator.ts (via store) | TimelineBar (scrub, restart), timeline-recording-orchestrator (range updates) |
 | Timeline recording arm state | timeline-recording-policy.ts | interaction-dispatch (first atom interaction: drag/move/rotate/flick) |
 | Timeline buffers (review frames, restart frames, checkpoints) | simulation-timeline.ts | timeline-recording-orchestrator (writes), simulation-timeline-coordinator (reads) |
@@ -433,6 +445,10 @@ bonded-group-highlight-runtime.ts          interaction-highlight-runtime.ts
 **Setter/compositor split:** `setHighlightedAtoms()`, `setInteractionHighlightedAtoms()`, and `clearInteractionHighlight()` are state-only — they store indices and intensity but do not touch meshes directly. All mesh creation, capacity management, material styling, and transform updates flow through `_updateGroupHighlight()`, the single rendering truth path.
 
 **Lifecycle cleanup:** `_disposeHighlightLayers()` disposes both InstancedMesh layers and resets all associated state. It is called from `loadStructure()` and `resetToEmpty()` to prevent stale highlight geometry from surviving across structure transitions. The old save/restore pattern (`_restorePanelHighlight`) has been removed entirely.
+
+### Deferred Phases
+
+Phase 3B-D (remaining interface narrowing), Phase 4 (folder reorganization), and Phase 5 (workspace assessment) are intentionally deferred.
 
 ## External Dependencies
 

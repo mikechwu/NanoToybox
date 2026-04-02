@@ -194,7 +194,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Decision:** Highlight the full bonded group during Move and Rotate interactions, not just the picked atom. Atom mode continues to highlight a single atom. Hover preview reflects the upcoming action scope before pointer-down.
 
-**Rationale:** Physics applies force to the full connected component in Move and Rotate modes. Highlighting only the picked atom made the interaction appear narrower than it actually was. The resolver (`interaction-highlight-runtime.ts`) maps interaction state + session mode to the correct highlight target using live `physics.componentId` / `physics.components`. The renderer has separate interaction and panel highlight channels so bonded-group panel selection is not clobbered. Interaction highlight takes visual priority; panel highlight restores automatically when interaction ends. Review mode clears both channels.
+**Rationale:** Physics applies force to the full connected component in Move and Rotate modes. Highlighting only the picked atom made the interaction appear narrower than it actually was. The resolver (`interaction-highlight-runtime.ts`) maps interaction state + session mode to the correct highlight target using live `physics.componentId` / `physics.components`. The renderer has separate interaction and panel highlight channels so bonded-group panel selection is not clobbered. Both layers coexist additively — panel highlight stays visible during interaction (see D31-D33 for the composition model that superseded the earlier save/restore pattern). Review mode clears both channels.
 
 **Evidence:** `page/js/runtime/interaction-highlight-runtime.ts`, `page/js/renderer.ts` (setInteractionHighlightedAtoms, clearInteractionHighlight, updateFeedback with sessionMode), `page/js/main.ts` (resolveInteractionHighlight in frame loop), `tests/unit/interaction-highlight.test.ts`, `tests/unit/renderer-interaction-highlight.test.ts`
 
@@ -282,3 +282,27 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Rationale:** The old name `groupHighlight` was ambiguous — it could refer to any group-level highlight, but it only controlled the panel selection appearance. Renaming to `panelHighlight` makes the config key self-documenting for the two-layer architecture. Extracting interaction highlight parameters (color, opacity) from hardcoded values in the renderer into `CONFIG.interactionHighlight` makes both layers configurable in the same way and discoverable in the same config namespace. The vocabulary (panel vs. interaction) now matches the mesh layer names, the compositor logic, and the public API.
 
 **Evidence:** `page/js/config.ts` (`CONFIG.panelHighlight`, `CONFIG.interactionHighlight`)
+
+## D35: Frame-Loop Sequencing Extracted to app/frame-runtime.ts
+
+**Decision:** The per-frame update pipeline was extracted from main.ts into page/js/app/frame-runtime.ts as executeFrame(). main.ts retains only RAF lifecycle (start/stop/teardown) as a thin wrapper constructing FrameRuntimeSurface.
+
+**Rationale:** Gives frame sequencing a single testable owner. Ordering invariants (recording after reconciliation, highlights after feedback) are enforced in one place.
+
+**Evidence:** `page/js/app/frame-runtime.ts`, `tests/unit/frame-runtime.test.ts` (worker-mode ordering proof, review-mode gating)
+
+## D36: Teardown Sequencing Extracted to app/app-lifecycle.ts
+
+**Decision:** The ordered teardown sequence was extracted from main.ts into page/js/app/app-lifecycle.ts as teardownAllSubsystems(). Reset helpers (resetSchedulerState, resetSessionState, resetEffectsGate) are also exported. main.ts constructs TeardownSurface and delegates.
+
+**Rationale:** Makes teardown ordering testable and explicit. Fixes a Zustand camera-mode subscription leak that was discovered during extraction.
+
+**Evidence:** `page/js/app/app-lifecycle.ts`, `tests/unit/app-lifecycle.test.ts` (exact dependency-ordered sequence verified)
+
+## D37: Package/Workspace Split Remains Deferred and Optional
+
+**Decision:** Phase 3B-D (remaining interface narrowing), Phase 4 (folder reorganization), and Phase 5 (workspace assessment) are intentionally deferred. The current single-package structure with logical boundaries (main.ts → app/ → runtime/) is sufficient.
+
+**Rationale:** Contract clarity, single-path orchestration, and test-backed lifecycle are achieved without physical package boundaries. Splitting would add build complexity without clear benefit at current scale.
+
+**Evidence:** `docs/architecture.md` (layering documented), `tests/unit/frame-runtime.test.ts` and `tests/unit/app-lifecycle.test.ts` (orchestration boundaries guarded).

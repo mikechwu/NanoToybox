@@ -146,7 +146,13 @@ The solver uses a multi-stage orientation pipeline:
 
 **Translation Optimization**
 
-After orientation is fixed, the solver optimizes translation. It searches 8 camera-relative directions (cardinal + diagonal) for the best offset from the anchor point (target molecule COM or a default camera-forward position). Hard constraint: no-initial-bond (`checkNoInitialBond()` enforces bond cutoff + 0.5 A safety margin). Soft scoring: proximity to desired "ready to collide" distance, preference for screen-centered placement, slight preference for camera-right directions.
+After orientation is fixed, the solver optimizes translation to place the preview molecule near the target without creating initial bonds.
+
+1. **Conservative gap**: `gap >= bond cutoff + SAFETY_MARGIN + READY_MARGIN`, also floored to 30% of the smaller molecule radius. `tangentDist = targetRadius + previewRadius + gap`.
+2. **Staged ring search**: 8 camera-relative directions (cardinal + diagonal) are probed at 4 progressively wider radii: `[tangentDist, +1x safeStartDist, +2x safeStartDist, +4x safeStartDist]`.
+3. **First-feasible-band policy**: the search stops at the first radius that yields a valid candidate (no initial bond via `checkNoInitialBond()`). Soft scoring within a band favors proximity to the desired "ready to collide" distance, screen-centered placement, and a slight camera-right preference.
+4. **Last-resort fallback**: if all bands fail, places the preview along `camera.right` at the maximum radius (`tangentDist + 4x safeStartDist`) and sets `feasible = false`.
+5. **Warning status**: `PlacementController` reads `feasible` from the solver result. When `feasible = false`, it shows a status message indicating the preview was placed farther out because no closer safe location was found.
 
 **Shared Helpers**
 
@@ -226,7 +232,15 @@ The page runs a full analytical Tersoff (1988) potential in JavaScript:
 
 ### Architecture
 
-The interactive page uses a composition root pattern with React-authoritative UI components. `main.ts` creates all subsystems, mounts the React UI, and registers callbacks into the Zustand store. See `docs/architecture.md` for the full module map, state ownership model, and lifecycle details.
+The interactive page uses a composition root pattern with React-authoritative UI components. `main.ts` is the composition root: it creates all subsystems, mounts the React UI, registers callbacks into the Zustand store, and wires modules together — but delegates runtime sequencing to dedicated modules. See `docs/architecture.md` for the full module map, state ownership model, and lifecycle details.
+
+**Orchestration ownership:**
+
+| Concern | Owner | Notes |
+|---------|-------|-------|
+| Composition & wiring | `main.ts` | Creates subsystems, mounts React, registers store callbacks. Owns RAF lifecycle (start/stop) but delegates the frame body |
+| Per-frame sequencing | `app/frame-runtime.ts` | Owns the sequenced update pipeline executed each frame (physics step, render, timeline, status, etc.) |
+| Teardown sequencing | `app/app-lifecycle.ts` | Owns ordered teardown of all subsystems, scheduler reset, session reset, and effects gate |
 
 **Key rules:**
 - Modules import from `config.ts` for shared constants. Data flows through `main.ts` orchestration and the Zustand store.
