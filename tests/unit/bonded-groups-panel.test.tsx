@@ -42,6 +42,7 @@ describe('BondedGroupsPanel', () => {
     projectNow: () => {},
     reset: () => {},
     getAtomIndicesForGroup: (id: string) => atomMap[id] ?? null,
+    getDisplaySourceKind: () => 'live' as const,
   };
 
   beforeEach(() => {
@@ -247,29 +248,32 @@ describe('BondedGroupsPanel', () => {
     expect(c.querySelector('.bonded-groups-clear')).toBeTruthy();
   });
 
-  it('panel hidden during timeline review mode', () => {
-    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+  it('panel hidden in review until historical topology source exists', () => {
+    // In production, review mode has no bonded-group display source yet
+    // (getTimelineReviewComponents returns null). So the runtime projects [],
+    // and the panel hides because groups.length === 0.
+    // This test reflects the honest production state.
+    useAppStore.getState().setBondedGroups([]); // no groups in review (production reality)
     useAppStore.getState().setTimelineMode('review');
     const c = renderPanel();
     expect(c.innerHTML).toBe('');
   });
 
-  it('bonded-group select blocked during review', () => {
+  it('bonded-group select blocked in review (canInspectBondedGroups: false)', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
-    // Enter review after groups visible
     useAppStore.getState().setTimelineMode('review');
-    // toggleSelectedGroup should no-op
     const hl = createBondedGroupHighlightRuntime({
       getBondedGroupRuntime: () => mockBgr,
       getRenderer: () => ({ setHighlightedAtoms: () => {} }),
       getPhysics: () => ({ n: 20 }),
     });
     hl.toggleSelectedGroup('a');
+    // Review inspection disabled until historical topology + review highlight rendering exist
     expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
   });
 
-  it('bonded-group hover blocked during review', () => {
+  it('bonded-group hover blocked in review (canInspectBondedGroups: false)', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().setTimelineMode('review');
     const hl = createBondedGroupHighlightRuntime({

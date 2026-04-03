@@ -23,6 +23,7 @@ describe('bonded group coordinator', () => {
       projectNow: vi.fn(() => callOrder.push('projectNow')),
       reset: vi.fn(),
       getAtomIndicesForGroup: vi.fn(() => null),
+      getDisplaySourceKind: vi.fn(() => 'live' as const),
     };
     const mockHighlight = {
       toggleSelectedGroup: vi.fn(),
@@ -51,6 +52,7 @@ describe('bonded group coordinator', () => {
       projectNow: vi.fn(),
       reset: vi.fn(() => callOrder.push('reset')),
       getAtomIndicesForGroup: vi.fn(() => null),
+      getDisplaySourceKind: vi.fn(() => 'live' as const),
     };
     const mockHighlight = {
       toggleSelectedGroup: vi.fn(),

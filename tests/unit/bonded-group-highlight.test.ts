@@ -28,6 +28,7 @@ function makeMockBGR(atomMap: Record<string, number[]>): BondedGroupRuntime {
     projectNow: vi.fn(),
     reset: vi.fn(),
     getAtomIndicesForGroup: (id: string) => atomMap[id] ?? null,
+    getDisplaySourceKind: () => 'live' as const,
   };
 }
 

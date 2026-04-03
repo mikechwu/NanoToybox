@@ -828,6 +828,46 @@ export class Renderer {
     this._updateGroupHighlight();
   }
 
+  // ── Atom color overrides (authored appearance, separate from highlight overlays) ──
+
+  /** Authored atom color overrides — stored per atom index, applied to base InstancedMesh.
+   *  Separate from highlight overlays (panel/interaction). Highlight renders on top. */
+  private _atomColorOverrides: Record<number, { hex: string }> | null = null;
+
+  /**
+   * Set authored atom color overrides. Affects base atom appearance (InstancedMesh color).
+   * Pass null to clear all overrides and restore default appearance.
+   * Highlight overlays still render on top of colored atoms.
+   */
+  setAtomColorOverrides(overrides: Record<number, { hex: string }> | null): void {
+    this._atomColorOverrides = overrides && Object.keys(overrides).length > 0 ? overrides : null;
+    this._applyAtomColorOverrides();
+  }
+
+  /** Clear all authored atom color overrides, restoring default appearance. */
+  clearAtomColorOverrides(): void {
+    this._atomColorOverrides = null;
+    this._applyAtomColorOverrides();
+  }
+
+  /** Apply atom color overrides to the InstancedMesh. Called internally after changes. */
+  private _applyAtomColorOverrides(): void {
+    if (!this._instancedAtoms) return;
+    const defaultColor = new THREE.Color(THEMES[this.currentTheme].atomColor);
+    const overrides = this._atomColorOverrides;
+    const n = this._atomCount;
+    for (let i = 0; i < n; i++) {
+      if (overrides && overrides[i]) {
+        this._instancedAtoms.setColorAt(i, new THREE.Color(overrides[i].hex));
+      } else {
+        this._instancedAtoms.setColorAt(i, defaultColor);
+      }
+    }
+    if (this._instancedAtoms.instanceColor) {
+      this._instancedAtoms.instanceColor.needsUpdate = true;
+    }
+  }
+
   /** Dispose both highlight layers completely. Called on structure reload/reset. */
   private _disposeHighlightLayers(): void {
     if (this._panelHighlightMesh) {
@@ -1079,6 +1119,8 @@ export class Renderer {
     }
     // Update highlight overlay material if active
     if (this._highlightMat) this._highlightMat.color.set(t.atom);
+    // Reapply authored color overrides (default color changed with theme)
+    this._applyAtomColorOverrides();
   }
 
   /**
@@ -1155,6 +1197,8 @@ export class Renderer {
     this._instancedAtoms.count = newCount;
     this._instancedAtoms.instanceMatrix.needsUpdate = true;
     this.scene.updateMatrixWorld(true);
+    // Reapply authored color overrides (annotation-global, survives atom count changes)
+    this._applyAtomColorOverrides();
   }
 
   /**

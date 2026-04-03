@@ -79,6 +79,14 @@ export interface BondedGroupCallbacks {
   onClearHighlight: () => void;
 }
 
+/** Atom color value for authored appearance overrides. */
+export interface AtomColorValue {
+  hex: string;
+}
+
+/** Map of atom index → color override. Authored by the user, separate from transient highlight. */
+export type AtomColorOverrideMap = Record<number, AtomColorValue>;
+
 /** Summary of a bonded connected component — projected from physics topology, not scene metadata.
  *  id: stable topology identity (survives merge/split via overlap reconciliation)
  *  displayIndex: 1-based visible index after sorting (for UI labels and future selection)
@@ -303,6 +311,10 @@ export interface AppStore {
   setChooserCallbacks: (cbs: ChooserCallbacks) => void;
   bondedGroupCallbacks: BondedGroupCallbacks | null;
   setBondedGroupCallbacks: (cbs: BondedGroupCallbacks | null) => void;
+  /** Authored atom color overrides — global annotations (persist across live/review). */
+  bondedGroupColorOverrides: AtomColorOverrideMap;
+  setBondedGroupColorOverrides: (overrides: AtomColorOverrideMap) => void;
+  clearBondedGroupColorOverrides: () => void;
 
   // Lifecycle
   resetTransientState: () => void;
@@ -374,6 +386,7 @@ export const useAppStore = create<AppStore>((set) => ({
   settingsCallbacks: null,
   chooserCallbacks: null,
   bondedGroupCallbacks: null,
+  bondedGroupColorOverrides: {},
 
   // Actions
   setTheme: (theme) => set({ theme }),
@@ -471,6 +484,8 @@ export const useAppStore = create<AppStore>((set) => ({
   setSettingsCallbacks: (cbs) => set({ settingsCallbacks: cbs }),
   setChooserCallbacks: (cbs) => set({ chooserCallbacks: cbs }),
   setBondedGroupCallbacks: (cbs) => set({ bondedGroupCallbacks: cbs }),
+  setBondedGroupColorOverrides: (overrides) => set({ bondedGroupColorOverrides: overrides }),
+  clearBondedGroupColorOverrides: () => set({ bondedGroupColorOverrides: {} }),
 
   resetTransientState: () => set({
     // Callbacks
@@ -479,6 +494,7 @@ export const useAppStore = create<AppStore>((set) => ({
     settingsCallbacks: null,
     chooserCallbacks: null,
     bondedGroupCallbacks: null,
+    bondedGroupColorOverrides: {},
     // UI chrome
     activeSheet: null,
     helpPageActive: false,

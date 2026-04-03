@@ -13,28 +13,29 @@
  * - Panel expand/collapse via store
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createBondedGroupRuntime, type BondedGroupPhysics } from '../../page/js/runtime/bonded-group-runtime';
+import { createBondedGroupRuntime } from '../../page/js/runtime/bonded-group-runtime';
+import type { BondedGroupDisplaySource } from '../../page/js/runtime/bonded-group-display-source';
 import { useAppStore } from '../../page/js/store/app-store';
 
-function makePhysics(components: { atoms: number[]; size: number }[]): BondedGroupPhysics {
+function makeSource(components: { atoms: number[]; size: number }[]): BondedGroupDisplaySource {
   const totalAtoms = components.reduce((sum, c) => sum + c.size, 0);
-  return { n: totalAtoms, components };
+  return { kind: 'live', atomCount: totalAtoms, components };
 }
 
 describe('bonded group projection', () => {
-  let physics: BondedGroupPhysics | null;
+  let source: BondedGroupDisplaySource | null;
 
   beforeEach(() => {
     useAppStore.getState().resetTransientState();
-    physics = null;
+    source = null;
   });
 
   function createRuntime() {
-    return createBondedGroupRuntime({ getPhysics: () => physics });
+    return createBondedGroupRuntime({ getDisplaySource: () => source });
   }
 
   it('projects components into store sorted by size desc', () => {
-    physics = makePhysics([
+    source = makeSource([
       { atoms: [0, 1, 2], size: 3 },
       { atoms: [3, 4, 5, 6, 7], size: 5 },
       { atoms: [8, 9], size: 2 },
@@ -53,7 +54,7 @@ describe('bonded group projection', () => {
   });
 
   it('minAtomIndex is correct for each group', () => {
-    physics = makePhysics([
+    source = makeSource([
       { atoms: [5, 6, 7], size: 3 },
       { atoms: [0, 1], size: 2 },
     ]);
@@ -66,21 +67,21 @@ describe('bonded group projection', () => {
   });
 
   it('empty physics produces empty groups', () => {
-    physics = makePhysics([]);
+    source = makeSource([]);
     const rt = createRuntime();
     rt.projectNow();
     expect(useAppStore.getState().bondedGroups).toHaveLength(0);
   });
 
   it('null physics produces empty groups', () => {
-    physics = null;
+    source = null;
     const rt = createRuntime();
     rt.projectNow();
     expect(useAppStore.getState().bondedGroups).toHaveLength(0);
   });
 
   it('reset clears groups', () => {
-    physics = makePhysics([{ atoms: [0, 1], size: 2 }]);
+    source = makeSource([{ atoms: [0, 1], size: 2 }]);
     const rt = createRuntime();
     rt.projectNow();
     expect(useAppStore.getState().bondedGroups).toHaveLength(1);
@@ -97,11 +98,11 @@ describe('stable tie ordering', () => {
 
   it('equal-size groups maintain order across projections', () => {
     // Two groups of size 3 — their order should be stable
-    let physics: BondedGroupPhysics = makePhysics([
+    let source: BondedGroupDisplaySource = makeSource([
       { atoms: [0, 1, 2], size: 3 },
       { atoms: [3, 4, 5], size: 3 },
     ]);
-    const rt = createBondedGroupRuntime({ getPhysics: () => physics });
+    const rt = createBondedGroupRuntime({ getDisplaySource: () => source });
     rt.projectNow();
 
     const first = useAppStore.getState().bondedGroups;
@@ -115,7 +116,7 @@ describe('stable tie ordering', () => {
     expect(second[1].id).toBe(id1);
 
     // Project with components in reversed array order — same groups, should keep same order
-    physics = makePhysics([
+    source = makeSource([
       { atoms: [3, 4, 5], size: 3 },
       { atoms: [0, 1, 2], size: 3 },
     ]);
@@ -133,18 +134,18 @@ describe('merge reconciliation', () => {
 
   it('merged group inherits ID from largest-overlap predecessor', () => {
     // Start with two groups
-    let physics: BondedGroupPhysics = makePhysics([
+    let source: BondedGroupDisplaySource = makeSource([
       { atoms: [0, 1, 2], size: 3 },
       { atoms: [3, 4], size: 2 },
     ]);
-    const rt = createBondedGroupRuntime({ getPhysics: () => physics });
+    const rt = createBondedGroupRuntime({ getDisplaySource: () => source });
     rt.projectNow();
 
     const before = useAppStore.getState().bondedGroups;
     const bigId = before[0].id; // the 3-atom group
 
     // Merge: both groups combine into one 5-atom group
-    physics = makePhysics([
+    source = makeSource([
       { atoms: [0, 1, 2, 3, 4], size: 5 },
     ]);
     rt.projectNow();
@@ -164,17 +165,17 @@ describe('split reconciliation', () => {
 
   it('larger-overlap child inherits original ID, other gets new ID', () => {
     // Start with one big group
-    let physics: BondedGroupPhysics = makePhysics([
+    let source: BondedGroupDisplaySource = makeSource([
       { atoms: [0, 1, 2, 3, 4], size: 5 },
     ]);
-    const rt = createBondedGroupRuntime({ getPhysics: () => physics });
+    const rt = createBondedGroupRuntime({ getDisplaySource: () => source });
     rt.projectNow();
 
     const before = useAppStore.getState().bondedGroups;
     const originalId = before[0].id;
 
     // Split: 3 atoms stay, 2 break off
-    physics = makePhysics([
+    source = makeSource([
       { atoms: [0, 1, 2], size: 3 },
       { atoms: [3, 4], size: 2 },
     ]);
@@ -197,16 +198,16 @@ describe('no-op suppression', () => {
   });
 
   it('minAtomIndex change triggers store update', () => {
-    let physics: BondedGroupPhysics = makePhysics([
+    let source: BondedGroupDisplaySource = makeSource([
       { atoms: [5, 6, 7], size: 3 },
     ]);
-    const rt = createBondedGroupRuntime({ getPhysics: () => physics });
+    const rt = createBondedGroupRuntime({ getDisplaySource: () => source });
     rt.projectNow();
     const ref1 = useAppStore.getState().bondedGroups;
     expect(ref1[0].minAtomIndex).toBe(5);
 
     // Same size group but different atoms — minAtomIndex changes
-    physics = makePhysics([{ atoms: [3, 5, 6], size: 3 }]);
+    source = makeSource([{ atoms: [3, 5, 6], size: 3 }]);
     rt.projectNow();
     const ref2 = useAppStore.getState().bondedGroups;
     expect(ref2[0].minAtomIndex).toBe(3);
@@ -216,11 +217,11 @@ describe('no-op suppression', () => {
 
   it('new equal-size groups sort by minAtomIndex fallback', () => {
     // Two brand-new groups with same size — orderKey is MAX_SAFE_INTEGER for both
-    const physics = makePhysics([
+    const source = makeSource([
       { atoms: [10, 11], size: 2 },
       { atoms: [3, 4], size: 2 },
     ]);
-    const rt = createBondedGroupRuntime({ getPhysics: () => physics });
+    const rt = createBondedGroupRuntime({ getDisplaySource: () => source });
     rt.projectNow();
 
     const groups = useAppStore.getState().bondedGroups;
@@ -231,11 +232,11 @@ describe('no-op suppression', () => {
   });
 
   it('identical projections do not trigger store update', () => {
-    const physics = makePhysics([
+    const source = makeSource([
       { atoms: [0, 1, 2], size: 3 },
       { atoms: [3, 4], size: 2 },
     ]);
-    const rt = createBondedGroupRuntime({ getPhysics: () => physics });
+    const rt = createBondedGroupRuntime({ getDisplaySource: () => source });
 
     rt.projectNow();
     const ref1 = useAppStore.getState().bondedGroups;
@@ -327,19 +328,19 @@ describe('selection ownership', () => {
   // Selection invalidation is owned by bonded-group-highlight-runtime, not bonded-group-runtime.
   // These tests verify that bonded-group-runtime does NOT touch selectedBondedGroupId.
 
-  let physics: BondedGroupPhysics | null;
+  let source: BondedGroupDisplaySource | null;
 
   beforeEach(() => {
     useAppStore.getState().resetTransientState();
-    physics = null;
+    source = null;
   });
 
   function createRuntime() {
-    return createBondedGroupRuntime({ getPhysics: () => physics });
+    return createBondedGroupRuntime({ getDisplaySource: () => source });
   }
 
   it('projectNow does not clear selectedBondedGroupId', () => {
-    physics = makePhysics([
+    source = makeSource([
       { atoms: [0, 1, 2], size: 3 },
       { atoms: [3, 4], size: 2 },
     ]);
@@ -350,7 +351,7 @@ describe('selection ownership', () => {
     useAppStore.getState().setSelectedBondedGroup(smallGroupId);
 
     // Group disappears — runtime updates groups but does NOT clear selection
-    physics = makePhysics([{ atoms: [0, 1, 2, 3, 4], size: 5 }]);
+    source = makeSource([{ atoms: [0, 1, 2, 3, 4], size: 5 }]);
     rt.projectNow();
 
     // Selection untouched by bonded-group-runtime
@@ -358,7 +359,7 @@ describe('selection ownership', () => {
   });
 
   it('reset does not clear selectedBondedGroupId', () => {
-    physics = makePhysics([{ atoms: [0, 1], size: 2 }]);
+    source = makeSource([{ atoms: [0, 1], size: 2 }]);
     const rt = createRuntime();
     rt.projectNow();
 

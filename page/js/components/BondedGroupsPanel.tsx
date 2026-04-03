@@ -13,6 +13,7 @@
  */
 
 import React, { useMemo, useCallback } from 'react';
+import { selectCanInspectBondedGroups } from '../store/selectors/bonded-group-capabilities';
 import { useAppStore } from '../store/app-store';
 import { partitionBondedGroups } from '../store/selectors/bonded-groups';
 
@@ -57,16 +58,15 @@ export function BondedGroupsPanel() {
   const side = useAppStore((s) => s.bondedGroupsSide);
   const hasTrackedHighlight = useAppStore((s) => s.hasTrackedBondedHighlight);
   const callbacks = useAppStore((s) => s.bondedGroupCallbacks);
-  const timelineMode = useAppStore((s) => s.timelineMode);
-
+  const canInspect = useAppStore(selectCanInspectBondedGroups);
   const { large, small } = useMemo(() => partitionBondedGroups(groups), [groups]);
 
   const handleListLeave = useCallback(() => {
     callbacks?.onHover(null);
   }, [callbacks]);
 
-  // Hide during timeline review — live topology doesn't match historical positions
-  if (groups.length === 0 || timelineMode === 'review') return null;
+  // Hide when no groups exist or when inspection is disabled by capability policy
+  if (groups.length === 0 || !canInspect) return null;
 
   return (
     <div className={`bonded-groups-panel side-${side}`}>

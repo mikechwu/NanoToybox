@@ -28,6 +28,8 @@ import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecy
 import { createOnboardingController, subscribeOnboardingReadiness } from './runtime/onboarding';
 import { createDragTargetRefresh, dragRefreshAction } from './runtime/drag-target-refresh';
 import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-group-runtime';
+import { resolveBondedGroupDisplaySource } from './runtime/bonded-group-display-source';
+import { createBondedGroupAppearanceRuntime, type BondedGroupAppearanceRuntime } from './runtime/bonded-group-appearance-runtime';
 import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from './runtime/bonded-group-highlight-runtime';
 import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './runtime/bonded-group-coordinator';
 import { createTimelineSubsystem, type TimelineSubsystem } from './runtime/timeline-subsystem';
@@ -151,6 +153,7 @@ let _unsubCameraMode: (() => void) | null = null;
 let _bondedGroups: BondedGroupRuntime | null = null;
 let _bondedGroupHighlight: BondedGroupHighlightRuntime | null = null;
 let _bondedGroupCoordinator: BondedGroupCoordinator | null = null;
+let _bondedGroupAppearance: BondedGroupAppearanceRuntime | null = null;
 
 // Simulation timeline subsystem
 let _timelineSub: TimelineSubsystem | null = null;
@@ -344,7 +347,7 @@ async function init() {
     partialProfilerReset,
     recoverFromWorkerFailure: recoverLocalPhysicsAfterWorkerFailure,
     getPauseSyncPromise: () => _pauseSyncPromise,
-    onSceneMutated: () => _bondedGroupCoordinator?.update(),
+    onSceneMutated: () => { _bondedGroupCoordinator?.update(); _bondedGroupAppearance?.syncToRenderer(); },
   });
 
   // Load manifest
@@ -584,7 +587,11 @@ async function init() {
 
   // ── Bonded group subsystem ──
   _bondedGroups = createBondedGroupRuntime({
-    getPhysics: () => physics,
+    getDisplaySource: () => resolveBondedGroupDisplaySource({
+      getPhysics: () => physics,
+      getTimelineReviewComponents: () => null, // TODO: wire when timeline stores historical topology
+      getTimelineMode: () => useAppStore.getState().timelineMode,
+    }),
   });
   _bondedGroupHighlight = createBondedGroupHighlightRuntime({
     getBondedGroupRuntime: () => _bondedGroups,
@@ -595,6 +602,14 @@ async function init() {
     getBondedGroupRuntime: () => _bondedGroups,
     getBondedGroupHighlightRuntime: () => _bondedGroupHighlight,
   });
+  // Bonded-group appearance runtime (annotation-global color overrides)
+  _bondedGroupAppearance = createBondedGroupAppearanceRuntime({
+    getBondedGroupRuntime: () => _bondedGroups,
+    getRenderer: () => renderer,
+  });
+  // Initial sync (annotation-global colors may already exist in store)
+  _bondedGroupAppearance.syncToRenderer();
+
   // Register callbacks via store (same pattern as dock/settings/chooser)
   useAppStore.getState().setBondedGroupCallbacks({
     onToggleSelect: (id) => _bondedGroupHighlight?.toggleSelectedGroup(id),

@@ -1,11 +1,9 @@
 /**
- * Bonded group runtime — projects physics connected components into store.
+ * Bonded group runtime — projects connected components into store.
  *
- * Reads physics.components (bond-graph connected components), builds UI summaries
- * with overlap-reconciled stable IDs, and publishes to the Zustand store.
- *
- * Separate from scene molecules: scene-runtime owns placement metadata,
- * this module owns live physics-topology-derived bonded groups.
+ * Display-source-aware: resolves topology from either live physics or
+ * review historical data via BondedGroupDisplaySource. Builds UI summaries
+ * with overlap-reconciled stable IDs and publishes to the Zustand store.
  *
  * Update policy: called after scene mutations and at throttled cadence during
  * simulation. Only publishes when the projection actually changes.
@@ -14,25 +12,22 @@
  *
  * Owns:        BondedGroupSummary[] projection, stable group IDs, freshId counter,
  *              overlap-reconciled ID assignment.
- * Depends on:  physics.components (bond-graph connected components),
+ * Depends on:  BondedGroupDisplaySource (display-source-aware topology),
  *              app-store (BondedGroupSummary[], write via setBondedGroups).
  * Called by:   bonded-group-coordinator (projectNow, reset).
  * Teardown:    reset() — clears previous summaries and ID state; store is set to [].
  */
 
 import { useAppStore, type BondedGroupSummary } from '../store/app-store';
-
-/** Minimal physics interface — only the fields this module reads. */
-export interface BondedGroupPhysics {
-  n: number;
-  components: { atoms: number[]; size: number }[];
-}
+import type { BondedGroupDisplaySource } from './bonded-group-display-source';
 
 export interface BondedGroupRuntime {
   projectNow(): void;
   reset(): void;
   /** Get atom indices for a group by its stable ID. Returns null if not found. */
   getAtomIndicesForGroup(id: string): number[] | null;
+  /** Returns the display source kind used by the last projection ('live' | 'review' | null). */
+  getDisplaySourceKind(): 'live' | 'review' | null;
 }
 
 // freshId counter is instance-scoped (moved inside createBondedGroupRuntime)
@@ -66,7 +61,7 @@ function summariesEqual(a: BondedGroupSummary[], b: BondedGroupSummary[]): boole
 }
 
 export function createBondedGroupRuntime(deps: {
-  getPhysics: () => BondedGroupPhysics | null;
+  getDisplaySource: () => BondedGroupDisplaySource | null;
 }): BondedGroupRuntime {
   // Instance-scoped ID counter — resets with the runtime instance
   let nextGroupId = 1;
@@ -79,30 +74,24 @@ export function createBondedGroupRuntime(deps: {
   // Atom membership map — keyed by group ID, updated after each projection
   const groupAtomMap = new Map<string, number[]>();
 
+  /** Track which display source kind was last used for getDisplaySourceKind(). */
+  let _lastSourceKind: 'live' | 'review' | null = null;
+
   function projectNow() {
-    const physics = deps.getPhysics();
-    if (!physics || physics.n === 0) {
+    const source = deps.getDisplaySource();
+    if (!source || source.atomCount === 0 || source.components.length === 0) {
       if (prevSummaries.length > 0) {
         prevGroups = [];
         prevSummaries = [];
         groupAtomMap.clear();
-        const store = useAppStore.getState();
-        store.setBondedGroups([]);
+        _lastSourceKind = null;
+        useAppStore.getState().setBondedGroups([]);
       }
       return;
     }
 
-    const components = physics.components;
-    if (!components || components.length === 0) {
-      if (prevSummaries.length > 0) {
-        prevGroups = [];
-        prevSummaries = [];
-        groupAtomMap.clear();
-        const store = useAppStore.getState();
-        store.setBondedGroups([]);
-      }
-      return;
-    }
+    _lastSourceKind = source.kind;
+    const components = source.components;
 
     // Step 1: Build raw fingerprints for each current component
     const raw = components.map((comp) => ({
@@ -189,6 +178,7 @@ export function createBondedGroupRuntime(deps: {
   function reset() {
     prevGroups = [];
     prevSummaries = [];
+    _lastSourceKind = null;
     useAppStore.getState().setBondedGroups([]);
     groupAtomMap.clear();
   }
@@ -197,6 +187,8 @@ export function createBondedGroupRuntime(deps: {
     return groupAtomMap.get(id) ?? null;
   }
 
-  return { projectNow, reset, getAtomIndicesForGroup };
+  function getDisplaySourceKind(): 'live' | 'review' | null { return _lastSourceKind; }
+
+  return { projectNow, reset, getAtomIndicesForGroup, getDisplaySourceKind };
 }
 
