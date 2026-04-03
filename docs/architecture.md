@@ -62,7 +62,7 @@ NanoToybox/
 │   │   │   ├── overlay-runtime.ts    # Overlay open/close policy (Escape, outside-click)
 │   │   │   ├── interaction-dispatch.ts # Interaction command effects, worker mirroring, timeline arming
 │   │   │   ├── input-bindings.ts     # InputManager construction, sync, callback wiring
-│   │   │   ├── ui-bindings.ts        # Zustand store callback registration
+│   │   │   ├── ui-bindings.ts        # Zustand store callback registration + review-mode guards (blockIfReviewLocked)
 │   │   │   ├── atom-source.ts        # Renderer-to-input atom-picking adapter
 │   │   │   ├── focus-runtime.ts     # Focus resolution: molecule lookup, centroid, pivot update; ensureFollowTarget for follow-mode validation
 │   │   │   ├── onboarding.ts        # Coachmark scheduling + page-load onboarding overlay gate (isOnboardingEligible, subscribeOnboardingReadiness)
@@ -77,6 +77,7 @@ NanoToybox/
 │   │   │   ├── timeline-subsystem.ts         # Factory that creates the full subsystem, exposes high-level interface to main.ts
 │   │   │   ├── restart-state-adapter.ts      # Serialization/application/capture of RestartState
 │   │   │   ├── reconciled-steps.ts           # Deduplication helper for worker snapshot step counting
+│   │   │   ├── review-mode-action-hints.ts  # Transient status hint for review-locked actions (mobile/fallback)
 │   │   │   ├── orbit-follow-update.ts        # Per-frame orbit-follow camera tracking from displayed bounds
 │   │   │   ├── drag-target-refresh.ts        # Per-frame drag target reprojection during active interactions
 │   │   │   ├── interaction-highlight-runtime.ts # Mode-aware highlight resolver (atom vs bonded group for Move/Rotate)
@@ -103,6 +104,8 @@ NanoToybox/
 │   │   │   ├── Icons.tsx         # Shared inline SVG icon utility (supporting component)
 │   │   │   ├── BondedGroupsPanel.tsx # Bonded cluster inspection panel (selection + hover highlight)
 │   │   │   ├── ActionHint.tsx     # Shared hover/focus tooltip (supporting component)
+│   │   │   ├── ReviewLockedControl.tsx    # Review-lock wrapper (span-based, for dock/chooser controls)
+│   │   │   ├── ReviewLockedListItem.tsx   # Review-lock list item (li-native, for settings rows)
 │   │   │   ├── TimelineActionHint.tsx # Re-export of ActionHint for backwards compatibility
 │   │   │   └── TimelineBar.tsx       # Bottom timeline UI inside DockLayout with FeatureBoundary
 │   │   ├── store/
@@ -110,9 +113,11 @@ NanoToybox/
 │   │   │   └── selectors/
 │   │   │       ├── dock.ts       # selectDockSurface derived selector
 │   │   │       ├── camera.ts    # selectCameraMode selector + CameraMode type
-│   │   │       └── bonded-groups.ts # partitionBondedGroups (large/small bucket selector)
+│   │   │       ├── bonded-groups.ts # partitionBondedGroups (large/small bucket selector)
+│   │   │       └── review-ui-lock.ts # Review UI lock selector (selectIsReviewLocked, REVIEW_LOCK_TOOLTIP/STATUS)
 │   │   ├── hooks/
-│   │   │   └── useSheetAnimation.ts # Sheet open/close CSS transitions
+│   │   │   ├── useSheetAnimation.ts # Sheet open/close CSS transitions
+│   │   │   └── useReviewLockedInteraction.ts # Shared hook for review-locked control behavior (tooltip, activation, keyboard)
 │   │   ├── react-root.tsx        # React mount/unmount entry point
 │   │   ├── config.ts             # Centralized page configuration
 │   │   ├── physics.ts            # Tersoff force engine + interaction forces
@@ -296,6 +301,20 @@ frame-runtime.ts (orchestration)
 
 **Focus policy (Policy A):** Placement commit does not change `lastFocusedMoleculeId` or retarget the camera. Placement framing handles visibility; Center/Follow handle explicit focus.
 
+### Review Mode UI Lock
+
+When `timelineMode === 'review'`, live-edit actions are disabled at two layers:
+
+1. **Visual lock (React):** Components subscribe to `selectIsReviewLocked()` and render locked controls via `ReviewLockedControl` (span-based wrapper for dock/chooser) or `ReviewLockedListItem` (li-native for settings rows). Both use `useReviewLockedInteraction` hook for shared tooltip/activation behavior.
+2. **Runtime guard (ui-bindings.ts):** `blockIfReviewLocked()` early-returns from 6 callbacks with `showReviewModeActionHint()`.
+
+**Locked actions:** Add, Atom/Move/Rotate mode change, Pause/Resume, Add Molecule, Clear, Structure selection.
+**Allowed actions:** Live, Restart, Stop & Clear.
+**Desktop:** ActionHint tooltips with `REVIEW_LOCK_TOOLTIP` (short copy).
+**Mobile:** Transient status hint with `REVIEW_LOCK_STATUS` (fuller copy explaining exits).
+
+Hint copy lives in `page/js/store/selectors/review-ui-lock.ts`. Hint timing (`statusHintMs`) lives in `CONFIG.reviewModeUi`.
+
 ## Key Design Decisions
 
 1. **Python reference + Numba acceleration** — pure Python for correctness, Numba for speed
@@ -316,7 +335,7 @@ frame-runtime.ts (orchestration)
 - **overlay-runtime.ts** — overlay open/close policy (Escape, outside-click, device-mode switch)
 - **interaction-dispatch.ts** — interaction command side effects, worker mirroring (flick ordering), and timeline arming (unconditional on startDrag/startMove/startRotate/flick)
 - **input-bindings.ts** — InputManager construction, sync (scene-mutation resync contract)
-- **ui-bindings.ts** — Zustand store callback registration (React intents → imperative commands)
+- **ui-bindings.ts** — Zustand store callback registration (React intents → imperative commands). Review-mode guards via `blockIfReviewLocked()` block 6 callbacks: onAdd, onPause, onModeChange, onAddMolecule, onClear, onSelectStructure.
 - **atom-source.ts** — shared renderer-to-input atom-picking adapter
 - **focus-runtime.ts** — focus resolution: molecule lookup, centroid computation, camera pivot update; `ensureFollowTarget()` for follow-mode validation. Placement commit does NOT change focus metadata or retarget camera (Policy A).
 - **onboarding.ts** — coachmark scheduling + page-load onboarding overlay gate (`isOnboardingEligible`, `subscribeOnboardingReadiness`)
@@ -336,6 +355,7 @@ frame-runtime.ts (orchestration)
 - **interaction-highlight-runtime.ts** — mode-aware highlight resolver: Atom → single atom, Move/Rotate → bonded group from live physics topology (cool palette via `setInteractionHighlightedAtoms` / `clearInteractionHighlight`)
 - **placement-solver.ts** — placement solver module: PCA shape analysis and molecule frame construction, camera-first orientation policy (`chooseCameraFamily`), geometry-aware family selection (`selectOrientationByGeometry`), perspective-projected geometry refinement (`refineOrientationFromGeometry`), shared projection helpers (`projectToScreen`, `projected2DPCA`), translation optimization with no-initial-bond constraint
 - **placement-camera-framing.ts** — pure camera-basis framing solver for placement preview: camera-space projection, adaptive target-shift search (5×5 grid + refinement), overflow deadband, visible-anchor filtering. No THREE/renderer/store imports.
+- **review-mode-action-hints.ts** — transient status hint for review-locked actions; uses `REVIEW_LOCK_STATUS` (fuller copy) via store `setStatusText` with auto-clear timer from `CONFIG.reviewModeUi.statusHintMs`
 
 **Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons, TimelineActionHint. Imperative controllers remain only for PlacementController and StatusController (hint-only).
 
@@ -420,6 +440,7 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | scheduler / effectsGate | app/frame-runtime.ts (per-frame) | — |
 | Timeline state (`mode`, `currentTimePs`, `reviewTimePs`, `rangePs`, etc.) | simulation-timeline-coordinator.ts (via store) | TimelineBar (scrub, restart), timeline-recording-orchestrator (range updates) |
 | Timeline recording arm state | timeline-recording-policy.ts | interaction-dispatch (first atom interaction: drag/move/rotate/flick) |
+| Review UI lock state | Derived by `selectIsReviewLocked()` from `timelineMode` | Components (visual lock), ui-bindings.ts (runtime guards) |
 | Timeline buffers (review frames, restart frames, checkpoints) | simulation-timeline.ts | timeline-recording-orchestrator (writes), simulation-timeline-coordinator (reads) |
 
 ### Overlay Close Policy

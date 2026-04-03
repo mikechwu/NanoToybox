@@ -22,8 +22,20 @@
  */
 
 import { useAppStore } from '../store/app-store';
+import { selectIsReviewLocked } from '../store/selectors/review-ui-lock';
+import { showReviewModeActionHint } from './review-mode-action-hints';
 import type { OverlayRuntime } from './overlay-runtime';
 import type { WorkerInteractionCommand } from '../worker-bridge';
+
+/** Returns true (and shows hint) if review mode blocks the action.
+ *  Uses selectIsReviewLocked for centralized policy. */
+function blockIfReviewLocked(): boolean {
+  if (selectIsReviewLocked(useAppStore.getState())) {
+    showReviewModeActionHint();
+    return true;
+  }
+  return false;
+}
 
 export interface UIBindingsDeps {
   // Overlay
@@ -67,11 +79,13 @@ export function registerStoreCallbacks(deps: UIBindingsDeps): void {
 
   store.setDockCallbacks({
     onAdd: () => {
+      if (blockIfReviewLocked()) return;
       if (deps.isPlacementActive()) { deps.exitPlacement(true); return; }
       deps.updateChooserRecentRow();
       deps.overlayRuntime.open('chooser');
     },
     onPause: () => {
+      if (blockIfReviewLocked()) return;
       if (deps.isPlacementActive()) return;
       deps.togglePause();
     },
@@ -81,6 +95,7 @@ export function registerStoreCallbacks(deps: UIBindingsDeps): void {
     },
     onCancel: () => deps.exitPlacement(false),
     onModeChange: (mode) => {
+      if (blockIfReviewLocked()) return;
       deps.setInteractionMode(mode);
     },
   });
@@ -126,10 +141,12 @@ export function registerStoreCallbacks(deps: UIBindingsDeps): void {
       deps.applyTextSize(size);
     },
     onAddMolecule: () => {
+      if (blockIfReviewLocked()) return;
       deps.updateChooserRecentRow();
       deps.overlayRuntime.open('chooser');
     },
     onClear: () => {
+      if (blockIfReviewLocked()) return;
       deps.overlayRuntime.close();
       void Promise.resolve(deps.clearPlayground()).catch((e) => {
         console.error('[ui] clear failed:', e);
@@ -142,6 +159,7 @@ export function registerStoreCallbacks(deps: UIBindingsDeps): void {
 
   store.setChooserCallbacks({
     onSelectStructure: (file: string, description: string) => {
+      if (blockIfReviewLocked()) return;
       useAppStore.getState().setRecentStructure({ file, name: description });
       deps.startPlacement(file, description);
     },

@@ -107,6 +107,18 @@ The bar uses a fixed-lane layout:
 
 Scrubbing away from the live edge auto-pauses the simulation and enters review mode. Review is display-only: `renderer.updateReviewFrame()` never mutates physics. All scene interaction is blocked at the input boundary during review. The bonded-groups panel is hidden and highlights are cleared. The frozen scrubber range is decoupled from live retention.
 
+**Review Mode UI Lock**
+
+When review mode is active, the following actions are visually disabled and blocked at the runtime callback boundary:
+
+- Dock: Add, Atom/Move/Rotate mode selector, Pause/Resume
+- Settings: Add Molecule, Clear
+- Chooser: Structure row selection (if chooser is open)
+
+Desktop users see `ActionHint` tooltips explaining the lock on hover/focus. Mobile users see a transient status hint on tap. Both use centralized copy from `REVIEW_LOCK_TOOLTIP` (short) and `REVIEW_LOCK_STATUS` (fuller, explains exits).
+
+Allowed actions in review: **Live** (return to current simulation), **Restart** (continue from scrub point), **Stop & Clear** (leave review and erase history). These remain fully interactive and visually prominent.
+
 **Restart**
 
 Restart uses dense restart frames recorded at 10 Hz containing pos + vel + bonds + config + boundary. Dense restart frames are preferred over sparse checkpoints because they are closer to the viewed time. The worker receives full dynamic state via a dedicated `restoreState` command. History is truncated after the restart point to maintain a monotonic timeline. Interaction state is NOT restored (prevents ghost spring forces).

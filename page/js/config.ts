@@ -129,6 +129,10 @@ export const CONFIG = {
     visibleAnchorMargin: 0.15,        // frustum margin for visible-anchor capture (0 = exact frustum)
   },
 
+  reviewModeUi: {
+    statusHintMs: 2200,               // ms — transient status hint auto-clear duration
+  },
+
   freeLook: {
     accelerationScale: 3.0,         // [1–10] thrust acceleration multiplier (× sceneRadius)
     maxSpeedScale: 8.0,             // [3–20] max speed multiplier (× sceneRadius)

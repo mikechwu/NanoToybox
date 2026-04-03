@@ -152,6 +152,26 @@ Key invariants:
 - Drag uses pointer capture; `updateDragFromLatestPointer()` is the per-frame reprojection contract
 - Placement commit does not change focus metadata (Policy A)
 
+### Review Mode UI Lock Contract
+
+The review-mode UI lock system enforces display-only behavior across all React surfaces when `timelineMode === 'review'`.
+
+| Layer | Module | Role |
+|-------|--------|------|
+| Selector | `store/selectors/review-ui-lock.ts` | `selectIsReviewLocked()` — single policy source. Components use this, not raw `timelineMode`. |
+| Runtime guards | `runtime/ui-bindings.ts` | `blockIfReviewLocked()` — blocks 6 callbacks with `showReviewModeActionHint()` |
+| Visual lock (buttons) | `components/ReviewLockedControl.tsx` | Span-wrapper for dock/chooser controls. Uses `ActionHint` + `useReviewLockedInteraction` |
+| Visual lock (list rows) | `components/ReviewLockedListItem.tsx` | Li-native for settings rows. Content dimmed via inner wrapper; tooltip at full contrast |
+| Shared behavior | `hooks/useReviewLockedInteraction.ts` | Tooltip timing, click/keyboard activation, status hint dispatch |
+| Hint copy | `selectors/review-ui-lock.ts` | `REVIEW_LOCK_TOOLTIP` (desktop), `REVIEW_LOCK_STATUS` (mobile/status) |
+| Hint timing | `config.ts` | `CONFIG.reviewModeUi.statusHintMs` |
+
+When changing review-lock behavior:
+1. **Policy changes** go in `review-ui-lock.ts` selector
+2. **Copy changes** update `REVIEW_LOCK_TOOLTIP` and/or `REVIEW_LOCK_STATUS`
+3. **New locked actions** add a guard in `ui-bindings.ts` AND visual lock in the component
+4. **Never** hardcode `timelineMode === 'review'` in components — use `selectIsReviewLocked`
+
 ### Highlight Composition Policy (Dual-Channel Architecture)
 
 The highlight system uses two independent visual channels composed by the renderer. Never collapse them back into a single mutable "current group highlight".

@@ -209,6 +209,21 @@ canvas { display: block; touch-action: none; }
 }
 .dock-item.active { color: var(--color-accent-text); }
 .dock-item:disabled { opacity: 0.3; cursor: default; }
+.review-locked { opacity: 0.35; cursor: not-allowed; }
+/* review-locked-trigger uses display:contents so the wrapper does not disrupt
+   dock/chooser flex layout. The trigger itself is the interactive hit target for
+   ActionHint hover/focus; children are visually dimmed and pointer-events:none.
+   Deliberate structural dependency — do not remove without verifying dock layout,
+   accessibility tree, and focus-outline behavior across browsers. */
+.review-locked-trigger { display: contents; cursor: not-allowed; }
+.review-locked-trigger > * { opacity: 0.35; pointer-events: none; }
+/* Segmented: dim individual labels, NOT the container (keeps ActionHint tooltips at full contrast) */
+.segmented .seg-disabled { opacity: 0.35; cursor: not-allowed; }
+/* Row-safe locked list item — position:relative for tooltip, no display override.
+   Content is dimmed via inner .review-locked-content; tooltip stays full-contrast.
+   Do not use .timeline-hint-anchor on list rows — it sets display:inline-flex. */
+.review-locked-list-item { position: relative; cursor: not-allowed; }
+.review-locked-content { opacity: 0.35; pointer-events: none; }
 
 @media (min-width: 768px) {
   .dock-region {
@@ -835,6 +850,22 @@ fieldset.segmented {
   left: auto;
   right: 100%;
   transform: translateY(-50%) translateX(50%) rotate(45deg);
+}
+/* Bottom-start placement for settings list rows */
+.timeline-hint--bottom-start {
+  bottom: auto;
+  top: calc(100% + 8px);
+  left: 0;
+  transform: translateY(-4px);
+}
+.timeline-hint--bottom-start.timeline-hint--visible {
+  transform: translateY(0);
+}
+.timeline-hint--bottom-start .timeline-hint-arrow {
+  top: auto;
+  bottom: 100%;
+  left: 16px;
+  transform: translateY(50%) rotate(45deg);
 }
 @media (hover: none), (pointer: coarse) {
   .timeline-hint { display: none; }

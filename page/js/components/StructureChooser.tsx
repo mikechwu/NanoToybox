@@ -8,6 +8,9 @@
 
 import React, { useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
+import { selectIsReviewLocked } from '../store/selectors/review-ui-lock';
+import { showReviewModeActionHint } from '../runtime/review-mode-action-hints';
+import { ReviewLockedControl } from './ReviewLockedControl';
 import { useSheetAnimation } from '../hooks/useSheetAnimation';
 
 export function StructureChooser() {
@@ -16,20 +19,23 @@ export function StructureChooser() {
   const recentStructure = useAppStore((s) => s.recentStructure);
   const chooserCallbacks = useAppStore((s) => s.chooserCallbacks);
   const closeOverlay = useAppStore((s) => s.closeOverlay);
+  const isReviewLocked = useAppStore(selectIsReviewLocked);
 
   const isOpen = activeSheet === 'chooser';
   const { ref, mounted, animating, onTransitionEnd } = useSheetAnimation(isOpen);
 
   const handleSelect = useCallback((file: string, description: string) => {
+    if (isReviewLocked) { showReviewModeActionHint(); return; }
     closeOverlay?.();
     chooserCallbacks?.onSelectStructure(file, description);
-  }, [closeOverlay, chooserCallbacks]);
+  }, [closeOverlay, chooserCallbacks, isReviewLocked]);
 
   const handleRecent = useCallback(() => {
     if (!recentStructure) return;
+    if (isReviewLocked) { showReviewModeActionHint(); return; }
     closeOverlay?.();
     chooserCallbacks?.onSelectStructure(recentStructure.file, recentStructure.name);
-  }, [closeOverlay, chooserCallbacks, recentStructure]);
+  }, [closeOverlay, chooserCallbacks, recentStructure, isReviewLocked]);
 
   if (!mounted) return null;
 
@@ -51,20 +57,37 @@ export function StructureChooser() {
       }}>
         {/* Recent row */}
         {recentStructure && (
-          <div className="chooser-recent" onClick={handleRecent}>
-            <span className="chooser-recent-label">Recent</span>
-            <span className="chooser-recent-name">{recentStructure.name}</span>
-          </div>
+          isReviewLocked ? (
+            <ReviewLockedControl label={`${recentStructure.name} (unavailable in Review)`}>
+              <div className="chooser-recent review-locked" onClick={handleRecent}>
+                <span className="chooser-recent-label">Recent</span>
+                <span className="chooser-recent-name">{recentStructure.name}</span>
+              </div>
+            </ReviewLockedControl>
+          ) : (
+            <div className="chooser-recent" onClick={handleRecent}>
+              <span className="chooser-recent-label">Recent</span>
+              <span className="chooser-recent-name">{recentStructure.name}</span>
+            </div>
+          )
         )}
         {/* Structure list */}
         {structures.map((s) => (
-          <div
-            key={s.key}
-            className="drawer-item"
-            onClick={() => handleSelect(s.file, s.description)}
-          >
-            {s.description} ({s.atomCount} atoms)
-          </div>
+          isReviewLocked ? (
+            <ReviewLockedControl key={s.key} label={`${s.description} (unavailable in Review)`}>
+              <div className="drawer-item review-locked" onClick={() => handleSelect(s.file, s.description)}>
+                {s.description} ({s.atomCount} atoms)
+              </div>
+            </ReviewLockedControl>
+          ) : (
+            <div
+              key={s.key}
+              className="drawer-item"
+              onClick={() => handleSelect(s.file, s.description)}
+            >
+              {s.description} ({s.atomCount} atoms)
+            </div>
+          )
         ))}
       </div>
     </aside>

@@ -330,3 +330,11 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Rationale:** Event-driven-only drag breaks when the camera moves between pointer events. Pointer capture is the browser-standard way to maintain drag past element boundaries. Per-frame reprojection from stored screen coordinates closes the gap between camera motion and cursor fidelity.
 
 **Evidence:** `page/js/placement.ts` (pointer capture, `_beginPreviewDrag`, `_endPreviewDrag`, `_reprojectDragAtScreenPoint`, `updateDragFromLatestPointer`), `tests/unit/placement-drag-lifecycle.test.ts` (7 controller-path tests including capture failure fallback)
+
+## D41: Review Mode UI Lock — Centralized Selector with Defense-in-Depth Guards
+
+**Decision:** Review mode (`timelineMode === 'review'`) disables live-edit actions at two layers: (1) visual lock in React components via `selectIsReviewLocked()` + `ReviewLockedControl`/`ReviewLockedListItem` wrappers, and (2) runtime callback guards via `blockIfReviewLocked()` in `ui-bindings.ts`. Locked actions: Add, mode change, Pause/Resume, Add Molecule, Clear, Structure selection. Allowed: Live, Restart, Stop & Clear.
+
+**Rationale:** Review mode was enforced at the scene-input layer but not at the React action layer. Users could still trigger Add, mode changes, and pause through exposed dock/settings controls. Defense-in-depth ensures correctness even with stale UI state. The centralized `selectIsReviewLocked` selector prevents policy drift across surfaces. Desktop uses `ActionHint` tooltips (`REVIEW_LOCK_TOOLTIP`); mobile uses transient status hints (`REVIEW_LOCK_STATUS`) explaining the exits.
+
+**Evidence:** `page/js/store/selectors/review-ui-lock.ts` (selector + copy constants), `page/js/runtime/ui-bindings.ts` (6 guarded callbacks), `page/js/components/ReviewLockedControl.tsx` + `ReviewLockedListItem.tsx` (visual lock wrappers), `page/js/hooks/useReviewLockedInteraction.ts` (shared behavior hook), `tests/unit/review-ui-lock-*.test.ts` + `tests/unit/dock-bar-review-lock.test.tsx` + `tests/unit/structure-chooser-review-lock.test.tsx` (35+ tests across 6 files)

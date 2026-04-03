@@ -45,6 +45,7 @@ These checks require a real browser with WebGL and cannot run in headless CI. Ru
 - [ ] **Settings:** Open/close settings sheet, switch Dark/Light theme, change speed, boundary mode
 - [ ] **Viewer:** Open `/viewer/`, drag-drop an `.xyz` file, verify atoms and bonds render
 - [ ] Placement camera framing: preview does not cause camera snap, drag past boundary works
+- [ ] Review mode UI lock: enter review → dock Add/mode/Pause disabled with hints → Settings Add Molecule/Clear disabled → Live/Restart exit re-enables
 
 Automated checks (typecheck, build, unit tests, Playwright E2E, deploy smoke) run in CI on every push/PR.
 
@@ -118,6 +119,7 @@ Browser                          Web Worker
 - **CI/CD** — GitHub Actions: typecheck, unit tests, build, E2E, deploy smoke, Python physics tests
 - **Containment boundary** — dynamic soft wall with Contain/Remove modes, live atom count, auto-scaling radius
 - **Placement camera framing** — smooth camera assist keeps scene + preview visible during molecule placement; continuous drag with pointer capture and per-frame cursor-lock reprojection
+- **Review mode UI lock** — display-only enforcement across all React surfaces during timeline review; centralized selector, runtime guards, ActionHint tooltips (desktop), transient status hints (mobile)
 - Structure library: 15 canonical relaxed structures (60–720 atoms)
 - Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)
 - Three.js trajectory viewer: functional at `viewer/index.html`

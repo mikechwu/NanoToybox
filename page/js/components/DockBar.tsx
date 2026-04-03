@@ -15,14 +15,32 @@
 import React, { useCallback, useLayoutEffect, useRef } from 'react';
 import { useAppStore } from '../store/app-store';
 import { selectDockSurface } from '../store/selectors/dock';
+import { selectIsReviewLocked, REVIEW_LOCK_TOOLTIP } from '../store/selectors/review-ui-lock';
+import { showReviewModeActionHint } from '../runtime/review-mode-action-hints';
 import { Segmented } from './Segmented';
+import { ReviewLockedControl } from './ReviewLockedControl';
 import { IconAdd, IconCheck, IconCancel, IconPause, IconResume, IconSettings } from './Icons';
 
-const MODES = [
-  { value: 'atom', label: 'Atom' },
-  { value: 'move', label: 'Move' },
-  { value: 'rotate', label: 'Rotate' },
-] as const;
+/** Dock-local helper: renders a button inside ReviewLockedControl when review-locked. */
+function DockLockedButton({ label, icon, text, buttonRef, className }: {
+  label: string; icon: React.ReactNode; text: string;
+  buttonRef?: React.Ref<HTMLButtonElement>; className?: string;
+}) {
+  return (
+    <ReviewLockedControl label={label}>
+      <button ref={buttonRef} className={`dock-item${className ? ` ${className}` : ''}`} aria-disabled="true">
+        <span className="dock-icon">{icon}</span>
+        <span className="dock-label">{text}</span>
+      </button>
+    </ReviewLockedControl>
+  );
+}
+
+const BASE_MODES = [
+  { value: 'atom' as const, label: 'Atom' },
+  { value: 'move' as const, label: 'Move' },
+  { value: 'rotate' as const, label: 'Rotate' },
+];
 
 /** Check if an element is still keyboard-focusable in its current DOM state. */
 function isStillKeyboardFocusable(el: HTMLElement): boolean {
@@ -40,6 +58,7 @@ export function DockBar() {
   const paused = useAppStore((s) => s.paused);
   const dockSurface = useAppStore(selectDockSurface);
   const dockCallbacks = useAppStore((s) => s.dockCallbacks);
+  const isReviewLocked = useAppStore(selectIsReviewLocked);
 
   const isPlacement = dockSurface === 'placement';
 
@@ -77,6 +96,11 @@ export function DockBar() {
     (mode: 'atom' | 'move' | 'rotate') => dockCallbacks?.onModeChange(mode),
     [dockCallbacks],
   );
+  const handleDisabledMode = useCallback(() => showReviewModeActionHint(), []);
+
+  const modes = isReviewLocked
+    ? BASE_MODES.map(m => ({ ...m, disabled: true, disabledReason: REVIEW_LOCK_TOOLTIP }))
+    : BASE_MODES;
 
   return (
     <div
@@ -87,14 +111,18 @@ export function DockBar() {
       onFocusCapture={handleFocusCapture}
     >
       {/* Add / Place button — primary action ref for focus repair */}
-      <button
-        ref={primaryActionRef}
-        className={`dock-item dock-add-btn${isPlacement ? ' dock-placement-accent' : ''}`}
-        onClick={handleAdd}
-      >
-        <span className="dock-icon">{isPlacement ? <IconCheck /> : <IconAdd />}</span>
-        <span className="dock-label">{isPlacement ? 'Place' : 'Add'}</span>
-      </button>
+      {isReviewLocked && !isPlacement ? (
+        <DockLockedButton label="Add (unavailable in Review)" icon={<IconAdd />} text="Add" buttonRef={primaryActionRef} className="dock-add-btn" />
+      ) : (
+        <button
+          ref={primaryActionRef}
+          className={`dock-item dock-add-btn${isPlacement ? ' dock-placement-accent' : ''}`}
+          onClick={handleAdd}
+        >
+          <span className="dock-icon">{isPlacement ? <IconCheck /> : <IconAdd />}</span>
+          <span className="dock-label">{isPlacement ? 'Place' : 'Add'}</span>
+        </button>
+      )}
 
       {/* Mode segmented control — only in primary surface */}
       {!isPlacement && (
@@ -102,9 +130,10 @@ export function DockBar() {
           name="interaction-mode"
           legend="Interaction mode"
           className="dock-mode"
-          items={MODES}
+          items={modes}
           activeValue={interactionMode}
           onSelect={handleMode}
+          onDisabledSelect={handleDisabledMode}
         />
       )}
 
@@ -117,14 +146,18 @@ export function DockBar() {
       )}
 
       {/* Pause / Resume */}
-      <button
-        className="dock-item"
-        onClick={handlePause}
-        disabled={isPlacement}
-      >
-        <span className="dock-icon">{paused ? <IconResume /> : <IconPause />}</span>
-        <span className="dock-label">{paused ? 'Resume' : 'Pause'}</span>
-      </button>
+      {isReviewLocked ? (
+        <DockLockedButton label={`${paused ? 'Resume' : 'Pause'} (unavailable in Review)`} icon={paused ? <IconResume /> : <IconPause />} text={paused ? 'Resume' : 'Pause'} />
+      ) : (
+        <button
+          className="dock-item"
+          onClick={handlePause}
+          disabled={isPlacement}
+        >
+          <span className="dock-icon">{paused ? <IconResume /> : <IconPause />}</span>
+          <span className="dock-label">{paused ? 'Resume' : 'Pause'}</span>
+        </button>
+      )}
 
       {/* Settings */}
       <button

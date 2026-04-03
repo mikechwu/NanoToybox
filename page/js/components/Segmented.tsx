@@ -11,6 +11,7 @@
  */
 
 import React, { useId } from 'react';
+import { ActionHint } from './ActionHint';
 
 export function Segmented<T extends string>({
   name,
@@ -18,13 +19,16 @@ export function Segmented<T extends string>({
   items,
   activeValue,
   onSelect,
+  onDisabledSelect,
   className,
 }: {
   name: string;
   legend: string;
-  items: readonly { readonly value: T; readonly label: string; readonly disabled?: boolean }[];
+  items: readonly { readonly value: T; readonly label: string; readonly disabled?: boolean; readonly disabledReason?: string }[];
   activeValue: T;
   onSelect: (value: T) => void;
+  /** Called when a disabled item is tapped/clicked. Used for review-mode hint delivery. */
+  onDisabledSelect?: (value: T, reason?: string) => void;
   className?: string;
 }) {
   const id = useId();
@@ -36,22 +40,33 @@ export function Segmented<T extends string>({
       style={{ '--seg-count': items.length, '--seg-active': activeIdx } as React.CSSProperties}
     >
       <legend className="sr-only">{legend}</legend>
-      {items.map((item) => (
-        <label
-          key={item.value}
-          className={`${item.value === activeValue ? 'active' : ''}${item.disabled ? ' seg-disabled' : ''}`}
-        >
-          <input
-            type="radio"
-            name={groupName}
-            value={item.value}
-            checked={item.value === activeValue}
-            disabled={item.disabled}
-            onChange={() => onSelect(item.value)}
-          />
-          {item.label}
-        </label>
-      ))}
+      {items.map((item) => {
+        const label = (
+          <label
+            key={item.disabled && item.disabledReason ? undefined : item.value}
+            className={`${item.value === activeValue ? 'active' : ''}${item.disabled ? ' seg-disabled' : ''}`}
+            onClick={item.disabled && onDisabledSelect ? (e) => { e.preventDefault(); onDisabledSelect(item.value, item.disabledReason); } : undefined}
+          >
+            <input
+              type="radio"
+              name={groupName}
+              value={item.value}
+              checked={item.value === activeValue}
+              disabled={item.disabled}
+              onChange={() => onSelect(item.value)}
+            />
+            {item.label}
+          </label>
+        );
+        if (item.disabled && item.disabledReason) {
+          return (
+            <ActionHint key={item.value} text={item.disabledReason} focusableWhenDisabled focusLabel={`${item.label} (unavailable)`}>
+              {label}
+            </ActionHint>
+          );
+        }
+        return <React.Fragment key={item.value}>{label}</React.Fragment>;
+      })}
     </fieldset>
   );
 }

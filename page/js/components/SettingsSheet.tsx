@@ -12,7 +12,9 @@
 import React, { useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 import { useSheetAnimation } from '../hooks/useSheetAnimation';
+import { selectIsReviewLocked } from '../store/selectors/review-ui-lock';
 import { Segmented } from './Segmented';
+import { ReviewLockedListItem } from './ReviewLockedListItem';
 
 // ── Slider helper ──
 
@@ -113,6 +115,7 @@ export function SettingsSheet() {
   const helpPageActive = useAppStore((s) => s.helpPageActive);
   const setHelpPageActive = useAppStore((s) => s.setHelpPageActive);
   const settingsCallbacks = useAppStore((s) => s.settingsCallbacks);
+  const reviewLock = useAppStore(selectIsReviewLocked);
 
   const isOpen = activeSheet === 'settings';
   const { ref, mounted, animating, onTransitionEnd } = useSheetAnimation(isOpen);
@@ -163,16 +166,28 @@ export function SettingsSheet() {
           <div className="group">
             <div className="group-header">Scene</div>
             <ul className="group-list">
-              <li className="group-item group-action" onClick={() => settingsCallbacks?.onAddMolecule()}>
-                Add Molecule
-              </li>
-              <li
-                className="group-item group-action"
-                style={{ color: 'var(--color-danger)' }}
-                onClick={() => settingsCallbacks?.onClear()}
-              >
-                Clear
-              </li>
+              {reviewLock ? (
+                <ReviewLockedListItem label="Add Molecule (unavailable in Review)" className="group-item group-action">
+                  Add Molecule
+                </ReviewLockedListItem>
+              ) : (
+                <li className="group-item group-action" onClick={() => settingsCallbacks?.onAddMolecule()}>
+                  Add Molecule
+                </li>
+              )}
+              {reviewLock ? (
+                <ReviewLockedListItem label="Clear (unavailable in Review)" className="group-item group-action">
+                  Clear
+                </ReviewLockedListItem>
+              ) : (
+                <li
+                  className="group-item group-action"
+                  style={{ color: 'var(--color-danger)' }}
+                  onClick={() => settingsCallbacks?.onClear()}
+                >
+                  Clear
+                </li>
+              )}
               <li className="group-item group-action" onClick={() => settingsCallbacks?.onResetView()}>
                 Reset View
               </li>

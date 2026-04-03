@@ -214,6 +214,17 @@ The acceptance tests use three intentionally overlapping layers. All three must 
 | `placement-camera-framing.test.ts` | 13 | Pure framing solver: no-adjustment fast path, target shift toward edge pressure, distance increase for wide unions, asymmetric margins, near-plane safety, orientation independence, visible-anchor filtering, adaptive search regression (visible-anchor vs offscreen, edge-drag target-shift preference, no over-depth), drag offset geometry (grabbed-point plane, non-origin preview, camera rotation compensation) |
 | `placement-drag-lifecycle.test.ts` | 7 | Controller-path drag lifecycle: pointer capture acquired on pointerdown, pointerleave does not abort drag with capture, pointerup releases capture, pointercancel aborts, per-frame reprojection runs during drag, capture-failure fallback (pointerleave aborts when capture unsupported) |
 
+### Review Mode UI Lock (35 tests across 6 files)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `review-ui-lock-selector.test.ts` | 4 | Selector: live mode all false, review mode all true, tooltip text content, tooltip vs status copy |
+| `review-ui-lock-guards.test.ts` | 7 | Runtime guards: onAdd, onPause, onModeChange, onAddMolecule, onSelectStructure, onClear blocked in review with hint; all work in live |
+| `review-lock-dom-structure.test.tsx` | 9 | DOM contract: li is direct child of ul, no timeline-hint-anchor class, tooltip inside li not wrapping, keyboard-focusable, tooltip not inside dimmed wrapper, bottom-start placement, selector integration |
+| `review-locked-interaction-hook.test.tsx` | 4 | Shared hook: click triggers status hint, Enter triggers hint, Space triggers hint, show/hide tooltip timing |
+| `dock-bar-review-lock.test.tsx` | 7 | DockBar: Add review-locked, Pause review-locked, Segmented items disabled, ActionHint tooltips on disabled items, Settings not locked, live mode normal, blocked click |
+| `structure-chooser-review-lock.test.tsx` | 4 | StructureChooser: rows wrapped in review lock, tooltips present, click shows hint not callback, live mode normal |
+
 ## Frontend Smoke Test
 
 Manual verification checklist for the interactive page (`page/index.html`). Run after any changes to `page/` code.
@@ -296,6 +307,17 @@ npm run dev
 - [ ] Release drag → preview stays in place, camera settles smoothly
 - [ ] Click Place → camera does NOT snap to new molecule (Policy A: no focus retarget on commit)
 - [ ] After Place, click Center → camera animates to newly placed molecule (explicit focus works)
+
+#### Review Mode UI Lock
+- [ ] Enter review mode by scrubbing timeline → dock Add, Atom/Move/Rotate, Pause/Resume appear visually disabled
+- [ ] Desktop: hover over disabled Add → tooltip shows "Review mode is read-only..."
+- [ ] Desktop: hover over disabled Atom/Move/Rotate segment → each shows tooltip
+- [ ] Mobile: tap disabled Add → transient status hint appears explaining review exits
+- [ ] Mobile: tap disabled mode segment → same status hint
+- [ ] Settings sheet: Add Molecule and Clear appear disabled with hint on hover/tap
+- [ ] Structure chooser (if open): rows appear locked, click shows hint instead of placing
+- [ ] Click Live → exit review, all controls re-enabled immediately
+- [ ] Click Restart → exit review, controls re-enabled, simulation resumes from scrub point
 
 | 52 | Speed 0.5x | Motion visibly slower |
 | 53 | Speed 2x | Visibly faster, stable |
