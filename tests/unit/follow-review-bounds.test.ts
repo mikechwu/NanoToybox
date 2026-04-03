@@ -25,7 +25,10 @@ describe('orbit-follow uses displayed bounds (real helper)', () => {
       getMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(1, 2, 3), radius: 5 })),
       getDisplayedMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(10, 20, 30), radius: 5 })),
       updateOrbitFollow: vi.fn(),
-    };
+      getDisplayedAtomWorldPosition: vi.fn(() => null),
+      camera: { position: new THREE.Vector3(0, 0, 15) },
+      getSceneRadius: vi.fn(() => 10),
+    } as any;
 
     updateOrbitFollowFromStore(renderer, 16);
 
@@ -46,7 +49,10 @@ describe('orbit-follow uses displayed bounds (real helper)', () => {
     const renderer = {
       getDisplayedMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(100, 200, 300), radius: 5 })),
       updateOrbitFollow: vi.fn(),
-    };
+      getDisplayedAtomWorldPosition: vi.fn(() => null),
+      camera: { position: new THREE.Vector3(0, 0, 15) },
+      getSceneRadius: vi.fn(() => 10),
+    } as any;
 
     updateOrbitFollowFromStore(renderer, 16);
 
@@ -64,7 +70,10 @@ describe('orbit-follow uses displayed bounds (real helper)', () => {
     const renderer = {
       getDisplayedMoleculeBounds: vi.fn(),
       updateOrbitFollow: vi.fn(),
-    };
+      getDisplayedAtomWorldPosition: vi.fn(() => null),
+      camera: { position: new THREE.Vector3(0, 0, 15) },
+      getSceneRadius: vi.fn(() => 10),
+    } as any;
 
     updateOrbitFollowFromStore(renderer, 16);
     expect(renderer.getDisplayedMoleculeBounds).not.toHaveBeenCalled();
@@ -80,7 +89,10 @@ describe('orbit-follow uses displayed bounds (real helper)', () => {
     const renderer = {
       getDisplayedMoleculeBounds: vi.fn(),
       updateOrbitFollow: vi.fn(),
-    };
+      getDisplayedAtomWorldPosition: vi.fn(() => null),
+      camera: { position: new THREE.Vector3(0, 0, 15) },
+      getSceneRadius: vi.fn(() => 10),
+    } as any;
 
     updateOrbitFollowFromStore(renderer, 16);
     expect(renderer.updateOrbitFollow).not.toHaveBeenCalled();

@@ -42,6 +42,8 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
       getDisplayedMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(1, 2, 3), radius: 3.5 })),
       setCameraFocusTarget: vi.fn(),
       animateToFocusedObject: vi.fn(),
+      animateToFramedTarget: vi.fn(),
+      getDisplayedAtomWorldPosition: vi.fn(() => new THREE.Vector3(0, 0, 0)),
       camera: { position: new THREE.Vector3(0, 0, 15) },
       getSceneRadius: () => 10,
     };
@@ -58,7 +60,7 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
       { id: 1, name: 'C60', structureFile: 'c60.xyz', atomCount: 60, atomOffset: 0 },
     ]);
     handleCenterObject(mockRenderer);
-    expect(mockRenderer.animateToFocusedObject).toHaveBeenCalled();
+    expect(mockRenderer.animateToFramedTarget).toHaveBeenCalled();
     expect(useAppStore.getState().lastFocusedMoleculeId).toBe(1);
   });
 
@@ -69,7 +71,7 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
     ]);
     useAppStore.getState().setLastFocusedMoleculeId(2);
     handleCenterObject(mockRenderer);
-    expect(mockRenderer.animateToFocusedObject).toHaveBeenCalled();
+    expect(mockRenderer.animateToFramedTarget).toHaveBeenCalled();
   });
 
   it('multiple molecules, no valid focus: centers nearest molecule', () => {
@@ -79,7 +81,7 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
     ]);
     handleCenterObject(mockRenderer);
     // No pick-focus mode — centers nearest molecule directly
-    expect(mockRenderer.animateToFocusedObject).toHaveBeenCalled();
+    expect(mockRenderer.animateToFramedTarget).toHaveBeenCalled();
     expect(useAppStore.getState().lastFocusedMoleculeId).not.toBeNull();
   });
 
@@ -90,7 +92,7 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
     ]);
     useAppStore.getState().setLastFocusedMoleculeId(99);
     handleCenterObject(mockRenderer);
-    expect(mockRenderer.animateToFocusedObject).toHaveBeenCalled();
+    expect(mockRenderer.animateToFramedTarget).toHaveBeenCalled();
   });
 });
 
@@ -120,6 +122,8 @@ describe('interaction-dispatch normal start', () => {
       getMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(5, 5, 5), radius: 3.5 })),
       setCameraFocusTarget: vi.fn(),
       animateToFocusedObject: vi.fn(),
+      animateToFramedTarget: vi.fn(),
+      getDisplayedAtomWorldPosition: vi.fn(() => new THREE.Vector3(0, 0, 0)),
       getCanvas: vi.fn(() => document.createElement('canvas')),
       camera: { position: new THREE.Vector3(0, 0, 15) },
       controls: { target: { set: vi.fn() }, update: vi.fn() },
@@ -178,6 +182,8 @@ describe('paused worker placement calls renderer.updatePositions', () => {
       getMoleculeBounds: vi.fn(() => ({ center: new THREE.Vector3(0, 0, 0), radius: 3 })),
       setCameraFocusTarget: vi.fn(),
       animateToFocusedObject: vi.fn(),
+      animateToFramedTarget: vi.fn(),
+      getDisplayedAtomWorldPosition: vi.fn(() => new THREE.Vector3(0, 0, 0)),
       getSceneRadius: () => 10,
       camera: { position: new THREE.Vector3(0, 0, 15) },
       updatePositions,

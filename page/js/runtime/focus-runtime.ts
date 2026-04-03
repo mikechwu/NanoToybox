@@ -1,108 +1,137 @@
 /**
- * Focus runtime — owns focus RESOLUTION (which molecule, what centroid,
- * update camera + store). Callers own focus TRIGGER ELIGIBILITY (when to
- * call these helpers based on interaction mode, placement state, etc.).
+ * Focus runtime — owns focus RESOLUTION and camera-target actions.
+ *
+ * Uses camera-target-runtime.ts for generic target resolution (molecule or
+ * bonded group). All center/follow/return actions share one resolution path.
  *
  * Responsibility split:
- * - focus-runtime.ts: molecule lookup, centroid computation, setCameraFocusTarget,
- *   setLastFocusedMoleculeId. Does NOT decide when to focus — only how.
- * - interaction-dispatch.ts: calls focusMoleculeByAtom on startDrag/Move/Rotate
- *   (trigger: any direct object interaction).
- * - scene-runtime.ts: clears lastFocusedMoleculeId on clearPlayground
- *   (scene lifecycle reset, not focus resolution).
+ * - focus-runtime.ts: target resolution, camera actions (center, follow, return).
+ * - camera-target-runtime.ts: pure resolution logic (ref → bounds).
+ * - interaction-dispatch.ts: calls focusMoleculeByAtom on drag/move/rotate start.
+ * - scene-runtime.ts: clears target on clearPlayground.
  *
- * Placement commit does NOT change focus metadata or retarget camera.
- * Placement visibility is handled by placement-camera-framing (frame-runtime).
- * Camera retargeting only happens via explicit user actions (Center / Return).
+ * Placement commit does NOT change focus metadata or retarget camera (Policy A).
  *
  * @module focus-runtime
- *
- * Owns:        Focus resolution logic (molecule lookup, centroid computation,
- *              camera target update), return-target resolution for guardrail.
- * Depends on:  app-store (molecules read, lastFocusedMoleculeId read/write),
- *              FocusRendererSurface (getDisplayedMoleculeCentroid,
- *              getDisplayedMoleculeBounds, setCameraFocusTarget, animateToFocusedObject).
- * Called by:   interaction-dispatch (focusMoleculeByAtom on drag/move/rotate start),
- *              scene-runtime (clearLastFocusedMoleculeId on clearPlayground).
- * Teardown:    Stateless module (pure functions) — no instance teardown needed.
  */
 
 import type * as THREE from 'three';
-import { useAppStore, type MoleculeMetadata } from '../store/app-store';
+import { useAppStore, type MoleculeMetadata, type CameraTargetRef } from '../store/app-store';
+import {
+  resolveCameraTargetRef,
+  resolveBestDefaultCameraTarget,
+  type CameraTargetDeps,
+  type CameraTargetRendererSurface,
+  type ResolvedCameraTarget,
+} from './camera-target-runtime';
 
 /** Minimal renderer surface needed for focus operations.
- *  All position queries are display-aware: they resolve from the currently
- *  displayed frame (live or review) via the renderer's display-source state. */
-export interface FocusRendererSurface {
-  getDisplayedMoleculeCentroid(atomOffset: number, atomCount: number): THREE.Vector3 | null;
-  getDisplayedMoleculeBounds(atomOffset: number, atomCount: number): { center: THREE.Vector3; radius: number } | null;
-  setCameraFocusTarget(target: THREE.Vector3): void;
-  animateToFocusedObject(opts?: { levelUp?: boolean; onComplete?: () => void }): void;
-  camera: { position: THREE.Vector3 };
-  getSceneRadius(): number;
+ *  Extends CameraTargetRendererSurface (getDisplayedMoleculeBounds,
+ *  getDisplayedAtomWorldPosition, camera.position, getSceneRadius) which
+ *  the target resolver needs. Focus-runtime itself only adds animateToFramedTarget. */
+export interface FocusRendererSurface extends CameraTargetRendererSurface {
+  animateToFramedTarget(target: { center: THREE.Vector3; radius: number }, opts?: { levelUp?: boolean; onComplete?: () => void }): void;
+}
+
+/** Dependencies injected by main.ts for bonded-group atom lookup. */
+export interface FocusTargetDeps {
+  getBondedGroupAtoms: (groupId: string) => number[] | null;
 }
 
 /** Typed return-target descriptor for shared recovery logic. */
 export interface ReturnTarget {
-  kind: 'molecule' | 'scene-origin';
+  kind: 'molecule' | 'bonded-group' | 'scene-origin';
   position: THREE.Vector3;
   radius: number;
   moleculeId?: number;
+  groupId?: string;
   guardrailEligible: boolean;
 }
 
+// ── Helpers ──
+
+function buildCameraTargetDeps(renderer: FocusRendererSurface, deps?: FocusTargetDeps): CameraTargetDeps {
+  return {
+    renderer,
+    molecules: useAppStore.getState().molecules,
+    getBondedGroupAtoms: deps?.getBondedGroupAtoms ?? (() => null),
+  };
+}
+
 /**
- * Resolve the best return target for ↩ Return to Object and far-drift guardrail.
- * Single source of truth — consumed by both animation and threshold computation.
+ * Pure resolution: resolve the current camera target ref, or fall back to
+ * a default. Does NOT mutate store state (no side effects).
+ * Use commitDefault=true only for explicit user actions (Center, Follow).
+ */
+function resolveCurrentOrDefault(
+  renderer: FocusRendererSurface,
+  deps?: FocusTargetDeps,
+  opts?: { commitDefault?: boolean },
+): ResolvedCameraTarget | null {
+  const store = useAppStore.getState();
+  const ctDeps = buildCameraTargetDeps(renderer, deps);
+
+  // Try explicit cameraTargetRef first
+  if (store.cameraTargetRef) {
+    const resolved = resolveCameraTargetRef(store.cameraTargetRef, ctDeps);
+    if (resolved) return resolved;
+  }
+
+  // Fall back to lastFocusedMoleculeId (compatibility)
+  if (store.lastFocusedMoleculeId !== null) {
+    const ref: CameraTargetRef = { kind: 'molecule', moleculeId: store.lastFocusedMoleculeId };
+    const resolved = resolveCameraTargetRef(ref, ctDeps);
+    if (resolved) return resolved;
+  }
+
+  // Fall back to best default
+  const defaultRef = resolveBestDefaultCameraTarget(ctDeps);
+  if (defaultRef) {
+    const resolved = resolveCameraTargetRef(defaultRef, ctDeps);
+    if (resolved) {
+      // Only commit default to store on explicit user actions
+      if (opts?.commitDefault) {
+        useAppStore.getState().setCameraTargetRef(defaultRef);
+        if (defaultRef.kind === 'molecule') {
+          useAppStore.getState().setLastFocusedMoleculeId(defaultRef.moleculeId);
+        }
+      }
+      return resolved;
+    }
+  }
+
+  return null;
+}
+
+// ── Public API ──
+
+/**
+ * Resolve the best return target for Return to Object and far-drift guardrail.
  */
 export function resolveReturnTarget(
   renderer: FocusRendererSurface,
   sceneRadius: number,
+  deps?: FocusTargetDeps,
 ): ReturnTarget {
-  const store = useAppStore.getState();
-  const molecules = store.molecules;
-
-  // Priority 1: valid last-focused molecule (display-aware)
-  if (store.lastFocusedMoleculeId !== null) {
-    const mol = molecules.find(m => m.id === store.lastFocusedMoleculeId);
-    if (mol) {
-      const bounds = renderer.getDisplayedMoleculeBounds(mol.atomOffset, mol.atomCount);
-      if (bounds) {
-        return { kind: 'molecule', position: bounds.center, radius: bounds.radius, moleculeId: mol.id, guardrailEligible: true };
-      }
-    }
+  const resolved = resolveCurrentOrDefault(renderer, deps, { commitDefault: false });
+  if (resolved) {
+    return {
+      kind: resolved.kind,
+      position: resolved.center,
+      radius: resolved.radius,
+      moleculeId: resolved.moleculeId,
+      groupId: resolved.groupId,
+      guardrailEligible: true,
+    };
   }
 
-  // Priority 2: nearest molecule to camera (display-aware)
-  if (molecules.length > 0) {
-    let bestMol = molecules[0];
-    let bestDist = Infinity;
-    const camPos = renderer.camera.position;
-    for (const mol of molecules) {
-      const c = renderer.getDisplayedMoleculeCentroid(mol.atomOffset, mol.atomCount);
-      if (!c) continue;
-      const d = camPos.distanceToSquared(c);
-      if (d < bestDist) { bestDist = d; bestMol = mol; }
-    }
-    const bounds = renderer.getDisplayedMoleculeBounds(bestMol.atomOffset, bestMol.atomCount);
-    if (bounds) {
-      return { kind: 'molecule', position: bounds.center, radius: bounds.radius, moleculeId: bestMol.id, guardrailEligible: true };
-    }
-  }
-
-  // Priority 3: scene origin (no guardrail)
-  // Use the same Vector3 constructor as the renderer's camera position
   const origin = renderer.camera.position.clone().set(0, 0, 0);
   return { kind: 'scene-origin', position: origin, radius: sceneRadius, guardrailEligible: false };
 }
 
 /**
  * Track which molecule the user is interacting with (store ID only).
- * Does NOT retarget the camera pivot — plain clicks and interaction starts
- * should not snap the view. Camera retarget only happens via explicit
- * Center Object / Return to Object actions.
- *
- * Updates lastFocusedMoleculeId for Center Object resolution.
+ * Updates both lastFocusedMoleculeId (compatibility) and cameraTargetRef.
  */
 export function focusMoleculeByAtom(
   atomIdx: number,
@@ -111,77 +140,43 @@ export function focusMoleculeByAtom(
   const molecules = useAppStore.getState().molecules;
   const mol = findMoleculeForAtom(atomIdx, molecules);
   if (!mol) return;
-  // In follow mode, freeze the tracked molecule — normal clicks should not
-  // change the follow target. Only disabling follow + re-enabling allows retarget.
   if (!useAppStore.getState().orbitFollowEnabled) {
     useAppStore.getState().setLastFocusedMoleculeId(mol.id);
+    useAppStore.getState().setCameraTargetRef({ kind: 'molecule', moleculeId: mol.id });
   }
 }
 
 /**
  * Ensure a valid follow target exists before enabling orbit-follow.
  * Returns true if a target was resolved (follow may proceed).
- * Returns false if no molecules exist (follow should stay off).
- *
- * This is the explicit contract for the Follow button: resolve first, enable second.
  */
-export function ensureFollowTarget(renderer: FocusRendererSurface): boolean {
+export function ensureFollowTarget(
+  renderer: FocusRendererSurface,
+  deps?: FocusTargetDeps,
+): boolean {
   const store = useAppStore.getState();
-  const molecules = store.molecules;
-  if (molecules.length === 0) return false;
+  if (store.molecules.length === 0) return false;
 
-  // If lastFocusedMoleculeId is already valid, keep it
-  if (store.lastFocusedMoleculeId !== null) {
-    const mol = molecules.find(m => m.id === store.lastFocusedMoleculeId);
-    if (mol) return true;
-  }
-
-  // Resolve: single molecule → use it; multiple → nearest to camera
-  if (molecules.length === 1) {
-    store.setLastFocusedMoleculeId(molecules[0].id);
-    return true;
-  }
-
-  const target = resolveReturnTarget(renderer, renderer.getSceneRadius());
-  if (target.kind === 'molecule' && target.moleculeId != null) {
-    store.setLastFocusedMoleculeId(target.moleculeId);
-    return true;
-  }
+  const resolved = resolveCurrentOrDefault(renderer, deps, { commitDefault: true });
+  if (resolved) return true;
 
   return false;
 }
 
 /**
  * Center Object action: animate camera to the best focus target.
- * Priority: valid last-focused → single molecule → nearest molecule to camera.
- * No-op if no molecules exist. No pick-focus mode — always resolves immediately.
+ * Resolves through generic cameraTargetRef → camera-target-runtime.
  */
-export function handleCenterObject(renderer: FocusRendererSurface): void {
+export function handleCenterObject(
+  renderer: FocusRendererSurface,
+  deps?: FocusTargetDeps,
+): void {
   const store = useAppStore.getState();
-  const molecules = store.molecules;
-  if (molecules.length === 0) return;
+  if (store.molecules.length === 0) return;
 
-  // Priority 1: valid last-focused molecule
-  if (store.lastFocusedMoleculeId !== null) {
-    const mol = molecules.find(m => m.id === store.lastFocusedMoleculeId);
-    if (mol) {
-      renderer.animateToFocusedObject();
-      return;
-    }
-  }
-
-  // Priority 2: single molecule — direct center
-  if (molecules.length === 1) {
-    useAppStore.getState().setLastFocusedMoleculeId(molecules[0].id);
-    renderer.animateToFocusedObject();
-    return;
-  }
-
-  // Priority 3: multiple molecules, no valid focus — center nearest to camera
-  const target = resolveReturnTarget(renderer, renderer.getSceneRadius());
-  if (target.kind === 'molecule' && target.moleculeId != null) {
-    useAppStore.getState().setLastFocusedMoleculeId(target.moleculeId);
-    renderer.animateToFocusedObject();
+  const resolved = resolveCurrentOrDefault(renderer, deps, { commitDefault: true });
+  if (resolved) {
+    renderer.animateToFramedTarget({ center: resolved.center, radius: resolved.radius });
   }
 }
 

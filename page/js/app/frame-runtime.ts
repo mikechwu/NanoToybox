@@ -106,6 +106,8 @@ export interface FrameRuntimeSurface {
   bondedGroupCoordinator: { update(): void } | null;
   overlayLayout: { isGlassActive(): boolean } | null;
   placement: { active: boolean; isDraggingPreview?: boolean; updateDragFromLatestPointer?: () => void } | null;
+  /** Bonded-group atom lookup for camera target resolution (orbit-follow). */
+  getBondedGroupAtoms?: (groupId: string) => number[] | null;
   /** Frozen scene anchor captured at placement start. Owned by frame-runtime. */
   placementFramingAnchor: PlacementFramingPoint[] | null;
   setPlacementFramingAnchor(anchor: PlacementFramingPoint[] | null): void;
@@ -340,7 +342,8 @@ export function executeFrame(timestamp: number, s: FrameRuntimeSurface): void {
     // Orbit follow — suppressed during placement (placement framing is sole camera owner)
     const placementActive = !!(s.placement && s.placement.active);
     if (!placementActive) {
-      updateOrbitFollowFromStore(s.renderer, frameDtMs);
+      updateOrbitFollowFromStore(s.renderer, frameDtMs,
+        s.getBondedGroupAtoms ? { getBondedGroupAtoms: s.getBondedGroupAtoms } : undefined);
     }
 
     // Placement camera framing — runs during both idle placement and active drag.

@@ -22,6 +22,11 @@ export interface MoleculeMetadata {
   atomOffset: number;
 }
 
+/** Generic camera target identity — supports molecule and bonded-group targets. */
+export type CameraTargetRef =
+  | { kind: 'molecule'; moleculeId: number }
+  | { kind: 'bonded-group'; groupId: string };
+
 /** An entry from the loaded structure manifest — available to add. */
 export interface StructureOption {
   key: string;
@@ -116,8 +121,13 @@ export interface AppStore {
   setCameraCallbacks: (cbs: { onCenterObject: () => void; onEnableFollow?: () => boolean; onReturnToObject?: () => void; onFreeze?: () => void }) => void;
 
   // Focus handle for camera pivot (validated before use — molecule may be removed)
+  // TODO(migration): Remove lastFocusedMoleculeId after bonded-group Center/Follow ships
+  // and old molecule-only CameraControls are retired. cameraTargetRef is the new authority.
   lastFocusedMoleculeId: number | null;
   setLastFocusedMoleculeId: (id: number | null) => void;
+  /** Generic camera target — replaces molecule-only lastFocusedMoleculeId for new paths. */
+  cameraTargetRef: CameraTargetRef | null;
+  setCameraTargetRef: (ref: CameraTargetRef | null) => void;
 
   // Scene-authoritative state
   atomCount: number;
@@ -310,6 +320,7 @@ export const useAppStore = create<AppStore>((set) => ({
   onboardingPhase: 'dismissed' as const,
   cameraCallbacks: null,
   lastFocusedMoleculeId: null,
+  cameraTargetRef: null,
   bondedGroups: [],
   bondedGroupsExpanded: false,
   bondedSmallGroupsExpanded: false,
@@ -382,6 +393,7 @@ export const useAppStore = create<AppStore>((set) => ({
   }),
   setCameraCallbacks: (cbs) => set({ cameraCallbacks: cbs }),
   setLastFocusedMoleculeId: (id) => set({ lastFocusedMoleculeId: id }),
+  setCameraTargetRef: (ref) => set({ cameraTargetRef: ref }),
   setTargetSpeed: (speed) => set({ targetSpeed: speed }),
   togglePause: () => set((s) => ({ paused: !s.paused })),
 
@@ -478,6 +490,7 @@ export const useAppStore = create<AppStore>((set) => ({
     onboardingPhase: 'dismissed' as const,
     cameraCallbacks: null,
     lastFocusedMoleculeId: null,
+    cameraTargetRef: null,
     // Bonded groups (side preference preserved across reset)
     bondedGroups: [],
     bondedGroupsExpanded: false,

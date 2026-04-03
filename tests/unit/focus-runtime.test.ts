@@ -18,8 +18,10 @@ function mockRenderer(centroid: THREE.Vector3 | null = new THREE.Vector3(1, 2, 3
   return {
     getDisplayedMoleculeCentroid: vi.fn(() => centroid),
     getDisplayedMoleculeBounds: vi.fn(() => bounds),
+    getDisplayedAtomWorldPosition: vi.fn((i: number) => centroid ? new THREE.Vector3(i, 0, 0) : null),
     setCameraFocusTarget: vi.fn(),
     animateToFocusedObject: vi.fn(),
+    animateToFramedTarget: vi.fn(),
     camera: { position: new THREE.Vector3(0, 0, 15) },
     getSceneRadius: () => 10,
   };
@@ -165,7 +167,7 @@ describe('display-aware focus resolution (review mode)', () => {
     ]);
     const r = mockRenderer(new THREE.Vector3(1, 2, 3));
     handleCenterObject(r);
-    expect(r.animateToFocusedObject).toHaveBeenCalled();
+    expect(r.animateToFramedTarget).toHaveBeenCalled();
     expect(useAppStore.getState().lastFocusedMoleculeId).toBe(5);
   });
 });
@@ -243,7 +245,7 @@ describe('Follow enable resolves a target', () => {
     const r = mockRenderer(new THREE.Vector3(1, 2, 3));
     handleCenterObject(r);
     expect(useAppStore.getState().lastFocusedMoleculeId).not.toBeNull();
-    expect(r.animateToFocusedObject).toHaveBeenCalled();
+    expect(r.animateToFramedTarget).toHaveBeenCalled();
   });
 
   it('follow enable + handleCenterObject gives the per-frame loop a valid target', () => {

@@ -1656,10 +1656,16 @@ export class Renderer {
   }
 
   /**
-   * Compute framing camera position for a bounding sphere from the current view direction.
-   * Returns the camera position that frames the sphere at CONFIG.camera.framingPadding fill.
-   * Validates against near/far clipping planes.
+   * Return the world-space position of a single atom from the currently displayed
+   * frame (live or review). Returns null if the index is out of range.
    */
+  getDisplayedAtomWorldPosition(atomIndex: number): THREE.Vector3 | null {
+    const src = this._getDisplayedPositions();
+    if (!src || atomIndex < 0 || atomIndex >= src.n) return null;
+    const i = atomIndex * 3;
+    return new THREE.Vector3(src.pos[i], src.pos[i + 1], src.pos[i + 2]);
+  }
+
   /**
    * Compute framing distance for a bounding sphere (not position — pure math).
    * Returns the clamped distance that frames the sphere safely.
@@ -1950,6 +1956,37 @@ export class Renderer {
         opts?.onComplete?.();
       },
     });
+  }
+
+  /**
+   * Generic framing animation — frames an arbitrary { center, radius } target.
+   * Delegates to the same shared animation/framing path as animateToFocusedObject.
+   */
+  animateToFramedTarget(
+    target: { center: THREE.Vector3; radius: number },
+    opts?: { levelUp?: boolean; onComplete?: () => void },
+  ): void {
+    const viewDir = this.getStableViewDirection();
+    const d = this.computeFramingDistance(target.radius);
+    const endCamPos = target.center.clone().add(viewDir.multiplyScalar(d));
+
+    this.animateCameraTo({
+      targetPos: target.center,
+      cameraPos: endCamPos,
+      levelUp: opts?.levelUp ?? false,
+      onComplete: () => {
+        this._currentFocusDistance = d;
+        this._showFocusIndicator(target.center);
+        opts?.onComplete?.();
+      },
+    });
+  }
+
+  /**
+   * Set the return-target resolver callback (replaces direct assignment of _returnToObjectCallback).
+   */
+  setReturnTargetResolver(resolver: () => { position: THREE.Vector3; radius: number } | null): void {
+    this._returnToObjectCallback = resolver;
   }
 
   /**

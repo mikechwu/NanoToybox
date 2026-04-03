@@ -729,13 +729,17 @@ async function init() {
     startPlacement: (file, desc) => { if (placement) placement.start(file, desc); },
   });
 
+  // Bonded-group atom lookup helper — shared by all camera target resolution paths
+  const getBondedGroupAtoms = (groupId: string) =>
+    _bondedGroups?.getAtomIndicesForGroup(groupId) ?? null;
+  const focusTargetDeps = { getBondedGroupAtoms };
+
   // Register camera control callbacks via store (consumed by CameraControls.tsx)
-  // Center Object logic lives in focus-runtime.ts (shared with tests)
   useAppStore.getState().setCameraCallbacks({
-    onCenterObject: () => { _handleCenterObject(renderer); },
+    onCenterObject: () => { _handleCenterObject(renderer, focusTargetDeps); },
     onEnableFollow: () => {
-      if (!ensureFollowTarget(renderer)) return false;
-      _handleCenterObject(renderer);
+      if (!ensureFollowTarget(renderer, focusTargetDeps)) return false;
+      _handleCenterObject(renderer, focusTargetDeps);
       return true;
     },
     onReturnToObject: () => {
@@ -747,12 +751,11 @@ async function init() {
     onFreeze: () => { renderer.freezeFlight(); useAppStore.getState().setFlightActive(false); },
   });
 
-  // Wire return-target callback via shared resolveReturnTarget descriptor
-  // Wire return-target callback directly from shared resolveReturnTarget
-  renderer._returnToObjectCallback = () => {
-    const target = resolveReturnTarget(renderer, renderer.getSceneRadius());
-    return target; // ReturnTarget has position + radius (+ kind, guardrailEligible)
-  };
+  // Wire return-target callback through generic camera-target resolution
+  renderer.setReturnTargetResolver(() => {
+    const target = resolveReturnTarget(renderer, renderer.getSceneRadius(), focusTargetDeps);
+    return target;
+  });
 
   // Subscribe to camera mode changes → configure OrbitControls + achievement
   let _prevCameraMode = useAppStore.getState().cameraMode;
@@ -919,6 +922,7 @@ function frameLoop(timestamp: number) {
     placement,
     placementFramingAnchor: _placementFramingAnchor,
     setPlacementFramingAnchor: (a: any) => { _placementFramingAnchor = a; },
+    getBondedGroupAtoms: (groupId: string) => _bondedGroups?.getAtomIndicesForGroup(groupId) ?? null,
     scene: _scene,
     effectsGate,
     lastReconciledSnapshotVersion: _lastReconciledSnapshotVersion,
