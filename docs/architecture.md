@@ -92,7 +92,7 @@ NanoToybox/
 │   │   │   └── coachmarks.ts     # Onboarding copy and IDs (placement, future hints)
 │   │   ├── components/           # React-authoritative UI components
 │   │   │   ├── DockLayout.tsx    # Dock positioning wrapper ([data-dock-root] measurement root)
-│   │   │   ├── DockBar.tsx       # Toolbar (add, pause, settings, mode; role="toolbar")
+│   │   │   ├── DockBar.tsx       # Toolbar with 4-slot CSS grid (Add, Mode, Pause, Settings); role="toolbar"
 │   │   │   ├── Segmented.tsx     # Shared native-radio segmented control
 │   │   │   ├── SettingsSheet.tsx # Settings sheet with all controls
 │   │   │   ├── StructureChooser.tsx # Structure picker sheet
@@ -314,6 +314,8 @@ When `timelineMode === 'review'`, live-edit actions are disabled at two layers:
 **Mobile:** Transient status hint with `REVIEW_LOCK_STATUS` (fuller copy explaining exits).
 
 Hint copy lives in `page/js/store/selectors/review-ui-lock.ts`. Hint timing (`statusHintMs`) lives in `CONFIG.reviewModeUi`.
+
+**Dock slot geometry:** The dock uses CSS grid with stable slot widths (`--dock-slot-action` for action buttons, `1fr` for the mode slot) so Pause↔Resume label changes do not rebalance the layout. Each control renders inside a named `.dock-slot` wrapper. The Segmented control uses stable `.seg-item` wrappers for every option so live and review modes produce identical flex children.
 
 ## Key Design Decisions
 

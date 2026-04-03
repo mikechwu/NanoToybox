@@ -46,6 +46,7 @@ These checks require a real browser with WebGL and cannot run in headless CI. Ru
 - [ ] **Viewer:** Open `/viewer/`, drag-drop an `.xyz` file, verify atoms and bonds render
 - [ ] Placement camera framing: preview does not cause camera snap, drag past boundary works
 - [ ] Review mode UI lock: enter review → dock Add/mode/Pause disabled with hints → Settings Add Molecule/Clear disabled → Live/Restart exit re-enables
+- [ ] Dock stability: Pause ↔ Resume toggle does not shift neighboring controls
 
 Automated checks (typecheck, build, unit tests, Playwright E2E, deploy smoke) run in CI on every push/PR.
 

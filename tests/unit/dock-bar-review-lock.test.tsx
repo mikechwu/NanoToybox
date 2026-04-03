@@ -63,9 +63,9 @@ describe('DockBar review-lock rendering', () => {
       expect((radio as HTMLInputElement).disabled).toBe(true);
     });
 
-    // Disabled labels should have seg-disabled class
-    const disabledLabels = segmented!.querySelectorAll('.seg-disabled');
-    expect(disabledLabels.length).toBe(3);
+    // Disabled items should have seg-item--disabled class
+    const disabledItems = segmented!.querySelectorAll('.seg-item--disabled');
+    expect(disabledItems.length).toBe(3);
   });
 
   it('Segmented disabled items have ActionHint wrappers with tooltip text', () => {
@@ -109,13 +109,50 @@ describe('DockBar review-lock rendering', () => {
     useAppStore.getState().setTimelineMode('review');
     const { container } = render(<DockBar />);
 
-    // The trigger wrapper intercepts clicks
     const trigger = container.querySelector('.review-locked-trigger');
     if (trigger) fireEvent.click(trigger);
+  });
 
-    // onAdd should NOT have been called (runtime guard also blocks, but UI should not forward)
-    const callbacks = useAppStore.getState().dockCallbacks;
-    // The click goes to the wrapper, not through to the dock callback
-    // (ReviewLockedControl prevents propagation)
+  it('segmented has identical .seg-item flex children in live and review modes', () => {
+    // Live mode
+    const { container: liveContainer } = render(<DockBar />);
+    const liveSegmented = liveContainer.querySelector('fieldset.segmented');
+    const liveItems = liveSegmented!.querySelectorAll(':scope > .seg-item');
+    expect(liveItems.length).toBe(3);
+
+    cleanup();
+
+    // Review mode
+    useAppStore.getState().setTimelineMode('review');
+    useAppStore.getState().setDockCallbacks({
+      onAdd: vi.fn(), onPause: vi.fn(), onSettings: vi.fn(),
+      onCancel: vi.fn(), onModeChange: vi.fn(),
+    });
+    const { container: reviewContainer } = render(<DockBar />);
+    const reviewSegmented = reviewContainer.querySelector('fieldset.segmented');
+    const reviewItems = reviewSegmented!.querySelectorAll(':scope > .seg-item');
+    expect(reviewItems.length).toBe(3);
+
+    // Same tag and class structure for immediate flex children
+    for (let i = 0; i < 3; i++) {
+      expect(reviewItems[i].tagName).toBe(liveItems[i].tagName);
+      expect(reviewItems[i].tagName).toBe('SPAN');
+      // Each item contains exactly one .seg-label
+      expect(reviewItems[i].querySelectorAll('.seg-label').length).toBe(1);
+      expect(liveItems[i].querySelectorAll('.seg-label').length).toBe(1);
+    }
+
+    // Review disabled items still contain .seg-label
+    const disabledItems = reviewSegmented!.querySelectorAll('.seg-item--disabled');
+    expect(disabledItems.length).toBe(3);
+    disabledItems.forEach(item => {
+      expect(item.querySelector('.seg-label')).not.toBeNull();
+    });
+
+    // Tooltips must be inside .seg-item, not as sibling flex children
+    const tooltips = reviewSegmented!.querySelectorAll(':scope > [role="tooltip"]');
+    expect(tooltips.length).toBe(0);
+    const innerTooltips = reviewSegmented!.querySelectorAll('.seg-item [role="tooltip"]');
+    expect(innerTooltips.length).toBe(3);
   });
 });

@@ -30,6 +30,7 @@
   /* Safe-area insets as readable CSS vars (for JS layout computation) */
   --safe-left: env(safe-area-inset-left, 0px);
   --dock-mode-max-width: 180px;
+  --dock-slot-action: 56px;
 }
 /* Text size: :root defines Normal defaults; Large overrides via data attribute */
 [data-text-size="large"] {
@@ -178,11 +179,14 @@ canvas { display: block; touch-action: none; }
   bottom: 0; left: 0; right: 0;
   z-index: 205; /* Above backdrop (200) so dock stays interactive while sheets are open */
 }
-/* ── Dock bar (visual toolbar) ── */
+/* ── Dock bar (visual toolbar) ──
+   Uses CSS grid with stable slot widths so Pause↔Resume label changes
+   do not rebalance the layout. Mode slot is wider for the segmented control. */
 .dock-bar {
-  display: flex;
-  justify-content: space-around;
+  display: grid;
+  grid-template-columns: var(--dock-slot-action) 1fr var(--dock-slot-action) var(--dock-slot-action);
   align-items: center;
+  justify-items: center;
   height: calc(var(--tap-target) + var(--space-lg) + env(safe-area-inset-bottom, 0px));
   padding-bottom: env(safe-area-inset-bottom, 0px);
   background: var(--panel-bg);
@@ -190,6 +194,7 @@ canvas { display: block; touch-action: none; }
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   border-top: 1px solid var(--color-border);
 }
+.dock-slot { display: flex; align-items: center; justify-content: center; }
 .dock-item {
   display: flex;
   flex-direction: column;
@@ -217,8 +222,9 @@ canvas { display: block; touch-action: none; }
    accessibility tree, and focus-outline behavior across browsers. */
 .review-locked-trigger { display: contents; cursor: not-allowed; }
 .review-locked-trigger > * { opacity: 0.35; pointer-events: none; }
-/* Segmented: dim individual labels, NOT the container (keeps ActionHint tooltips at full contrast) */
-.segmented .seg-disabled { opacity: 0.35; cursor: not-allowed; }
+/* Segmented disabled: dim the label inside the stable wrapper, not the wrapper itself
+   (keeps ActionHint tooltips at full contrast). Consolidated here — no other .seg-disabled rules. */
+.segmented .seg-item--disabled .seg-label { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 /* Row-safe locked list item — position:relative for tooltip, no display override.
    Content is dimmed via inner .review-locked-content; tooltip stays full-contrast.
    Do not use .timeline-hint-anchor on list rows — it sets display:inline-flex. */
@@ -388,10 +394,20 @@ fieldset.segmented {
   position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%;
   margin: 0; cursor: pointer;
 }
-.segmented label {
-  position: relative; /* anchor for absolute-fill radio */
+/* .seg-item is the stable flex child — identical in live and review modes.
+   Layout contract lives here, not on the label, so ActionHint wrappers
+   inside disabled items do not change the flex child structure. */
+.seg-item {
   flex: 1 1 0%;
-  min-width: 0; /* Override intrinsic min-width so flex distributes equally regardless of text length */
+  min-width: 0;
+  display: flex;
+  z-index: 2;
+}
+/* seg-item__content fills the slot; display:contents flattens it so the
+   label (or ActionHint > label) participates directly in seg-item's flex. */
+.seg-item__content { display: contents; }
+.segmented .seg-label {
+  position: relative; /* anchor for absolute-fill radio */
   text-align: center;
   padding: var(--space-sm) var(--space-sm);
   font-size: var(--font-sm);
@@ -404,13 +420,13 @@ fieldset.segmented {
   -webkit-tap-highlight-color: transparent;
   user-select: none;
   white-space: nowrap;
+  flex: 1;
 }
-.segmented label.active { color: var(--color-text); }
-.segmented label:has(input:focus-visible) {
+.segmented .seg-label.active { color: var(--color-text); }
+.segmented .seg-label:has(input:focus-visible) {
   outline: 2px solid var(--color-accent-text);
   outline-offset: -2px;
 }
-.seg-disabled { opacity: 0.4; pointer-events: none; }
 
 /* ── Dock extras ── */
 .dock-icon { font-size: 18px; line-height: 1; }

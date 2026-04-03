@@ -14,8 +14,12 @@ import { REVIEW_LOCK_TOOLTIP } from '../store/selectors/review-ui-lock';
 import { useReviewLockedInteraction } from '../hooks/useReviewLockedInteraction';
 import { ActionHint } from './ActionHint';
 
+/** Shared placement type for all review-locked wrappers. */
+export type ReviewLockedPlacement = 'top' | 'top-end' | 'right' | 'bottom-start';
+
 export interface ReviewLockedControlProps {
   label: string;
+  /** ActionHint placement (bottom-start not supported here — use ReviewLockedListItem). */
   placement?: 'top' | 'top-end' | 'right';
   children: React.ReactElement;
 }

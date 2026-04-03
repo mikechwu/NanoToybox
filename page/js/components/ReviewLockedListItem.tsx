@@ -14,12 +14,13 @@
 import React from 'react';
 import { REVIEW_LOCK_TOOLTIP } from '../store/selectors/review-ui-lock';
 import { useReviewLockedInteraction } from '../hooks/useReviewLockedInteraction';
+import type { ReviewLockedPlacement } from './ReviewLockedControl';
 
 export interface ReviewLockedListItemProps {
   label: string;
   className?: string;
   /** Tooltip placement variant. Default: 'bottom-start' for settings rows. */
-  hintPlacement?: 'top' | 'top-end' | 'right' | 'bottom-start';
+  hintPlacement?: ReviewLockedPlacement;
   children: React.ReactNode;
 }
 

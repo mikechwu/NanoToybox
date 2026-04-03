@@ -172,6 +172,23 @@ When changing review-lock behavior:
 3. **New locked actions** add a guard in `ui-bindings.ts` AND visual lock in the component
 4. **Never** hardcode `timelineMode === 'review'` in components — use `selectIsReviewLocked`
 
+### Dock Slot Geometry Contract
+
+The dock bar (`DockBar.tsx`) uses a 4-slot CSS grid layout to prevent content-width rebalancing:
+
+| Slot | Class | Content (primary) | Content (placement) |
+|------|-------|-------------------|---------------------|
+| A | `dock-slot--add` | Add button | Place button |
+| B | `dock-slot--mode` | Segmented (Atom/Move/Rotate) | Cancel button |
+| C | `dock-slot--pause` | Pause/Resume | Pause/Resume (disabled) |
+| D | `dock-slot--aux` | Settings | Settings (disabled) |
+
+Key rules:
+- Action slots use `--dock-slot-action` (fixed width); mode slot uses `1fr`
+- The Segmented control uses `.seg-item` wrappers for every option — live and review modes must produce identical flex children
+- `.seg-item__content` owns layout filling; ActionHint sits inside it (no cross-component CSS dependency)
+- Do NOT reintroduce `justify-content: space-around` on `.dock-bar`
+
 ### Highlight Composition Policy (Dual-Channel Architecture)
 
 The highlight system uses two independent visual channels composed by the renderer. Never collapse them back into a single mutable "current group highlight".

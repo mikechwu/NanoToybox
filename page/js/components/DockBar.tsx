@@ -110,65 +110,70 @@ export function DockBar() {
       ref={barRef}
       onFocusCapture={handleFocusCapture}
     >
-      {/* Add / Place button — primary action ref for focus repair */}
-      {isReviewLocked && !isPlacement ? (
-        <DockLockedButton label="Add (unavailable in Review)" icon={<IconAdd />} text="Add" buttonRef={primaryActionRef} className="dock-add-btn" />
-      ) : (
-        <button
-          ref={primaryActionRef}
-          className={`dock-item dock-add-btn${isPlacement ? ' dock-placement-accent' : ''}`}
-          onClick={handleAdd}
-        >
-          <span className="dock-icon">{isPlacement ? <IconCheck /> : <IconAdd />}</span>
-          <span className="dock-label">{isPlacement ? 'Place' : 'Add'}</span>
-        </button>
-      )}
+      {/* Slot A: Add / Place */}
+      <div className="dock-slot dock-slot--add">
+        {isReviewLocked && !isPlacement ? (
+          <DockLockedButton label="Add (unavailable in Review)" icon={<IconAdd />} text="Add" buttonRef={primaryActionRef} className="dock-add-btn" />
+        ) : (
+          <button
+            ref={primaryActionRef}
+            className={`dock-item dock-add-btn${isPlacement ? ' dock-placement-accent' : ''}`}
+            onClick={handleAdd}
+          >
+            <span className="dock-icon">{isPlacement ? <IconCheck /> : <IconAdd />}</span>
+            <span className="dock-label">{isPlacement ? 'Place' : 'Add'}</span>
+          </button>
+        )}
+      </div>
 
-      {/* Mode segmented control — only in primary surface */}
-      {!isPlacement && (
-        <Segmented
-          name="interaction-mode"
-          legend="Interaction mode"
-          className="dock-mode"
-          items={modes}
-          activeValue={interactionMode}
-          onSelect={handleMode}
-          onDisabledSelect={handleDisabledMode}
-        />
-      )}
+      {/* Slot B: Mode segmented / Cancel */}
+      <div className="dock-slot dock-slot--mode">
+        {!isPlacement ? (
+          <Segmented
+            name="interaction-mode"
+            legend="Interaction mode"
+            className="dock-mode"
+            items={modes}
+            activeValue={interactionMode}
+            onSelect={handleMode}
+            onDisabledSelect={handleDisabledMode}
+          />
+        ) : (
+          <button className="dock-item dock-cancel" onClick={handleCancel}>
+            <span className="dock-icon"><IconCancel /></span>
+            <span className="dock-label">Cancel</span>
+          </button>
+        )}
+      </div>
 
-      {/* Cancel button — only in placement surface */}
-      {isPlacement && (
-        <button className="dock-item dock-cancel" onClick={handleCancel}>
-          <span className="dock-icon"><IconCancel /></span>
-          <span className="dock-label">Cancel</span>
-        </button>
-      )}
+      {/* Slot C: Pause / Resume */}
+      <div className="dock-slot dock-slot--pause">
+        {isReviewLocked ? (
+          <DockLockedButton label={`${paused ? 'Resume' : 'Pause'} (unavailable in Review)`} icon={paused ? <IconResume /> : <IconPause />} text={paused ? 'Resume' : 'Pause'} />
+        ) : (
+          <button
+            className="dock-item"
+            onClick={handlePause}
+            disabled={isPlacement}
+          >
+            <span className="dock-icon">{paused ? <IconResume /> : <IconPause />}</span>
+            <span className="dock-label">{paused ? 'Resume' : 'Pause'}</span>
+          </button>
+        )}
+      </div>
 
-      {/* Pause / Resume */}
-      {isReviewLocked ? (
-        <DockLockedButton label={`${paused ? 'Resume' : 'Pause'} (unavailable in Review)`} icon={paused ? <IconResume /> : <IconPause />} text={paused ? 'Resume' : 'Pause'} />
-      ) : (
+      {/* Slot D: Settings */}
+      <div className="dock-slot dock-slot--aux">
         <button
           className="dock-item"
-          onClick={handlePause}
+          onClick={handleSettings}
           disabled={isPlacement}
+          data-dock-settings
         >
-          <span className="dock-icon">{paused ? <IconResume /> : <IconPause />}</span>
-          <span className="dock-label">{paused ? 'Resume' : 'Pause'}</span>
+          <span className="dock-icon"><IconSettings /></span>
+          <span className="dock-label">Settings</span>
         </button>
-      )}
-
-      {/* Settings */}
-      <button
-        className="dock-item"
-        onClick={handleSettings}
-        disabled={isPlacement}
-        data-dock-settings
-      >
-        <span className="dock-icon"><IconSettings /></span>
-        <span className="dock-label">Settings</span>
-      </button>
+      </div>
     </div>
   );
 }

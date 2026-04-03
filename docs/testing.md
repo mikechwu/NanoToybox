@@ -222,8 +222,14 @@ The acceptance tests use three intentionally overlapping layers. All three must 
 | `review-ui-lock-guards.test.ts` | 7 | Runtime guards: onAdd, onPause, onModeChange, onAddMolecule, onSelectStructure, onClear blocked in review with hint; all work in live |
 | `review-lock-dom-structure.test.tsx` | 9 | DOM contract: li is direct child of ul, no timeline-hint-anchor class, tooltip inside li not wrapping, keyboard-focusable, tooltip not inside dimmed wrapper, bottom-start placement, selector integration |
 | `review-locked-interaction-hook.test.tsx` | 4 | Shared hook: click triggers status hint, Enter triggers hint, Space triggers hint, show/hide tooltip timing |
-| `dock-bar-review-lock.test.tsx` | 7 | DockBar: Add review-locked, Pause review-locked, Segmented items disabled, ActionHint tooltips on disabled items, Settings not locked, live mode normal, blocked click |
+| `dock-bar-review-lock.test.tsx` | 8 | DockBar: Add review-locked, Pause review-locked, Segmented items disabled, ActionHint tooltips on disabled items, Settings not locked, live mode normal, blocked click, live/review segmented structural parity |
 | `structure-chooser-review-lock.test.tsx` | 4 | StructureChooser: rows wrapped in review lock, tooltips present, click shows hint not callback, live mode normal |
+
+### Dock Layout Stability (6 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `dock-bar-layout-stability.test.tsx` | 6 | 4 named slot wrappers, paused toggle preserves slot structure, Pause/Resume in same slot, mode slot contains segmented, placement maps to same slots, grid structure |
 
 ## Frontend Smoke Test
 
@@ -318,6 +324,10 @@ npm run dev
 - [ ] Structure chooser (if open): rows appear locked, click shows hint instead of placing
 - [ ] Click Live → exit review, all controls re-enabled immediately
 - [ ] Click Restart → exit review, controls re-enabled, simulation resumes from scrub point
+
+#### Dock Stability
+- [ ] Toggle Pause ↔ Resume repeatedly → Add, mode selector, and Settings do not shift
+- [ ] Atom / Move / Rotate spacing looks identical in live and review modes
 
 | 52 | Speed 0.5x | Motion visibly slower |
 | 53 | Speed 2x | Visibly faster, stable |

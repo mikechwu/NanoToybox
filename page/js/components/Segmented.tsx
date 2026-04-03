@@ -5,6 +5,10 @@
  * single tab stop, arrow-key navigation, disabled-option skipping.
  * Visual indicator uses --seg-active CSS custom property (derived internally).
  *
+ * Every item is wrapped in a stable .seg-item container for layout. This
+ * ensures live and disabled/review modes have identical flex children,
+ * preventing alignment differences when ActionHint wraps disabled items.
+ *
  * The name prop is a stable technical ID for radio grouping; legend is the
  * human-readable group label (screen-reader visible via sr-only class).
  * useId() suffix guarantees page-unique radio groups.
@@ -12,6 +16,51 @@
 
 import React, { useId } from 'react';
 import { ActionHint } from './ActionHint';
+
+/** Internal helper: renders one segmented item with a stable layout wrapper. */
+function SegmentedItemShell<T extends string>({
+  item,
+  groupName,
+  activeValue,
+  onSelect,
+  onDisabledSelect,
+}: {
+  item: { readonly value: T; readonly label: string; readonly disabled?: boolean; readonly disabledReason?: string };
+  groupName: string;
+  activeValue: T;
+  onSelect: (value: T) => void;
+  onDisabledSelect?: (value: T, reason?: string) => void;
+}) {
+  const isActive = item.value === activeValue;
+  const label = (
+    <label
+      className={`seg-label${isActive ? ' active' : ''}`}
+      onClick={item.disabled && onDisabledSelect ? (e) => { e.preventDefault(); onDisabledSelect(item.value, item.disabledReason); } : undefined}
+    >
+      <input
+        type="radio"
+        name={groupName}
+        value={item.value}
+        checked={isActive}
+        disabled={item.disabled}
+        onChange={() => onSelect(item.value)}
+      />
+      {item.label}
+    </label>
+  );
+
+  return (
+    <span className={`seg-item${item.disabled ? ' seg-item--disabled' : ''}`}>
+      <span className="seg-item__content">
+        {item.disabled && item.disabledReason ? (
+          <ActionHint text={item.disabledReason} focusableWhenDisabled focusLabel={`${item.label} (unavailable)`}>
+            {label}
+          </ActionHint>
+        ) : label}
+      </span>
+    </span>
+  );
+}
 
 export function Segmented<T extends string>({
   name,
@@ -40,33 +89,16 @@ export function Segmented<T extends string>({
       style={{ '--seg-count': items.length, '--seg-active': activeIdx } as React.CSSProperties}
     >
       <legend className="sr-only">{legend}</legend>
-      {items.map((item) => {
-        const label = (
-          <label
-            key={item.disabled && item.disabledReason ? undefined : item.value}
-            className={`${item.value === activeValue ? 'active' : ''}${item.disabled ? ' seg-disabled' : ''}`}
-            onClick={item.disabled && onDisabledSelect ? (e) => { e.preventDefault(); onDisabledSelect(item.value, item.disabledReason); } : undefined}
-          >
-            <input
-              type="radio"
-              name={groupName}
-              value={item.value}
-              checked={item.value === activeValue}
-              disabled={item.disabled}
-              onChange={() => onSelect(item.value)}
-            />
-            {item.label}
-          </label>
-        );
-        if (item.disabled && item.disabledReason) {
-          return (
-            <ActionHint key={item.value} text={item.disabledReason} focusableWhenDisabled focusLabel={`${item.label} (unavailable)`}>
-              {label}
-            </ActionHint>
-          );
-        }
-        return <React.Fragment key={item.value}>{label}</React.Fragment>;
-      })}
+      {items.map((item) => (
+        <SegmentedItemShell
+          key={item.value}
+          item={item}
+          groupName={groupName}
+          activeValue={activeValue}
+          onSelect={onSelect}
+          onDisabledSelect={onDisabledSelect}
+        />
+      ))}
     </fieldset>
   );
 }
