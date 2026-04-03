@@ -156,6 +156,8 @@ let _bondedGroupCoordinator: BondedGroupCoordinator | null = null;
 let _timelineSub: TimelineSubsystem | null = null;
 /** Track the last reconciled snapshot version to avoid double-counting steps. */
 let _lastReconciledSnapshotVersion = -1;
+/** Frozen visible-anchor set for placement framing (captured at placement start). */
+let _placementFramingAnchor: { x: number; y: number; z: number }[] | null = null;
 
 
 // Pause sync guard — resolves when syncStateNow completes during pause transition.
@@ -915,6 +917,8 @@ function frameLoop(timestamp: number) {
     bondedGroupCoordinator: _bondedGroupCoordinator,
     overlayLayout: _overlayLayout,
     placement,
+    placementFramingAnchor: _placementFramingAnchor,
+    setPlacementFramingAnchor: (a: any) => { _placementFramingAnchor = a; },
     scene: _scene,
     effectsGate,
     lastReconciledSnapshotVersion: _lastReconciledSnapshotVersion,

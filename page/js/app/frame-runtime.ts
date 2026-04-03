@@ -18,6 +18,7 @@ import { resolveInteractionHighlight } from '../runtime/interaction-highlight-ru
 import { resolveReconciledSteps } from '../runtime/reconciled-steps';
 import { updateOrbitFollowFromStore, type OrbitFollowRendererSurface } from '../runtime/orbit-follow-update';
 import { resolveReturnTarget, type FocusRendererSurface } from '../runtime/focus-runtime';
+import { computePlacementFramingGoal, filterVisiblePoints, type PlacementFramingPoint } from '../runtime/placement-camera-framing';
 import { useAppStore } from '../store/app-store';
 
 // ── Narrow dependency interface ──
@@ -40,6 +41,18 @@ export interface FrameRendererSurface extends OrbitFollowRendererSurface, FocusR
   render(): void;
   getSceneRadius(): number;
   _flightVelocity: { length(): number };
+
+  // Placement camera framing support (optional — only present when renderer is real)
+  getCameraBasis?(): { right: { x: number; y: number; z: number }; up: { x: number; y: number; z: number }; forward: { x: number; y: number; z: number } };
+  getPlacementPreviewWorldPoints?(): { x: number; y: number; z: number }[] | null;
+  getDisplayedSceneWorldPoints?(): { x: number; y: number; z: number }[];
+  getPlacementFramingCameraParams?(): { tanX: number; tanY: number; near: number; position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } };
+  updatePlacementFraming?(
+    dtMs: number,
+    desiredTarget: { x: number; y: number; z: number },
+    desiredDistance: number,
+    opts?: { targetSmoothing?: number; distanceGrowSmoothing?: number; distanceShrinkSmoothing?: number; allowDistanceShrink?: boolean },
+  ): void;
 }
 
 /** Narrow scheduler surface used by the frame loop. */
@@ -92,7 +105,10 @@ export interface FrameRuntimeSurface {
   inputBindings: { getManager(): any } | null;
   bondedGroupCoordinator: { update(): void } | null;
   overlayLayout: { isGlassActive(): boolean } | null;
-  placement: { active: boolean } | null;
+  placement: { active: boolean; isDraggingPreview?: boolean; updateDragFromLatestPointer?: () => void } | null;
+  /** Frozen scene anchor captured at placement start. Owned by frame-runtime. */
+  placementFramingAnchor: PlacementFramingPoint[] | null;
+  setPlacementFramingAnchor(anchor: PlacementFramingPoint[] | null): void;
   scene: { updateActiveCountRow(): void } | null;
   effectsGate: { mode: string; reduced: boolean; slowCount: number; fastCount: number; SLOW_THRESHOLD: number; FAST_THRESHOLD: number; ENTER_COUNT: number; EXIT_COUNT: number };
 
@@ -321,8 +337,70 @@ export function executeFrame(timestamp: number, s: FrameRuntimeSurface): void {
     s.scheduler.forceRenderThisTick = false;
     const shouldRender = wasForced || s.scheduler.renderSkipCounter >= s.scheduler.renderSkipLevel;
 
-    // Orbit follow
-    updateOrbitFollowFromStore(s.renderer, frameDtMs);
+    // Orbit follow — suppressed during placement (placement framing is sole camera owner)
+    const placementActive = !!(s.placement && s.placement.active);
+    if (!placementActive) {
+      updateOrbitFollowFromStore(s.renderer, frameDtMs);
+    }
+
+    // Placement camera framing — runs during both idle placement and active drag.
+    // Sequence: compute framing goal → apply camera assist → reproject drag preview.
+    if (placementActive &&
+        s.renderer.getCameraBasis && s.renderer.getDisplayedSceneWorldPoints &&
+        s.renderer.getPlacementPreviewWorldPoints && s.renderer.getPlacementFramingCameraParams &&
+        s.renderer.updatePlacementFraming) {
+      const previewPoints = s.renderer.getPlacementPreviewWorldPoints();
+      if (previewPoints) {
+        const cam = s.renderer.getPlacementFramingCameraParams();
+        const basis = s.renderer.getCameraBasis();
+
+        // Use frozen visible-anchor; capture on first frame of placement session
+        let anchor = s.placementFramingAnchor;
+        if (!anchor) {
+          const allScene = s.renderer.getDisplayedSceneWorldPoints!();
+          anchor = filterVisiblePoints(
+            allScene, cam.target, cam.position, basis,
+            cam.tanX, cam.tanY, CONFIG.placementFraming.visibleAnchorMargin,
+          );
+          s.setPlacementFramingAnchor(anchor);
+        }
+
+        const allPoints = [...anchor, ...previewPoints];
+
+        const goal = computePlacementFramingGoal({
+          points: allPoints,
+          target: cam.target,
+          cameraPosition: cam.position,
+          basis,
+          tanX: cam.tanX,
+          tanY: cam.tanY,
+          near: cam.near,
+          nearMargin: CONFIG.camera.nearPlaneMargin,
+          safe: CONFIG.placementFraming,
+          lambda: CONFIG.placementFraming.targetShiftLambda,
+        });
+
+        // Apply smoothing toward goal (continuous convergence, no hard stop)
+        const isDragging = !!(s.placement!.isDraggingPreview);
+        if (goal) {
+          s.renderer.updatePlacementFraming(frameDtMs, goal.desiredTarget, goal.desiredDistance, {
+            targetSmoothing: CONFIG.placementFraming.targetSmoothing,
+            distanceGrowSmoothing: CONFIG.placementFraming.distanceGrowSmoothing,
+            distanceShrinkSmoothing: CONFIG.placementFraming.distanceShrinkSmoothing,
+            allowDistanceShrink: !isDragging,
+          });
+        }
+
+        // After camera assist, reproject the dragged preview using updated camera state
+        // so the grabbed atom stays under the cursor continuously.
+        if (isDragging && s.placement!.updateDragFromLatestPointer) {
+          s.placement!.updateDragFromLatestPointer!();
+        }
+      }
+    } else if (!placementActive && s.placementFramingAnchor) {
+      // Clear frozen anchor when placement ends
+      s.setPlacementFramingAnchor(null);
+    }
 
     // Free-Look flight
     if (CONFIG.camera.freeLookEnabled && useAppStore.getState().cameraMode === 'freelook' && s.inputBindings) {

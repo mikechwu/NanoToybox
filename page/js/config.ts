@@ -117,6 +117,18 @@ export const CONFIG = {
     followLongPressMs: 500,         // [300–800] ms — long-press threshold for ⊕ follow mode
   },
 
+  placementFraming: {
+    left: 0.88,                       // normalized safe-region allowance (left half-space)
+    right: 0.88,
+    top: 0.90,
+    bottom: 0.82,                     // larger bottom inset (dock bar clearance)
+    targetShiftLambda: 0.15,          // cost weight penalizing target shift vs. zoom-out
+    targetSmoothing: 10,              // exponential smoothing constant (s⁻¹) for target
+    distanceGrowSmoothing: 8,         // smoothing for distance increase
+    distanceShrinkSmoothing: 3,       // smoothing for distance decrease (slower settle)
+    visibleAnchorMargin: 0.15,        // frustum margin for visible-anchor capture (0 = exact frustum)
+  },
+
   freeLook: {
     accelerationScale: 3.0,         // [1–10] thrust acceleration multiplier (× sceneRadius)
     maxSpeedScale: 8.0,             // [3–20] max speed multiplier (× sceneRadius)

@@ -9,7 +9,6 @@ import * as THREE from 'three';
 import { useAppStore } from '../../page/js/store/app-store';
 import {
   focusMoleculeByAtom,
-  focusNewestPlacedMolecule,
   findMoleculeForAtom,
   resolveReturnTarget,
 } from '../../page/js/runtime/focus-runtime';
@@ -90,69 +89,35 @@ describe('focusMoleculeByAtom', () => {
   });
 });
 
-describe('focusNewestPlacedMolecule', () => {
+describe('Scene-runtime caller contracts (Policy A: placement commit decoupled)', () => {
   beforeEach(() => {
     useAppStore.getState().resetTransientState();
   });
 
-  it('focuses the last molecule in the list', () => {
+  it('placement commit does NOT retarget camera or change focus metadata', () => {
+    // Policy A: placement commit neither moves camera nor changes lastFocusedMoleculeId.
+    // Placement framing handles visibility; Center/Follow handle explicit focus.
     useAppStore.getState().setMolecules([
       { id: 1, name: 'A', structureFile: 'a.xyz', atomCount: 60, atomOffset: 0 },
       { id: 2, name: 'B', structureFile: 'b.xyz', atomCount: 40, atomOffset: 60 },
     ]);
-    const r = mockRenderer(new THREE.Vector3(10, 20, 30));
-    focusNewestPlacedMolecule(r);
-    expect(r.getDisplayedMoleculeCentroid).toHaveBeenCalledWith(60, 40);
-    expect(r.setCameraFocusTarget).toHaveBeenCalledWith(new THREE.Vector3(10, 20, 30));
-    expect(useAppStore.getState().lastFocusedMoleculeId).toBe(2);
-  });
-
-  it('no-ops when molecule list is empty', () => {
-    const r = mockRenderer();
-    focusNewestPlacedMolecule(r);
-    expect(r.setCameraFocusTarget).not.toHaveBeenCalled();
-  });
-
-  it('no-ops when centroid is null', () => {
-    useAppStore.getState().setMolecules([
-      { id: 1, name: 'A', structureFile: 'a.xyz', atomCount: 60, atomOffset: 0 },
-    ]);
-    const r = mockRenderer(null);
-    focusNewestPlacedMolecule(r);
-    expect(r.setCameraFocusTarget).not.toHaveBeenCalled();
-    expect(useAppStore.getState().lastFocusedMoleculeId).toBeNull();
-  });
-});
-
-describe('Scene-runtime caller contracts', () => {
-  beforeEach(() => {
-    useAppStore.getState().resetTransientState();
-  });
-
-  it('placement commit focuses newest molecule only when placementActive is true', () => {
-    useAppStore.getState().setMolecules([
-      { id: 1, name: 'A', structureFile: 'a.xyz', atomCount: 60, atomOffset: 0 },
-    ]);
     useAppStore.getState().setPlacementActive(true);
 
     const r = mockRenderer(new THREE.Vector3(10, 20, 30));
-    // Same guard scene-runtime uses: only focus when placementActive
-    if (useAppStore.getState().placementActive) {
-      focusNewestPlacedMolecule(r);
-    }
-    expect(r.setCameraFocusTarget).toHaveBeenCalled();
-    expect(useAppStore.getState().lastFocusedMoleculeId).toBe(1);
+    // Simulate what scene-runtime.ts finalizeCommittedScene() now does:
+    // NO focusNewestPlacedMolecule call — just recomputeFocusDistance equivalent
+    // The renderer is NOT asked to retarget camera
+    expect(r.setCameraFocusTarget).not.toHaveBeenCalled();
+    expect(useAppStore.getState().lastFocusedMoleculeId).toBeNull();
   });
 
-  it('placement commit does NOT focus when placementActive is false', () => {
+  it('non-placement commit (addMoleculeToScene) also does NOT retarget camera', () => {
     useAppStore.getState().setMolecules([
       { id: 1, name: 'A', structureFile: 'a.xyz', atomCount: 60, atomOffset: 0 },
     ]);
 
     const r = mockRenderer(new THREE.Vector3(10, 20, 30));
-    if (useAppStore.getState().placementActive) {
-      focusNewestPlacedMolecule(r);
-    }
+    // finalizeCommittedScene() no longer has focusNewestPlaced option
     expect(r.setCameraFocusTarget).not.toHaveBeenCalled();
     expect(useAppStore.getState().lastFocusedMoleculeId).toBeNull();
   });

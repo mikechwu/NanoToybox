@@ -8,10 +8,12 @@
  *   setLastFocusedMoleculeId. Does NOT decide when to focus — only how.
  * - interaction-dispatch.ts: calls focusMoleculeByAtom on startDrag/Move/Rotate
  *   (trigger: any direct object interaction).
- * - scene-runtime.ts: calls focusNewestPlacedMolecule on placement commit
- *   (trigger: placementActive === true gate owned by scene-runtime).
  * - scene-runtime.ts: clears lastFocusedMoleculeId on clearPlayground
  *   (scene lifecycle reset, not focus resolution).
+ *
+ * Placement commit does NOT change focus metadata or retarget camera.
+ * Placement visibility is handled by placement-camera-framing (frame-runtime).
+ * Camera retargeting only happens via explicit user actions (Center / Return).
  *
  * @module focus-runtime
  *
@@ -21,8 +23,7 @@
  *              FocusRendererSurface (getDisplayedMoleculeCentroid,
  *              getDisplayedMoleculeBounds, setCameraFocusTarget, animateToFocusedObject).
  * Called by:   interaction-dispatch (focusMoleculeByAtom on drag/move/rotate start),
- *              scene-runtime (focusNewestPlacedMolecule on placement commit,
- *              clearLastFocusedMoleculeId on clearPlayground).
+ *              scene-runtime (clearLastFocusedMoleculeId on clearPlayground).
  * Teardown:    Stateless module (pure functions) — no instance teardown needed.
  */
 
@@ -115,22 +116,6 @@ export function focusMoleculeByAtom(
   if (!useAppStore.getState().orbitFollowEnabled) {
     useAppStore.getState().setLastFocusedMoleculeId(mol.id);
   }
-}
-
-/**
- * Focus the camera on the most recently added molecule.
- * Used after placement commit. No-op if no molecules exist.
- */
-export function focusNewestPlacedMolecule(
-  renderer: FocusRendererSurface,
-): void {
-  const molecules = useAppStore.getState().molecules;
-  if (molecules.length === 0) return;
-  const newest = molecules[molecules.length - 1];
-  const centroid = renderer.getDisplayedMoleculeCentroid(newest.atomOffset, newest.atomCount);
-  if (!centroid) return;
-  useAppStore.getState().setLastFocusedMoleculeId(newest.id);
-  renderer.setCameraFocusTarget(centroid);
 }
 
 /**

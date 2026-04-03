@@ -137,6 +137,21 @@ When changing placement policy:
 4. **Review `selectOrientationByGeometry()` comments** if override semantics change — this is the final arbiter and may score candidates differently from the base policy.
 5. **`[observable behavior]` tests are policy-independent** — they check user-facing sanity (readability, stability, plane shape) and should not need updating for most policy changes.
 
+### Placement Camera Framing Contract
+
+The placement camera framing system (`page/js/runtime/placement-camera-framing.ts`) is a pure solver with no THREE/renderer/store imports. When changing placement framing behavior:
+
+1. **Pure math changes** go in `placement-camera-framing.ts` — tested via `tests/unit/placement-camera-framing.test.ts`
+2. **Orchestration changes** (when to run, drag policy) go in `app/frame-runtime.ts` — tested via `tests/unit/frame-runtime.test.ts`
+3. **Drag lifecycle changes** go in `placement.ts` — tested via `tests/unit/placement-drag-lifecycle.test.ts`
+4. **Config tuning** goes in `config.ts` under `CONFIG.placementFraming`
+
+Key invariants:
+- Placement framing is independent from Center/Follow semantics
+- Camera orientation is never changed by the framing solver
+- Drag uses pointer capture; `updateDragFromLatestPointer()` is the per-frame reprojection contract
+- Placement commit does not change focus metadata (Policy A)
+
 ### Highlight Composition Policy (Dual-Channel Architecture)
 
 The highlight system uses two independent visual channels composed by the renderer. Never collapse them back into a single mutable "current group highlight".

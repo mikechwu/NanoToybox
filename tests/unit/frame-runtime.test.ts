@@ -59,6 +59,8 @@ function makeStub(overrides: Partial<FrameRuntimeSurface> = {}): FrameRuntimeSur
     bondedGroupCoordinator: null,
     overlayLayout: null,
     placement: null,
+    placementFramingAnchor: null,
+    setPlacementFramingAnchor: vi.fn(),
     scene: { updateActiveCountRow: vi.fn() },
     effectsGate: { mode: 'auto', reduced: false, slowCount: 0, fastCount: 0, SLOW_THRESHOLD: 33, FAST_THRESHOLD: 20, ENTER_COUNT: 5, EXIT_COUNT: 10 },
     lastReconciledSnapshotVersion: 0,
@@ -167,5 +169,182 @@ describe('frame-runtime: executeFrame', () => {
   it('does not crash with minimal surface (all optionals null)', () => {
     const s = makeStub();
     expect(() => executeFrame(1000, s)).not.toThrow();
+  });
+
+  // ── C. Placement camera framing integration tests ──
+
+  it('C1: placement framing runs during placement', () => {
+    const updatePlacementFraming = vi.fn();
+    const setAnchor = vi.fn();
+    const s = makeStub({
+      placement: { active: true, isDraggingPreview: false },
+      placementFramingAnchor: null,
+      setPlacementFramingAnchor: setAnchor,
+      renderer: {
+        ...makeStub().renderer,
+        getCameraBasis: vi.fn(() => ({
+          right: { x: 1, y: 0, z: 0 },
+          up: { x: 0, y: 1, z: 0 },
+          forward: { x: 0, y: 0, z: -1 },
+        })),
+        getPlacementPreviewWorldPoints: vi.fn(() => [
+          { x: 30, y: 0, z: 0 },  // far right — triggers framing
+        ]),
+        getDisplayedSceneWorldPoints: vi.fn(() => [
+          { x: 0, y: 0, z: 0 },
+        ]),
+        getPlacementFramingCameraParams: vi.fn(() => ({
+          tanX: 0.83, tanY: 0.47, near: 0.1,
+          position: { x: 0, y: 0, z: 20 },
+          target: { x: 0, y: 0, z: 0 },
+        })),
+        updatePlacementFraming,
+      } as any,
+    });
+
+    executeFrame(1000, s);
+
+    // Anchor must be captured on first frame
+    expect(setAnchor).toHaveBeenCalled();
+    expect(updatePlacementFraming).toHaveBeenCalled();
+  });
+
+  it('C2: orbit-follow suppressed during placement', () => {
+    const s = makeStub({
+      placement: { active: true, isDraggingPreview: false },
+      placementFramingAnchor: null,
+      setPlacementFramingAnchor: vi.fn(),
+      renderer: {
+        ...makeStub().renderer,
+        updateOrbitFollow: vi.fn(),
+        getCameraBasis: vi.fn(() => ({
+          right: { x: 1, y: 0, z: 0 },
+          up: { x: 0, y: 1, z: 0 },
+          forward: { x: 0, y: 0, z: -1 },
+        })),
+        getPlacementPreviewWorldPoints: vi.fn(() => [{ x: 0, y: 0, z: 0 }]),
+        getDisplayedSceneWorldPoints: vi.fn(() => []),
+        getPlacementFramingCameraParams: vi.fn(() => ({
+          tanX: 0.83, tanY: 0.47, near: 0.1,
+          position: { x: 0, y: 0, z: 20 },
+          target: { x: 0, y: 0, z: 0 },
+        })),
+        updatePlacementFraming: vi.fn(),
+      } as any,
+    });
+
+    executeFrame(1000, s);
+
+    // orbit-follow must NOT run during placement
+    expect(s.renderer.updateOrbitFollow).not.toHaveBeenCalled();
+  });
+
+  it('C3: idle placement allows distance shrink', () => {
+    const updatePlacementFraming = vi.fn();
+    // Pre-set anchor so we skip capture (simulates second+ frame)
+    const s = makeStub({
+      placement: { active: true, isDraggingPreview: false },
+      placementFramingAnchor: [{ x: 0, y: 0, z: 0 }],
+      setPlacementFramingAnchor: vi.fn(),
+      renderer: {
+        ...makeStub().renderer,
+        getCameraBasis: vi.fn(() => ({
+          right: { x: 1, y: 0, z: 0 },
+          up: { x: 0, y: 1, z: 0 },
+          forward: { x: 0, y: 0, z: -1 },
+        })),
+        getPlacementPreviewWorldPoints: vi.fn(() => [
+          { x: 30, y: 0, z: 0 },
+        ]),
+        getDisplayedSceneWorldPoints: vi.fn(() => [
+          { x: 0, y: 0, z: 0 },
+        ]),
+        getPlacementFramingCameraParams: vi.fn(() => ({
+          tanX: 0.83, tanY: 0.47, near: 0.1,
+          position: { x: 0, y: 0, z: 20 },
+          target: { x: 0, y: 0, z: 0 },
+        })),
+        updatePlacementFraming,
+      } as any,
+    });
+
+    executeFrame(1000, s);
+
+    // Unconditional: framing MUST be called, and shrink MUST be allowed when not dragging
+    expect(updatePlacementFraming).toHaveBeenCalled();
+    const opts = updatePlacementFraming.mock.calls[0][3];
+    expect(opts.allowDistanceShrink).toBe(true);
+  });
+
+  it('C4: framing runs during active drag + reprojection called after camera assist', () => {
+    const updatePlacementFraming = vi.fn();
+    const updateDragFromLatestPointer = vi.fn();
+    const s = makeStub({
+      placement: { active: true, isDraggingPreview: true, updateDragFromLatestPointer },
+      placementFramingAnchor: [{ x: 0, y: 0, z: 0 }],
+      setPlacementFramingAnchor: vi.fn(),
+      renderer: {
+        ...makeStub().renderer,
+        getCameraBasis: vi.fn(() => ({
+          right: { x: 1, y: 0, z: 0 },
+          up: { x: 0, y: 1, z: 0 },
+          forward: { x: 0, y: 0, z: -1 },
+        })),
+        getPlacementPreviewWorldPoints: vi.fn(() => [
+          { x: 30, y: 0, z: 0 },
+        ]),
+        getDisplayedSceneWorldPoints: vi.fn(() => [
+          { x: 0, y: 0, z: 0 },
+        ]),
+        getPlacementFramingCameraParams: vi.fn(() => ({
+          tanX: 0.83, tanY: 0.47, near: 0.1,
+          position: { x: 0, y: 0, z: 20 },
+          target: { x: 0, y: 0, z: 0 },
+        })),
+        updatePlacementFraming,
+      } as any,
+    });
+
+    executeFrame(1000, s);
+
+    // Framing MUST run during drag (camera assist continues)
+    expect(updatePlacementFraming).toHaveBeenCalled();
+    // Drag reprojection MUST be called after camera assist
+    expect(updateDragFromLatestPointer).toHaveBeenCalled();
+    // Distance shrink suppressed during drag
+    const opts = updatePlacementFraming.mock.calls[0][3];
+    expect(opts.allowDistanceShrink).toBe(false);
+  });
+
+  it('C4b: drag reprojection NOT called when not dragging', () => {
+    const updateDragFromLatestPointer = vi.fn();
+    const s = makeStub({
+      placement: { active: true, isDraggingPreview: false, updateDragFromLatestPointer },
+      placementFramingAnchor: [{ x: 0, y: 0, z: 0 }],
+      setPlacementFramingAnchor: vi.fn(),
+      renderer: {
+        ...makeStub().renderer,
+        getCameraBasis: vi.fn(() => ({
+          right: { x: 1, y: 0, z: 0 },
+          up: { x: 0, y: 1, z: 0 },
+          forward: { x: 0, y: 0, z: -1 },
+        })),
+        getPlacementPreviewWorldPoints: vi.fn(() => [
+          { x: 30, y: 0, z: 0 },
+        ]),
+        getDisplayedSceneWorldPoints: vi.fn(() => [
+          { x: 0, y: 0, z: 0 },
+        ]),
+        getPlacementFramingCameraParams: vi.fn(() => ({
+          tanX: 0.83, tanY: 0.47, near: 0.1,
+          position: { x: 0, y: 0, z: 20 },
+          target: { x: 0, y: 0, z: 0 },
+        })),
+        updatePlacementFraming: vi.fn(),
+      } as any,
+    });
+
+    executeFrame(1000, s);
+    expect(updateDragFromLatestPointer).not.toHaveBeenCalled();
   });
 });

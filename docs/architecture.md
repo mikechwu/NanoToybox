@@ -80,10 +80,11 @@ NanoToybox/
 │   │   │   ├── orbit-follow-update.ts        # Per-frame orbit-follow camera tracking from displayed bounds
 │   │   │   ├── drag-target-refresh.ts        # Per-frame drag target reprojection during active interactions
 │   │   │   ├── interaction-highlight-runtime.ts # Mode-aware highlight resolver (atom vs bonded group for Move/Rotate)
-│   │   │   └── placement-solver.ts  # Placement solver: PCA shape analysis, molecule frame, chooseCameraFamily, selectOrientationByGeometry, refineOrientationFromGeometry, projectToScreen/projected2DPCA helpers, translation optimization with no-initial-bond constraint
+│   │   │   ├── placement-solver.ts  # Placement solver: PCA shape analysis, molecule frame, chooseCameraFamily, selectOrientationByGeometry, refineOrientationFromGeometry, projectToScreen/projected2DPCA helpers, translation optimization with no-initial-bond constraint
+│   │   │   └── placement-camera-framing.ts  # Pure camera-basis framing solver for placement preview: overflow measurement, adaptive target-shift search, visible-anchor filtering
 │   │   ├── scene.ts              # Scene commit/clear/load (transaction-safe)
-│   │   ├── placement.ts          # Placement lifecycle, tangent computation, canvas listeners
-│   │   │                           #   → delegates rigid-transform computation to placement-solver.ts
+│   │   ├── placement.ts          # Placement lifecycle, pointer-capture drag, per-frame reprojection, canvas listeners
+│   │   │                           #   → delegates rigid-transform to placement-solver.ts, framing to placement-camera-framing.ts
 │   │   ├── interaction.ts        # Command dispatch, screen-to-physics projection
 │   │   ├── status.ts             # Hint fade + contextual coachmarks (hint-only)
 │   │   ├── ui/
@@ -265,6 +266,36 @@ placement-solver.ts
 - `selectOrientationByGeometry()` — final runtime arbiter (geometry-scored)
 - Tests enforce: policy conformance, external oracle backstop, observable behavior
 
+### Placement Camera Framing
+
+`placement-camera-framing.ts` is a pure solver that computes camera target and distance adjustments to keep both scene content and the placement preview visible. It has no THREE/renderer/store dependencies — all math is expressed in camera-basis vectors.
+
+```
+placement.ts (lifecycle + drag)
+       │
+       ▼
+frame-runtime.ts (orchestration)
+       │
+       ├── 1. Capture frozen visible-anchor (first frame only)
+       │       filterVisiblePoints() — keeps only scene atoms currently in frustum
+       │
+       ├── 2. Compute framing goal
+       │       computePlacementFramingGoal() — adaptive 5×5 search + refinement
+       │       overflow deadband (0.02 NDC) prevents threshold jitter
+       │
+       ├── 3. Apply camera assist (renderer.updatePlacementFraming)
+       │       smooth exponential ease, frame-rate independent
+       │       distance shrink suppressed during drag
+       │
+       └── 4. Reproject drag preview (placement.updateDragFromLatestPointer)
+               grabbed-point plane + stored screen coords → group displacement
+               runs after camera assist so grabbed atom stays under cursor
+```
+
+**Drag contract:** Pointer capture (`setPointerCapture`) is acquired on preview pointerdown so drag continues past canvas/page boundaries. If capture fails, pointerleave aborts the drag as fallback. Frame-runtime runs camera framing during active drag and calls `updateDragFromLatestPointer()` per frame to reproject the preview against the updated camera. The grabbed atom remains under the cursor continuously.
+
+**Focus policy (Policy A):** Placement commit does not change `lastFocusedMoleculeId` or retarget the camera. Placement framing handles visibility; Center/Follow handle explicit focus.
+
 ## Key Design Decisions
 
 1. **Python reference + Numba acceleration** — pure Python for correctness, Numba for speed
@@ -287,7 +318,7 @@ placement-solver.ts
 - **input-bindings.ts** — InputManager construction, sync (scene-mutation resync contract)
 - **ui-bindings.ts** — Zustand store callback registration (React intents → imperative commands)
 - **atom-source.ts** — shared renderer-to-input atom-picking adapter
-- **focus-runtime.ts** — focus resolution: molecule lookup, centroid computation, camera pivot update; `ensureFollowTarget()` for follow-mode validation
+- **focus-runtime.ts** — focus resolution: molecule lookup, centroid computation, camera pivot update; `ensureFollowTarget()` for follow-mode validation. Placement commit does NOT change focus metadata or retarget camera (Policy A).
 - **onboarding.ts** — coachmark scheduling + page-load onboarding overlay gate (`isOnboardingEligible`, `subscribeOnboardingReadiness`)
 - **bonded-group-runtime.ts** — live connected-component projection with overlap-reconciled stable IDs
 - **bonded-group-highlight-runtime.ts** — persistent atom tracking, hover preview, panel highlight resolution (warm palette via `setHighlightedAtoms`)
@@ -304,6 +335,7 @@ placement-solver.ts
 - **drag-target-refresh.ts** — per-frame reprojection of pointer intent during active drag/move/rotate interactions
 - **interaction-highlight-runtime.ts** — mode-aware highlight resolver: Atom → single atom, Move/Rotate → bonded group from live physics topology (cool palette via `setInteractionHighlightedAtoms` / `clearInteractionHighlight`)
 - **placement-solver.ts** — placement solver module: PCA shape analysis and molecule frame construction, camera-first orientation policy (`chooseCameraFamily`), geometry-aware family selection (`selectOrientationByGeometry`), perspective-projected geometry refinement (`refineOrientationFromGeometry`), shared projection helpers (`projectToScreen`, `projected2DPCA`), translation optimization with no-initial-bond constraint
+- **placement-camera-framing.ts** — pure camera-basis framing solver for placement preview: camera-space projection, adaptive target-shift search (5×5 grid + refinement), overflow deadband, visible-anchor filtering. No THREE/renderer/store imports.
 
 **Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons, TimelineActionHint. Imperative controllers remain only for PlacementController and StatusController (hint-only).
 
@@ -330,10 +362,10 @@ Four-tier layering (top to bottom):
 **2. App orchestration** (`page/js/app/`):
 
 - **`frame-runtime.ts`** (`executeFrame()`):
-  - Owns the per-frame update pipeline sequence (physics → reconciliation → feedback → highlight → recording → render)
+  - Owns the per-frame update pipeline sequence (physics → reconciliation → feedback → highlight → recording → placement framing → drag reprojection → render)
   - `main.ts:frameLoop()` is a thin wrapper that constructs the `FrameRuntimeSurface` and delegates
-  - Ordering matters: recording MUST happen after reconciliation; highlights MUST happen after feedback
-  - Depends on: physics, renderer, stateMachine, scheduler, worker runtime, timeline, drag-target-refresh, interaction-highlight-runtime
+  - Ordering matters: recording MUST happen after reconciliation; highlights MUST happen after feedback; placement framing runs before render; drag reprojection runs after camera assist
+  - Depends on: physics, renderer, stateMachine, scheduler, worker runtime, timeline, drag-target-refresh, interaction-highlight-runtime, placement-camera-framing
 
 - **`app-lifecycle.ts`** (`teardownAllSubsystems()`):
   - Owns the ordered teardown sequence (dependency-ordered; test verifies exact call sequence)
@@ -374,7 +406,7 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | `session.playback` | app/frame-runtime.ts (per-frame) | React DockBar (pause), React SettingsSheet (speed) |
 | `session.interactionMode` | main.ts (via store callback) | React DockBar (mode segmented) |
 | Camera mode (`cameraMode`) | Zustand store (`app-store.ts`) | CameraControls mode toggle (feature-gated), Esc key, Free-Look recovery callbacks |
-| Camera focus (`lastFocusedMoleculeId`) | focus-runtime.ts (via store) | interaction-dispatch (orbit), input-bindings (free-look), placement |
+| Camera focus (`lastFocusedMoleculeId`) | focus-runtime.ts (via store) | interaction-dispatch (orbit), input-bindings (free-look). Placement commit does NOT change focus (Policy A). |
 | Orbit follow (`orbitFollowEnabled`) | Zustand store (`app-store.ts`) | CameraControls Follow button; per-frame via `app/frame-runtime.ts` → `runtime/orbit-follow-update.ts` |
 | Onboarding phase (`onboardingPhase`) | Zustand store (`app-store.ts`) | OnboardingOverlay consumer; `subscribeOnboardingReadiness` producer |
 | UI chrome (sheets, theme, etc.) | Zustand store (`app-store.ts`) | React components |
@@ -383,6 +415,8 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | Panel highlight | renderer (`_panelHighlightMesh`, renderOrder 2) — state via `setHighlightedAtoms()` | bonded-group-highlight-runtime.ts (persistent bonded-group selection/hover) |
 | Interaction highlight | renderer (`_interactionHighlightMesh`, renderOrder 3) — state via `setInteractionHighlightedAtoms()` / `clearInteractionHighlight()` | interaction-highlight-runtime.ts (transient Move/Rotate); both layers composed by `_updateGroupHighlight()` |
 | placement state | placement.ts (`_state`) | React DockBar (add/cancel via dockCallbacks) |
+| Placement framing anchor | app/frame-runtime.ts (frozen at placement start) | Captured from visible scene atoms; cleared on placement exit |
+| Placement drag screen coords | placement.ts (`lastPointerScreen`) | Pointer/touch move events; consumed per-frame by `updateDragFromLatestPointer()` |
 | scheduler / effectsGate | app/frame-runtime.ts (per-frame) | — |
 | Timeline state (`mode`, `currentTimePs`, `reviewTimePs`, `rangePs`, etc.) | simulation-timeline-coordinator.ts (via store) | TimelineBar (scrub, restart), timeline-recording-orchestrator (range updates) |
 | Timeline recording arm state | timeline-recording-policy.ts | interaction-dispatch (first atom interaction: drag/move/rotate/flick) |

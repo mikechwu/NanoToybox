@@ -547,6 +547,72 @@ export class Renderer {
   }
 
   /**
+   * Extract camera basis vectors (right, up, forward) from the camera's
+   * world matrix. Forward points from camera toward scene (the look direction).
+   */
+  getCameraBasis(): { right: THREE.Vector3; up: THREE.Vector3; forward: THREE.Vector3 } {
+    this.camera.updateMatrixWorld(true);
+    const m = this.camera.matrixWorld.elements;
+    // Column 0 = local X (right), Column 1 = local Y (up), Column 2 = local -Z (forward is negated)
+    const right = new THREE.Vector3(m[0], m[1], m[2]).normalize();
+    const up = new THREE.Vector3(m[4], m[5], m[6]).normalize();
+    const forward = new THREE.Vector3(-m[8], -m[9], -m[10]).normalize();
+    return { right, up, forward };
+  }
+
+  /**
+   * Return world-space positions of all preview atoms (including group offset).
+   * Returns null when no preview is active. Optionally subsample for performance.
+   */
+  getPlacementPreviewWorldPoints(maxPoints?: number): THREE.Vector3[] | null {
+    if (!this._previewGroup || !this._previewAtomMeshes || this._previewAtomMeshes.length === 0) return null;
+    const gp = this._previewGroup.position;
+    const meshes = this._previewAtomMeshes;
+    const limit = maxPoints != null ? Math.min(maxPoints, meshes.length) : meshes.length;
+    const stride = meshes.length <= limit ? 1 : meshes.length / limit;
+    const result: THREE.Vector3[] = [];
+    for (let i = 0; i < limit; i++) {
+      const idx = Math.min(Math.floor(i * stride), meshes.length - 1);
+      const mp = meshes[idx].position;
+      result.push(new THREE.Vector3(mp.x + gp.x, mp.y + gp.y, mp.z + gp.z));
+    }
+    return result;
+  }
+
+  /**
+   * Return world-space positions of all displayed scene atoms (from physics ref).
+   * Optionally subsample for performance on large scenes.
+   */
+  getDisplayedSceneWorldPoints(maxPoints?: number): THREE.Vector3[] {
+    if (!this._physicsRef || this._physicsRef.n === 0) return [];
+    const pos = this._physicsRef.pos;
+    const n = this._physicsRef.n;
+    const limit = maxPoints != null ? Math.min(maxPoints, n) : n;
+    const stride = n <= limit ? 1 : n / limit;
+    const result: THREE.Vector3[] = [];
+    for (let i = 0; i < limit; i++) {
+      const idx = Math.min(Math.floor(i * stride), n - 1);
+      result.push(new THREE.Vector3(pos[idx * 3], pos[idx * 3 + 1], pos[idx * 3 + 2]));
+    }
+    return result;
+  }
+
+  /**
+   * Return camera parameters needed for placement framing solver.
+   */
+  getPlacementFramingCameraParams(): { tanX: number; tanY: number; near: number; position: THREE.Vector3; target: THREE.Vector3 } {
+    const vFov = this.camera.fov * Math.PI / 180;
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * this.camera.aspect);
+    return {
+      tanX: Math.tan(hFov / 2),
+      tanY: Math.tan(vFov / 2),
+      near: this.camera.near,
+      position: this.camera.position.clone(),
+      target: this.controls.target.clone(),
+    };
+  }
+
+  /**
    * Apply a snapshot of positions received from the worker thread.
    * Milestone B: positions are applied to atom instance matrices.
    * Bond args (_bonds, _bondCount) are accepted but intentionally ignored —
@@ -1776,6 +1842,53 @@ export class Renderer {
     const blendFactor = 1 - Math.exp(-8 * (dtMs / 1000));
     this.controls.target.lerp(bounds.center, blendFactor);
     this.camera.position.lerp(desiredCamPos, blendFactor);
+    this.controls.update();
+  }
+
+  /**
+   * Smoothly apply placement framing goal to camera target + distance.
+   * Preserves camera orientation — only adjusts target and position along
+   * the current view direction.
+   */
+  updatePlacementFraming(
+    dtMs: number,
+    desiredTarget: { x: number; y: number; z: number },
+    desiredDistance: number,
+    opts?: {
+      targetSmoothing?: number;
+      distanceGrowSmoothing?: number;
+      distanceShrinkSmoothing?: number;
+      allowDistanceShrink?: boolean;
+    },
+  ): void {
+    const dtSec = dtMs / 1000;
+    const targetBlend = 1 - Math.exp(-(opts?.targetSmoothing ?? 10) * dtSec);
+    const growBlend = 1 - Math.exp(-(opts?.distanceGrowSmoothing ?? 8) * dtSec);
+    const shrinkBlend = 1 - Math.exp(-(opts?.distanceShrinkSmoothing ?? 3) * dtSec);
+    const allowShrink = opts?.allowDistanceShrink ?? true;
+
+    // Current view direction (camera → target)
+    const viewDir = new THREE.Vector3().subVectors(this.controls.target, this.camera.position);
+    const currentDist = viewDir.length();
+    const dir = currentDist > 0.01 ? viewDir.normalize() : new THREE.Vector3(0, 0, -1);
+
+    // Smooth target (manual lerp — avoids constructing a temp Vector3)
+    this.controls.target.x += (desiredTarget.x - this.controls.target.x) * targetBlend;
+    this.controls.target.y += (desiredTarget.y - this.controls.target.y) * targetBlend;
+    this.controls.target.z += (desiredTarget.z - this.controls.target.z) * targetBlend;
+
+    // Smooth distance (grow vs shrink policy)
+    let newDist: number;
+    if (desiredDistance > currentDist) {
+      newDist = currentDist + (desiredDistance - currentDist) * growBlend;
+    } else if (allowShrink) {
+      newDist = currentDist + (desiredDistance - currentDist) * shrinkBlend;
+    } else {
+      newDist = currentDist;
+    }
+
+    // Position camera at new distance from target along -dir (preserves orientation)
+    this.camera.position.copy(this.controls.target).addScaledVector(dir, -newDist);
     this.controls.update();
   }
 

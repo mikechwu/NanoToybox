@@ -168,6 +168,28 @@ The solver exports helpers used by both the runtime and test QA:
 
 `solvePlacement()` returns `transformedAtoms` — the authoritative pre-transformed atom positions in world space. Both preview rendering and commit-to-scene consume these same positions, eliminating double-transform divergence.
 
+**Placement Camera Framing**
+
+When a placement preview appears, the camera smoothly adjusts to keep both the existing scene and the preview molecule visible. The framing solver (`placement-camera-framing.ts`) works entirely in camera-basis coordinates with no world-axis assumptions:
+
+- A frozen "visible-anchor" is captured at placement start — only scene atoms currently in the frustum participate, so offscreen content does not inflate the framing distance.
+- An adaptive 5×5 target-shift search prefers re-centering over zoom-out, with search radius derived from actual overflow.
+- Camera framing runs continuously during both idle placement and active drag.
+- After camera adjustment, the dragged preview is reprojected per-frame so the grabbed atom stays under the cursor.
+
+**Drag Contract**
+
+Preview drag uses `setPointerCapture()` for continuity past canvas/page boundaries:
+
+- Pointer capture is acquired on pointerdown; if capture fails, pointerleave aborts the drag as fallback.
+- On every pointermove/touchmove, the screen coordinates are stored and the preview is reprojected using the grabbed-point plane (anchored at the actual clicked atom, not the preview center).
+- On every frame, `updateDragFromLatestPointer()` re-runs the reprojection against the current camera state, ensuring the grabbed atom stays under the cursor even when the camera has moved since the last pointer event.
+- `previewOffset` is always a group displacement added to world-positioned atoms — the drag math converts absolute solved positions back to displacements via `basePreviewCenter`.
+
+**Focus Policy (Policy A)**
+
+Placement commit does not change `lastFocusedMoleculeId` or retarget the camera. Camera retargeting only happens via explicit user actions (Center / Return to Object). First-molecule `fitCamera()` remains via `scene.ts` for the initial add-to-empty-scene path.
+
 ### Interaction Model
 
 **Orbit Mode (default)** — rotate around focus target, atoms are directly manipulable.

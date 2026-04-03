@@ -169,7 +169,7 @@ Architecture extractions should be guarded at the extracted owner, not only thro
 
 | File | Purpose |
 |------|---------|
-| `frame-runtime.test.ts` | Per-frame pipeline ordering (worker-mode sequencing proof, review-mode gating, drag-refresh gating, sync-mode fallback) |
+| `frame-runtime.test.ts` | Per-frame pipeline ordering (worker-mode sequencing proof, review-mode gating, drag-refresh gating, sync-mode fallback, placement framing integration: framing runs during placement, orbit-follow suppressed, idle shrink allowed, drag framing + reprojection, drag reprojection not called when idle) |
 | `app-lifecycle.test.ts` | Teardown sequence ordering (exact dependency-ordered call sequence, subscription cleanup, partial-init safety) |
 
 ### UI Components (10 tests across 2 files)
@@ -206,6 +206,13 @@ The acceptance tests use three intentionally overlapping layers. All three must 
 **[external oracle]** tests are an independent canonical backstop: a small set of stable hand-written expected families. Currently mostly vertical-family because the scorer architecture (pure target-axis extent) makes stable horizontal line cases rare. This is a known property of the scorer, not a test gap. Failure here warrants investigating whether a policy change was intentional.
 
 **[observable behavior]** tests validate what the user actually sees without referencing any policy helper: readability ratios (visible extent vs 3D extent), orbit stability (angle drift under small camera perturbation), and plane projected shape (2D PCA aspect ratio confirms face-on presentation). These can detect a bad product rule that the other two layers would miss.
+
+### Placement Camera Framing (20 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `placement-camera-framing.test.ts` | 13 | Pure framing solver: no-adjustment fast path, target shift toward edge pressure, distance increase for wide unions, asymmetric margins, near-plane safety, orientation independence, visible-anchor filtering, adaptive search regression (visible-anchor vs offscreen, edge-drag target-shift preference, no over-depth), drag offset geometry (grabbed-point plane, non-origin preview, camera rotation compensation) |
+| `placement-drag-lifecycle.test.ts` | 7 | Controller-path drag lifecycle: pointer capture acquired on pointerdown, pointerleave does not abort drag with capture, pointerup releases capture, pointercancel aborts, per-frame reprojection runs during drag, capture-failure fallback (pointerleave aborts when capture unsupported) |
 
 ## Frontend Smoke Test
 
@@ -280,6 +287,16 @@ npm run dev
 | 49 | Clear during pending preview load | Click Add Molecule, select structure, then Clear before preview appears — no preview appears after Clear |
 | 50 | Escape during pending preview load (desktop) | Press Escape while structure is loading — load is cancelled, no preview appears |
 | 51 | Preview drag on elongated structure (e.g., CNT) near bond region | Drag starts predictably; nearby atom is preferred when visually intended (CONFIG.picker.previewAtomPreference threshold) |
+
+#### Placement Camera Framing
+- [ ] Add a molecule to an existing scene → camera should NOT jump, preview and scene both visible
+- [ ] If preview already fits in view → camera should not move at all
+- [ ] Drag preview toward edge → camera smoothly makes room (target shift preferred over zoom-out)
+- [ ] Drag preview past canvas boundary → drag continues (pointer capture), preview follows cursor
+- [ ] Release drag → preview stays in place, camera settles smoothly
+- [ ] Click Place → camera does NOT snap to new molecule (Policy A: no focus retarget on commit)
+- [ ] After Place, click Center → camera animates to newly placed molecule (explicit focus works)
+
 | 52 | Speed 0.5x | Motion visibly slower |
 | 53 | Speed 2x | Visibly faster, stable |
 | 54 | Max mode on C720 | Tracks live max |

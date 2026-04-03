@@ -21,7 +21,9 @@ import { CONFIG } from '../config';
 import { commitMolecule, clearPlayground, addMoleculeToScene } from '../scene';
 import { loadStructure } from '../loader';
 import { useAppStore } from '../store/app-store';
-import { focusNewestPlacedMolecule } from './focus-runtime';
+// focusNewestPlacedMolecule intentionally NOT imported — placement commit
+// does not change focus metadata or camera pivot (Policy A: placement framing
+// is about visibility, not about changing what Center/Follow mean).
 import { COACHMARKS } from '../ui/coachmarks';
 import type { PhysicsEngine } from '../physics';
 import type { Renderer } from '../renderer';
@@ -80,17 +82,15 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
   }
 
   /** Shared post-commit renderer sync. Every successful scene commit (initial
-   *  load or placement) must call this so atoms AND bonds are visible. */
-  function finalizeCommittedScene(opts: { focusNewestPlaced?: boolean }) {
+   *  load or placement) must call this so atoms AND bonds are visible.
+   *  Does NOT retarget camera or change focus metadata — placement framing
+   *  handles visibility; Center/Follow handle explicit focus. */
+  function finalizeCommittedScene() {
     const physics = deps.getPhysics();
     const renderer = deps.getRenderer();
     renderer.setPhysicsRef(physics);
     renderer.updateSceneRadius();
-    if (opts.focusNewestPlaced) {
-      focusNewestPlacedMolecule(renderer);
-    } else {
-      renderer.recomputeFocusDistance();
-    }
+    renderer.recomputeFocusDistance();
     renderer.updatePositions(physics);
   }
 
@@ -194,7 +194,7 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
         fitCamera: () => renderer.fitCamera(),
         updateSceneStatus: () => this.updateSceneStatus(),
       });
-      finalizeCommittedScene({ focusNewestPlaced: useAppStore.getState().placementActive });
+      finalizeCommittedScene();
 
       const wr = deps.getWorkerRuntime();
       if (wr && wr.isActive()) {
@@ -265,7 +265,7 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
         updateStatus: (text) => this.updateStatus(text),
         setLoading: (v) => { deps.getSession().isLoading = v; },
       });
-      if (committed) finalizeCommittedScene({ focusNewestPlaced: false });
+      if (committed) finalizeCommittedScene();
     },
 
     updateStatus(text: string) {

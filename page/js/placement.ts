@@ -1,11 +1,21 @@
 /**
  * Placement controller — manages molecule preview placement lifecycle.
  *
- * Owns: placement state, preview lifecycle, tangent computation,
+ * Owns: placement state, preview lifecycle, drag interaction,
  *   canvas placement listeners, structure loading for preview.
  *
  * Listeners: canvas pointer/touch capture-phase (registered/unregistered per placement).
  * Requires destroy() if the app ever needs to tear down placement.
+ *
+ * Drag contract:
+ * - Pointer capture is acquired on pointerdown via setPointerCapture() so drag
+ *   continues past canvas/page boundaries. If capture fails, pointerleave aborts.
+ * - frame-runtime may move the camera during drag (placement framing assist).
+ *   After camera updates, frame-runtime calls updateDragFromLatestPointer() to
+ *   reproject the dragged preview from the stored screen coordinates against the
+ *   updated camera, keeping the grabbed atom under the cursor continuously.
+ * - Drag start is centralized in _beginPreviewDrag(); drag end in _endPreviewDrag().
+ *   Reprojection math lives in _reprojectDragAtScreenPoint() (single source of truth).
  */
 import * as THREE from 'three';
 import { CONFIG } from './config';
@@ -70,7 +80,17 @@ export class PlacementController {
     previewOffset: number[];
     placementPlane: { normal: THREE.Vector3; point: THREE.Vector3 } | null;
     isDraggingPreview: boolean;
-    grabOffset: number[];
+    /** World-space grab vector: preview center → grabbed point at pointerdown. */
+    grabVectorWorld: number[];
+    /** World-space preview center at placement start (before any drag offset).
+     *  Used to convert absolute solved center back to group displacement. */
+    basePreviewCenter: number[];
+    /** Latest pointer screen coordinates during drag (for per-frame reprojection). */
+    lastPointerScreen: { x: number; y: number } | null;
+    /** Pointer ID with active capture (null when no capture held). */
+    activePointerId: number | null;
+    /** True only when setPointerCapture actually succeeded. Gates pointerleave behavior. */
+    hasPointerCapture: boolean;
     lastStructureFile: string | null;
     lastStructureName: string | null;
     lastOffset: number[] | null;
@@ -112,7 +132,11 @@ export class PlacementController {
       previewOffset: [0, 0, 0],
       placementPlane: null,
       isDraggingPreview: false,
-      grabOffset: [0, 0, 0],
+      grabVectorWorld: [0, 0, 0],
+      basePreviewCenter: [0, 0, 0],
+      lastPointerScreen: null,
+      activePointerId: null,
+      hasPointerCapture: false,
       lastStructureFile: null,
       lastStructureName: null,
       lastOffset: null,
@@ -221,6 +245,10 @@ export class PlacementController {
       // Show preview: transformed atoms are already in world space, group at origin
       this._renderer.showPreview(solverResult.transformedAtoms, bonds, [0, 0, 0]);
 
+      // Capture base preview center (atoms' world centroid before any drag offset)
+      const baseCenter = this._renderer.getPreviewWorldCenter();
+      this._state.basePreviewCenter = [baseCenter[0], baseCenter[1], baseCenter[2]];
+
       // Show placement UI
       this._commands.setDockPlacementMode(true);
       const targetName = this._getTargetMoleculeName();
@@ -254,7 +282,7 @@ export class PlacementController {
     // Block duplicate Place presses during async commit, but always allow Cancel
     if (this._state.isCommitting && commit) return;
 
-    this._state.isDraggingPreview = false;
+    this._endPreviewDrag();
     this._commands.forceRender();
 
     // Capture data before clearing state — commitMolecule may throw
@@ -294,7 +322,11 @@ export class PlacementController {
       this._state.previewBonds = null;
       this._state.previewOffset = [0, 0, 0];
       this._state.placementPlane = null;
-      this._state.grabOffset = [0, 0, 0];
+      this._state.grabVectorWorld = [0, 0, 0];
+      this._state.basePreviewCenter = [0, 0, 0];
+      this._state.lastPointerScreen = null;
+      this._state.activePointerId = null;
+      this._state.hasPointerCapture = false;
       this._state.previewFeasible = true;
       this._commands.setDockPlacementMode(false);
       this._commands.updateSceneStatus();
@@ -390,78 +422,153 @@ export class PlacementController {
 
   // --- Placement input handling ---
 
-  /** Recompute placement plane from current camera, keeping preview at same world position. */
-  _refreshPlacementPlane() {
-    const camState = this._renderer.getCameraState();
-    const camDir = new THREE.Vector3(...camState.direction);
-    const center = this._renderer.getPreviewWorldCenter();
-    this._state.placementPlane = {
-      normal: camDir.clone(),
-      point: new THREE.Vector3(center[0], center[1], center[2]),
-    };
+  /**
+   * Per-frame drag reprojection: recompute the preview offset from the latest
+   * stored pointer screen coordinates and the current camera state. Called by
+   * frame-runtime after camera assist so the grabbed atom stays under the cursor
+   * even when the camera has moved since the last pointer event.
+   */
+  updateDragFromLatestPointer(): void {
+    if (!this._state.isDraggingPreview || !this._state.lastPointerScreen) return;
+    // Clamp pointer to canvas rect for out-of-bounds robustness (captured pointer may be outside)
+    const rect = this._renderer.getCanvas().getBoundingClientRect();
+    const sx = Math.min(Math.max(this._state.lastPointerScreen.x, rect.left), rect.right);
+    const sy = Math.min(Math.max(this._state.lastPointerScreen.y, rect.top), rect.bottom);
+    this._reprojectDragAtScreenPoint(sx, sy);
   }
 
-  _registerListeners() {
+  /**
+   * Acquire pointer capture on the canvas for continuous drag past boundaries.
+   * On success: sets activePointerId and hasPointerCapture.
+   * On failure: both remain empty/false — pointerleave will abort the drag.
+   */
+  private _acquirePreviewPointerCapture(pointerId: number): void {
+    try {
+      this._renderer.getCanvas().setPointerCapture(pointerId);
+      this._state.activePointerId = pointerId;
+      this._state.hasPointerCapture = true;
+    } catch (_) {
+      this._state.activePointerId = null;
+      this._state.hasPointerCapture = false;
+    }
+  }
+
+  /** Release pointer capture if held. Safe to call when no capture is active. */
+  private _releasePreviewPointerCapture(): void {
+    if (this._state.activePointerId != null) {
+      try { this._renderer.getCanvas().releasePointerCapture(this._state.activePointerId); } catch (_) {}
+      this._state.activePointerId = null;
+    }
+    this._state.hasPointerCapture = false;
+  }
+
+  /**
+   * Initialize a drag session from a hit-test result. Shared by pointer and
+   * touch start paths. Owns: drag state activation, screen coords, grab vector,
+   * grabbed-point plane, and pointer capture (when pointerId is provided).
+   */
+  private _beginPreviewDrag(screenX: number, screenY: number, hitWorldPoint: number[], pointerId?: number): void {
+    this._state.isDraggingPreview = true;
+    this._state.lastPointerScreen = { x: screenX, y: screenY };
+    if (pointerId != null) {
+      this._acquirePreviewPointerCapture(pointerId);
+    }
+    const center = this._renderer.getPreviewWorldCenter();
+    this._state.grabVectorWorld = [
+      hitWorldPoint[0] - center[0],
+      hitWorldPoint[1] - center[1],
+      hitWorldPoint[2] - center[2],
+    ];
+    const grabPt = new THREE.Vector3(hitWorldPoint[0], hitWorldPoint[1], hitWorldPoint[2]);
+    this._refreshPlacementPlane(grabPt);
+  }
+
+  /** Centralized drag-end cleanup. Owns all drag-session teardown state. */
+  private _endPreviewDrag(): void {
+    this._releasePreviewPointerCapture();
+    this._state.isDraggingPreview = false;
+    this._state.lastPointerScreen = null;
+  }
+
+  /**
+   * Single source of truth for drag reprojection math.
+   * Rebuilds the grabbed-point plane from the current camera, intersects the
+   * cursor ray, and converts the solved world center to a group displacement.
+   */
+  private _reprojectDragAtScreenPoint(screenX: number, screenY: number): void {
+    const gv = this._state.grabVectorWorld;
+    const base = this._state.basePreviewCenter;
+    const off = this._state.previewOffset;
+    // Current grabbed point = baseCenter + currentOffset + grabVector
+    const grabPt = new THREE.Vector3(
+      base[0] + off[0] + gv[0],
+      base[1] + off[1] + gv[1],
+      base[2] + off[2] + gv[2],
+    );
+    this._refreshPlacementPlane(grabPt);
+    const pp = this._state.placementPlane;
+    if (!pp) return;
+    const ray = this._renderer.screenPointToRay(screenX, screenY);
+    const rayOrigin = new THREE.Vector3(...ray.origin);
+    const rayDir = new THREE.Vector3(...ray.direction);
+    const denom = rayDir.dot(pp.normal);
+    if (Math.abs(denom) < 1e-10) return;
+    const diff = pp.point.clone().sub(rayOrigin);
+    const t = diff.dot(pp.normal) / denom;
+    const worldPos = rayOrigin.add(rayDir.multiplyScalar(t));
+    // newOffset = (rayPlaneHit - grabVector) - basePreviewCenter
+    const newOffset = [
+      worldPos.x - gv[0] - base[0],
+      worldPos.y - gv[1] - base[1],
+      worldPos.z - gv[2] - base[2],
+    ];
+    this._state.previewOffset = newOffset;
+    this._renderer.updatePreviewOffset(newOffset);
+  }
+
+  /**
+   * Rebuild the placement plane normal from the current camera direction.
+   * The plane passes through `worldPoint` (the grabbed point, not the preview center).
+   */
+  private _refreshPlacementPlane(worldPoint?: THREE.Vector3) {
+    const camState = this._renderer.getCameraState();
+    const normal = new THREE.Vector3(...camState.direction);
+    const point = worldPoint ?? (() => {
+      const c = this._renderer.getPreviewWorldCenter();
+      return new THREE.Vector3(c[0], c[1], c[2]);
+    })();
+    this._state.placementPlane = { normal, point };
+  }
+
+  private _registerListeners() {
     const canvas = this._renderer.getCanvas();
     const self = this;
     const handlers = {
       pointerdown: (e) => {
-        if (self._state.isCommitting) return; // frozen during async commit
-        if (e.button !== 0) return; // primary pointer only
+        if (self._state.isCommitting) return;
+        if (e.button !== 0) return;
         const hit = self._renderer.raycastPreview(e.clientX, e.clientY);
         if (hit.hit) {
           e.stopPropagation();
           e.preventDefault();
-          self._state.isDraggingPreview = true;
-          // Recompute placement plane from current camera (may have changed since placement start)
-          self._refreshPlacementPlane();
-          // Compute grab offset projected onto placement plane
-          const center = self._renderer.getPreviewWorldCenter();
-          const pp = self._state.placementPlane;
-          const dx = hit.worldPoint[0] - center[0];
-          const dy = hit.worldPoint[1] - center[1];
-          const dz = hit.worldPoint[2] - center[2];
-          const dot = dx * pp.normal.x + dy * pp.normal.y + dz * pp.normal.z;
-          self._state.grabOffset = [
-            dx - dot * pp.normal.x,
-            dy - dot * pp.normal.y,
-            dz - dot * pp.normal.z,
-          ];
+          self._beginPreviewDrag(e.clientX, e.clientY, hit.worldPoint, e.pointerId);
         }
-        // If miss, let propagate (camera)
       },
       pointermove: (e) => {
         if (self._state.isCommitting || !self._state.isDraggingPreview) return;
         e.stopPropagation();
-        // Project pointer onto placement plane
-        const pp = self._state.placementPlane;
-        const ray = self._renderer.screenPointToRay(e.clientX, e.clientY);
-        const rayOrigin = new THREE.Vector3(...ray.origin);
-        const rayDir = new THREE.Vector3(...ray.direction);
-        const denom = rayDir.dot(pp.normal);
-        if (Math.abs(denom) < 1e-10) return;
-        const diff = pp.point.clone().sub(rayOrigin);
-        const t = diff.dot(pp.normal) / denom;
-        const worldPos = rayOrigin.add(rayDir.multiplyScalar(t));
-        // Apply grab offset
-        const go = self._state.grabOffset;
-        const newOffset = [worldPos.x - go[0], worldPos.y - go[1], worldPos.z - go[2]];
-        self._state.previewOffset = newOffset;
-        self._renderer.updatePreviewOffset(newOffset);
+        self._state.lastPointerScreen = { x: e.clientX, y: e.clientY };
+        self._reprojectDragAtScreenPoint(e.clientX, e.clientY);
       },
-      pointerup: (e) => {
+      pointerup: (_e) => {
         if (self._state.isDraggingPreview) {
-          self._state.isDraggingPreview = false;
+          self._endPreviewDrag();
         }
-        // Always let propagate (OrbitControls needs pointerup)
       },
       touchstart: (e) => {
-        if (self._state.isCommitting) return; // frozen during async commit
+        if (self._state.isCommitting) return;
         if (e.touches.length !== 1) {
-          // 2+ fingers: cancel preview drag, let camera handle
-          if (self._state.isDraggingPreview) {
-            self._state.isDraggingPreview = false;
-          }
+          if (self._state.isDraggingPreview) self._endPreviewDrag();
           return;
         }
         const touch = e.touches[0];
@@ -469,19 +576,7 @@ export class PlacementController {
         if (hit.hit) {
           e.stopPropagation();
           e.preventDefault();
-          self._state.isDraggingPreview = true;
-          self._refreshPlacementPlane();
-          const center = self._renderer.getPreviewWorldCenter();
-          const pp = self._state.placementPlane;
-          const dx = hit.worldPoint[0] - center[0];
-          const dy = hit.worldPoint[1] - center[1];
-          const dz = hit.worldPoint[2] - center[2];
-          const dot = dx * pp.normal.x + dy * pp.normal.y + dz * pp.normal.z;
-          self._state.grabOffset = [
-            dx - dot * pp.normal.x,
-            dy - dot * pp.normal.y,
-            dz - dot * pp.normal.z,
-          ];
+          self._beginPreviewDrag(touch.clientX, touch.clientY, hit.worldPoint);
         }
       },
       touchmove: (e) => {
@@ -489,33 +584,30 @@ export class PlacementController {
         e.stopPropagation();
         e.preventDefault();
         const touch = e.touches[0];
-        const pp = self._state.placementPlane;
-        const ray = self._renderer.screenPointToRay(touch.clientX, touch.clientY);
-        const rayOrigin = new THREE.Vector3(...ray.origin);
-        const rayDir = new THREE.Vector3(...ray.direction);
-        const denom = rayDir.dot(pp.normal);
-        if (Math.abs(denom) < 1e-10) return;
-        const diff = pp.point.clone().sub(rayOrigin);
-        const t = diff.dot(pp.normal) / denom;
-        const worldPos = rayOrigin.add(rayDir.multiplyScalar(t));
-        const go = self._state.grabOffset;
-        const newOffset = [worldPos.x - go[0], worldPos.y - go[1], worldPos.z - go[2]];
-        self._state.previewOffset = newOffset;
-        self._renderer.updatePreviewOffset(newOffset);
+        self._state.lastPointerScreen = { x: touch.clientX, y: touch.clientY };
+        self._reprojectDragAtScreenPoint(touch.clientX, touch.clientY);
       },
       touchend: (e) => {
         if (e.touches.length === 0 && self._state.isDraggingPreview) {
-          self._state.isDraggingPreview = false;
+          self._endPreviewDrag();
         }
       },
       pointercancel: (_e) => {
-        self._state.isDraggingPreview = false;
+        if (self._state.isDraggingPreview) self._endPreviewDrag();
       },
       pointerleave: (_e) => {
-        self._state.isDraggingPreview = false;
+        if (self._state.isDraggingPreview) {
+          // If pointer capture is active, drag continues — pointerleave is just
+          // the cursor leaving the element boundary. If capture failed, abort drag.
+          if (!self._state.hasPointerCapture) {
+            self._endPreviewDrag();
+          }
+        } else {
+          self._state.lastPointerScreen = null;
+        }
       },
       touchcancel: (_e) => {
-        self._state.isDraggingPreview = false;
+        if (self._state.isDraggingPreview) self._endPreviewDrag();
       },
     };
     // Register in capture phase
@@ -531,7 +623,7 @@ export class PlacementController {
     this._listeners = handlers;
   }
 
-  _unregisterListeners() {
+  private _unregisterListeners() {
     if (!this._listeners) return;
     const canvas = this._renderer.getCanvas();
     canvas.removeEventListener('pointerdown', this._listeners.pointerdown, { capture: true });

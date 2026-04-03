@@ -306,3 +306,27 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Rationale:** Contract clarity, single-path orchestration, and test-backed lifecycle are achieved without physical package boundaries. Splitting would add build complexity without clear benefit at current scale.
 
 **Evidence:** `docs/architecture.md` (layering documented), `tests/unit/frame-runtime.test.ts` and `tests/unit/app-lifecycle.test.ts` (orchestration boundaries guarded).
+
+## D38: Placement Camera Framing — Pure Solver with Frozen Visible-Anchor
+
+**Decision:** Camera framing during placement is handled by a pure camera-basis solver (`placement-camera-framing.ts`) that has no THREE/renderer/store imports. The solver works with plain `{x,y,z}` objects and uses an adaptive 5×5 target-shift search centered on the projected bbox error. A frozen "visible-anchor" set is captured at placement start so offscreen scene atoms do not inflate the framing distance. An overflow deadband (0.02 NDC) prevents threshold jitter.
+
+**Rationale:** Placement framing is about keeping what the user was already viewing plus the preview visible — not about framing the entire scene. The pure solver enables thorough unit testing without DOM/WebGL dependencies. The adaptive search prefers target shift over zoom-out, matching the UX goal of "making room" rather than "backing away."
+
+**Evidence:** `page/js/runtime/placement-camera-framing.ts` (pure solver), `tests/unit/placement-camera-framing.test.ts` (20 tests including orientation independence and visible-anchor regressions), `page/js/app/frame-runtime.ts` (frozen anchor capture + orchestration)
+
+## D39: Placement Focus Decoupled from Commit (Policy A)
+
+**Decision:** Placement commit does not change `lastFocusedMoleculeId` or retarget the camera. `focusNewestPlacedMolecule` was removed from `focus-runtime.ts`. Camera retargeting only happens via explicit user actions (Center / Return). First-molecule `fitCamera()` still works via `scene.ts`.
+
+**Rationale:** Placement framing handles visibility; Center/Follow handle explicit focus. Coupling these caused a sudden camera jump on Place click. Decoupling makes focus selection and camera framing different concerns.
+
+**Evidence:** `page/js/runtime/scene-runtime.ts` (no focusNewestPlaced import), `page/js/runtime/focus-runtime.ts` (function removed, module header updated), `tests/unit/focus-runtime.test.ts` (Policy A tests)
+
+## D40: Continuous Drag with Pointer Capture and Per-Frame Reprojection
+
+**Decision:** Preview drag uses `setPointerCapture()` so drag continues past canvas/page boundaries. Frame-runtime runs camera framing during active drag and calls `updateDragFromLatestPointer()` per frame to reproject the preview against the updated camera state. The grabbed atom stays under the cursor continuously even when the camera moves.
+
+**Rationale:** Event-driven-only drag breaks when the camera moves between pointer events. Pointer capture is the browser-standard way to maintain drag past element boundaries. Per-frame reprojection from stored screen coordinates closes the gap between camera motion and cursor fidelity.
+
+**Evidence:** `page/js/placement.ts` (pointer capture, `_beginPreviewDrag`, `_endPreviewDrag`, `_reprojectDragAtScreenPoint`, `updateDragFromLatestPointer`), `tests/unit/placement-drag-lifecycle.test.ts` (7 controller-path tests including capture failure fallback)
