@@ -189,6 +189,25 @@ Key rules:
 - `.seg-item__content` owns layout filling; ActionHint sits inside it (no cross-component CSS dependency)
 - Do NOT reintroduce `justify-content: space-around` on `.dock-bar`
 
+### Bonded Group Architecture Contract
+
+The bonded-group subsystem is display-source-aware with a centralized capability policy.
+
+| Layer | Module | Role |
+|-------|--------|------|
+| Display source | `runtime/bonded-group-display-source.ts` | Resolves live physics or review historical topology |
+| Projection | `runtime/bonded-group-runtime.ts` | Consumes `getDisplaySource()`, stable IDs, store projection |
+| Capability policy | `selectors/bonded-group-capabilities.ts` | `selectCanInspectBondedGroups` gates panel + highlight |
+| Highlight | `runtime/bonded-group-highlight-runtime.ts` | Select/hover gated by `canInspectBondedGroupsNow()` |
+| Appearance | `runtime/bonded-group-appearance-runtime.ts` | Group color → atom overrides via `renderer.setAtomColorOverrides()` |
+| Store | `app-store.ts` | `bondedGroupColorOverrides` (annotation-global) |
+
+Key rules:
+- Bonded-group runtime reads `getDisplaySource()`, never physics directly
+- Review inspection disabled until historical topology + review highlight rendering exist
+- Color overrides are annotations (Option B) — persist across live/review, not part of timeline
+- Highlight overlays and color overrides are independent renderer layers
+
 ### Highlight Composition Policy (Dual-Channel Architecture)
 
 The highlight system uses two independent visual channels composed by the renderer. Never collapse them back into a single mutable "current group highlight".

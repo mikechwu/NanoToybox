@@ -346,3 +346,27 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Rationale:** `space-around` caused layout shift when Pause↔Resume toggled because the labels have different widths. Fixed-width action slots and a `1fr` mode slot eliminate content-driven rebalancing. The `.seg-item` wrapper prevents alignment differences between live mode (bare labels) and review mode (ActionHint-wrapped labels). The `.seg-item__content` node owns layout filling so the segmented control does not depend on ActionHint's internal class names.
 
 **Evidence:** `page/index.html` (grid-template-columns, --dock-slot-action, .seg-item, .seg-item__content), `page/js/components/DockBar.tsx` (dock-slot wrappers), `page/js/components/Segmented.tsx` (SegmentedItemShell), `tests/unit/dock-bar-layout-stability.test.tsx` (6 structural tests), `tests/unit/dock-bar-review-lock.test.tsx` (live/review parity test)
+
+## D43: Display-Source-Aware Bonded Groups
+
+**Decision:** Bonded-group projection consumes a display-source abstraction (`bonded-group-display-source.ts`) instead of reading physics directly. The runtime's `getDisplaySource()` resolves from live physics or review historical topology. Review topology is deferred (returns null) until the timeline stores historical components.
+
+**Rationale:** The bonded-group system was live-only by architecture. Making it display-source-aware prepares for review-mode bonded-group inspection without duplicating topology logic. The abstraction allows future review topology to plug in without changing the runtime.
+
+**Evidence:** `page/js/runtime/bonded-group-display-source.ts`, `page/js/runtime/bonded-group-runtime.ts` (getDisplaySource, getDisplaySourceKind), `page/js/main.ts` (wiring with resolveBondedGroupDisplaySource)
+
+## D44: Bonded Group Capability Policy
+
+**Decision:** A centralized capability selector (`bonded-group-capabilities.ts`) gates bonded-group actions per mode: inspect, target, color-edit, simulate. Review disables all bonded-group interaction until historical topology + review highlight rendering exist. Primitive selector `selectCanInspectBondedGroups` derives from the full capability object for React stability.
+
+**Rationale:** Hardcoded `timelineMode === 'review'` blocks were scattered across components and runtimes. A centralized policy makes future review enablement a single-selector change. The primitive selector avoids React infinite-render issues with object selectors.
+
+**Evidence:** `page/js/store/selectors/bonded-group-capabilities.ts`, `page/js/components/BondedGroupsPanel.tsx` (selectCanInspectBondedGroups), `page/js/runtime/bonded-group-highlight-runtime.ts` (canInspectBondedGroupsNow)
+
+## D45: Annotation Model for Atom Color Persistence (Option B)
+
+**Decision:** Bonded-group color edits are global annotations, not part of timeline history (Option B). `bondedGroupColorOverrides` in the store persists across live/review mode transitions. The appearance runtime translates group-level color intent to atom-level overrides via `renderer.setAtomColorOverrides()`, which is separate from highlight overlays. Colors are not affected by scrub, restart, or review entry.
+
+**Rationale:** Historical color state (Option A) would require extending timeline frames, restart state, and review rendering. Annotation-global colors are simpler to implement and match the UX expectation that color edits are user preferences, not simulation state. Color editing in review is gated on inspection capability (currently disabled).
+
+**Evidence:** `page/js/store/app-store.ts` (AtomColorOverrideMap, bondedGroupColorOverrides), `page/js/runtime/bonded-group-appearance-runtime.ts`, `page/js/renderer.ts` (setAtomColorOverrides, _applyAtomColorOverrides), `tests/unit/bonded-group-prefeature.test.ts` (persistence semantics)

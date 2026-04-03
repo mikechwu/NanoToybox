@@ -176,7 +176,7 @@ Architecture extractions should be guarded at the extracted owner, not only thro
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
-| `bonded-groups-panel.test.tsx` | 3 | Review-mode guards: panel hidden during review, atom select blocked, hover blocked |
+| `bonded-groups-panel.test.tsx` | 3 | Review-mode guards: panel hidden during review, review blocks inspection via capability policy, hover blocked |
 | `status-bar-precedence.test.tsx` | 7 | Rewritten for message-only contract: status message precedence rules across simulation states |
 
 Previously-skipped StatusBar tests have been unskipped and now pass.
@@ -230,6 +230,12 @@ The acceptance tests use three intentionally overlapping layers. All three must 
 | File | Tests | What it validates |
 |------|------:|-------------------|
 | `dock-bar-layout-stability.test.tsx` | 6 | 4 named slot wrappers, paused toggle preserves slot structure, Pause/Resume in same slot, mode slot contains segmented, placement maps to same slots, grid structure |
+
+### Bonded Group Pre-Feature (13 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `bonded-group-prefeature.test.ts` | 13 | Display source: live resolution, review resolution, null case. Capabilities: live allows all, review blocks inspect/target/edit/mutate, color-edit gated on inspection. Appearance: group color writes atom overrides, clear removes overrides, syncToRenderer drives renderer. Wiring: initial sync with preloaded store, applyGroupColor drives renderer. Persistence: colors survive timeline mode transitions, annotation-global semantics. |
 
 ## Frontend Smoke Test
 
@@ -328,6 +334,14 @@ npm run dev
 #### Dock Stability
 - [ ] Toggle Pause ↔ Resume repeatedly → Add, mode selector, and Settings do not shift
 - [ ] Atom / Move / Rotate spacing looks identical in live and review modes
+
+#### Bonded Group Architecture
+- [ ] Bonded-group panel visible in live mode with bonded atoms
+- [ ] Bonded-group panel hidden in review mode (no historical topology yet)
+- [ ] Select/hover bonded group works in live mode
+- [ ] Select/hover bonded group blocked in review mode
+- [ ] Theme change preserves authored atom color overrides (if any applied via console/test)
+- [ ] Structure append preserves authored atom color overrides
 
 | 52 | Speed 0.5x | Motion visibly slower |
 | 53 | Speed 2x | Visibly faster, stable |

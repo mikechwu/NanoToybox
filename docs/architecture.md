@@ -66,9 +66,11 @@ NanoToybox/
 │   │   │   ├── atom-source.ts        # Renderer-to-input atom-picking adapter
 │   │   │   ├── focus-runtime.ts     # Focus resolution: molecule lookup, centroid, pivot update; ensureFollowTarget for follow-mode validation
 │   │   │   ├── onboarding.ts        # Coachmark scheduling + page-load onboarding overlay gate (isOnboardingEligible, subscribeOnboardingReadiness)
-│   │   │   ├── bonded-group-runtime.ts     # Live connected-component projection + stable ID reconciliation
+│   │   │   ├── bonded-group-runtime.ts     # Display-source-aware connected-component projection + stable ID reconciliation (consumes getDisplaySource(), not getPhysics())
 │   │   │   ├── bonded-group-highlight-runtime.ts # Persistent atom tracking + hover preview resolution
 │   │   │   ├── bonded-group-coordinator.ts # Coordinated projection + highlight lifecycle
+│   │   │   ├── bonded-group-display-source.ts   # Display-source resolver: live physics or review historical topology
+│   │   │   ├── bonded-group-appearance-runtime.ts # Group-to-atom color translation + renderer sync (annotation model)
 │   │   │   ├── simulation-timeline.ts        # Ring buffers (review frames, restart frames, checkpoints), RestartState contract, frozen review range, truncation on restart
 │   │   │   ├── simulation-timeline-coordinator.ts # Orchestrates review/restart across physics, renderer, worker, store
 │   │   │   ├── timeline-context-capture.ts   # Capture/restore interaction and boundary state via public physics API
@@ -114,7 +116,8 @@ NanoToybox/
 │   │   │       ├── dock.ts       # selectDockSurface derived selector
 │   │   │       ├── camera.ts    # selectCameraMode selector + CameraMode type
 │   │   │       ├── bonded-groups.ts # partitionBondedGroups (large/small bucket selector)
-│   │   │       └── review-ui-lock.ts # Review UI lock selector (selectIsReviewLocked, REVIEW_LOCK_TOOLTIP/STATUS)
+│   │   │       ├── review-ui-lock.ts # Review UI lock selector (selectIsReviewLocked, REVIEW_LOCK_TOOLTIP/STATUS)
+│   │   │       └── bonded-group-capabilities.ts # Bonded-group capability policy (inspect/target/edit/mutate per mode)
 │   │   ├── hooks/
 │   │   │   ├── useSheetAnimation.ts # Sheet open/close CSS transitions
 │   │   │   └── useReviewLockedInteraction.ts # Shared hook for review-locked control behavior (tooltip, activation, keyboard)
@@ -317,6 +320,14 @@ Hint copy lives in `page/js/store/selectors/review-ui-lock.ts`. Hint timing (`st
 
 **Dock slot geometry:** The dock uses CSS grid with stable slot widths (`--dock-slot-action` for action buttons, `1fr` for the mode slot) so Pause↔Resume label changes do not rebalance the layout. Each control renders inside a named `.dock-slot` wrapper. The Segmented control uses stable `.seg-item` wrappers for every option so live and review modes produce identical flex children.
 
+### Bonded Group Display Source + Appearance
+
+Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolves topology from live physics or review historical data. The runtime projects from whichever source is active. Review topology is deferred (returns null) until the timeline stores historical components.
+
+**Capability policy:** `bonded-group-capabilities.ts` gates inspection, targeting, color editing, and simulation mutation per mode. Review disables all bonded-group interaction until historical topology + review highlight rendering exist.
+
+**Atom appearance (annotation model):** `bondedGroupColorOverrides` in the store holds authored atom colors as global annotations (not timeline history). The appearance runtime translates group-level color intent to atom-level overrides via `renderer.setAtomColorOverrides()`, separate from highlight overlays. Colors survive scrub/restart/mode transitions.
+
 ## Key Design Decisions
 
 1. **Python reference + Numba acceleration** — pure Python for correctness, Numba for speed
@@ -341,9 +352,11 @@ Hint copy lives in `page/js/store/selectors/review-ui-lock.ts`. Hint timing (`st
 - **atom-source.ts** — shared renderer-to-input atom-picking adapter
 - **focus-runtime.ts** — focus resolution: molecule lookup, centroid computation, camera pivot update; `ensureFollowTarget()` for follow-mode validation. Placement commit does NOT change focus metadata or retarget camera (Policy A).
 - **onboarding.ts** — coachmark scheduling + page-load onboarding overlay gate (`isOnboardingEligible`, `subscribeOnboardingReadiness`)
-- **bonded-group-runtime.ts** — live connected-component projection with overlap-reconciled stable IDs
+- **bonded-group-runtime.ts** — display-source-aware bonded-group projection with overlap-reconciled stable IDs. Consumes `getDisplaySource()` (not physics directly). `getDisplaySourceKind()` reports live vs review source.
 - **bonded-group-highlight-runtime.ts** — persistent atom tracking, hover preview, panel highlight resolution (warm palette via `setHighlightedAtoms`)
 - **bonded-group-coordinator.ts** — coordinated projection + highlight lifecycle (update + teardown)
+- **bonded-group-display-source.ts** — resolves bonded-group topology source: live physics components or review historical topology. Pure function, no side effects.
+- **bonded-group-appearance-runtime.ts** — translates group-level color edits into atom-level overrides via renderer `setAtomColorOverrides()`. Annotation model: colors persist across live/review modes.
 - **simulation-timeline.ts** — ring buffers for dense review frames, restart frames, and checkpoints; RestartState contract; frozen review range; truncation on restart
 - **simulation-timeline-coordinator.ts** — orchestrates review/restart across physics, renderer, worker, store
 - **timeline-context-capture.ts** — capture/restore interaction and boundary state via public physics API
@@ -443,6 +456,8 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | Timeline state (`mode`, `currentTimePs`, `reviewTimePs`, `rangePs`, etc.) | simulation-timeline-coordinator.ts (via store) | TimelineBar (scrub, restart), timeline-recording-orchestrator (range updates) |
 | Timeline recording arm state | timeline-recording-policy.ts | interaction-dispatch (first atom interaction: drag/move/rotate/flick) |
 | Review UI lock state | Derived by `selectIsReviewLocked()` from `timelineMode` | Components (visual lock), ui-bindings.ts (runtime guards) |
+| Bonded-group color overrides | app-store (`bondedGroupColorOverrides`) | bonded-group-appearance-runtime (applyGroupColor, clearGroupColor) |
+| Bonded-group display source | bonded-group-display-source.ts (resolved per projection) | bonded-group-runtime (consumes via getDisplaySource) |
 | Timeline buffers (review frames, restart frames, checkpoints) | simulation-timeline.ts | timeline-recording-orchestrator (writes), simulation-timeline-coordinator (reads) |
 
 ### Overlay Close Policy
@@ -502,6 +517,8 @@ bonded-group-highlight-runtime.ts          interaction-highlight-runtime.ts
 **Setter/compositor split:** `setHighlightedAtoms()`, `setInteractionHighlightedAtoms()`, and `clearInteractionHighlight()` are state-only — they store indices and intensity but do not touch meshes directly. All mesh creation, capacity management, material styling, and transform updates flow through `_updateGroupHighlight()`, the single rendering truth path.
 
 **Lifecycle cleanup:** `_disposeHighlightLayers()` disposes both InstancedMesh layers and resets all associated state. It is called from `loadStructure()` and `resetToEmpty()` to prevent stale highlight geometry from surviving across structure transitions. The old save/restore pattern (`_restorePanelHighlight`) has been removed entirely.
+
+**Atom color overrides (third visual layer):** `renderer.setAtomColorOverrides()` applies authored per-atom colors to the base InstancedMesh, independent of both highlight layers. The highlight overlays render on top of colored atoms. Color overrides are re-applied after `populateAppendedAtoms()` and `applyTheme()` for lifecycle resilience. The appearance runtime (`bonded-group-appearance-runtime.ts`) translates group-level color intent into atom-level overrides.
 
 ### Deferred Phases
 

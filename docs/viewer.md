@@ -73,6 +73,14 @@ Overlap atoms (selected in the panel AND being interacted with) receive both hal
 
 **Lifecycle:** `_disposeHighlightLayers()` is called on `loadStructure` and `resetToEmpty` to tear down both layers cleanly.
 
+**Display-Source-Aware Bonded Groups**
+
+The bonded-group panel is display-source-aware: it projects from live physics topology by default. Review-mode bonded groups are disabled until historical topology storage is implemented. The `selectCanInspectBondedGroups` capability selector gates panel visibility and highlight interactions — currently returns false in review mode.
+
+**Atom Color Overrides (Annotation Model)**
+
+Authored atom color overrides (`bondedGroupColorOverrides`) are global annotations that persist across live/review mode transitions. They are applied via `renderer.setAtomColorOverrides()` independently of highlight overlays. Colors survive theme changes, structure appends, scrub, and restart.
+
 ### Speed & Pause
 
 **Pause** is a primary dock button. Physics freezes; camera, UI, and input remain active. Resume resets the accumulator to prevent catch-up burst.

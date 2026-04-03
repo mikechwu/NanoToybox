@@ -47,6 +47,7 @@ These checks require a real browser with WebGL and cannot run in headless CI. Ru
 - [ ] Placement camera framing: preview does not cause camera snap, drag past boundary works
 - [ ] Review mode UI lock: enter review → dock Add/mode/Pause disabled with hints → Settings Add Molecule/Clear disabled → Live/Restart exit re-enables
 - [ ] Dock stability: Pause ↔ Resume toggle does not shift neighboring controls
+- [ ] Bonded groups: panel visible in live, hidden in review; authored color overrides persist across theme/structure changes
 
 Automated checks (typecheck, build, unit tests, Playwright E2E, deploy smoke) run in CI on every push/PR.
 
@@ -125,6 +126,7 @@ Browser                          Web Worker
 - Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)
 - Three.js trajectory viewer: functional at `viewer/index.html`
 - Performance benchmarks in `page/bench/`
+- **Bonded group architecture** — display-source-aware projection, capability policy, annotation-model atom color overrides; review-mode inspection deferred until historical topology exists
 
 ## Project Goal
 
