@@ -66,6 +66,7 @@ function createSub(physics = makePhysics(), renderer = makeRenderer()): Timeline
     forceRender: vi.fn(),
     clearBondedGroupHighlight: vi.fn(),
     clearRendererFeedback: vi.fn(),
+    syncBondedGroupsForDisplayFrame: vi.fn(),
   });
 }
 

@@ -36,11 +36,13 @@ export function resolveBondedGroupDisplaySource(
   const mode = deps.getTimelineMode();
 
   if (mode === 'review') {
+    // Strict review: never fall back to live physics. If historical topology is
+    // unavailable, return null so the panel honestly shows no groups.
     const review = deps.getTimelineReviewComponents();
     if (review && review.components.length > 0) {
       return { kind: 'review', atomCount: review.atomCount, components: review.components };
     }
-    // Fall back to live physics if review data unavailable
+    return null;
   }
 
   const physics = deps.getPhysics();

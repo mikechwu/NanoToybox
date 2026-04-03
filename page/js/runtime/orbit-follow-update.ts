@@ -18,6 +18,7 @@ import type * as THREE from 'three';
 import { useAppStore, type CameraTargetRef } from '../store/app-store';
 import {
   resolveCameraTargetRef,
+  resolveFollowTargetRef,
   type CameraTargetDeps,
   type CameraTargetRendererSurface,
 } from './camera-target-runtime';
@@ -49,18 +50,31 @@ export function updateOrbitFollowFromStore(
   const s = useAppStore.getState();
   if (!s.orbitFollowEnabled || s.cameraMode !== 'orbit') return;
 
-  // Resolve target: prefer cameraTargetRef, fall back to lastFocusedMoleculeId
-  let ref: CameraTargetRef | null = s.cameraTargetRef;
-  if (!ref && s.lastFocusedMoleculeId !== null) {
-    ref = { kind: 'molecule', moleculeId: s.lastFocusedMoleculeId };
-  }
-  if (!ref) return;
-
   const ctDeps: CameraTargetDeps = {
     renderer,
     molecules: s.molecules,
     getBondedGroupAtoms: deps?.getBondedGroupAtoms ?? (() => null),
   };
+
+  // Priority 1: persistent frozen follow target (atom-set or molecule)
+  if (s.orbitFollowTargetRef) {
+    const resolved = resolveFollowTargetRef(s.orbitFollowTargetRef, ctDeps);
+    if (resolved) {
+      renderer.updateOrbitFollow(frameDtMs, { center: resolved.center, radius: resolved.radius });
+      return;
+    }
+    // Frozen target fully unresolvable (all atoms gone) — disable follow
+    useAppStore.getState().setOrbitFollowEnabled(false);
+    useAppStore.getState().setOrbitFollowTargetRef(null);
+    return;
+  }
+
+  // Priority 2: generic cameraTargetRef, fall back to lastFocusedMoleculeId
+  let ref: CameraTargetRef | null = s.cameraTargetRef;
+  if (!ref && s.lastFocusedMoleculeId !== null) {
+    ref = { kind: 'molecule', moleculeId: s.lastFocusedMoleculeId };
+  }
+  if (!ref) return;
 
   const resolved = resolveCameraTargetRef(ref, ctDeps);
   if (resolved) {

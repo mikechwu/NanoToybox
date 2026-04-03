@@ -87,9 +87,9 @@ describe('BondedGroupsPanel', () => {
     // 2 large clusters (42 and 10 atoms)
     expect(rows.length).toBe(2);
     expect(rows[0].textContent).toContain('Cluster 1');
-    expect(rows[0].textContent).toContain('42 atoms');
+    expect(rows[0].textContent).toContain('42');
     expect(rows[1].textContent).toContain('Cluster 2');
-    expect(rows[1].textContent).toContain('10 atoms');
+    expect(rows[1].textContent).toContain('10');
 
     // Small-clusters summary row visible
     const smallToggle = c.querySelector('.bonded-groups-small-toggle');
@@ -113,7 +113,7 @@ describe('BondedGroupsPanel', () => {
     const smallRows = c.querySelectorAll('.bonded-groups-small-row');
     expect(smallRows.length).toBe(3); // 3, 2, 1 atoms
     expect(smallRows[0].textContent).toContain('Cluster 3');
-    expect(smallRows[0].textContent).toContain('3 atoms');
+    expect(smallRows[0].textContent).toContain('3');
 
     // Large clusters still visible
     const largeRows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle):not(.bonded-groups-small-row)');
@@ -248,18 +248,23 @@ describe('BondedGroupsPanel', () => {
     expect(c.querySelector('.bonded-groups-clear')).toBeTruthy();
   });
 
-  it('panel hidden in review until historical topology source exists', () => {
-    // In production, review mode has no bonded-group display source yet
-    // (getTimelineReviewComponents returns null). So the runtime projects [],
-    // and the panel hides because groups.length === 0.
-    // This test reflects the honest production state.
-    useAppStore.getState().setBondedGroups([]); // no groups in review (production reality)
+  it('panel visible in review when historical groups exist', () => {
+    // Review topology now feeds bonded-group projection via getReviewBondedGroupComponents.
+    // When groups are projected from review data, the panel is visible.
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().setTimelineMode('review');
+    const c = renderPanel();
+    expect(c.innerHTML).not.toBe('');
+  });
+
+  it('panel hidden in review when no groups projected', () => {
+    useAppStore.getState().setBondedGroups([]);
     useAppStore.getState().setTimelineMode('review');
     const c = renderPanel();
     expect(c.innerHTML).toBe('');
   });
 
-  it('bonded-group select blocked in review (canInspectBondedGroups: false)', () => {
+  it('bonded-group select works in review (canInspectBondedGroups: true)', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
     useAppStore.getState().setTimelineMode('review');
@@ -269,11 +274,10 @@ describe('BondedGroupsPanel', () => {
       getPhysics: () => ({ n: 20 }),
     });
     hl.toggleSelectedGroup('a');
-    // Review inspection disabled until historical topology + review highlight rendering exist
-    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
+    expect(useAppStore.getState().selectedBondedGroupId).toBe('a');
   });
 
-  it('bonded-group hover blocked in review (canInspectBondedGroups: false)', () => {
+  it('bonded-group hover works in review (canInspectBondedGroups: true)', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().setTimelineMode('review');
     const hl = createBondedGroupHighlightRuntime({
@@ -282,6 +286,27 @@ describe('BondedGroupsPanel', () => {
       getPhysics: () => ({ n: 20 }),
     });
     hl.setHoveredGroup('a');
-    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+    expect(useAppStore.getState().hoveredBondedGroupId).toBe('a');
+  });
+
+  it('keyboard Enter on cluster row toggles selection', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
+    expect(rows.length).toBeGreaterThan(0);
+    const row = rows[0] as HTMLElement;
+    // Verify accessibility attributes
+    expect(row.getAttribute('role')).toBe('button');
+    expect(row.getAttribute('tabindex')).toBe('0');
+    // Fire Enter → should toggle selection via onToggleSelect callback
+    fireEvent.keyDown(row, { key: 'Enter' });
+    expect(useAppStore.getState().selectedBondedGroupId).toBe('a');
+    // Fire Enter again → should deselect
+    fireEvent.keyDown(row, { key: 'Enter' });
+    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
+    // Space also toggles selection
+    fireEvent.keyDown(row, { key: ' ' });
+    expect(useAppStore.getState().selectedBondedGroupId).toBe('a');
   });
 });

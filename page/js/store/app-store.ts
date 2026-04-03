@@ -27,6 +27,11 @@ export type CameraTargetRef =
   | { kind: 'molecule'; moleculeId: number }
   | { kind: 'bonded-group'; groupId: string };
 
+/** Persistent follow target — frozen at click time, survives topology changes. */
+export type FollowTargetRef =
+  | { kind: 'molecule'; moleculeId: number }
+  | { kind: 'atom-set'; atomIndices: number[] };
+
 /** An entry from the loaded structure manifest — available to add. */
 export interface StructureOption {
   key: string;
@@ -77,6 +82,10 @@ export interface BondedGroupCallbacks {
   onToggleSelect: (id: string) => void;
   onHover: (id: string | null) => void;
   onClearHighlight: () => void;
+  onCenterGroup?: (id: string) => void;
+  onFollowGroup?: (id: string) => void;
+  onApplyGroupColor?: (id: string, colorHex: string) => void;
+  onClearGroupColor?: (id: string) => void;
 }
 
 /** Atom color value for authored appearance overrides. */
@@ -136,6 +145,9 @@ export interface AppStore {
   /** Generic camera target — replaces molecule-only lastFocusedMoleculeId for new paths. */
   cameraTargetRef: CameraTargetRef | null;
   setCameraTargetRef: (ref: CameraTargetRef | null) => void;
+  /** Persistent follow target — frozen atom set that survives topology changes. */
+  orbitFollowTargetRef: FollowTargetRef | null;
+  setOrbitFollowTargetRef: (ref: FollowTargetRef | null) => void;
 
   // Scene-authoritative state
   atomCount: number;
@@ -333,6 +345,7 @@ export const useAppStore = create<AppStore>((set) => ({
   cameraCallbacks: null,
   lastFocusedMoleculeId: null,
   cameraTargetRef: null,
+  orbitFollowTargetRef: null,
   bondedGroups: [],
   bondedGroupsExpanded: false,
   bondedSmallGroupsExpanded: false,
@@ -407,6 +420,7 @@ export const useAppStore = create<AppStore>((set) => ({
   setCameraCallbacks: (cbs) => set({ cameraCallbacks: cbs }),
   setLastFocusedMoleculeId: (id) => set({ lastFocusedMoleculeId: id }),
   setCameraTargetRef: (ref) => set({ cameraTargetRef: ref }),
+  setOrbitFollowTargetRef: (ref) => set({ orbitFollowTargetRef: ref }),
   setTargetSpeed: (speed) => set({ targetSpeed: speed }),
   togglePause: () => set((s) => ({ paused: !s.paused })),
 
@@ -507,6 +521,7 @@ export const useAppStore = create<AppStore>((set) => ({
     cameraCallbacks: null,
     lastFocusedMoleculeId: null,
     cameraTargetRef: null,
+    orbitFollowTargetRef: null,
     // Bonded groups (side preference preserved across reset)
     bondedGroups: [],
     bondedGroupsExpanded: false,

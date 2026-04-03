@@ -96,6 +96,7 @@ describe('coordinator applyReviewFrame integration', () => {
       setSimTimePs: vi.fn(),
       clearBondedGroupHighlight: vi.fn(),
       clearRendererFeedback: vi.fn(),
+      syncBondedGroupsForDisplayFrame: vi.fn(),
     });
 
     coordinator.enterReview(0.5);
@@ -137,6 +138,7 @@ describe('coordinator applyReviewFrame integration', () => {
       setSimTimePs: vi.fn(),
       clearBondedGroupHighlight: vi.fn(),
       clearRendererFeedback: vi.fn(),
+      syncBondedGroupsForDisplayFrame: vi.fn(),
     });
 
     coordinator.enterReview(0.1);

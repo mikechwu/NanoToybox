@@ -9,7 +9,7 @@
  */
 
 import type * as THREE from 'three';
-import type { MoleculeMetadata, CameraTargetRef } from '../store/app-store';
+import type { MoleculeMetadata, CameraTargetRef, FollowTargetRef } from '../store/app-store';
 import { CONFIG } from '../config';
 
 // ── Types ──
@@ -32,6 +32,10 @@ export interface CameraTargetDeps {
   getBondedGroupAtoms: (groupId: string) => number[] | null;
 }
 
+/** Resolved framing target. `kind` indicates framing semantics (centroid+radius),
+ *  not source identity. Frozen atom-set follows resolve as kind: 'bonded-group'
+ *  because the framing math is identical. TODO: consider adding kind: 'atom-set'
+ *  if downstream consumers need to distinguish source identity from framing shape. */
 export interface ResolvedCameraTarget {
   kind: 'molecule' | 'bonded-group';
   center: THREE.Vector3;
@@ -117,6 +121,60 @@ function resolveBondedGroupTarget(
     center,
     radius,
     groupId,
+  };
+}
+
+// ── Follow target resolution (frozen atom set) ──
+
+/**
+ * Resolve a FollowTargetRef to framing bounds. For atom-set targets, computes
+ * centroid + radius from the frozen atom indices using displayed positions.
+ * Works in both live and review because it reads displayed positions.
+ */
+export function resolveFollowTargetRef(
+  ref: FollowTargetRef,
+  deps: CameraTargetDeps,
+): ResolvedCameraTarget | null {
+  if (ref.kind === 'molecule') {
+    return resolveMoleculeTarget(ref.moleculeId, deps);
+  }
+  if (ref.kind === 'atom-set') {
+    return resolveAtomSetTarget(ref.atomIndices, deps);
+  }
+  return null;
+}
+
+/** Resolve a frozen atom-set to framing bounds.
+ *  Returns kind: 'bonded-group' because the framing semantics are identical
+ *  (centroid + radius from atom positions). The kind reflects framing behavior,
+ *  not the source identity. */
+function resolveAtomSetTarget(
+  atomIndices: number[],
+  deps: CameraTargetDeps,
+): ResolvedCameraTarget | null {
+  if (atomIndices.length === 0) return null;
+  let cx = 0, cy = 0, cz = 0, count = 0;
+  for (const idx of atomIndices) {
+    const pos = deps.renderer.getDisplayedAtomWorldPosition(idx);
+    if (!pos) continue; // skip atoms that are out of range (e.g. removed)
+    cx += pos.x; cy += pos.y; cz += pos.z; count++;
+  }
+  if (count === 0) return null;
+  cx /= count; cy /= count; cz /= count;
+  let maxDistSq = 0;
+  for (const idx of atomIndices) {
+    const pos = deps.renderer.getDisplayedAtomWorldPosition(idx);
+    if (!pos) continue;
+    const dx = pos.x - cx, dy = pos.y - cy, dz = pos.z - cz;
+    maxDistSq = Math.max(maxDistSq, dx * dx + dy * dy + dz * dz);
+  }
+  const firstPos = deps.renderer.getDisplayedAtomWorldPosition(atomIndices[0]);
+  if (!firstPos) return null;
+  const center = firstPos.clone().set(cx, cy, cz);
+  return {
+    kind: 'bonded-group',
+    center,
+    radius: Math.sqrt(maxDistSq) + CONFIG.camera.atomVisualRadius,
   };
 }
 

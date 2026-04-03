@@ -46,6 +46,7 @@ export interface TimelineSubsystemDeps {
   forceRender: TimelineCoordinatorDeps['forceRender'];
   clearBondedGroupHighlight: TimelineCoordinatorDeps['clearBondedGroupHighlight'];
   clearRendererFeedback: TimelineCoordinatorDeps['clearRendererFeedback'];
+  syncBondedGroupsForDisplayFrame: TimelineCoordinatorDeps['syncBondedGroupsForDisplayFrame'];
 }
 
 /** High-level subsystem handle — main.ts should only use these methods. */
@@ -79,6 +80,11 @@ export interface TimelineSubsystem {
   teardown(): void;
   /** Install callbacks + enter ready state atomically (no transient off flash). */
   installAndEnable(): void;
+  /** Compute connected components from historical bond topology at the review time. */
+  getReviewBondedGroupComponents(timePs: number): { atomCount: number; components: { atoms: number[]; size: number }[] } | null;
+  /** Get bonded-group components for the current review frame (from internal timeline state, not store).
+   *  Returns null when not in review mode. */
+  getCurrentReviewBondedGroupComponents(): { atomCount: number; components: { atoms: number[]; size: number }[] } | null;
 }
 
 export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSubsystem {
@@ -115,6 +121,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
     setSimTimePs: (timePs) => orchestrator.setSimTimePs(timePs),
     clearBondedGroupHighlight: deps.clearBondedGroupHighlight,
     clearRendererFeedback: deps.clearRendererFeedback,
+    syncBondedGroupsForDisplayFrame: deps.syncBondedGroupsForDisplayFrame,
     syncStoreState,
   });
 
@@ -228,6 +235,14 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
         onStartRecordingNow: () => startRecordingNow(),
         onTurnRecordingOff: () => turnRecordingOff(),
       }, 'ready');
+    },
+    getReviewBondedGroupComponents: (timePs) => timeline.getReviewBondedGroupComponents(timePs),
+    getCurrentReviewBondedGroupComponents: () => {
+      const state = timeline.getState();
+      if (state.mode !== 'review') return null;
+      const reviewFrame = timeline.getCurrentReviewFrame();
+      if (!reviewFrame) return null;
+      return timeline.getReviewBondedGroupComponents(reviewFrame.timePs);
     },
   };
 }

@@ -78,6 +78,7 @@ describe('Store callbacks do not arm timeline (real registerStoreCallbacks)', ()
       forceRender: vi.fn(),
       clearBondedGroupHighlight: vi.fn(),
       clearRendererFeedback: vi.fn(),
+      syncBondedGroupsForDisplayFrame: vi.fn(),
     });
 
     sub.installAndEnable(); // Match main.ts init — start in ready state

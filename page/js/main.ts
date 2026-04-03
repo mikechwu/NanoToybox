@@ -30,6 +30,7 @@ import { createDragTargetRefresh, dragRefreshAction } from './runtime/drag-targe
 import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-group-runtime';
 import { resolveBondedGroupDisplaySource } from './runtime/bonded-group-display-source';
 import { createBondedGroupAppearanceRuntime, type BondedGroupAppearanceRuntime } from './runtime/bonded-group-appearance-runtime';
+import { handleBondedGroupFollowToggle } from './runtime/bonded-group-follow-actions';
 import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from './runtime/bonded-group-highlight-runtime';
 import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './runtime/bonded-group-coordinator';
 import { createTimelineSubsystem, type TimelineSubsystem } from './runtime/timeline-subsystem';
@@ -589,7 +590,11 @@ async function init() {
   _bondedGroups = createBondedGroupRuntime({
     getDisplaySource: () => resolveBondedGroupDisplaySource({
       getPhysics: () => physics,
-      getTimelineReviewComponents: () => null, // TODO: wire when timeline stores historical topology
+      getTimelineReviewComponents: () => {
+        // Read directly from timeline subsystem internal state, not from store.
+        // This avoids stale timelineReviewTimePs when sync runs before store update.
+        return _timelineSub?.getCurrentReviewBondedGroupComponents() ?? null;
+      },
       getTimelineMode: () => useAppStore.getState().timelineMode,
     }),
   });
@@ -610,11 +615,31 @@ async function init() {
   // Initial sync (annotation-global colors may already exist in store)
   _bondedGroupAppearance.syncToRenderer();
 
+  // Shared camera-target deps — used by bonded-group callbacks and camera control callbacks
+  const _focusTargetDeps = { getBondedGroupAtoms: (gid: string) => _bondedGroups?.getAtomIndicesForGroup(gid) ?? null };
+
   // Register callbacks via store (same pattern as dock/settings/chooser)
   useAppStore.getState().setBondedGroupCallbacks({
     onToggleSelect: (id) => _bondedGroupHighlight?.toggleSelectedGroup(id),
     onHover: (id) => _bondedGroupHighlight?.setHoveredGroup(id),
     onClearHighlight: () => _bondedGroupHighlight?.clearHighlight(),
+    onCenterGroup: (id) => {
+      // One-shot: set target and frame. No persistent active state.
+      useAppStore.getState().setCameraTargetRef({ kind: 'bonded-group', groupId: id });
+      _handleCenterObject(renderer, _focusTargetDeps);
+    },
+    onFollowGroup: (id) => {
+      handleBondedGroupFollowToggle(id, {
+        getGroupAtoms: (gid) => _bondedGroups?.getAtomIndicesForGroup(gid) ?? null,
+        centerCurrentTarget: () => _handleCenterObject(renderer, _focusTargetDeps),
+      });
+    },
+    onApplyGroupColor: (id, colorHex) => {
+      _bondedGroupAppearance?.applyGroupColor(id, colorHex);
+    },
+    onClearGroupColor: (id) => {
+      _bondedGroupAppearance?.clearGroupColor(id);
+    },
   });
 
   // ── Simulation timeline subsystem ──
@@ -636,6 +661,7 @@ async function init() {
     forceRender: () => { scheduler.forceRenderThisTick = true; },
     clearBondedGroupHighlight: () => { _bondedGroupHighlight?.clearHighlight(); },
     clearRendererFeedback: () => { if (renderer) renderer.clearFeedback(); },
+    syncBondedGroupsForDisplayFrame: () => { _bondedGroupCoordinator?.update(); },
   });
   _timelineSub.installAndEnable(); // Atomic: install callbacks + enter ready state (no transient off flash)
 
@@ -744,17 +770,14 @@ async function init() {
     startPlacement: (file, desc) => { if (placement) placement.start(file, desc); },
   });
 
-  // Bonded-group atom lookup helper — shared by all camera target resolution paths
-  const getBondedGroupAtoms = (groupId: string) =>
-    _bondedGroups?.getAtomIndicesForGroup(groupId) ?? null;
-  const focusTargetDeps = { getBondedGroupAtoms };
+  // Camera target deps already hoisted as _focusTargetDeps above bonded-group callbacks
 
   // Register camera control callbacks via store (consumed by CameraControls.tsx)
   useAppStore.getState().setCameraCallbacks({
-    onCenterObject: () => { _handleCenterObject(renderer, focusTargetDeps); },
+    onCenterObject: () => { _handleCenterObject(renderer, _focusTargetDeps); },
     onEnableFollow: () => {
-      if (!ensureFollowTarget(renderer, focusTargetDeps)) return false;
-      _handleCenterObject(renderer, focusTargetDeps);
+      if (!ensureFollowTarget(renderer, _focusTargetDeps)) return false;
+      _handleCenterObject(renderer, _focusTargetDeps);
       return true;
     },
     onReturnToObject: () => {
@@ -768,7 +791,7 @@ async function init() {
 
   // Wire return-target callback through generic camera-target resolution
   renderer.setReturnTargetResolver(() => {
-    const target = resolveReturnTarget(renderer, renderer.getSceneRadius(), focusTargetDeps);
+    const target = resolveReturnTarget(renderer, renderer.getSceneRadius(), _focusTargetDeps);
     return target;
   });
 

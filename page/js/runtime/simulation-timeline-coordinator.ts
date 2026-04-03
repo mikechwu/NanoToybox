@@ -38,6 +38,8 @@ export interface TimelineCoordinatorDeps {
   clearBondedGroupHighlight: () => void;
   /** Clear all visual feedback (hover highlight, force line) from the renderer. */
   clearRendererFeedback: () => void;
+  /** Refresh bonded-group projection + highlight for the current display frame. */
+  syncBondedGroupsForDisplayFrame: () => void;
 }
 
 export interface TimelineCoordinator {
@@ -67,19 +69,24 @@ export function createTimelineCoordinator(deps: TimelineCoordinatorDeps): Timeli
     _wasPausedBeforeReview = deps.isPaused();
     if (!deps.isPaused()) deps.pause();
 
-    // Clear all interactive visual state — review is display-only.
-    // Live highlights would appear against historical positions and be misleading.
+    // Clear live interaction feedback (Move/Rotate forces, hover indicators).
+    // Bonded-group highlight is cleared to reset stale live-topology selections.
+    // Users can re-select from review-projected groups after entering review.
     deps.clearBondedGroupHighlight();
     deps.clearRendererFeedback();
 
     const frame = deps.timeline.enterReview(timePs);
     if (frame) applyReviewFrame(frame);
+    // Re-project bonded groups from the review frame's topology
+    deps.syncBondedGroupsForDisplayFrame();
     deps.syncStoreState();
   }
 
   function scrubTo(timePs: number): void {
     const frame = deps.timeline.scrubTo(timePs);
     if (frame) applyReviewFrame(frame);
+    // Re-project bonded groups for the new scrub position
+    deps.syncBondedGroupsForDisplayFrame();
     deps.syncStoreState();
   }
 
@@ -98,6 +105,8 @@ export function createTimelineCoordinator(deps: TimelineCoordinatorDeps): Timeli
     if (!_wasPausedBeforeReview && deps.isPaused()) deps.resume();
     _wasPausedBeforeReview = false;
 
+    // Re-project bonded groups from live physics (display source now resolves live)
+    deps.syncBondedGroupsForDisplayFrame();
     deps.forceRender();
     deps.syncStoreState();
   }

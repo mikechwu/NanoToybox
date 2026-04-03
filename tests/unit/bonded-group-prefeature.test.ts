@@ -61,24 +61,20 @@ describe('bonded-group display source', () => {
 // ── Capability Policy Tests ──
 
 describe('bonded-group capabilities', () => {
-  it('8: live capabilities allow inspect/target/edit', () => {
+  it('8: live allows inspect/target/mutate, defers color edit until UI', () => {
     const caps = selectBondedGroupCapabilities({ timelineMode: 'live' } as any);
     expect(caps.canInspectBondedGroups).toBe(true);
     expect(caps.canTargetBondedGroups).toBe(true);
-    expect(caps.canEditBondedGroupColor).toBe(true);
+    expect(caps.canEditBondedGroupColor).toBe(false); // until panel color UI
     expect(caps.canMutateSimulation).toBe(true);
   });
 
-  it('9: review capabilities block inspect/target/mutation (until review topology exists)', () => {
+  it('9: review allows inspect/target, defers color edit, blocks mutation', () => {
     const caps = selectBondedGroupCapabilities({ timelineMode: 'review' } as any);
-    expect(caps.canInspectBondedGroups).toBe(false);
-    expect(caps.canTargetBondedGroups).toBe(false);
+    expect(caps.canInspectBondedGroups).toBe(true);
+    expect(caps.canTargetBondedGroups).toBe(true);
+    expect(caps.canEditBondedGroupColor).toBe(false); // until panel color UI
     expect(caps.canMutateSimulation).toBe(false);
-  });
-
-  it('10: review color-edit disabled (requires inspection, which is not yet available in review)', () => {
-    const caps = selectBondedGroupCapabilities({ timelineMode: 'review' } as any);
-    expect(caps.canEditBondedGroupColor).toBe(false);
   });
 });
 
@@ -137,6 +133,20 @@ describe('bonded-group appearance runtime', () => {
     expect(mockRenderer.setAtomColorOverrides).toHaveBeenCalled();
     const lastCall = mockRenderer.setAtomColorOverrides.mock.calls.at(-1)![0];
     expect(lastCall[0]).toEqual({ hex: '#ff0000' });
+  });
+});
+
+// ── Display Source Strict Review ──
+
+describe('bonded-group display source: strict review mode', () => {
+  it('review mode with null topology returns null (no live fallback)', () => {
+    const deps: BondedGroupDisplaySourceDeps = {
+      getPhysics: () => ({ n: 60, components: [{ atoms: [0, 1, 2], size: 3 }] }),
+      getTimelineReviewComponents: () => null,
+      getTimelineMode: () => 'review',
+    };
+    // Must return null, NOT fall back to live physics
+    expect(resolveBondedGroupDisplaySource(deps)).toBeNull();
   });
 });
 

@@ -77,6 +77,7 @@ function createTestSubsystem() {
     forceRender: vi.fn(),
     clearBondedGroupHighlight: vi.fn(),
     clearRendererFeedback: vi.fn(),
+    syncBondedGroupsForDisplayFrame: vi.fn(),
   });
 }
 

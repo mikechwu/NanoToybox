@@ -693,9 +693,10 @@ export class Renderer {
     this._ensureBondCapacity(reviewBonds.length);
     this._updateBondTransformsInstanced(reviewBonds, positions, null);
 
-    // Suppress highlights — review is not interactive
+    // Suppress single-atom and interaction highlights (Move/Rotate are review-locked).
+    // Keep panel highlight visible for bonded-group inspection in review.
     if (this._highlightMesh) this._highlightMesh.visible = false;
-    if (this._panelHighlightMesh) this._panelHighlightMesh.visible = false;
+    // Panel highlight (bonded-group selection/hover) preserved in review
     if (this._interactionHighlightMesh) this._interactionHighlightMesh.visible = false;
   }
 
@@ -907,8 +908,11 @@ export class Renderer {
     scale: number,
     renderOrder: number,
   ): void {
-    if (!this._physicsRef || !this._atomGeom) return;
-    const pos = this._physicsRef.pos;
+    // Use display-aware positions: review positions when in review, live physics otherwise.
+    // This ensures highlight overlays track the currently displayed frame, not stale live state.
+    const src = this._getDisplayedPositions();
+    if (!src || !this._atomGeom) return;
+    const pos = src.pos;
     const count = indices.length;
 
     // Resolve layer-specific state

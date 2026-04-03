@@ -273,8 +273,13 @@ describe('renderer alignment with persistent tracking', () => {
       _physicsRef: { pos, n: 3 },
       _atomGeom: atomGeom,
       _dummyObj: dummyObj,
+      _displaySource: 'live',
+      _reviewPositions: null,
+      _reviewAtomCount: 0,
       scene,
     };
+    const getDisplayedPositions = (Renderer.prototype as any)._getDisplayedPositions;
+    ctx._getDisplayedPositions = getDisplayedPositions.bind(ctx);
     ctx._applyHighlightLayer = applyLayer.bind(ctx);
 
     update.call(ctx);

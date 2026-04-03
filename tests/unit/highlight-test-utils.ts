@@ -36,6 +36,11 @@ export async function makeStateFake(overrides: Record<string, any> = {}) {
   };
   fake._applyHighlightLayer = (proto as any)._applyHighlightLayer.bind(fake);
   fake._updateGroupHighlight = (proto as any)._updateGroupHighlight.bind(fake);
+  fake._getDisplayedPositions = (proto as any)._getDisplayedPositions.bind(fake);
+  // Default display source state for fakes
+  fake._displaySource = 'live';
+  fake._reviewPositions = null;
+  fake._reviewAtomCount = 0;
   return { fake, proto };
 }
 
@@ -67,7 +72,12 @@ export async function makeRealMeshCtx(atomCount = 5) {
   };
   ctx._applyHighlightLayer = (proto as any)._applyHighlightLayer.bind(ctx);
   ctx._updateGroupHighlight = (proto as any)._updateGroupHighlight.bind(ctx);
+  ctx._getDisplayedPositions = (proto as any)._getDisplayedPositions.bind(ctx);
   ctx._disposeHighlightLayers = (proto as any)._disposeHighlightLayers.bind(ctx);
+  // Display source state for review-aware highlight rendering
+  ctx._displaySource = 'live';
+  ctx._reviewPositions = null;
+  ctx._reviewAtomCount = 0;
   ctx.setHighlightedAtoms = proto.setHighlightedAtoms.bind(ctx);
   ctx.setInteractionHighlightedAtoms = proto.setInteractionHighlightedAtoms.bind(ctx);
   ctx.clearInteractionHighlight = proto.clearInteractionHighlight.bind(ctx);
