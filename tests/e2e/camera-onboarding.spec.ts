@@ -43,66 +43,37 @@ async function skipOnboarding(page: import('@playwright/test').Page, baseURL: st
 
 test.describe('Phase 1 — Object View Controls', () => {
 
-  test('no Orbit label, no ? button in camera controls', async ({ page, baseURL }) => {
+  test('camera controls hidden when Free-Look disabled', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
     await skipOnboarding(page, baseURL!)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
     await page.waitForTimeout(1000)
 
-    // Camera controls region should exist
+    // CameraControls only renders when CONFIG.camera.freeLookEnabled is true.
+    // Center/Follow moved to BondedGroupsPanel (Phase 10 cleanup).
     const camCtrl = page.locator('[data-camera-controls]')
-    await expect(camCtrl).toBeAttached({ timeout: 5000 })
-
-    // No "Orbit" text inside camera controls
-    const camText = await camCtrl.textContent()
-    expect(camText).not.toContain('Orbit')
-
-    // No "?" text inside camera controls
-    expect(camText).not.toContain('?')
+    await expect(camCtrl).not.toBeAttached({ timeout: 3000 })
 
     expect(errors).toEqual([])
   })
 
-  test('Center and Follow buttons exist in orbit mode', async ({ page, baseURL }) => {
+  test('bonded-group panel provides Center and Follow per cluster', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
     await skipOnboarding(page, baseURL!)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
     await page.waitForTimeout(1000)
 
-    // Center button exists with correct aria-label
-    const centerBtn = page.getByRole('button', { name: 'Center Object' })
-    await expect(centerBtn).toBeAttached({ timeout: 5000 })
+    // Bonded-group panel should appear once groups are projected
+    const panel = page.locator('.bonded-groups-panel')
+    await expect(panel).toBeAttached({ timeout: 10000 })
 
-    // Follow button exists
-    const followBtn = page.getByRole('button', { name: 'Follow' })
-    await expect(followBtn).toBeAttached({ timeout: 5000 })
+    // Expand the panel
+    await panel.locator('.bonded-groups-header').click()
+    await expect(panel.locator('.bonded-groups-list')).toBeAttached({ timeout: 3000 })
 
-    expect(errors).toEqual([])
-  })
-
-  test('Follow button toggles orbitFollowEnabled', async ({ page, baseURL }) => {
-    const errors = collectErrors(page)
-    await skipOnboarding(page, baseURL!)
-    await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
-    await page.waitForTimeout(1000)
-
-    // Initial state: follow off
-    let ui = await page.evaluate(() => (window as any)._getUIState?.())
-    expect(ui?.orbitFollowEnabled).toBe(false)
-
-    // Click Follow — enables
-    await page.getByRole('button', { name: 'Follow' }).click()
-    ui = await page.evaluate(() => (window as any)._getUIState?.())
-    expect(ui?.orbitFollowEnabled).toBe(true)
-
-    // Follow button now shows active state
-    const activeBtn = page.getByRole('button', { name: /Following target/ })
-    await expect(activeBtn).toBeAttached({ timeout: 2000 })
-
-    // Click again — disables
-    await activeBtn.click()
-    ui = await page.evaluate(() => (window as any)._getUIState?.())
-    expect(ui?.orbitFollowEnabled).toBe(false)
+    // Center and Follow action buttons exist per-row
+    const centerBtns = panel.locator('.bonded-groups-action-btn')
+    await expect(centerBtns.first()).toBeAttached({ timeout: 3000 })
 
     expect(errors).toEqual([])
   })
@@ -216,66 +187,43 @@ test.describe('Phase 4 — Help in Settings', () => {
 
 test.describe('Phase 6 — Layout Contract', () => {
 
-  test('camera controls positioned below top status area, not overlapping dock', async ({ page, baseURL }) => {
+  test('bonded-group panel positioned in upper region, not overlapping dock', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
     await skipOnboarding(page, baseURL!)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
     await page.waitForTimeout(1000)
 
-    const camCtrl = page.locator('[data-camera-controls]')
-    await expect(camCtrl).toBeAttached({ timeout: 5000 })
+    // Bonded-group panel is the primary secondary overlay (replaced camera controls)
+    const panel = page.locator('.bonded-groups-panel')
+    await expect(panel).toBeAttached({ timeout: 10000 })
 
-    const camBox = await camCtrl.boundingBox()
-    expect(camBox).toBeTruthy()
+    const panelBox = await panel.boundingBox()
+    expect(panelBox).toBeTruthy()
 
-    // If status bar is visible, camera controls should be below and left-aligned
-    const statusBar = page.locator('[data-status-root]')
-    if (await statusBar.count() > 0) {
-      const statusBox = await statusBar.boundingBox()
-      if (statusBox) {
-        expect(camBox!.y).toBeGreaterThanOrEqual(statusBox.y + statusBox.height)
-        // Horizontal alignment: cam controls left edge within 20px of status left edge
-        expect(Math.abs(camBox!.x - statusBox.x)).toBeLessThan(20)
-      }
-    }
-
-    // Camera controls must be in the upper region (top 30%)
+    // Panel must be in the upper region (top 40%)
     const viewportH = await page.evaluate(() => window.innerHeight)
-    expect(camBox!.y).toBeLessThan(viewportH * 0.3)
+    expect(panelBox!.y).toBeLessThan(viewportH * 0.4)
 
-    // Camera controls must NOT overlap the dock (bottom region)
+    // Panel must NOT overlap the dock (bottom region)
     const dockBar = page.locator('[data-dock-root]')
     const dockBox = await dockBar.boundingBox()
     if (dockBox) {
-      const camBottom = camBox!.y + camBox!.height
-      expect(camBottom).toBeLessThan(dockBox.y)
+      const panelBottom = panelBox!.y + panelBox!.height
+      expect(panelBottom).toBeLessThan(dockBox.y)
     }
 
     expect(errors).toEqual([])
   })
 
-  test('camera controls use fallback position when status bar is absent', async ({ page, baseURL }) => {
+  test('camera controls hidden when Free-Look feature gate is off', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
     await skipOnboarding(page, baseURL!)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
     await page.waitForTimeout(1000)
 
-    const statusBar = page.locator('[data-status-root]')
-    const statusCount = await statusBar.count()
-
+    // With freeLookEnabled: false (default), camera controls should not render
     const camCtrl = page.locator('[data-camera-controls]')
-    const camBox = await camCtrl.boundingBox()
-    expect(camBox).toBeTruthy()
-
-    if (statusCount === 0) {
-      // Fallback: camera controls at ~48px from top (within tolerance)
-      expect(camBox!.y).toBeGreaterThanOrEqual(30)
-      expect(camBox!.y).toBeLessThan(80)
-    }
-
-    // Either way, must be in upper region and not overlap dock
-    const viewportH = await page.evaluate(() => window.innerHeight)
-    expect(camBox!.y).toBeLessThan(viewportH * 0.3)
+    await expect(camCtrl).not.toBeAttached({ timeout: 3000 })
 
     expect(errors).toEqual([])
   })
