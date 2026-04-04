@@ -61,19 +61,21 @@ describe('bonded-group display source', () => {
 // ── Capability Policy Tests ──
 
 describe('bonded-group capabilities', () => {
-  it('8: live allows all capabilities', () => {
+  it('8: live allows inspect/target/edit, blocks tracked highlight', () => {
     const caps = selectBondedGroupCapabilities({ timelineMode: 'live' } as any);
     expect(caps.canInspectBondedGroups).toBe(true);
     expect(caps.canTargetBondedGroups).toBe(true);
     expect(caps.canEditBondedGroupColor).toBe(true);
+    expect(caps.canTrackBondedGroupHighlight).toBe(false);
     expect(caps.canMutateSimulation).toBe(true);
   });
 
-  it('9: review allows inspect/target/edit, blocks mutation', () => {
+  it('9: review allows inspect/target/edit, blocks mutation + tracked highlight', () => {
     const caps = selectBondedGroupCapabilities({ timelineMode: 'review' } as any);
     expect(caps.canInspectBondedGroups).toBe(true);
     expect(caps.canTargetBondedGroups).toBe(true);
     expect(caps.canEditBondedGroupColor).toBe(true);
+    expect(caps.canTrackBondedGroupHighlight).toBe(false);
     expect(caps.canMutateSimulation).toBe(false);
   });
 });

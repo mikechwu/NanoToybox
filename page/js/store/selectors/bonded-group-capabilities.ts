@@ -3,7 +3,8 @@
  * are available based on the current app mode (live vs review).
  *
  * All bonded-group features (inspection, targeting, color editing) are shipped.
- * Only canMutateSimulation is mode-gated (disabled in review).
+ * Persistent tracked highlight is feature-gated off (canTrackBondedGroupHighlight: false).
+ * canMutateSimulation is mode-gated (disabled in review).
  * Color editing uses the annotation model (Option B): global overrides,
  * not part of timeline history.
  */
@@ -18,6 +19,11 @@ export interface BondedGroupCapabilities {
   canTargetBondedGroups: boolean;
   /** Can the user edit bonded-group colors? Requires inspection capability. */
   canEditBondedGroupColor: boolean;
+  /** Can the user create persistent tracked highlights by clicking a row?
+   *  When false, hover preview still works but click-to-select is disabled.
+   *  Currently hidden (feature-gated off) — store fields and runtime methods
+   *  remain for future re-enablement or full removal. */
+  canTrackBondedGroupHighlight: boolean;
   /** Can the user mutate the live simulation (add/remove/drag atoms)? */
   canMutateSimulation: boolean;
 }
@@ -31,6 +37,7 @@ export function selectBondedGroupCapabilities(s: AppStore): BondedGroupCapabilit
     canInspectBondedGroups: true,
     canTargetBondedGroups: true,
     canEditBondedGroupColor: true,
+    canTrackBondedGroupHighlight: false,
     canMutateSimulation: !isReview,
   };
 }
@@ -51,7 +58,17 @@ export function selectCanEditBondedGroupColor(s: AppStore): boolean {
   return selectBondedGroupCapabilities(s).canEditBondedGroupColor;
 }
 
+/** Primitive selector: true when persistent tracked highlight is enabled. */
+export function selectCanTrackBondedGroupHighlight(s: AppStore): boolean {
+  return selectBondedGroupCapabilities(s).canTrackBondedGroupHighlight;
+}
+
 /** Imperative check: reads current store for runtime guards. */
 export function canInspectBondedGroupsNow(): boolean {
   return selectCanInspectBondedGroups(useAppStore.getState());
+}
+
+/** Imperative check: true when persistent tracked highlight is enabled. */
+export function canTrackBondedGroupHighlightNow(): boolean {
+  return selectCanTrackBondedGroupHighlight(useAppStore.getState());
 }

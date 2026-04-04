@@ -1,13 +1,16 @@
 /**
  * Bonded group highlight runtime — persistent atom tracking + hover preview.
  *
- * Two distinct highlight sources:
- * 1. Persistent: _trackedAtoms (frozen at click time, owned by this runtime)
- * 2. Temporary: hoveredBondedGroupId (always live group membership)
+ * Two distinct highlight sources (persistent is currently feature-gated off):
+ * 1. Persistent: _trackedAtoms (frozen at click time, gated by canTrackBondedGroupHighlight)
+ * 2. Temporary: hoveredBondedGroupId (always live group membership, always active)
  *
  * Priority: tracked atoms > hover preview > none.
  * Hover entry disabled when tracked set exists; hover clearing always allowed.
  * Invalid atom indices (>= physics.n) are filtered before rendering.
+ *
+ * The persistent tracking path is retained for future re-enablement — all store
+ * fields, methods, and priority resolution remain intact.
  *
  * Store owns lightweight UI flags only (hasTrackedBondedHighlight: boolean).
  * Heavy atom arrays stay in this runtime, never in the store.
@@ -27,7 +30,7 @@
  */
 
 import { useAppStore } from '../store/app-store';
-import { canInspectBondedGroupsNow } from '../store/selectors/bonded-group-capabilities';
+import { canInspectBondedGroupsNow, canTrackBondedGroupHighlightNow } from '../store/selectors/bonded-group-capabilities';
 import type { BondedGroupRuntime } from './bonded-group-runtime';
 
 export interface HighlightRenderer {
@@ -65,9 +68,24 @@ export function createBondedGroupHighlightRuntime(deps: {
     useAppStore.setState({ hasTrackedBondedHighlight: atoms != null && atoms.length > 0 });
   }
 
+  /** Self-heal: if tracked highlight is feature-gated off but stale tracked
+   *  state exists (e.g., from hot reload, prior session, or non-UI setup),
+   *  clear it so hover preview isn't permanently suppressed. */
+  function clearTrackedIfFeatureDisabled(): void {
+    if (canTrackBondedGroupHighlightNow()) return;
+    const store = useAppStore.getState();
+    if (!_trackedAtoms && !store.hasTrackedBondedHighlight && !store.selectedBondedGroupId) return;
+    _trackedAtoms = null;
+    useAppStore.setState({
+      selectedBondedGroupId: null,
+      hasTrackedBondedHighlight: false,
+    });
+  }
+
   function syncToRenderer() {
     const renderer = deps.getRenderer();
     if (!renderer) return;
+    clearTrackedIfFeatureDisabled();
     const store = useAppStore.getState();
 
     // Priority 1: persistent tracked atoms (frozen at selection time)
@@ -96,8 +114,13 @@ export function createBondedGroupHighlightRuntime(deps: {
     renderer.setHighlightedAtoms(null);
   }
 
+  /** Toggle persistent tracked highlight for a bonded group.
+   *  Two guards: canInspectBondedGroupsNow (inspection must be available)
+   *  and canTrackBondedGroupHighlightNow (persistent tracking feature gate).
+   *  Currently a no-op because the tracking gate is off. */
   function toggleSelectedGroup(id: string) {
     if (!canInspectBondedGroupsNow()) return;
+    if (!canTrackBondedGroupHighlightNow()) return;
     const store = useAppStore.getState();
     if (store.selectedBondedGroupId === id) {
       // Deselect: clear everything
@@ -137,6 +160,7 @@ export function createBondedGroupHighlightRuntime(deps: {
   }
 
   function syncAfterTopologyChange() {
+    clearTrackedIfFeatureDisabled();
     const store = useAppStore.getState();
     const groups = store.bondedGroups;
     const groupIds = new Set(groups.map(g => g.id));

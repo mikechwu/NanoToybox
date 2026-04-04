@@ -197,8 +197,8 @@ The bonded-group subsystem is display-source-aware with a centralized capability
 |-------|--------|------|
 | Display source | `runtime/bonded-group-display-source.ts` | Resolves live physics or review historical topology |
 | Projection | `runtime/bonded-group-runtime.ts` | Consumes `getDisplaySource()`, stable IDs, store projection |
-| Capability policy | `selectors/bonded-group-capabilities.ts` | `selectCanInspectBondedGroups` gates panel + highlight |
-| Highlight | `runtime/bonded-group-highlight-runtime.ts` | Select/hover gated by `canInspectBondedGroupsNow()` |
+| Capability policy | `selectors/bonded-group-capabilities.ts` | `selectCanInspectBondedGroups` gates panel + hover; `selectCanTrackBondedGroupHighlight` gates persistent tracked highlight |
+| Highlight | `runtime/bonded-group-highlight-runtime.ts` | `toggleSelectedGroup` gated by `canTrackBondedGroupHighlightNow()`; hover (`setHoveredGroup`) gated only by `canInspectBondedGroupsNow()` |
 | Appearance | `runtime/bonded-group-appearance-runtime.ts` | Group-to-atom color mapping, group color intents (`Map<string, string>`), renderer sync |
 | Store | `app-store.ts` | `bondedGroupColorOverrides` (annotation-global), `colorEditorOpenForGroupId` |
 
@@ -207,6 +207,31 @@ Key rules:
 - Review inspection disabled until historical topology + review highlight rendering exist
 - Color overrides are annotations (Option B) — persist across live/review, not part of timeline
 - Highlight overlays and color overrides are independent renderer layers
+
+#### Highlight Hide Architecture (Tracked Highlight Feature-Gated Off)
+
+Persistent tracked highlights are feature-gated off via `canTrackBondedGroupHighlight: false` in `bonded-group-capabilities.ts`. The infrastructure is retained for future re-enablement or full removal.
+
+**bonded-group-highlight-runtime.ts**:
+- `toggleSelectedGroup(id)` is double-gated: `canInspectBondedGroupsNow()` AND `canTrackBondedGroupHighlightNow()`. While the tracking capability is false, toggle is a no-op.
+- Self-healing via `clearTrackedIfFeatureDisabled()` at the top of both `syncToRenderer()` and `syncAfterTopologyChange()`. If stale tracked state survives (hot reload, prior session), it is cleared so hover preview is not permanently suppressed.
+- Hover path (`setHoveredGroup`) is NOT gated by the tracking capability — it checks only `canInspectBondedGroupsNow()`. Hover works normally regardless of the tracked highlight gate.
+- Priority resolution (tracked > hover > none) remains intact; with tracking disabled, hover is always the effective path.
+
+**bonded-group-capabilities.ts**:
+- New capability field: `canTrackBondedGroupHighlight: false` (hardcoded off).
+- Primitive selector `selectCanTrackBondedGroupHighlight` + imperative helper `canTrackBondedGroupHighlightNow()` mirror the existing inspect pattern.
+- Distinguished from `canInspectBondedGroups`: hover uses the inspect capability; tracked highlight uses the track capability. Both are independent policy decisions.
+
+**BondedGroupCallbacks** (in `app-store.ts`):
+- Active shipped callbacks at top: `onHover`, `onCenterGroup`, `onFollowGroup`, `onApplyGroupColor`, `onClearGroupColor`, `getGroupAtoms`.
+- Legacy-hidden callbacks grouped at bottom under comment: `onToggleSelect?` and `onClearHighlight?` (both optional). Retained for future re-enablement.
+
+**Future removal targets** (when tracked highlight is permanently dropped):
+- Store fields: `selectedBondedGroupId`, `hasTrackedBondedHighlight`
+- Runtime: `_trackedAtoms`, tracked branch in `syncToRenderer()` (Priority 1 block)
+- Panel: selection handlers, `.selected` class, Clear Highlight button
+- Callbacks: `onToggleSelect`, `onClearHighlight` in `BondedGroupCallbacks`
 
 #### Color Editing Module Ownership & Wiring
 

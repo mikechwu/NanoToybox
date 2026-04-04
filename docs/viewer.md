@@ -34,7 +34,7 @@ npm run dev
 | Text size | Normal (default) / Large — Appearance section in settings. CSS-only token override via `[data-text-size]` attribute |
 | Settings sheet | Adjustable drag strength, rotation strength, damping, speed, boundary mode, theme, and text size — organized in grouped sections (Scene, Simulation, Interaction, Appearance, Boundary, Help) |
 | Containment boundary | Contain mode (soft harmonic wall bounces atoms back) or Remove mode (atoms deleted past boundary). Live atom count in Settings sheet (Scene section). Wall radius auto-scales with atom count (CONFIG.wall.density). Toggle in Settings sheet (Boundary section). |
-| Bonded clusters | Side panel showing live connected components. Click to select (persistent panel-layer highlight, warm amber), hover to preview (pale yellow, desktop). Two-level expand: large clusters + collapsible small clusters. Clear Highlight button when tracked set exists. Per-cluster color chip for authored color overrides (see Color Editing UX below). |
+| Bonded clusters | Side panel showing live connected components. Hover to preview (pale yellow highlight, desktop only — mouse enter shows, mouse leave clears). Row click selection is feature-gated off; rows are display-only (no `role="button"`, no `tabIndex`). Clear Highlight button is hidden. Two-level expand: large clusters + collapsible small clusters. Per-cluster color chip for authored color overrides (see Color Editing UX below). Center and Follow buttons remain fully interactive. |
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
 | Pause | Primary control — freezes physics, camera/UI remain active |
 | Timeline | TimelineBar with scrub track, review mode (display-only playback of history), and restart from dense frames. Recording arms on first atom interaction (drag/move/rotate/flick) |
@@ -48,7 +48,7 @@ The dock has a three-way segmented mode selector: **Atom** | **Move** | **Rotate
 | Mode | Physics behavior |
 |------|-----------------|
 | Atom (default) | Spring force on single atom (camera plane). Single-atom interaction highlight (cool blue). |
-| Move | Uniform force on connected component, normalized by component size. **Full bonded group highlighted** on interaction layer (cool blue). Force line originates from picked atom. Detached fragments are unaffected. Overlap atoms with an active panel selection get both halos (warm outer + cool inner). |
+| Move | Uniform force on connected component, normalized by component size. **Full bonded group highlighted** on interaction layer (cool blue). Force line originates from picked atom. Detached fragments are unaffected. |
 | Rotate | Torque via diagonal inertia tensor, distributed as tangential forces. **Full bonded group highlighted** on interaction layer (cool blue). |
 
 ### Highlight Composition
@@ -57,10 +57,10 @@ The renderer uses two independent highlight layers, each backed by its own Insta
 
 | Layer | Role | Color | renderOrder |
 |-------|------|-------|-------------|
-| **Panel layer** | Persistent bonded-group highlight (click-select in side panel) | Warm amber | 2 |
+| **Panel layer** | Bonded-group highlight. Persistent click-select is feature-gated off; layer is used only for transient hover preview | Warm amber / pale yellow | 2 |
 | **Interaction layer** | Transient Move/Rotate highlight (active during drag) | Cool blue | 3 |
 
-Overlap atoms (selected in the panel AND being interacted with) receive both halos: warm outer (panel) + cool inner (interaction). The panel layer persists during interaction — there is no save/restore pattern.
+With click-select gated off, the panel layer only carries transient hover previews. Overlap (panel + interaction) is possible only during a concurrent hover and drag, which is rare in practice.
 
 **CONFIG tokens**
 
@@ -101,7 +101,7 @@ Clicking the color chip opens a portalled popover (escapes panel overflow). The 
 
 **Group color intents:** Applied colors persist across topology changes. When atoms join a colored group, they inherit the group's color. When colored groups merge, each group's atoms keep their original color (the chip transitions to the multi-color conic gradient).
 
-**Interaction independence:** Clicking the color chip does NOT toggle row selection or highlight. Hover preview clears when the popover opens.
+**Interaction independence:** Clicking the color chip does NOT trigger any row-level behavior. Hover preview clears when the popover opens.
 
 **Accessibility:** The popover has `role="menu"`, each swatch has `role="menuitem"`, and the backdrop has `role="presentation"`. The multi-color chip announces "Multiple colors in cluster N".
 

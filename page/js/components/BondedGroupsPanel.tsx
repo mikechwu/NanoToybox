@@ -4,19 +4,19 @@
  * Grid layout: color | label | atoms | center | follow columns.
  *
  * Interactions:
- * - Color chip: opens inline swatch menu for that row (independent of selection)
- * - Row body click: toggle persistent selection highlight
+ * - Color chip: opens preset swatch popover for that row (independent of selection)
  * - Row hover: temporary preview highlight
  * - Center: one-shot camera frame
  * - Follow: toggle orbit-follow (frozen atom set)
- * - Clear Highlight: visible when tracked highlight exists
  *
- * Color editing and highlight selection are separate concerns.
+ * Persistent row selection and Clear Highlight are feature-gated off
+ * (canTrackBondedGroupHighlight: false). Store fields and runtime methods
+ * are retained for future re-enablement — see bonded-group-capabilities.ts.
  */
 
 import React, { useMemo, useCallback, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { selectCanInspectBondedGroups, selectCanTargetBondedGroups, selectCanEditBondedGroupColor } from '../store/selectors/bonded-group-capabilities';
+import { selectCanInspectBondedGroups, selectCanTargetBondedGroups, selectCanEditBondedGroupColor, selectCanTrackBondedGroupHighlight } from '../store/selectors/bonded-group-capabilities';
 import { useAppStore } from '../store/app-store';
 import { partitionBondedGroups } from '../store/selectors/bonded-groups';
 import { IconCenter, IconFollow } from './Icons';
@@ -82,9 +82,9 @@ function chipBackground(state: GroupColorState): React.CSSProperties | undefined
   return undefined; // CSS fallback: var(--atom-base-color)
 }
 
-function ClusterRow({ id, displayIndex, atomCount, isSmall, canTarget, canEditColor, colorEditorOpen, onToggleColorEditor, panelSide }: {
+function ClusterRow({ id, displayIndex, atomCount, isSmall, canTarget, canEditColor, canTrackHighlight, colorEditorOpen, onToggleColorEditor, panelSide }: {
   id: string; displayIndex: number; atomCount: number; isSmall?: boolean;
-  canTarget: boolean; canEditColor: boolean;
+  canTarget: boolean; canEditColor: boolean; canTrackHighlight: boolean;
   colorEditorOpen: boolean; onToggleColorEditor: (id: string) => void;
   panelSide: 'left' | 'right';
 }) {
@@ -105,15 +105,17 @@ function ClusterRow({ id, displayIndex, atomCount, isSmall, canTarget, canEditCo
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    callbacks?.onToggleSelect(id);
-  }, [id, callbacks]);
+    if (!canTrackHighlight) return;
+    callbacks?.onToggleSelect?.(id);
+  }, [canTrackHighlight, id, callbacks]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (!canTrackHighlight) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      callbacks?.onToggleSelect(id);
+      callbacks?.onToggleSelect?.(id);
     }
-  }, [id, callbacks]);
+  }, [canTrackHighlight, id, callbacks]);
 
   const handleMouseEnter = useCallback(() => { callbacks?.onHover(id); }, [id, callbacks]);
   const handleMouseLeave = useCallback(() => { callbacks?.onHover(null); }, [callbacks]);
@@ -165,13 +167,13 @@ function ClusterRow({ id, displayIndex, atomCount, isSmall, canTarget, canEditCo
 
   return (
     <div
-      className={`bonded-groups-row${isSmall ? ' bonded-groups-small-row' : ''}${isSelected ? ' bonded-groups-selected' : ''}${isHovered ? ' bonded-groups-hovered' : ''}${colorEditorOpen ? ' bonded-groups-color-open' : ''}`}
-      onClick={handleClick}
-      onKeyDown={handleKeyDown}
+      className={`bonded-groups-row${isSmall ? ' bonded-groups-small-row' : ''}${canTrackHighlight && isSelected ? ' bonded-groups-selected' : ''}${isHovered ? ' bonded-groups-hovered' : ''}${colorEditorOpen ? ' bonded-groups-color-open' : ''}`}
+      onClick={canTrackHighlight ? handleClick : undefined}
+      onKeyDown={canTrackHighlight ? handleKeyDown : undefined}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      role="button"
-      tabIndex={0}
+      role={canTrackHighlight ? 'button' : undefined}
+      tabIndex={canTrackHighlight ? 0 : undefined}
     >
       {/* Color chip — clicking opens a portalled popover, independent of selection */}
       {canEditColor ? (
@@ -245,6 +247,7 @@ export function BondedGroupsPanel() {
   const canInspect = useAppStore(selectCanInspectBondedGroups);
   const canTarget = useAppStore(selectCanTargetBondedGroups);
   const canEditColor = useAppStore(selectCanEditBondedGroupColor);
+  const canTrackHighlight = useAppStore(selectCanTrackBondedGroupHighlight);
   const { large, small } = useMemo(() => partitionBondedGroups(groups), [groups]);
 
   // Separate color-edit state (not tied to highlight selection)
@@ -293,7 +296,7 @@ export function BondedGroupsPanel() {
           )}
           {large.map((g) => (
             <ClusterRow key={g.id} id={g.id} displayIndex={g.displayIndex} atomCount={g.atomCount}
-              canTarget={canTarget} canEditColor={canEditColor}
+              canTarget={canTarget} canEditColor={canEditColor} canTrackHighlight={canTrackHighlight}
               colorEditorOpen={colorEditorOpenForId === g.id} onToggleColorEditor={handleToggleColorEditor} panelSide={side} />
           ))}
           {small.length > 0 && (
@@ -305,15 +308,15 @@ export function BondedGroupsPanel() {
               </button>
               {smallExpanded && small.map((g) => (
                 <ClusterRow key={g.id} id={g.id} displayIndex={g.displayIndex} atomCount={g.atomCount} isSmall
-                  canTarget={canTarget} canEditColor={canEditColor}
+                  canTarget={canTarget} canEditColor={canEditColor} canTrackHighlight={canTrackHighlight}
                   colorEditorOpen={colorEditorOpenForId === g.id} onToggleColorEditor={handleToggleColorEditor} panelSide={side} />
               ))}
             </>
           )}
         </div>
       )}
-      {hasTrackedHighlight && (
-        <button className="bonded-groups-clear" onClick={() => callbacks?.onClearHighlight()} type="button">
+      {canTrackHighlight && hasTrackedHighlight && (
+        <button className="bonded-groups-clear" onClick={() => callbacks?.onClearHighlight?.()} type="button">
           Clear Highlight
         </button>
       )}

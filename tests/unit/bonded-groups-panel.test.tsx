@@ -47,13 +47,17 @@ describe('BondedGroupsPanel', () => {
     getDisplaySourceKind: () => 'live' as const,
   };
 
-  /** Track color overrides applied via callbacks. */
+  /** Track callbacks fired via panel interactions. */
   let appliedColors: Record<string, string>;
   let clearedGroups: string[];
+  let centeredGroups: string[];
+  let followedGroups: string[];
 
   beforeEach(() => {
     appliedColors = {};
     clearedGroups = [];
+    centeredGroups = [];
+    followedGroups = [];
     useAppStore.getState().resetTransientState();
     // Wire real highlight runtime via store-registered callbacks (same as main.ts)
     const hl = createBondedGroupHighlightRuntime({
@@ -65,6 +69,8 @@ describe('BondedGroupsPanel', () => {
       onToggleSelect: (id) => hl.toggleSelectedGroup(id),
       onHover: (id) => hl.setHoveredGroup(id),
       onClearHighlight: () => hl.clearHighlight(),
+      onCenterGroup: (id) => { centeredGroups.push(id); },
+      onFollowGroup: (id) => { followedGroups.push(id); },
       onApplyGroupColor: (id, hex) => { appliedColors[id] = hex; },
       onClearGroupColor: (id) => { clearedGroups.push(id); },
       getGroupAtoms: (id) => atomMap[id] ?? null,
@@ -165,33 +171,41 @@ describe('BondedGroupsPanel', () => {
     useAppStore.getState().setBondedGroupsSide('left');
   });
 
-  it('row click selects cluster', () => {
+  // ── Tracked highlight hidden (canTrackBondedGroupHighlight: false) ──
+
+  it('row click does not toggle persistent selection when tracked highlight is disabled', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
 
-    // Click first cluster row
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
     fireEvent.click(rows[0]);
-    expect(useAppStore.getState().selectedBondedGroupId).toBe('a');
-
-    // Click again to deselect
-    fireEvent.click(rows[0]);
+    // Selection should NOT be set — feature gated off
     expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
   });
 
-  it('selected row has selected class', () => {
+  it('row does not have button role or tabIndex when tracked highlight is disabled', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+
+    const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
+    const row = rows[0] as HTMLElement;
+    expect(row.getAttribute('role')).toBeNull();
+    expect(row.getAttribute('tabindex')).toBeNull();
+  });
+
+  it('selected-row class not applied when tracked highlight is disabled', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    // Seed legacy state — should not render as selected
     useAppStore.getState().setSelectedBondedGroup('a');
     const c = renderPanel();
 
-    const selected = c.querySelector('.bonded-groups-selected');
-    expect(selected).toBeTruthy();
-    expect(selected!.textContent).toContain('Cluster 1');
+    expect(c.querySelector('.bonded-groups-selected')).toBeNull();
   });
 
-  it('hover adds hovered class when no selection', () => {
+  it('hover preview still works when tracked highlight is disabled', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
@@ -199,63 +213,55 @@ describe('BondedGroupsPanel', () => {
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
     fireEvent.mouseEnter(rows[0]);
     expect(useAppStore.getState().hoveredBondedGroupId).toBe('a');
-    // Re-render picks up hovered state
     const hovered = c.querySelector('.bonded-groups-hovered');
     expect(hovered).toBeTruthy();
 
-    // Hover clears when leaving the row
     fireEvent.mouseLeave(rows[0]);
     expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
   });
 
-  it('hover does not set state when tracked highlight exists', () => {
+  it('Clear Highlight button hidden when tracked highlight capability is false', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
+    // Seed legacy tracked state
+    useAppStore.setState({ hasTrackedBondedHighlight: true });
     const c = renderPanel();
 
-    // Select first — creates tracked highlight via real runtime
-    const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
-    fireEvent.click(rows[0]);
-    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(true);
-
-    // Now hover second row — should be blocked
-    fireEvent.mouseEnter(rows[1]);
-    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+    // Clear Highlight should NOT render — capability is off
+    expect(c.querySelector('.bonded-groups-clear')).toBeNull();
   });
 
-  it('Clear Highlight button visible when tracked atoms exist', () => {
+  it('color chip still works when tracked highlight is disabled', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
+    const chip = c.querySelector('.bonded-groups-color-chip')!;
 
-    // No tracked atoms — no clear button
-    expect(c.querySelector('.bonded-groups-clear')).toBeNull();
-
-    // Select a group — creates tracked atoms
-    const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
-    fireEvent.click(rows[0]);
-    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(true);
-    const clearBtn = c.querySelector('.bonded-groups-clear');
-    expect(clearBtn).toBeTruthy();
-
-    // Click clear — clears tracked atoms + selection
-    fireEvent.click(clearBtn!);
-    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(false);
+    fireEvent.click(chip);
+    // Popover opens
+    expect(document.querySelector('.bonded-groups-color-popover')).toBeTruthy();
+    // Selection NOT toggled
     expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
   });
 
-  it('Clear Highlight button visible even when selected ID is null but tracked atoms persist', () => {
+  it('Center and Follow still work when tracked highlight is disabled', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
-    // Select a group to create tracked highlight
-    const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
-    fireEvent.click(rows[0]);
-    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(true);
-    // Simulate group disappearing — ID cleared but tracked atoms persist
-    useAppStore.getState().setSelectedBondedGroup(null);
-    // Clear button should still be visible (tracked atoms exist)
-    expect(c.querySelector('.bonded-groups-clear')).toBeTruthy();
+
+    const actionBtns = c.querySelectorAll('.bonded-groups-action-btn');
+    expect(actionBtns.length).toBeGreaterThanOrEqual(2);
+
+    // Click Center (first action button)
+    fireEvent.click(actionBtns[0]);
+    expect(centeredGroups).toContain('a');
+
+    // Click Follow (second action button)
+    fireEvent.click(actionBtns[1]);
+    expect(followedGroups).toContain('a');
+
+    // Selection remains null — row inertness did not break nested controls
+    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
   });
 
   it('panel visible in review when historical groups exist', () => {
@@ -274,7 +280,7 @@ describe('BondedGroupsPanel', () => {
     expect(c.innerHTML).toBe('');
   });
 
-  it('bonded-group select works in review (canInspectBondedGroups: true)', () => {
+  it('bonded-group select gated off in review (canTrackBondedGroupHighlight: false)', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
     useAppStore.getState().setTimelineMode('review');
@@ -283,8 +289,9 @@ describe('BondedGroupsPanel', () => {
       getRenderer: () => ({ setHighlightedAtoms: () => {} }),
       getPhysics: () => ({ n: 20 }),
     });
+    // toggleSelectedGroup is gated off — no-op
     hl.toggleSelectedGroup('a');
-    expect(useAppStore.getState().selectedBondedGroupId).toBe('a');
+    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
   });
 
   it('bonded-group hover works in review (canInspectBondedGroups: true)', () => {
@@ -299,25 +306,20 @@ describe('BondedGroupsPanel', () => {
     expect(useAppStore.getState().hoveredBondedGroupId).toBe('a');
   });
 
-  it('keyboard Enter on cluster row toggles selection', () => {
+  it('keyboard Enter/Space does not toggle selection when tracked highlight is disabled', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
-    expect(rows.length).toBeGreaterThan(0);
     const row = rows[0] as HTMLElement;
-    // Verify accessibility attributes
-    expect(row.getAttribute('role')).toBe('button');
-    expect(row.getAttribute('tabindex')).toBe('0');
-    // Fire Enter → should toggle selection via onToggleSelect callback
-    fireEvent.keyDown(row, { key: 'Enter' });
-    expect(useAppStore.getState().selectedBondedGroupId).toBe('a');
-    // Fire Enter again → should deselect
+    // No button role or tabindex when tracked highlight is hidden
+    expect(row.getAttribute('role')).toBeNull();
+    expect(row.getAttribute('tabindex')).toBeNull();
+    // Enter/Space should not toggle selection
     fireEvent.keyDown(row, { key: 'Enter' });
     expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
-    // Space also toggles selection
     fireEvent.keyDown(row, { key: ' ' });
-    expect(useAppStore.getState().selectedBondedGroupId).toBe('a');
+    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
   });
 
   // ── Inline color chip + anchored popover tests ──

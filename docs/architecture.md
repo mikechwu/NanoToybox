@@ -67,7 +67,7 @@ NanoToybox/
 │   │   │   ├── focus-runtime.ts     # Focus resolution: molecule lookup, centroid, pivot update; ensureFollowTarget for follow-mode validation
 │   │   │   ├── onboarding.ts        # Coachmark scheduling + page-load onboarding overlay gate (isOnboardingEligible, subscribeOnboardingReadiness)
 │   │   │   ├── bonded-group-runtime.ts     # Display-source-aware connected-component projection + stable ID reconciliation (consumes getDisplaySource(), not getPhysics())
-│   │   │   ├── bonded-group-highlight-runtime.ts # Persistent atom tracking + hover preview resolution
+│   │   │   ├── bonded-group-highlight-runtime.ts # Persistent atom tracking + hover preview resolution; self-healing clearTrackedIfFeatureDisabled()
 │   │   │   ├── bonded-group-coordinator.ts # Coordinated projection + highlight lifecycle
 │   │   │   ├── bonded-group-display-source.ts   # Display-source resolver: live physics or review historical topology
 │   │   │   ├── bonded-group-appearance-runtime.ts # Group-to-atom color translation + renderer sync (annotation model)
@@ -104,7 +104,7 @@ NanoToybox/
 │   │   │   ├── CameraControls.tsx # Object View panel: Center + Follow buttons (default); mode toggle when Free-Look gate is on
 │   │   │   ├── OnboardingOverlay.tsx # Page-load welcome card with sink-to-Settings animation
 │   │   │   ├── Icons.tsx         # Shared inline SVG icon utility (supporting component)
-│   │   │   ├── BondedGroupsPanel.tsx # Bonded cluster inspection panel (selection + hover highlight)
+│   │   │   ├── BondedGroupsPanel.tsx # Bonded cluster inspection panel (hover highlight; tracked selection gated by canTrackBondedGroupHighlight)
 │   │   │   ├── ActionHint.tsx     # Shared hover/focus tooltip (supporting component)
 │   │   │   ├── ReviewLockedControl.tsx    # Review-lock wrapper (span-based, for dock/chooser controls)
 │   │   │   ├── ReviewLockedListItem.tsx   # Review-lock list item (li-native, for settings rows)
@@ -117,7 +117,7 @@ NanoToybox/
 │   │   │       ├── camera.ts    # selectCameraMode selector + CameraMode type
 │   │   │       ├── bonded-groups.ts # partitionBondedGroups (large/small bucket selector)
 │   │   │       ├── review-ui-lock.ts # Review UI lock selector (selectIsReviewLocked, REVIEW_LOCK_TOOLTIP/STATUS)
-│   │   │       └── bonded-group-capabilities.ts # Bonded-group capability policy (inspect/target/edit/mutate per mode)
+│   │   │       └── bonded-group-capabilities.ts # Bonded-group capability policy (inspect/target/edit/mutate/canTrackBondedGroupHighlight per mode)
 │   │   ├── hooks/
 │   │   │   ├── useSheetAnimation.ts # Sheet open/close CSS transitions
 │   │   │   └── useReviewLockedInteraction.ts # Shared hook for review-locked control behavior (tooltip, activation, keyboard)
@@ -324,7 +324,9 @@ Hint copy lives in `page/js/store/selectors/review-ui-lock.ts`. Hint timing (`st
 
 Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolves topology from live physics or review historical data. The runtime projects from whichever source is active. Review topology is deferred (returns null) until the timeline stores historical components.
 
-**Capability policy:** `bonded-group-capabilities.ts` gates inspection, targeting, color editing, and simulation mutation per mode. Review disables all bonded-group interaction until historical topology + review highlight rendering exist.
+**Capability policy:** `bonded-group-capabilities.ts` gates inspection, targeting, color editing, and simulation mutation per mode. `canTrackBondedGroupHighlight: false` is a new capability that hides persistent tracked highlight (click-to-select a bonded group) while keeping hover preview active. The capability selector, runtime guard (`bonded-group-highlight-runtime.ts`), and panel (`BondedGroupsPanel.tsx`) all enforce this gate. Review disables all bonded-group interaction until historical topology + review highlight rendering exist.
+
+**Tracked highlight hide (panel):** When `canTrackBondedGroupHighlight` is off, panel rows have no `role="button"`, no `tabIndex`, and no click/keyDown handlers — hover (`onMouseEnter`/`onMouseLeave`) remains active for preview. The "Clear Highlight" button is gated by `canTrackHighlight && hasTrackedHighlight`. Legacy callbacks `onToggleSelect` and `onClearHighlight` are now optional in `BondedGroupCallbacks`, grouped under a "Legacy-hidden" comment block.
 
 **Atom appearance (annotation model):** `bondedGroupColorOverrides` in the store holds authored atom colors as global annotations (not timeline history). The appearance runtime translates group-level color intent to atom-level overrides via `renderer.setAtomColorOverrides()`, separate from highlight overlays. Colors survive scrub/restart/mode transitions.
 
@@ -361,7 +363,7 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - **focus-runtime.ts** — focus resolution: molecule lookup, centroid computation, camera pivot update; `ensureFollowTarget()` for follow-mode validation. Placement commit does NOT change focus metadata or retarget camera (Policy A).
 - **onboarding.ts** — coachmark scheduling + page-load onboarding overlay gate (`isOnboardingEligible`, `subscribeOnboardingReadiness`)
 - **bonded-group-runtime.ts** — display-source-aware bonded-group projection with overlap-reconciled stable IDs. Consumes `getDisplaySource()` (not physics directly). `getDisplaySourceKind()` reports live vs review source.
-- **bonded-group-highlight-runtime.ts** — persistent atom tracking, hover preview, panel highlight resolution (warm palette via `setHighlightedAtoms`)
+- **bonded-group-highlight-runtime.ts** — persistent atom tracking, hover preview, panel highlight resolution (warm palette via `setHighlightedAtoms`). Self-healing: `clearTrackedIfFeatureDisabled()` clears stale tracked state (`_trackedAtoms`, `selectedBondedGroupId`, `hasTrackedBondedHighlight`) when `canTrackBondedGroupHighlight` is off; called at the top of `syncToRenderer()` and `syncAfterTopologyChange()`. Runtime structure preserved (no store fields or methods deleted — hide pass only).
 - **bonded-group-coordinator.ts** — coordinated projection + highlight lifecycle (update + teardown)
 - **bonded-group-display-source.ts** — resolves bonded-group topology source: live physics components or review historical topology. Pure function, no side effects.
 - **bonded-group-appearance-runtime.ts** — translates group-level color edits into atom-level overrides via renderer `setAtomColorOverrides()`. Annotation model: colors persist across live/review modes. Maintains `groupColorIntents` map for topology-resilient intent propagation; `syncGroupIntents()` fills newly joined atoms without overwriting existing overrides.
@@ -455,7 +457,7 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | UI chrome (sheets, theme, etc.) | Zustand store (`app-store.ts`) | React components |
 | `session.theme` | main.ts (via settings callback) | React SettingsSheet (theme segmented) |
 | Drag target (spring anchor) | physics.ts (`dragTarget`, `dragAtom`) + drag-target-refresh.ts (screen coords) | interaction-dispatch (event-driven), drag-target-refresh (per-frame reprojection) |
-| Panel highlight | renderer (`_panelHighlightMesh`, renderOrder 2) — state via `setHighlightedAtoms()` | bonded-group-highlight-runtime.ts (persistent bonded-group selection/hover) |
+| Panel highlight | renderer (`_panelHighlightMesh`, renderOrder 2) — state via `setHighlightedAtoms()` | bonded-group-highlight-runtime.ts (hover preview always; persistent tracked selection gated by `canTrackBondedGroupHighlight`) |
 | Interaction highlight | renderer (`_interactionHighlightMesh`, renderOrder 3) — state via `setInteractionHighlightedAtoms()` / `clearInteractionHighlight()` | interaction-highlight-runtime.ts (transient Move/Rotate); both layers composed by `_updateGroupHighlight()` |
 | placement state | placement.ts (`_state`) | React DockBar (add/cancel via dockCallbacks) |
 | Placement framing anchor | app/frame-runtime.ts (frozen at placement start) | Captured from visible scene atoms; cleared on placement exit |
@@ -518,7 +520,7 @@ bonded-group-highlight-runtime.ts          interaction-highlight-runtime.ts
 ```
 
 **Layers:**
-- **Panel highlight** (`_panelHighlightMesh`) — warm amber palette (`CONFIG.panelHighlight`, formerly `groupHighlight`), renderOrder 2. Driven by bonded-group-highlight-runtime for persistent bonded-group selection and hover preview.
+- **Panel highlight** (`_panelHighlightMesh`) — warm amber palette (`CONFIG.panelHighlight`, formerly `groupHighlight`), renderOrder 2. Driven by bonded-group-highlight-runtime for hover preview (always) and persistent tracked selection (gated by `canTrackBondedGroupHighlight`).
 - **Interaction highlight** (`_interactionHighlightMesh`) — cool blue palette (`CONFIG.interactionHighlight`), renderOrder 3. Driven by interaction-highlight-runtime for transient Move/Rotate mode feedback.
 
 **Additive composition:** When both layers are active, the compositor computes overlap (atoms present in both index sets). Overlap atoms appear on *both* layers: the panel layer renders panelOnly + overlap, the interaction layer renders interactionOnly + overlap. This ensures neither highlight visually disappears when the other is set.

@@ -396,3 +396,9 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Decision:** Render the color swatch popover via `createPortal(document.body)` with a transparent backdrop for click-outside-to-close.
 
 **Rationale:** The bonded-groups panel lives inside a scrollable container with `overflow-y: auto`, which clipped the popover. Portaling to `document.body` escapes all ancestor overflow/stacking contexts. The transparent backdrop provides a standard click-outside dismiss without requiring global event listeners or focus-trap complexity.
+
+## D50: Hide Persistent Bonded-Group Highlight (Keep Hover)
+
+**Decision:** Feature-gate persistent tracked highlight off via `canTrackBondedGroupHighlight: false` while keeping hover preview active. Store fields, runtime methods, and CSS retained for future re-enablement.
+
+**Rationale:** Persistent highlight overlaps visually with authored color overrides, creating confusion. Hover preview provides sufficient inspection feedback. The hide-first approach is lowest-risk — the runtime self-heals stale tracked state via `clearTrackedIfFeatureDisabled()`, and the UI becomes inert for selection while remaining fully interactive for color editing, Center, and Follow.

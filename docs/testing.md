@@ -147,6 +147,20 @@ npx vitest run tests/unit/simulation-timeline.test.ts
 | `renderer-interaction-highlight.test.ts` | 13 | Panel/interaction layer independence, real InstancedMesh creation, overlap counts, review-visibility restoration, disposal cleanup, multi-molecule regression |
 | `highlight-test-utils.ts` | — | Shared helpers: `makeStateFake()` (minimal state-only renderer fake), `makeRealMeshCtx()` (real THREE geometry context) |
 
+### Highlight Runtime Gating (5 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `bonded-group-highlight.test.ts` | 5 | Tracked highlight gating when `canTrackBondedGroupHighlight` is false |
+
+Tests live in a `"tracked highlight gating"` describe block and verify the store behaves correctly when the tracking capability is disabled:
+
+- `toggleSelectedGroup` no-ops when `canTrackBondedGroupHighlight` is false
+- `setHoveredGroup` still works when tracking disabled
+- `clearHighlight` safe when tracking disabled
+- `syncToRenderer` self-heals stale tracked state when feature gated off
+- hover works again after stale tracked state self-healed
+
 Tests are organized in 3 layers, each catching a different class of regression:
 
 | Layer | Tests | What it proves |
@@ -178,22 +192,24 @@ Architecture extractions should be guarded at the extracted owner, not only thro
 | `frame-runtime.test.ts` | Per-frame pipeline ordering (worker-mode sequencing proof, review-mode gating, drag-refresh gating, sync-mode fallback, placement framing integration: framing runs during placement, orbit-follow suppressed, idle shrink allowed, drag framing + reprojection, drag reprojection not called when idle) |
 | `app-lifecycle.test.ts` | Teardown sequence ordering (exact dependency-ordered call sequence, subscription cleanup, partial-init safety) |
 
-### UI Components (46 tests across 2 files)
+### UI Components (53 tests across 2 files)
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
-| `bonded-groups-panel.test.tsx` | 39 | Full BondedGroupsPanel contract (see breakdown below) |
+| `bonded-groups-panel.test.tsx` | 46 | Full BondedGroupsPanel contract (see breakdown below) |
 | `status-bar-precedence.test.tsx` | 7 | Rewritten for message-only contract: status message precedence rules across simulation states |
 
 Previously-skipped StatusBar tests have been unskipped and now pass.
 
-#### BondedGroupsPanel Test Breakdown (39 tests)
+#### BondedGroupsPanel Test Breakdown (46 tests)
 
-Tests cover the full two-level UI, highlight wiring, color editing, and config contracts:
+Tests cover the full two-level UI, highlight wiring, color editing, highlight hide behavior, and config contracts:
 
 **Core panel behavior:** returns null when no groups, collapsed header with count, header click expands large clusters, small-clusters button expands only small groups, second header click collapses, side-class defaults, side-right class when store side is right.
 
 **Selection and highlight:** row click selects/deselects cluster, selected row has selected class, hover adds hovered class when no selection, hover blocked when tracked highlight exists, Clear Highlight button visible when tracked atoms exist, Clear button visible when selected ID is null but tracked atoms persist, panel visible in review with historical groups, panel hidden in review when no groups projected, bonded-group select works in review, bonded-group hover works in review, keyboard Enter/Space toggles selection.
+
+**Highlight hide (tracking disabled):** row click does not toggle selection, row has no button role or tabIndex, selected-row class not applied, hover preview still works, Clear Highlight hidden even with legacy `hasTrackedBondedHighlight`, color chip still works, Center and Follow still work when tracking disabled.
 
 **Color chip and popover:** color chip visible in every row without requiring selection, chip defaults to base atom color (no `has-color` class), clicking chip opens portalled popover (not a grid-row child), chip click does not toggle row selection (independent of selection), choosing a swatch calls `onApplyGroupColor` (7 swatches: 6 presets + original), second chip click closes popover, clicking backdrop closes popover, row gets `bonded-groups-color-open` class when popover active.
 
@@ -253,11 +269,11 @@ The acceptance tests use three intentionally overlapping layers. All three must 
 |------|------:|-------------------|
 | `dock-bar-layout-stability.test.tsx` | 6 | 4 named slot wrappers, paused toggle preserves slot structure, Pause/Resume in same slot, mode slot contains segmented, placement maps to same slots, grid structure |
 
-### Bonded Group Pre-Feature (17 tests)
+### Bonded Group Pre-Feature (19 tests)
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
-| `bonded-group-prefeature.test.ts` | 17 | Display source: live resolution, review resolution, null case, strict review (no live fallback). Capabilities: live allows all, review blocks mutation but allows inspect/target/edit. Appearance: group color writes atom overrides, clear removes overrides, syncToRenderer drives renderer, syncGroupIntents propagates to uncolored atoms, syncGroupIntents does NOT overwrite existing overrides from merged groups, pruning (group disappears then intent pruned), clearGroupColor removes intent so syncGroupIntents won't re-apply. Wiring: initial sync with preloaded store, applyGroupColor drives renderer. Persistence: colors survive timeline mode transitions, annotation-global semantics. |
+| `bonded-group-prefeature.test.ts` | 19 | Display source: live resolution, review resolution, null case, strict review (no live fallback). Capabilities: live allows all, review blocks mutation but allows inspect/target/edit, live mode `canTrackBondedGroupHighlight` false, review mode `canTrackBondedGroupHighlight` false. Appearance: group color writes atom overrides, clear removes overrides, syncToRenderer drives renderer, syncGroupIntents propagates to uncolored atoms, syncGroupIntents does NOT overwrite existing overrides from merged groups, pruning (group disappears then intent pruned), clearGroupColor removes intent so syncGroupIntents won't re-apply. Wiring: initial sync with preloaded store, applyGroupColor drives renderer. Persistence: colors survive timeline mode transitions, annotation-global semantics. |
 
 ## Frontend Smoke Test
 

@@ -79,9 +79,8 @@ export interface TimelineCallbacks {
 
 /** Imperative callbacks for the bonded-group panel, registered by main.ts. */
 export interface BondedGroupCallbacks {
-  onToggleSelect: (id: string) => void;
+  // ── Active shipped actions ──
   onHover: (id: string | null) => void;
-  onClearHighlight: () => void;
   onCenterGroup?: (id: string) => void;
   onFollowGroup?: (id: string) => void;
   /** Apply a color to all atoms in the given bonded group (stores intent + immediate override). */
@@ -90,6 +89,12 @@ export interface BondedGroupCallbacks {
   onClearGroupColor?: (id: string) => void;
   /** Read-only: returns atom indices for a group (used by color editor to detect current color). */
   getGroupAtoms?: (id: string) => number[] | null;
+
+  // ── Legacy-hidden: persistent tracked highlight (feature-gated off) ──
+  // Retained for future re-enablement or full removal.
+  // Next cleanup: group into trackedHighlightCallbacks?: { ... }
+  onToggleSelect?: (id: string) => void;
+  onClearHighlight?: () => void;
 }
 
 /** Atom color value for authored appearance overrides. */
@@ -183,17 +188,19 @@ export interface AppStore {
 
   // Bonded groups (physics-topology-derived, separate from scene molecules)
   // Highlight contract:
-  //   - selectedBondedGroupId: selected row in the live cluster list
-  //   - hasTrackedBondedHighlight: true when frozen atom set exists (atoms owned by runtime, not store)
-  //   - hoveredBondedGroupId: transient hover preview (always live membership)
+  //   - selectedBondedGroupId: legacy-hidden — persistent selection (feature-gated off via canTrackBondedGroupHighlight)
+  //   - hasTrackedBondedHighlight: legacy-hidden — true when frozen atom set exists (runtime-owned)
+  //   - hoveredBondedGroupId: active — transient hover preview (always live membership)
   //   - Renderer authority: tracked atoms first, hover second, else none
-  //   - Tracked atoms persist even if the original group disappears from the list
+  //   - Tracked highlight fields retained for future re-enablement or full removal
   bondedGroups: BondedGroupSummary[];
   bondedGroupsExpanded: boolean;
   bondedSmallGroupsExpanded: boolean;
   bondedGroupsSide: 'left' | 'right';
+  /** Legacy-hidden: persistent selection (feature-gated off — see highlight contract above). */
   selectedBondedGroupId: string | null;
   hoveredBondedGroupId: string | null;
+  /** Legacy-hidden: true when frozen atom set exists (runtime-owned, feature-gated off). */
   hasTrackedBondedHighlight: boolean;
   /** Which group's color editor popover is open (null = closed).
    *  Cleared automatically by setBondedGroups when the open group disappears

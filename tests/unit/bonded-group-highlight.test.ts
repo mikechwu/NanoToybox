@@ -14,10 +14,18 @@
  * - Invalid atom indices filtered against physics.n
  * - Clear Highlight clears persistent tracked set
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from '../../page/js/runtime/bonded-group-highlight-runtime';
 import { useAppStore } from '../../page/js/store/app-store';
 import type { BondedGroupRuntime } from '../../page/js/runtime/bonded-group-runtime';
+
+// Mock canTrackBondedGroupHighlightNow — default true for semantic tests,
+// individual tests override to false for gating verification.
+const mockCanTrack = vi.fn(() => true);
+vi.mock('../../page/js/store/selectors/bonded-group-capabilities', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../page/js/store/selectors/bonded-group-capabilities')>();
+  return { ...actual, canTrackBondedGroupHighlightNow: () => mockCanTrack() };
+});
 
 function makeMockRenderer() {
   return { setHighlightedAtoms: vi.fn() };
@@ -244,6 +252,84 @@ describe('persistent atom tracking', () => {
 
     highlight.syncAfterTopologyChange();
     expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+  });
+});
+
+describe('tracked highlight gating (canTrackBondedGroupHighlight: false)', () => {
+  let highlight: BondedGroupHighlightRuntime;
+  let renderer: ReturnType<typeof makeMockRenderer>;
+
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+    useAppStore.getState().setBondedGroups([
+      { id: 'a', displayIndex: 1, atomCount: 3, minAtomIndex: 0, orderKey: 0 },
+    ]);
+    renderer = makeMockRenderer();
+    mockCanTrack.mockReturnValue(false);
+    highlight = createBondedGroupHighlightRuntime({
+      getBondedGroupRuntime: () => makeMockBGR({ a: [0, 1, 2] }),
+      getRenderer: () => renderer,
+      getPhysics: () => ({ n: 5 }),
+    });
+  });
+
+  afterEach(() => { mockCanTrack.mockReturnValue(true); });
+
+  it('toggleSelectedGroup no-ops when canTrackBondedGroupHighlight is false', () => {
+    highlight.toggleSelectedGroup('a');
+    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(false);
+    expect(renderer.setHighlightedAtoms).not.toHaveBeenCalled();
+  });
+
+  it('setHoveredGroup still works when tracked highlight is disabled', () => {
+    highlight.setHoveredGroup('a');
+    expect(useAppStore.getState().hoveredBondedGroupId).toBe('a');
+    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith([0, 1, 2], 'hover');
+  });
+
+  it('clearHighlight remains safe when tracked highlight is disabled', () => {
+    highlight.clearHighlight();
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(false);
+    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith(null);
+  });
+
+  it('syncToRenderer self-heals stale tracked state when feature is gated off', () => {
+    // Seed stale tracked state (as if from hot reload or prior session)
+    mockCanTrack.mockReturnValue(true);
+    highlight.toggleSelectedGroup('a');
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(true);
+    expect(useAppStore.getState().selectedBondedGroupId).toBe('a');
+    renderer.setHighlightedAtoms.mockClear();
+
+    // Gate feature off
+    mockCanTrack.mockReturnValue(false);
+
+    // syncToRenderer should clear stale tracked state
+    highlight.syncToRenderer();
+    expect(useAppStore.getState().hasTrackedBondedHighlight).toBe(false);
+    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
+    // Renderer should show no highlight (no hover active)
+    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith(null);
+  });
+
+  it('hover works again after stale tracked state is self-healed', () => {
+    // Seed stale tracked state
+    mockCanTrack.mockReturnValue(true);
+    highlight.toggleSelectedGroup('a');
+    renderer.setHighlightedAtoms.mockClear();
+
+    // Gate feature off — tracked state blocks hover
+    mockCanTrack.mockReturnValue(false);
+
+    // syncToRenderer self-heals
+    highlight.syncToRenderer();
+    renderer.setHighlightedAtoms.mockClear();
+
+    // Now hover should work (tracked state cleared)
+    highlight.setHoveredGroup('a');
+    expect(useAppStore.getState().hoveredBondedGroupId).toBe('a');
+    expect(renderer.setHighlightedAtoms).toHaveBeenCalledWith([0, 1, 2], 'hover');
   });
 });
 
