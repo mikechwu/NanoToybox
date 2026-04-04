@@ -1,10 +1,14 @@
 /**
  * BondedGroupsPanel — compact side panel showing bonded clusters.
  *
+ * Disclosure: expanded by default; header toggles between Collapse / Expand.
+ *
  * Grid layout: color | label | atoms | center | follow columns.
  *
  * Interactions:
- * - Color chip: opens preset swatch popover for that row (independent of selection)
+ * - Color chip (plain solid): opens a portalled popover with the primary
+ *   swatch (default / restore) centered on top and preset swatches in a
+ *   responsive grid below.  Each swatch is a reusable ColorSwatch component.
  * - Row hover: temporary preview highlight
  * - Center: one-shot camera frame
  * - Follow: toggle orbit-follow (frozen atom set)
@@ -26,7 +30,7 @@ type GroupColorOption =
   | { kind: 'default' }
   | { kind: 'preset'; hex: string };
 
-/** Preset palette — tuned for luminance separation under 3D atom lighting. */
+/** Full palette (default + presets) — presets tuned for luminance separation under 3D atom lighting. */
 const GROUP_COLOR_OPTIONS: GroupColorOption[] = [
   { kind: 'default' },
   { kind: 'preset', hex: '#ff5555' },
@@ -37,12 +41,13 @@ const GROUP_COLOR_OPTIONS: GroupColorOption[] = [
   { kind: 'preset', hex: '#ff66aa' },
 ];
 
-/** Layout split: primary (default) in hex center, secondary (presets) in hex ring. */
+/** Layout split: primary (default) centered on top, secondary (presets) in responsive grid. */
 interface GroupColorLayout {
   primary: GroupColorOption | null;
   secondary: GroupColorOption[];
 }
 
+/** Split options into primary (the default entry, if any) and secondary (all presets). */
 export function buildGroupColorLayout(options: GroupColorOption[]): GroupColorLayout {
   const primary = options.find(o => o.kind === 'default') ?? null;
   const secondary = options.filter(o => o.kind !== 'default');
@@ -50,15 +55,6 @@ export function buildGroupColorLayout(options: GroupColorOption[]): GroupColorLa
 }
 
 const COLOR_LAYOUT = buildGroupColorLayout(GROUP_COLOR_OPTIONS);
-
-/** Hex ring geometry — 6 positions at 60° intervals, starting from top clockwise. */
-const HEX_RADIUS = 26; // px, center-to-center distance
-function hexSlotStyle(index: number): React.CSSProperties {
-  const angle = index * 60 * Math.PI / 180;
-  const x = HEX_RADIUS * Math.sin(angle);
-  const y = -HEX_RADIUS * Math.cos(angle);
-  return { left: `calc(50% + ${Math.round(x * 10) / 10}px)`, top: `calc(50% + ${Math.round(y * 10) / 10}px)` };
-}
 
 /** Reusable swatch button — owns active class, visual treatment, and aria-label. */
 function ColorSwatch({ option, active, onSelect }: {
@@ -263,26 +259,23 @@ function ClusterRow({ id, displayIndex, atomCount, isSmall, canTarget, canEditCo
         <>
           <div className="bonded-groups-color-backdrop" role="presentation" onClick={handleColorChipClick} />
           <div className="bonded-groups-color-popover" role="menu" aria-label="Color swatches" style={popoverStyle} onClick={(e) => e.stopPropagation()}>
-            <div className="bonded-groups-color-hex">
-              {/* Center: default swatch */}
-              {COLOR_LAYOUT.primary && (
-                <div className="bonded-groups-hex-slot" style={{ left: '50%', top: '50%' }}>
-                  <ColorSwatch
-                    option={COLOR_LAYOUT.primary}
-                    active={colorState.kind === 'default'}
-                    onSelect={handleSelectOption}
-                  />
-                </div>
-              )}
-              {/* Ring: 6 preset swatches at 60° intervals */}
-              {COLOR_LAYOUT.secondary.map((option, i) => (
-                <div key={option.kind === 'preset' ? option.hex : 'default'} className="bonded-groups-hex-slot" style={hexSlotStyle(i)}>
-                  <ColorSwatch
-                    option={option}
-                    active={option.kind === 'preset' && activeHex === option.hex}
-                    onSelect={handleSelectOption}
-                  />
-                </div>
+            {COLOR_LAYOUT.primary && (
+              <div className="bonded-groups-color-primary">
+                <ColorSwatch
+                  option={COLOR_LAYOUT.primary}
+                  active={colorState.kind === 'default'}
+                  onSelect={handleSelectOption}
+                />
+              </div>
+            )}
+            <div className="bonded-groups-color-grid">
+              {COLOR_LAYOUT.secondary.map(option => (
+                <ColorSwatch
+                  key={option.kind === 'preset' ? option.hex : 'default'}
+                  option={option}
+                  active={option.kind === 'preset' && activeHex === option.hex}
+                  onSelect={handleSelectOption}
+                />
               ))}
             </div>
           </div>
@@ -332,8 +325,10 @@ export function BondedGroupsPanel() {
 
   return (
     <div className={`bonded-groups-panel side-${side}`}>
-      <button className="bonded-groups-header" onClick={toggleExpanded} type="button">
-        Bonded Clusters <span className="bonded-groups-count">{groups.length}</span>
+      <button className="bonded-groups-header" onClick={toggleExpanded} aria-expanded={expanded} aria-controls="bonded-groups-list" type="button">
+        <span className="bonded-groups-header-title">Bonded Clusters</span>
+        <span className="bonded-groups-count">{groups.length}</span>
+        <span className="bonded-groups-header-action">{expanded ? 'Collapse' : 'Expand'}</span>
       </button>
       {isFollowActive && (
         <button className="bonded-groups-follow-indicator" onClick={handleStopFollow} aria-label="Stop following" type="button">
@@ -342,7 +337,7 @@ export function BondedGroupsPanel() {
         </button>
       )}
       {expanded && (
-        <div className="bonded-groups-list" onMouseLeave={handleListLeave}>
+        <div id="bonded-groups-list" className="bonded-groups-list" onMouseLeave={handleListLeave}>
           {(canTarget || canEditColor) && (
             <div className="bonded-groups-col-header">
               {canEditColor && <span />}

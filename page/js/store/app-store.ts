@@ -194,6 +194,8 @@ export interface AppStore {
   //   - Renderer authority: tracked atoms first, hover second, else none
   //   - Tracked highlight fields retained for future re-enablement or full removal
   bondedGroups: BondedGroupSummary[];
+  /** Whether the bonded-groups panel is expanded. Defaults to true.
+   *  Preserved across resetTransientState — user's collapse/expand choice survives resets. */
   bondedGroupsExpanded: boolean;
   bondedSmallGroupsExpanded: boolean;
   bondedGroupsSide: 'left' | 'right';
@@ -365,7 +367,7 @@ export const useAppStore = create<AppStore>((set) => ({
   cameraTargetRef: null,
   orbitFollowTargetRef: null,
   bondedGroups: [],
-  bondedGroupsExpanded: false,
+  bondedGroupsExpanded: true,
   bondedSmallGroupsExpanded: false,
   bondedGroupsSide: 'right',
   selectedBondedGroupId: null,
@@ -548,9 +550,11 @@ export const useAppStore = create<AppStore>((set) => ({
     lastFocusedMoleculeId: null,
     cameraTargetRef: null,
     orbitFollowTargetRef: null,
-    // Bonded groups (side preference preserved across reset)
+    // Bonded groups (side + expanded preference preserved across reset)
     bondedGroups: [],
-    bondedGroupsExpanded: false,
+    // bondedGroupsExpanded intentionally NOT reset — user's collapse/expand choice survives resets.
+    // bondedSmallGroupsExpanded IS reset because it is data-dependent (small clusters may not
+    // exist after topology change, so collapsing the detail view is the safe default).
     bondedSmallGroupsExpanded: false,
     selectedBondedGroupId: null,
     hoveredBondedGroupId: null,

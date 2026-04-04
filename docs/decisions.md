@@ -357,9 +357,9 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 ## D44: Bonded Group Capability Policy
 
-**Decision:** A centralized capability selector (`bonded-group-capabilities.ts`) gates bonded-group actions per mode: inspect, target, color-edit, simulate. Review disables all bonded-group interaction until historical topology + review highlight rendering exist. Primitive selector `selectCanInspectBondedGroups` derives from the full capability object for React stability.
+**Decision:** A centralized capability selector (`bonded-group-capabilities.ts`) gates bonded-group actions per mode: inspect, target, color-edit, track-highlight, simulate. Review only disables mutation (`canMutateSimulation: false`); inspection, targeting, and color editing are always enabled. Persistent tracked highlight is feature-gated off (`canTrackBondedGroupHighlight: false`). Primitive selectors derive from the full capability object for React stability.
 
-**Rationale:** Hardcoded `timelineMode === 'review'` blocks were scattered across components and runtimes. A centralized policy makes future review enablement a single-selector change. The primitive selector avoids React infinite-render issues with object selectors.
+**Rationale:** Hardcoded `timelineMode === 'review'` blocks were scattered across components and runtimes. A centralized policy makes capability changes a single-selector edit. Primitive selectors avoid React infinite-render issues with object selectors.
 
 **Evidence:** `page/js/store/selectors/bonded-group-capabilities.ts`, `page/js/components/BondedGroupsPanel.tsx` (selectCanInspectBondedGroups), `page/js/runtime/bonded-group-highlight-runtime.ts` (canInspectBondedGroupsNow)
 
@@ -402,3 +402,15 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Decision:** Feature-gate persistent tracked highlight off via `canTrackBondedGroupHighlight: false` while keeping hover preview active. Store fields, runtime methods, and CSS retained for future re-enablement.
 
 **Rationale:** Persistent highlight overlaps visually with authored color overrides, creating confusion. Hover preview provides sufficient inspection feedback. The hide-first approach is lowest-risk — the runtime self-heals stale tracked state via `clearTrackedIfFeatureDisabled()`, and the UI becomes inert for selection while remaining fully interactive for color editing, Center, and Follow.
+
+## D51: Unified Popover Layout (CSS-Only Responsive)
+
+**Decision:** Replace hex-ring popover with primary (default) + CSS grid (presets). Same JSX on all platforms — mobile 3×2, desktop 6×1 via `@media` breakpoint. No platform-specific JSX branches.
+
+**Rationale:** Simpler to maintain. Layout changes are CSS-only. Palette changes require editing data array only.
+
+## D52: Panel Expanded by Default with User Preference Preservation
+
+**Decision:** `bondedGroupsExpanded` defaults to `true`. `resetTransientState` does NOT reset it — user's collapse/expand choice survives scene reloads and mode transitions. `bondedSmallGroupsExpanded` still resets because it is data-dependent.
+
+**Rationale:** "Default open" should mean initial state, not always-reopen. User intent wins after first interaction.

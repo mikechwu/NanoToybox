@@ -5,7 +5,8 @@
  * Component-level tests for BondedGroupsPanel.
  *
  * Verifies the two-level UI contract:
- * - Header click expands/collapses main list
+ * - Panel starts expanded by default (disclosure pattern)
+ * - Header click collapses/expands main list with Collapse/Expand hint
  * - Small-clusters button expands only the small-group bucket
  * - Large clusters remain visible while small clusters stay collapsed
  * - Panel hidden when no groups
@@ -59,6 +60,8 @@ describe('BondedGroupsPanel', () => {
     centeredGroups = [];
     followedGroups = [];
     useAppStore.getState().resetTransientState();
+    // Ensure expanded state is reset (resetTransientState preserves user preference)
+    useAppStore.setState({ bondedGroupsExpanded: true });
     // Wire real highlight runtime via store-registered callbacks (same as main.ts)
     const hl = createBondedGroupHighlightRuntime({
       getBondedGroupRuntime: () => mockBgr,
@@ -82,45 +85,46 @@ describe('BondedGroupsPanel', () => {
     expect(c.innerHTML).toBe('');
   });
 
-  it('shows collapsed header with group count', () => {
+  it('panel is expanded by default with large clusters visible', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     const c = renderPanel();
     const header = c.querySelector('.bonded-groups-header');
     expect(header).toBeTruthy();
     expect(header!.textContent).toContain('Bonded Clusters');
     expect(header!.textContent).toContain('5');
-    // No cluster rows when collapsed
-    expect(c.querySelector('.bonded-groups-list')).toBeNull();
-  });
+    expect(header!.getAttribute('aria-expanded')).toBe('true');
 
-  it('header click expands to show large clusters', () => {
-    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    const c = renderPanel();
-
-    // Click header to expand
-    fireEvent.click(c.querySelector('.bonded-groups-header')!);
-
+    // Large clusters visible by default (expanded)
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle):not(.bonded-groups-small-row)');
-    // 2 large clusters (42 and 10 atoms)
     expect(rows.length).toBe(2);
     expect(rows[0].textContent).toContain('Cluster 1');
-    expect(rows[0].textContent).toContain('42');
     expect(rows[1].textContent).toContain('Cluster 2');
-    expect(rows[1].textContent).toContain('10');
+  });
 
-    // Small-clusters summary row visible
-    const smallToggle = c.querySelector('.bonded-groups-small-toggle');
-    expect(smallToggle).toBeTruthy();
-    expect(smallToggle!.textContent).toContain('Small clusters');
-    expect(smallToggle!.textContent).toContain('3');
+  it('header shows Collapse when expanded, Expand when collapsed', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    const c = renderPanel();
+    const header = c.querySelector('.bonded-groups-header')!;
 
-    // Small cluster detail rows NOT visible
-    expect(c.querySelectorAll('.bonded-groups-small-row').length).toBe(0);
+    // Expanded by default → Collapse hint
+    expect(header.textContent).toContain('Collapse');
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+
+    // Click to collapse
+    fireEvent.click(header);
+    expect(header.textContent).toContain('Expand');
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(c.querySelector('.bonded-groups-list')).toBeNull();
+
+    // Click to expand again
+    fireEvent.click(header);
+    expect(header.textContent).toContain('Collapse');
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(c.querySelector('.bonded-groups-list')).toBeTruthy();
   });
 
   it('small-clusters button expands only small groups', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded(); // expand main
     const c = renderPanel();
 
     // Click small-clusters toggle
@@ -128,24 +132,22 @@ describe('BondedGroupsPanel', () => {
 
     // Small cluster rows now visible
     const smallRows = c.querySelectorAll('.bonded-groups-small-row');
-    expect(smallRows.length).toBe(3); // 3, 2, 1 atoms
+    expect(smallRows.length).toBe(3);
     expect(smallRows[0].textContent).toContain('Cluster 3');
-    expect(smallRows[0].textContent).toContain('3');
 
     // Large clusters still visible
     const largeRows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle):not(.bonded-groups-small-row)');
     expect(largeRows.length).toBe(2);
   });
 
-  it('second header click collapses everything', () => {
+  it('header click collapses everything', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
 
-    // Large clusters visible
+    // Large clusters visible (expanded by default)
     expect(c.querySelectorAll('.bonded-groups-row').length).toBeGreaterThan(0);
 
-    // Click header again
+    // Click header to collapse
     fireEvent.click(c.querySelector('.bonded-groups-header')!);
 
     // Everything collapsed
@@ -175,7 +177,6 @@ describe('BondedGroupsPanel', () => {
 
   it('row click does not toggle persistent selection when tracked highlight is disabled', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
 
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
@@ -186,7 +187,6 @@ describe('BondedGroupsPanel', () => {
 
   it('row does not have button role or tabIndex when tracked highlight is disabled', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
 
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
@@ -197,7 +197,7 @@ describe('BondedGroupsPanel', () => {
 
   it('selected-row class not applied when tracked highlight is disabled', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
+
     // Seed legacy state — should not render as selected
     useAppStore.getState().setSelectedBondedGroup('a');
     const c = renderPanel();
@@ -207,7 +207,6 @@ describe('BondedGroupsPanel', () => {
 
   it('hover preview still works when tracked highlight is disabled', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
 
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
@@ -222,7 +221,7 @@ describe('BondedGroupsPanel', () => {
 
   it('Clear Highlight button hidden when tracked highlight capability is false', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
+
     // Seed legacy tracked state
     useAppStore.setState({ hasTrackedBondedHighlight: true });
     const c = renderPanel();
@@ -233,7 +232,6 @@ describe('BondedGroupsPanel', () => {
 
   it('color chip still works when tracked highlight is disabled', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const chip = c.querySelector('.bonded-groups-color-chip')!;
 
@@ -246,7 +244,6 @@ describe('BondedGroupsPanel', () => {
 
   it('Center and Follow still work when tracked highlight is disabled', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
 
     const actionBtns = c.querySelectorAll('.bonded-groups-action-btn');
@@ -282,7 +279,7 @@ describe('BondedGroupsPanel', () => {
 
   it('bonded-group select gated off in review (canTrackBondedGroupHighlight: false)', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
+
     useAppStore.getState().setTimelineMode('review');
     const hl = createBondedGroupHighlightRuntime({
       getBondedGroupRuntime: () => mockBgr,
@@ -308,7 +305,6 @@ describe('BondedGroupsPanel', () => {
 
   it('keyboard Enter/Space does not toggle selection when tracked highlight is disabled', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
     const row = rows[0] as HTMLElement;
@@ -326,7 +322,6 @@ describe('BondedGroupsPanel', () => {
 
   it('color chip is visible in every row without requiring selection', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const chips = c.querySelectorAll('.bonded-groups-color-chip');
     // 2 large clusters visible
@@ -337,7 +332,6 @@ describe('BondedGroupsPanel', () => {
 
   it('color chip defaults to base atom color (no inline style) when no override', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
     expect(chip).toBeTruthy();
@@ -347,7 +341,6 @@ describe('BondedGroupsPanel', () => {
 
   it('clicking chip opens portalled popover, not a grid-row child', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const chip = c.querySelector('.bonded-groups-color-chip')!;
 
@@ -364,7 +357,6 @@ describe('BondedGroupsPanel', () => {
 
   it('clicking chip does not toggle row selection', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const chip = c.querySelector('.bonded-groups-color-chip')!;
 
@@ -375,7 +367,7 @@ describe('BondedGroupsPanel', () => {
 
   it('choosing a swatch calls onApplyGroupColor and updates chip', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
+
     // Set an override so chip reflects it
     useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff5555' } });
     const c = renderPanel();
@@ -383,13 +375,13 @@ describe('BondedGroupsPanel', () => {
     const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
     fireEvent.click(chip); // open popover
 
-    // 7 swatches in hex layout: default center + 6 ring presets
+    // Primary (1 default) + grid (6 presets) = 7 swatches total
     const popover = document.querySelector('.bonded-groups-color-popover')!;
-    const swatches = popover.querySelectorAll('.bonded-groups-swatch:not(.bonded-groups-swatch-original)');
-    expect(swatches.length).toBe(6);
+    const gridSwatches = popover.querySelectorAll('.bonded-groups-color-grid .bonded-groups-swatch');
+    expect(gridSwatches.length).toBe(6);
 
     // Click the blue swatch (#55aaff is index 3 in presets)
-    fireEvent.click(swatches[3]);
+    fireEvent.click(gridSwatches[3]);
     expect(appliedColors['a']).toBe('#55aaff');
 
     // Chip has inline background from the override
@@ -398,7 +390,6 @@ describe('BondedGroupsPanel', () => {
 
   it('second chip click closes the popover', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const chip = c.querySelector('.bonded-groups-color-chip')!;
 
@@ -411,7 +402,6 @@ describe('BondedGroupsPanel', () => {
 
   it('clicking backdrop closes the popover', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const chip = c.querySelector('.bonded-groups-color-chip')!;
 
@@ -425,7 +415,6 @@ describe('BondedGroupsPanel', () => {
 
   it('row gets bonded-groups-color-open class when popover is active', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const chip = c.querySelector('.bonded-groups-color-chip')!;
 
@@ -438,7 +427,6 @@ describe('BondedGroupsPanel', () => {
 
   it('hover clears when cursor leaves row', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
 
@@ -451,7 +439,6 @@ describe('BondedGroupsPanel', () => {
 
   it('moving across rows switches preview correctly', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
 
@@ -469,7 +456,6 @@ describe('BondedGroupsPanel', () => {
 
   it('opening color popover clears hover preview', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
 
@@ -490,7 +476,7 @@ describe('BondedGroupsPanel', () => {
 
   it('popover has original-color swatch instead of ✕ clear button', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
+
     useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff5555' } });
     const c = renderPanel();
     const chip = c.querySelector('.bonded-groups-color-chip')!;
@@ -507,7 +493,7 @@ describe('BondedGroupsPanel', () => {
 
   it('clicking original-color swatch calls onClearGroupColor', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
+
     useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff5555' } });
     const c = renderPanel();
     const chip = c.querySelector('.bonded-groups-color-chip')!;
@@ -520,7 +506,7 @@ describe('BondedGroupsPanel', () => {
 
   it('original-color swatch gets active class when no override exists', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
+
     // No overrides — default state
     const c = renderPanel();
     const chip = c.querySelector('.bonded-groups-color-chip')!;
@@ -532,7 +518,7 @@ describe('BondedGroupsPanel', () => {
 
   it('multi-color group chip shows conic gradient', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
+
     useAppStore.getState().setBondedGroupColorOverrides({
       0: { hex: '#ff5555' }, 1: { hex: '#ff5555' },
       2: { hex: '#33dd66' }, 3: { hex: '#33dd66' },
@@ -545,7 +531,7 @@ describe('BondedGroupsPanel', () => {
 
   it('colored + default atoms shows conic gradient with default segment', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
+
     useAppStore.getState().setBondedGroupColorOverrides({
       0: { hex: '#ff5555' }, 1: { hex: '#ff5555' },
     });
@@ -558,7 +544,7 @@ describe('BondedGroupsPanel', () => {
 
   it('single-color chip shows solid background, not conic gradient', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
+
     useAppStore.getState().setBondedGroupColorOverrides({
       0: { hex: '#ff5555' }, 1: { hex: '#ff5555' }, 2: { hex: '#ff5555' },
       3: { hex: '#ff5555' }, 4: { hex: '#ff5555' },
@@ -573,7 +559,6 @@ describe('BondedGroupsPanel', () => {
 
   it('portalled popover does not keep hoveredBondedGroupId alive', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
 
@@ -591,26 +576,25 @@ describe('BondedGroupsPanel', () => {
 
   // ── Unified popover structure ──
 
-  it('popover has honeycomb layout: default center + 6 presets in hex ring', () => {
+  it('popover has primary + grid layout: default on top, 6 presets in grid', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     fireEvent.click(c.querySelector('.bonded-groups-color-chip')!);
 
     const popover = document.querySelector('.bonded-groups-color-popover')!;
-    const hex = popover.querySelector('.bonded-groups-color-hex')!;
-    expect(hex).toBeTruthy();
-    // 7 slots total: 1 center + 6 ring
-    const slots = hex.querySelectorAll('.bonded-groups-hex-slot');
-    expect(slots.length).toBe(7);
-    // 7 swatches total: 1 default + 6 presets
-    expect(hex.querySelectorAll('.bonded-groups-swatch').length).toBe(7);
-    expect(hex.querySelector('.bonded-groups-swatch-original')).toBeTruthy();
+    // Primary section: 1 default swatch
+    const primary = popover.querySelector('.bonded-groups-color-primary')!;
+    expect(primary).toBeTruthy();
+    expect(primary.querySelector('.bonded-groups-swatch-original')).toBeTruthy();
+    // Grid section: 6 preset swatches
+    const grid = popover.querySelector('.bonded-groups-color-grid')!;
+    expect(grid).toBeTruthy();
+    expect(grid.querySelectorAll('.bonded-groups-swatch').length).toBe(6);
   });
 
-  it('default swatch in hex center clears color', () => {
+  it('default swatch in primary section clears color', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
+
     useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff5555' } });
     const c = renderPanel();
     fireEvent.click(c.querySelector('.bonded-groups-color-chip')!);
@@ -619,13 +603,12 @@ describe('BondedGroupsPanel', () => {
     expect(clearedGroups).toContain('a');
   });
 
-  it('preset swatch in hex ring applies color', () => {
+  it('preset swatch in grid applies color', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     fireEvent.click(c.querySelector('.bonded-groups-color-chip')!);
-    const presets = document.querySelectorAll('.bonded-groups-swatch:not(.bonded-groups-swatch-original)');
-    fireEvent.click(presets[0]); // first preset in ring
+    const gridSwatches = document.querySelectorAll('.bonded-groups-color-grid .bonded-groups-swatch');
+    fireEvent.click(gridSwatches[0]); // first preset in grid
     expect(appliedColors['a']).toBe('#ff5555');
   });
 });

@@ -254,26 +254,27 @@ describe('panel store behavior', () => {
     useAppStore.getState().resetTransientState();
   });
 
-  it('bondedGroupsExpanded defaults to false', () => {
-    expect(useAppStore.getState().bondedGroupsExpanded).toBe(false);
+  it('bondedGroupsExpanded defaults to true (expanded by default)', () => {
+    expect(useAppStore.getState().bondedGroupsExpanded).toBe(true);
   });
 
   it('toggleBondedGroupsExpanded toggles the flag', () => {
     useAppStore.getState().toggleBondedGroupsExpanded();
-    expect(useAppStore.getState().bondedGroupsExpanded).toBe(true);
-    useAppStore.getState().toggleBondedGroupsExpanded();
     expect(useAppStore.getState().bondedGroupsExpanded).toBe(false);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    expect(useAppStore.getState().bondedGroupsExpanded).toBe(true);
   });
 
-  it('resetTransientState collapses panel and clears groups', () => {
+  it('resetTransientState preserves expanded preference and clears groups', () => {
     useAppStore.getState().setBondedGroups([
       { id: 'g1', displayIndex: 1, atomCount: 5, minAtomIndex: 0, orderKey: 0 },
     ]);
-    useAppStore.getState().toggleBondedGroupsExpanded();
-    expect(useAppStore.getState().bondedGroupsExpanded).toBe(true);
+    useAppStore.getState().toggleBondedGroupsExpanded(); // collapse
+    expect(useAppStore.getState().bondedGroupsExpanded).toBe(false);
     expect(useAppStore.getState().bondedGroups).toHaveLength(1);
 
     useAppStore.getState().resetTransientState();
+    // User's collapse choice is preserved — not forced back to expanded
     expect(useAppStore.getState().bondedGroupsExpanded).toBe(false);
     expect(useAppStore.getState().bondedGroups).toHaveLength(0);
   });

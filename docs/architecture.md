@@ -338,6 +338,16 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 
 **Color editor popover:** The color swatch popover in `BondedGroupsPanel.tsx` is rendered via `createPortal(…, document.body)` to escape the panel's `overflow-y: auto` clipping. Positioned via `chipRef.getBoundingClientRect()` relative to the chip button. `colorEditorOpenForGroupId: string | null` in the store tracks which group's editor is open; `setBondedGroups` clears it conditionally (only when the open group's ID disappears from the new groups list).
 
+**Popover layout:** Unified across all screen sizes — same JSX, CSS-only responsive. Primary row: default swatch (restore original color) centered on top. Secondary row: preset swatches in a responsive CSS grid (3×2 on mobile, 6×1 at `@media (min-width: 768px)` breakpoint).
+
+**GroupColorOption + buildGroupColorLayout:** `GroupColorOption` is a discriminated union (`'default' | 'preset'`) modelling the default restore action and preset hex colors. `buildGroupColorLayout()` splits options into `primary` (the default swatch) and `secondary` (preset swatches) for the two-row popover layout.
+
+**ColorSwatch component:** Reusable swatch button that owns active class, `aria-label`, and click behavior. The popover arranges swatches via `ColorSwatch` instances — layout is the popover's concern, interaction is the swatch's concern.
+
+**Color chip style:** Plain solid circle, no border (`border: 2px solid transparent`). Active swatch scales 1.3× (`transform: scale(1.3)`) with transparent border and no box-shadow — the swatch's own color is the sole active indicator.
+
+**Panel disclosure:** Panel is expanded by default (`bondedGroupsExpanded: true`). The header is a `<button>` acting as a disclosure control with Collapse/Expand hint text, `aria-expanded`, and `aria-controls="bonded-groups-list"`. The user's expand/collapse preference is preserved across `resetTransientState` (intentionally NOT reset — the choice survives resets).
+
 ## Key Design Decisions
 
 1. **Python reference + Numba acceleration** — pure Python for correctness, Numba for speed
@@ -468,6 +478,7 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | Review UI lock state | Derived by `selectIsReviewLocked()` from `timelineMode` | Components (visual lock), ui-bindings.ts (runtime guards) |
 | Bonded-group color overrides | app-store (`bondedGroupColorOverrides`) | bonded-group-appearance-runtime (applyGroupColor, clearGroupColor); `groupColorIntents` map propagated by `syncGroupIntents()` |
 | Color editor popover | app-store (`colorEditorOpenForGroupId`) | BondedGroupsPanel (chip click); `setBondedGroups` clears when open group disappears |
+| Panel disclosure (`bondedGroupsExpanded`) | Zustand store (`app-store.ts`) | BondedGroupsPanel header toggle; survives `resetTransientState` |
 | Bonded-group display source | bonded-group-display-source.ts (resolved per projection) | bonded-group-runtime (consumes via getDisplaySource) |
 | Timeline buffers (review frames, restart frames, checkpoints) | simulation-timeline.ts | timeline-recording-orchestrator (writes), simulation-timeline-coordinator (reads) |
 

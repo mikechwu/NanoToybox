@@ -244,6 +244,8 @@ Persistent tracked highlights are feature-gated off via `canTrackBondedGroupHigh
 - `colorEditorOpenForGroupId: string | null` — tracks which group's color popover is open
 - Cleared conditionally in `setBondedGroups`: only when the open group disappears from the new group list
 - `bondedGroupColorOverrides` — per-atom color overrides (annotation-global)
+- `bondedGroupsExpanded` defaults to `true`, preserved across `resetTransientState` (user's collapse/expand choice survives resets)
+- `bondedSmallGroupsExpanded` still resets to `false` (data-dependent — small clusters may not exist after scene change)
 
 **CONFIG additions** (`config.ts`):
 - `atomColorOverride.minSaturation` (0.7) — perceptual saturation lift threshold for override colors
@@ -255,7 +257,8 @@ Persistent tracked highlights are feature-gated off via `canTrackBondedGroupHigh
 - `clearAtomColorOverrides()` removed (dead code)
 
 **BondedGroupsPanel.tsx**:
-- Uses `createPortal` for color popover (portal + backdrop)
+- Unified popover uses `buildGroupColorLayout` + `ColorSwatch` component: primary (default) centered on top, secondary presets in responsive grid — no platform-specific JSX
+- Panel expanded by default with disclosure header (`aria-expanded` + `aria-controls="bonded-groups-list"`)
 - `useGroupColorState` hook returns `GroupColorState` with `hasDefault` flag (detects atoms still at base color within a partially colored group)
 - `panelSide` prop threaded to `ClusterRow` for popover positioning (left/right)
 - Escape key handler closes color editor
@@ -264,6 +267,13 @@ Persistent tracked highlights are feature-gated off via `canTrackBondedGroupHigh
 **CSS** (`page/index.html`):
 - 5-column grid for bonded-group list: color-chip | label | atoms | center | follow
 - Portal popover + backdrop at z-index 199 (backdrop) / 200 (popover)
+- Responsive grid for color popover: 3x2 mobile, 6x1 desktop via `@media (min-width: 768px)` — same JSX, CSS-only breakpoint
+- Plain borderless color chips (`.bonded-groups-swatch`); active swatch scales 1.3x with no border/box-shadow
+
+**Data model** (`BondedGroupsPanel.tsx`):
+- `GroupColorOption` — discriminated union: `{ kind: 'default' }` | `{ kind: 'preset'; hex: string }`
+- `GROUP_COLOR_OPTIONS` — static palette array (1 default + 6 presets, tuned for luminance separation under 3D atom lighting)
+- `buildGroupColorLayout(options)` — splits the options array into `{ primary, secondary }` (`GroupColorLayout`); primary is the default swatch, secondary is the preset grid
 
 ### Highlight Composition Policy (Dual-Channel Architecture)
 

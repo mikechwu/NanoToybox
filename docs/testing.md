@@ -192,30 +192,34 @@ Architecture extractions should be guarded at the extracted owner, not only thro
 | `frame-runtime.test.ts` | Per-frame pipeline ordering (worker-mode sequencing proof, review-mode gating, drag-refresh gating, sync-mode fallback, placement framing integration: framing runs during placement, orbit-follow suppressed, idle shrink allowed, drag framing + reprojection, drag reprojection not called when idle) |
 | `app-lifecycle.test.ts` | Teardown sequence ordering (exact dependency-ordered call sequence, subscription cleanup, partial-init safety) |
 
-### UI Components (53 tests across 2 files)
+### UI Components (54 tests across 2 files)
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
-| `bonded-groups-panel.test.tsx` | 46 | Full BondedGroupsPanel contract (see breakdown below) |
+| `bonded-groups-panel.test.tsx` | 47 | Full BondedGroupsPanel contract (see breakdown below) |
 | `status-bar-precedence.test.tsx` | 7 | Rewritten for message-only contract: status message precedence rules across simulation states |
 
 Previously-skipped StatusBar tests have been unskipped and now pass.
 
-#### BondedGroupsPanel Test Breakdown (46 tests)
+#### BondedGroupsPanel Test Breakdown (47 tests)
 
-Tests cover the full two-level UI, highlight wiring, color editing, highlight hide behavior, and config contracts:
+Tests cover the disclosure pattern, two-level UI, highlight wiring, color editing, popover layout, highlight hide behavior, buildGroupColorLayout, and config contracts:
 
-**Core panel behavior:** returns null when no groups, collapsed header with count, header click expands large clusters, small-clusters button expands only small groups, second header click collapses, side-class defaults, side-right class when store side is right.
+**Disclosure pattern:** panel expanded by default with large clusters visible, header shows Collapse when expanded and Expand when collapsed, aria-expanded toggles correctly on header click, header click collapses everything.
 
-**Selection and highlight:** row click selects/deselects cluster, selected row has selected class, hover adds hovered class when no selection, hover blocked when tracked highlight exists, Clear Highlight button visible when tracked atoms exist, Clear button visible when selected ID is null but tracked atoms persist, panel visible in review with historical groups, panel hidden in review when no groups projected, bonded-group select works in review, bonded-group hover works in review, keyboard Enter/Space toggles selection.
+**Core panel behavior:** returns null when no groups, small-clusters button expands only small groups, side-class defaults, side-right class when store side is right.
 
-**Highlight hide (tracking disabled):** row click does not toggle selection, row has no button role or tabIndex, selected-row class not applied, hover preview still works, Clear Highlight hidden even with legacy `hasTrackedBondedHighlight`, color chip still works, Center and Follow still work when tracking disabled.
+**Highlight hide (tracking disabled):** row click does not toggle selection, row has no button role or tabIndex, selected-row class not applied, hover preview still works, Clear Highlight hidden even with legacy `hasTrackedBondedHighlight`, color chip still works, Center and Follow still work when tracking disabled, panel visible in review with historical groups, panel hidden in review when no groups projected, bonded-group select gated off in review, bonded-group hover works in review, keyboard Enter/Space does not toggle selection when tracked highlight is disabled.
 
-**Color chip and popover:** color chip visible in every row without requiring selection, chip defaults to base atom color (no `has-color` class), clicking chip opens portalled popover (not a grid-row child), chip click does not toggle row selection (independent of selection), choosing a swatch calls `onApplyGroupColor` (7 swatches: 6 presets + original), second chip click closes popover, clicking backdrop closes popover, row gets `bonded-groups-color-open` class when popover active.
+**Color chip and popover:** color chip visible in every row without requiring selection, chip defaults to base atom color (no inline style), clicking chip opens portalled popover (not a grid-row child), chip click does not toggle row selection (independent of selection), choosing a swatch calls `onApplyGroupColor` (7 swatches: 6 presets + original), second chip click closes popover, clicking backdrop closes popover, row gets `bonded-groups-color-open` class when popover active.
+
+**Popover structure (primary + grid layout):** popover has primary section with 1 default swatch centered and grid section with 6 preset swatches in responsive grid (replaces hex ring), default swatch in primary section clears color, preset swatch in grid applies color.
 
 **Hover clearing regressions:** hover clears when cursor leaves row, moving across rows switches preview correctly, opening color popover clears hover preview.
 
-**Original-color swatch and multi-color chip:** popover has original-color swatch instead of clear button (calls `clearGroupColor`), original-color swatch gets active class when no override exists, multi-color group chip gets `multi-color` class and conic gradient (2+ authored colors), colored + default atoms shows multi-color chip with `var(--atom-base-color)` segment, single-color only when ALL atoms have same override (no `multi-color` class), portalled popover does not keep `hoveredBondedGroupId` alive.
+**Original-color swatch and multi-color chip:** popover has original-color swatch instead of clear button (calls `clearGroupColor`), clicking original-color swatch calls onClearGroupColor, original-color swatch gets active class when no override exists, multi-color group chip shows conic gradient (2+ authored colors), colored + default atoms shows conic gradient with `var(--atom-base-color)` segment, single-color chip shows solid background (not conic gradient) when ALL atoms have same override, portalled popover does not keep `hoveredBondedGroupId` alive.
+
+**buildGroupColorLayout:** default option placed in primary slot, secondary preserves original preset order, primary is null when no default option exists, works with varying palette sizes.
 
 **Config contracts:** selected highlight opacity/emissive below readability thresholds, hover highlight more subtle than selected (opacity, emissive, scale), every theme defines numeric atom color for CSS and renderer parity.
 
@@ -269,11 +273,35 @@ The acceptance tests use three intentionally overlapping layers. All three must 
 |------|------:|-------------------|
 | `dock-bar-layout-stability.test.tsx` | 6 | 4 named slot wrappers, paused toggle preserves slot structure, Pause/Resume in same slot, mode slot contains segmented, placement maps to same slots, grid structure |
 
-### Bonded Group Pre-Feature (19 tests)
+### Bonded Group Runtime & Store (20 tests)
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
-| `bonded-group-prefeature.test.ts` | 19 | Display source: live resolution, review resolution, null case, strict review (no live fallback). Capabilities: live allows all, review blocks mutation but allows inspect/target/edit, live mode `canTrackBondedGroupHighlight` false, review mode `canTrackBondedGroupHighlight` false. Appearance: group color writes atom overrides, clear removes overrides, syncToRenderer drives renderer, syncGroupIntents propagates to uncolored atoms, syncGroupIntents does NOT overwrite existing overrides from merged groups, pruning (group disappears then intent pruned), clearGroupColor removes intent so syncGroupIntents won't re-apply. Wiring: initial sync with preloaded store, applyGroupColor drives renderer. Persistence: colors survive timeline mode transitions, annotation-global semantics. |
+| `bonded-groups.test.ts` | 20 | Projection, reconciliation, store behavior, and partitioning (see breakdown below) |
+
+Tests cover connected-component projection, stable tie ordering, merge/split reconciliation, no-op suppression, panel store behavior, group partitioning, and selection ownership:
+
+**Projection:** projects components sorted by size desc, minAtomIndex correct, empty/null physics produce empty groups, reset clears groups.
+
+**Stable tie ordering:** equal-size groups maintain order across projections.
+
+**Merge reconciliation:** merged group inherits ID from largest-overlap predecessor.
+
+**Split reconciliation:** larger-overlap child inherits original ID, smaller child gets new ID.
+
+**No-op suppression:** minAtomIndex change triggers store update, new equal-size groups sort by minAtomIndex fallback, identical projections do not trigger store update.
+
+**Panel store behavior:** `bondedGroupsExpanded` defaults to true (expanded by default), `toggleBondedGroupsExpanded` toggles in both directions, `resetTransientState` preserves expanded preference and clears groups, `bondedSmallGroupsExpanded` defaults to false and toggles, `resetTransientState` collapses small groups.
+
+**Partitioning:** partitions into large and small buckets, custom threshold works.
+
+**Selection ownership:** `projectNow` does not clear `selectedBondedGroupId`, `reset` does not clear `selectedBondedGroupId`.
+
+### Bonded Group Pre-Feature (17 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `bonded-group-prefeature.test.ts` | 17 | Display source: live resolution, review resolution, null case, strict review (no live fallback). Capabilities: live allows all, review blocks mutation but allows inspect/target/edit, live mode `canTrackBondedGroupHighlight` false, review mode `canTrackBondedGroupHighlight` false. Appearance: group color writes atom overrides, clear removes overrides, syncToRenderer drives renderer, syncGroupIntents propagates to uncolored atoms, syncGroupIntents does NOT overwrite existing overrides from merged groups, pruning (group disappears then intent pruned), clearGroupColor removes intent so syncGroupIntents won't re-apply. Wiring: initial sync with preloaded store, applyGroupColor drives renderer. Persistence: colors survive timeline mode transitions, annotation-global semantics. |
 
 ## Frontend Smoke Test
 
@@ -291,7 +319,7 @@ npm run dev
 |---|------|----------|
 | 1 | Page loads | C60 renders with atoms and bonds visible |
 | 2 | Switch structure | New structure loads, old one clears completely |
-| 3 | Atom mode: left-drag on atom | Highlight (green), spring line shows, atom follows cursor |
+| 3 | Atom mode: left-drag on atom | Highlight (cool blue), spring line shows, atom follows cursor |
 | 3a | Hold pointer still during drag | Force line endpoint keeps updating as atom moves under spring tension (per-frame reprojection) |
 | 4 | Release drag | Atom retains momentum, structure vibrates naturally |
 | 5 | Ctrl+click on atom (any mode) | Molecule rotates, spring line visible |
@@ -374,11 +402,12 @@ npm run dev
 - [ ] Atom / Move / Rotate spacing looks identical in live and review modes
 
 #### Bonded Group Architecture
-- [ ] Bonded-group panel visible in live mode with bonded atoms
-- [ ] Bonded-group panel hidden in review mode (no historical topology yet)
-- [ ] Select/hover bonded group works in live mode
-- [ ] Select/hover bonded group blocked in review mode
-- [ ] Theme change preserves authored atom color overrides (if any applied via console/test)
+- [ ] Bonded-group panel visible and expanded by default in live mode
+- [ ] Bonded-group panel visible in review mode with historical topology
+- [ ] Hover preview works in both live and review modes
+- [ ] Persistent click-to-select is hidden (canTrackBondedGroupHighlight: false)
+- [ ] Color editing, Center, Follow work in both live and review
+- [ ] Theme change preserves authored atom color overrides
 - [ ] Structure append preserves authored atom color overrides
 
 | 52 | Speed 0.5x | Motion visibly slower |

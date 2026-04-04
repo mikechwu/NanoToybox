@@ -47,7 +47,7 @@ These checks require a real browser with WebGL and cannot run in headless CI. Ru
 - [ ] Placement camera framing: preview does not cause camera snap, drag past boundary works
 - [ ] Review mode UI lock: enter review → dock Add/mode/Pause disabled with hints → Settings Add Molecule/Clear disabled → Live/Restart exit re-enables
 - [ ] Dock stability: Pause ↔ Resume toggle does not shift neighboring controls
-- [ ] Bonded groups: panel visible in live, hidden in review; per-row inline color chip opens preset swatch popover; authored color overrides persist across theme/structure changes; persistent tracked highlight is feature-gated off (hover preview remains active)
+- [ ] Bonded groups: panel expanded by default with Collapse/Expand disclosure hint visible; per-row inline color chip opens preset swatch popover with responsive layout; authored color overrides persist across theme/structure changes; persistent tracked highlight is feature-gated off (hover preview remains active)
 - [ ] Verify bonded-group color persists across topology changes (group merge/split)
 - [ ] Verify multi-color chip shows conic gradient when group has mixed colors
 - [ ] Verify color popover accessible via Escape key
@@ -130,7 +130,7 @@ Browser                          Web Worker
 - Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)
 - Three.js trajectory viewer: functional at `viewer/index.html`
 - Performance benchmarks in `page/bench/`
-- **Bonded group architecture** — display-source-aware projection, capability policy, annotation-model atom color overrides; inline color editing via per-row color chip with portal popover (preset swatches, conic-gradient multi-color chips), group color intents persist across topology changes; persistent tracked highlight feature-gated off (hover preview remains active); review-mode inspection deferred until historical topology exists
+- **Bonded group architecture** — display-source-aware projection, capability policy, annotation-model atom color overrides; inline color editing via per-row color chip with portal popover (preset swatches, responsive layout, disclosure-pattern panel expanded by default), conic-gradient multi-color chips, group color intents persist across topology changes; persistent tracked highlight feature-gated off (hover preview remains active); review-mode inspection deferred until historical topology exists
 
 ## Project Goal
 

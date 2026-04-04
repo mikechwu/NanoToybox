@@ -34,7 +34,7 @@ npm run dev
 | Text size | Normal (default) / Large — Appearance section in settings. CSS-only token override via `[data-text-size]` attribute |
 | Settings sheet | Adjustable drag strength, rotation strength, damping, speed, boundary mode, theme, and text size — organized in grouped sections (Scene, Simulation, Interaction, Appearance, Boundary, Help) |
 | Containment boundary | Contain mode (soft harmonic wall bounces atoms back) or Remove mode (atoms deleted past boundary). Live atom count in Settings sheet (Scene section). Wall radius auto-scales with atom count (CONFIG.wall.density). Toggle in Settings sheet (Boundary section). |
-| Bonded clusters | Side panel showing live connected components. Hover to preview (pale yellow highlight, desktop only — mouse enter shows, mouse leave clears). Row click selection is feature-gated off; rows are display-only (no `role="button"`, no `tabIndex`). Clear Highlight button is hidden. Two-level expand: large clusters + collapsible small clusters. Per-cluster color chip for authored color overrides (see Color Editing UX below). Center and Follow buttons remain fully interactive. |
+| Bonded clusters | Side panel showing live connected components, expanded by default. Header shows "Collapse" when open, "Expand" when closed; user's expand/collapse preference persists across resets. Hover to preview (pale yellow highlight, desktop only — mouse enter shows, mouse leave clears). Row click selection is feature-gated off; rows are display-only (no `role="button"`, no `tabIndex`). Clear Highlight button is hidden. Two-level expand: large clusters + collapsible small clusters. Per-cluster color chip for authored color overrides (see Color Editing UX below). Center and Follow buttons remain fully interactive. |
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
 | Pause | Primary control — freezes physics, camera/UI remain active |
 | Timeline | TimelineBar with scrub track, review mode (display-only playback of history), and restart from dense frames. Recording arms on first atom interaction (drag/move/rotate/flick) |
@@ -75,7 +75,7 @@ With click-select gated off, the panel layer only carries transient hover previe
 
 **Display-Source-Aware Bonded Groups**
 
-The bonded-group panel is display-source-aware: it projects from live physics topology by default. Review-mode bonded groups are disabled until historical topology storage is implemented. The `selectCanInspectBondedGroups` capability selector gates panel visibility and highlight interactions — currently returns false in review mode.
+The bonded-group panel is display-source-aware: it projects from live physics topology by default and from historical bond topology in review mode. The `selectCanInspectBondedGroups` capability selector gates panel visibility — always returns true in both live and review. Only `canMutateSimulation` is mode-gated (disabled in review).
 
 **Atom Color Overrides (Annotation Model)**
 
@@ -83,7 +83,7 @@ Authored atom color overrides (`bondedGroupColorOverrides`) are global annotatio
 
 **Color Editing UX**
 
-Each cluster row in the bonded-group panel has a 16 px circular color chip to the left of the label. The chip reflects the current color state of the cluster:
+Each cluster row in the bonded-group panel has a 16 px circular color chip to the left of the label. The chip is a plain solid circle with no border ring. It reflects the current color state of the cluster:
 
 | Chip state | Appearance |
 |------------|------------|
@@ -91,7 +91,7 @@ Each cluster row in the bonded-group panel has a 16 px circular color chip to th
 | Single override | The authored color (solid fill) |
 | Multi-color | Conic gradient of unique override colors + a default-color segment if some atoms in the cluster are uncolored |
 
-Clicking the color chip opens a portalled popover (escapes panel overflow). The popover contains 6 preset color swatches plus 1 "original color" swatch that restores the default.
+Clicking the color chip opens a portalled popover (escapes panel overflow). The popover layout has two rows: the default (original) swatch centered on the top row, and 6 preset swatches in a responsive grid below — 3x2 on mobile, 6x1 on desktop. Same structure on all platforms. The active swatch scales up (1.3x) in its own color with no contrasting ring.
 
 **Preset palette:** `#ff5555, #ffbb33, #33dd66, #55aaff, #aa77ff, #ff66aa` — tuned for luminance separation under 3D atom lighting.
 
@@ -137,7 +137,7 @@ The bar uses a fixed-lane layout:
 
 **Review Mode**
 
-Scrubbing away from the live edge auto-pauses the simulation and enters review mode. Review is display-only: `renderer.updateReviewFrame()` never mutates physics. All scene interaction is blocked at the input boundary during review. The bonded-groups panel is hidden and highlights are cleared. The frozen scrubber range is decoupled from live retention.
+Scrubbing away from the live edge auto-pauses the simulation and enters review mode. Review is display-only: `renderer.updateReviewFrame()` never mutates physics. Live-edit actions (drag, add/remove atoms) are blocked at the input boundary during review. The bonded-groups panel remains visible with historical topology, supporting hover preview, Center/Follow, and color editing. The frozen scrubber range is decoupled from live retention.
 
 **Review Mode UI Lock**
 
