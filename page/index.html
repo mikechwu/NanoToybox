@@ -532,30 +532,33 @@ fieldset.segmented {
   box-shadow: inset 0 0 0 1px var(--color-accent-text);
 }
 .bonded-groups-follow-indicator:hover { opacity: 0.8; }
-/* Color chip — sits directly in grid cell */
+/* Color chip — sits directly in grid cell, plain solid fill with no visible border */
 .bonded-groups-color-chip {
-  width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--color-border);
+  width: 16px; height: 16px; border-radius: 50%; border: none;
   background: var(--atom-base-color, #444); cursor: pointer; padding: 0;
-  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  transition: transform 0.15s;
   justify-self: center;
 }
-.bonded-groups-color-chip:hover { transform: scale(1.15); border-color: var(--color-text); }
-.bonded-groups-color-chip.has-color {
-  border-color: rgba(255,255,255,0.35);
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.25);
-}
+.bonded-groups-color-chip:hover { transform: scale(1.15); }
 /* Transparent backdrop — closes popover on outside click */
 .bonded-groups-color-backdrop {
   position: fixed; inset: 0; z-index: 199;
 }
-/* Portalled color popover — escapes panel overflow, positioned via inline style */
+/* Portalled color popover — escapes panel overflow, positioned via inline style.
+   Honeycomb layout: default in center, 6 presets in hex ring around it. */
 .bonded-groups-color-popover {
-  z-index: 200; display: flex; align-items: center; gap: 5px;
-  padding: 6px 10px; white-space: nowrap;
+  z-index: 200;
+  padding: 8px;
   background: var(--panel-bg); backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   border: 1px solid var(--color-border); border-radius: var(--radius-sm);
   box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+}
+.bonded-groups-color-hex {
+  position: relative; width: 72px; height: 72px;
+}
+.bonded-groups-hex-slot {
+  position: absolute; transform: translate(-50%, -50%);
 }
 /* Soften selected-row highlight when color popover is open */
 .bonded-groups-color-open.bonded-groups-selected { background: var(--color-surface-hover) !important; }
@@ -566,16 +569,13 @@ fieldset.segmented {
 }
 .bonded-groups-swatch:hover { transform: scale(1.15); }
 .bonded-groups-swatch.active {
-  border-color: var(--color-text); transform: scale(1.15);
-  box-shadow: 0 0 0 2px var(--color-accent-text);
+  transform: scale(1.3);
+  border-color: transparent;
+  box-shadow: none;
 }
 /* Original-color swatch — uses base atom color, visually consistent with presets */
 .bonded-groups-swatch-original {
   background: var(--atom-base-color, #444);
-}
-/* Multi-color chip — conic gradient segments, no single-color border treatment */
-.bonded-groups-color-chip.multi-color {
-  border-color: rgba(255,255,255,0.25);
 }
 /* Bonded-group list is a single 5-column grid. Header and rows all participate
    in the same column tracks via subgrid, so columns align perfectly regardless

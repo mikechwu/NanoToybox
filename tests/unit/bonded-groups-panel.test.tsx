@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import React from 'react';
 import { render, fireEvent } from '@testing-library/react';
-import { BondedGroupsPanel } from '../../page/js/components/BondedGroupsPanel';
+import { BondedGroupsPanel, buildGroupColorLayout } from '../../page/js/components/BondedGroupsPanel';
 import { useAppStore, type BondedGroupSummary } from '../../page/js/store/app-store';
 import { createBondedGroupHighlightRuntime } from '../../page/js/runtime/bonded-group-highlight-runtime';
 import { CONFIG } from '../../page/js/config';
@@ -335,14 +335,13 @@ describe('BondedGroupsPanel', () => {
     expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
   });
 
-  it('color chip defaults to base atom color (no has-color class) when no override', () => {
+  it('color chip defaults to base atom color (no inline style) when no override', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
     const c = renderPanel();
     const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
     expect(chip).toBeTruthy();
-    // No authored color → no inline background style, no has-color class
-    expect(chip.classList.contains('has-color')).toBe(false);
+    // No authored color → no inline background style (CSS fallback applies)
     expect(chip.style.background).toBe('');
   });
 
@@ -384,17 +383,17 @@ describe('BondedGroupsPanel', () => {
     const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
     fireEvent.click(chip); // open popover
 
-    // Swatches inside the active popover (6 presets + 1 original = 7)
+    // 7 swatches in hex layout: default center + 6 ring presets
     const popover = document.querySelector('.bonded-groups-color-popover')!;
-    const swatches = popover.querySelectorAll('.bonded-groups-swatch');
-    expect(swatches.length).toBe(7);
+    const swatches = popover.querySelectorAll('.bonded-groups-swatch:not(.bonded-groups-swatch-original)');
+    expect(swatches.length).toBe(6);
 
-    // Click the blue swatch (#55aaff is index 3 in PRESET_COLORS)
+    // Click the blue swatch (#55aaff is index 3 in presets)
     fireEvent.click(swatches[3]);
     expect(appliedColors['a']).toBe('#55aaff');
 
-    // Chip now shows has-color class (already had override, so it was present)
-    expect(chip.classList.contains('has-color')).toBe(true);
+    // Chip has inline background from the override
+    expect(chip.style.background).not.toBe('');
   });
 
   it('second chip click closes the popover', () => {
@@ -531,10 +530,9 @@ describe('BondedGroupsPanel', () => {
     expect(original!.classList.contains('active')).toBe(true);
   });
 
-  it('multi-color group chip gets multi-color class and conic gradient', () => {
+  it('multi-color group chip shows conic gradient', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
-    // Two different colors on atoms in group 'a'
     useAppStore.getState().setBondedGroupColorOverrides({
       0: { hex: '#ff5555' }, 1: { hex: '#ff5555' },
       2: { hex: '#33dd66' }, 3: { hex: '#33dd66' },
@@ -542,32 +540,25 @@ describe('BondedGroupsPanel', () => {
     const c = renderPanel();
 
     const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
-    expect(chip.classList.contains('multi-color')).toBe(true);
-    expect(chip.classList.contains('has-color')).toBe(true);
-    // Background should contain conic-gradient
     expect(chip.style.background).toContain('conic-gradient');
   });
 
-  it('colored + default atoms shows multi-color chip with default segment', () => {
+  it('colored + default atoms shows conic gradient with default segment', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
-    // Only atoms 0, 1 have overrides — atoms 2, 3, 4 are default
     useAppStore.getState().setBondedGroupColorOverrides({
       0: { hex: '#ff5555' }, 1: { hex: '#ff5555' },
     });
     const c = renderPanel();
 
     const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
-    expect(chip.classList.contains('multi-color')).toBe(true);
-    // Conic gradient should include atom-base-color for the default segment
     expect(chip.style.background).toContain('conic-gradient');
     expect(chip.style.background).toContain('var(--atom-base-color');
   });
 
-  it('single-color group chip does not get multi-color class', () => {
+  it('single-color chip shows solid background, not conic gradient', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     useAppStore.getState().toggleBondedGroupsExpanded();
-    // ALL atoms in group 'a' have the same color — no default atoms remain
     useAppStore.getState().setBondedGroupColorOverrides({
       0: { hex: '#ff5555' }, 1: { hex: '#ff5555' }, 2: { hex: '#ff5555' },
       3: { hex: '#ff5555' }, 4: { hex: '#ff5555' },
@@ -575,8 +566,9 @@ describe('BondedGroupsPanel', () => {
     const c = renderPanel();
 
     const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
-    expect(chip.classList.contains('multi-color')).toBe(false);
-    expect(chip.classList.contains('has-color')).toBe(true);
+    expect(chip.style.background).not.toContain('conic-gradient');
+    // jsdom normalizes hex to rgb
+    expect(chip.style.background).toContain('rgb(255, 85, 85)');
   });
 
   it('portalled popover does not keep hoveredBondedGroupId alive', () => {
@@ -595,6 +587,46 @@ describe('BondedGroupsPanel', () => {
     const backdrop = document.querySelector('.bonded-groups-color-backdrop')!;
     fireEvent.click(backdrop);
     expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+  });
+
+  // ── Unified popover structure ──
+
+  it('popover has honeycomb layout: default center + 6 presets in hex ring', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    fireEvent.click(c.querySelector('.bonded-groups-color-chip')!);
+
+    const popover = document.querySelector('.bonded-groups-color-popover')!;
+    const hex = popover.querySelector('.bonded-groups-color-hex')!;
+    expect(hex).toBeTruthy();
+    // 7 slots total: 1 center + 6 ring
+    const slots = hex.querySelectorAll('.bonded-groups-hex-slot');
+    expect(slots.length).toBe(7);
+    // 7 swatches total: 1 default + 6 presets
+    expect(hex.querySelectorAll('.bonded-groups-swatch').length).toBe(7);
+    expect(hex.querySelector('.bonded-groups-swatch-original')).toBeTruthy();
+  });
+
+  it('default swatch in hex center clears color', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff5555' } });
+    const c = renderPanel();
+    fireEvent.click(c.querySelector('.bonded-groups-color-chip')!);
+    const original = document.querySelector('.bonded-groups-swatch-original')!;
+    fireEvent.click(original);
+    expect(clearedGroups).toContain('a');
+  });
+
+  it('preset swatch in hex ring applies color', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    fireEvent.click(c.querySelector('.bonded-groups-color-chip')!);
+    const presets = document.querySelectorAll('.bonded-groups-swatch:not(.bonded-groups-swatch-original)');
+    fireEvent.click(presets[0]); // first preset in ring
+    expect(appliedColors['a']).toBe('#ff5555');
   });
 });
 
@@ -617,9 +649,51 @@ describe('theme atom color contract', () => {
   it('every theme defines a numeric atom color for CSS and renderer parity', () => {
     for (const [, t] of Object.entries(THEMES)) {
       expect(typeof t.atom).toBe('number');
-      // Must produce a valid 6-char hex for --atom-base-color CSS variable
       const hex = '#' + t.atom.toString(16).padStart(6, '0');
       expect(hex).toMatch(/^#[0-9a-f]{6}$/);
     }
   });
 });
+
+describe('buildGroupColorLayout', () => {
+  it('places default option in primary slot', () => {
+    const layout = buildGroupColorLayout([
+      { kind: 'default' },
+      { kind: 'preset', hex: '#ff5555' },
+      { kind: 'preset', hex: '#33dd66' },
+    ]);
+    expect(layout.primary).toEqual({ kind: 'default' });
+  });
+
+  it('secondary preserves original preset order', () => {
+    const layout = buildGroupColorLayout([
+      { kind: 'default' },
+      { kind: 'preset', hex: '#ff5555' },
+      { kind: 'preset', hex: '#33dd66' },
+    ]);
+    expect(layout.secondary).toEqual([
+      { kind: 'preset', hex: '#ff5555' },
+      { kind: 'preset', hex: '#33dd66' },
+    ]);
+  });
+
+  it('primary is null when no default option exists', () => {
+    const layout = buildGroupColorLayout([
+      { kind: 'preset', hex: '#ff5555' },
+    ]);
+    expect(layout.primary).toBeNull();
+    expect(layout.secondary.length).toBe(1);
+  });
+
+  it('works with varying palette sizes', () => {
+    const layout = buildGroupColorLayout([
+      { kind: 'default' },
+      { kind: 'preset', hex: '#aaa' },
+      { kind: 'preset', hex: '#bbb' },
+      { kind: 'preset', hex: '#ccc' },
+      { kind: 'preset', hex: '#ddd' },
+    ]);
+    expect(layout.secondary.length).toBe(4);
+  });
+});
+

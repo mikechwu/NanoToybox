@@ -21,8 +21,63 @@ import { useAppStore } from '../store/app-store';
 import { partitionBondedGroups } from '../store/selectors/bonded-groups';
 import { IconCenter, IconFollow } from './Icons';
 
+/** Color option model — one unified type for default + preset colors. */
+type GroupColorOption =
+  | { kind: 'default' }
+  | { kind: 'preset'; hex: string };
+
 /** Preset palette — tuned for luminance separation under 3D atom lighting. */
-const PRESET_COLORS = ['#ff5555', '#ffbb33', '#33dd66', '#55aaff', '#aa77ff', '#ff66aa'];
+const GROUP_COLOR_OPTIONS: GroupColorOption[] = [
+  { kind: 'default' },
+  { kind: 'preset', hex: '#ff5555' },
+  { kind: 'preset', hex: '#ffbb33' },
+  { kind: 'preset', hex: '#33dd66' },
+  { kind: 'preset', hex: '#55aaff' },
+  { kind: 'preset', hex: '#aa77ff' },
+  { kind: 'preset', hex: '#ff66aa' },
+];
+
+/** Layout split: primary (default) in hex center, secondary (presets) in hex ring. */
+interface GroupColorLayout {
+  primary: GroupColorOption | null;
+  secondary: GroupColorOption[];
+}
+
+export function buildGroupColorLayout(options: GroupColorOption[]): GroupColorLayout {
+  const primary = options.find(o => o.kind === 'default') ?? null;
+  const secondary = options.filter(o => o.kind !== 'default');
+  return { primary, secondary };
+}
+
+const COLOR_LAYOUT = buildGroupColorLayout(GROUP_COLOR_OPTIONS);
+
+/** Hex ring geometry — 6 positions at 60° intervals, starting from top clockwise. */
+const HEX_RADIUS = 26; // px, center-to-center distance
+function hexSlotStyle(index: number): React.CSSProperties {
+  const angle = index * 60 * Math.PI / 180;
+  const x = HEX_RADIUS * Math.sin(angle);
+  const y = -HEX_RADIUS * Math.cos(angle);
+  return { left: `calc(50% + ${Math.round(x * 10) / 10}px)`, top: `calc(50% + ${Math.round(y * 10) / 10}px)` };
+}
+
+/** Reusable swatch button — owns active class, visual treatment, and aria-label. */
+function ColorSwatch({ option, active, onSelect }: {
+  option: GroupColorOption;
+  active: boolean;
+  onSelect: (option: GroupColorOption) => void;
+}) {
+  const isDefault = option.kind === 'default';
+  return (
+    <button
+      role="menuitem"
+      className={`bonded-groups-swatch${isDefault ? ' bonded-groups-swatch-original' : ''}${active ? ' active' : ''}`}
+      style={isDefault ? undefined : { background: option.hex }}
+      onClick={() => onSelect(option)}
+      aria-label={isDefault ? 'Restore original color' : `Set color ${option.hex}`}
+      type="button"
+    />
+  );
+}
 
 /**
  * Derived color state for a group's chip.
@@ -98,7 +153,6 @@ function ClusterRow({ id, displayIndex, atomCount, isSmall, canTarget, canEditCo
   const isHovered = hoveredId === id && !hasTracked;
   const isFollowingThisGroup = orbitFollowEnabled && cameraTargetRef?.kind === 'bonded-group' && cameraTargetRef.groupId === id;
   const colorState = useGroupColorState(id);
-  const hasAuthoredColor = colorState.kind !== 'default';
   const activeHex = colorState.kind === 'single' ? colorState.hex : null;
   const chipStyle = useMemo(() => chipBackground(colorState), [colorState]);
   const chipRef = useRef<HTMLButtonElement>(null);
@@ -136,12 +190,12 @@ function ClusterRow({ id, displayIndex, atomCount, isSmall, canTarget, canEditCo
     onToggleColorEditor(id);
   }, [id, onToggleColorEditor, callbacks]);
 
-  const handleApplyColor = useCallback((hex: string) => {
-    callbacks?.onApplyGroupColor?.(id, hex);
-  }, [id, callbacks]);
-
-  const handleClearColor = useCallback(() => {
-    callbacks?.onClearGroupColor?.(id);
+  const handleSelectOption = useCallback((option: GroupColorOption) => {
+    if (option.kind === 'default') {
+      callbacks?.onClearGroupColor?.(id);
+    } else {
+      callbacks?.onApplyGroupColor?.(id, option.hex);
+    }
   }, [id, callbacks]);
 
   // Close popover on Escape key
@@ -160,9 +214,9 @@ function ClusterRow({ id, displayIndex, atomCount, isSmall, canTarget, canEditCo
     const rect = chipRef.current.getBoundingClientRect();
     const top = rect.top + rect.height / 2;
     if (panelSide === 'left') {
-      return { position: 'fixed', top, left: rect.right + 8, transform: 'translateY(-50%)' };
+      return { position: 'fixed', top, left: rect.right + 12, transform: 'translateY(-50%)' };
     }
-    return { position: 'fixed', top, right: window.innerWidth - rect.left + 8, transform: 'translateY(-50%)' };
+    return { position: 'fixed', top, right: window.innerWidth - rect.left + 12, transform: 'translateY(-50%)' };
   }, [colorEditorOpen, panelSide]);
 
   return (
@@ -179,7 +233,7 @@ function ClusterRow({ id, displayIndex, atomCount, isSmall, canTarget, canEditCo
       {canEditColor ? (
         <button
           ref={chipRef}
-          className={`bonded-groups-color-chip${hasAuthoredColor ? ' has-color' : ''}${colorState.kind === 'multi' ? ' multi-color' : ''}`}
+          className="bonded-groups-color-chip"
           style={chipStyle}
           onClick={handleColorChipClick}
           aria-label={colorState.kind === 'multi' ? `Multiple colors in cluster ${displayIndex}` : `Edit color for cluster ${displayIndex}`}
@@ -209,24 +263,28 @@ function ClusterRow({ id, displayIndex, atomCount, isSmall, canTarget, canEditCo
         <>
           <div className="bonded-groups-color-backdrop" role="presentation" onClick={handleColorChipClick} />
           <div className="bonded-groups-color-popover" role="menu" aria-label="Color swatches" style={popoverStyle} onClick={(e) => e.stopPropagation()}>
-            {PRESET_COLORS.map(hex => (
-              <button
-                key={hex}
-                role="menuitem"
-                className={`bonded-groups-swatch${activeHex === hex ? ' active' : ''}`}
-                style={{ background: hex }}
-                onClick={() => handleApplyColor(hex)}
-                aria-label={`Set color ${hex}`}
-                type="button"
-              />
-            ))}
-            <button
-              role="menuitem"
-              className={`bonded-groups-swatch bonded-groups-swatch-original${colorState.kind === 'default' ? ' active' : ''}`}
-              onClick={handleClearColor}
-              aria-label="Restore original color"
-              type="button"
-            />
+            <div className="bonded-groups-color-hex">
+              {/* Center: default swatch */}
+              {COLOR_LAYOUT.primary && (
+                <div className="bonded-groups-hex-slot" style={{ left: '50%', top: '50%' }}>
+                  <ColorSwatch
+                    option={COLOR_LAYOUT.primary}
+                    active={colorState.kind === 'default'}
+                    onSelect={handleSelectOption}
+                  />
+                </div>
+              )}
+              {/* Ring: 6 preset swatches at 60° intervals */}
+              {COLOR_LAYOUT.secondary.map((option, i) => (
+                <div key={option.kind === 'preset' ? option.hex : 'default'} className="bonded-groups-hex-slot" style={hexSlotStyle(i)}>
+                  <ColorSwatch
+                    option={option}
+                    active={option.kind === 'preset' && activeHex === option.hex}
+                    onSelect={handleSelectOption}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         </>,
         document.body
