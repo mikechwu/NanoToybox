@@ -31,6 +31,7 @@ Or visit the live demo at [mikechwu.github.io/NanoToybox](https://mikechwu.githu
 - **Dark/Light themes** — full UI adaptation with glassmorphic panels
 - **Containment boundary** — soft harmonic wall with Contain/Remove toggle, live atom count, auto-scaling radius
 - **Responsive UI** — phone (bottom sheet), tablet (side panel), desktop (non-modal panel)
+- **Bonded-group color editing** — inline color chip with preset swatch popover; group color intents persist across topology changes, multi-color chips for mixed groups, perceptual lift for 3D readability
 - **React + Zustand** — all UI surfaces are React-authoritative with reactive store
 
 ## How It Works

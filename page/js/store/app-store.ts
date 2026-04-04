@@ -84,8 +84,12 @@ export interface BondedGroupCallbacks {
   onClearHighlight: () => void;
   onCenterGroup?: (id: string) => void;
   onFollowGroup?: (id: string) => void;
+  /** Apply a color to all atoms in the given bonded group (stores intent + immediate override). */
   onApplyGroupColor?: (id: string, colorHex: string) => void;
+  /** Remove the color override and intent for the given bonded group. */
   onClearGroupColor?: (id: string) => void;
+  /** Read-only: returns atom indices for a group (used by color editor to detect current color). */
+  getGroupAtoms?: (id: string) => number[] | null;
 }
 
 /** Atom color value for authored appearance overrides. */
@@ -133,13 +137,15 @@ export interface AppStore {
   onboardingPhase: 'visible' | 'exiting' | 'dismissed';
   setOnboardingPhase: (phase: 'visible' | 'exiting' | 'dismissed') => void;
 
-  // Camera control callbacks (registered by main.ts, consumed by CameraControls)
-  cameraCallbacks: { onCenterObject: () => void; onEnableFollow?: () => boolean; onReturnToObject?: () => void; onFreeze?: () => void } | null;
-  setCameraCallbacks: (cbs: { onCenterObject: () => void; onEnableFollow?: () => boolean; onReturnToObject?: () => void; onFreeze?: () => void }) => void;
+  // Camera control callbacks (registered by main.ts, consumed by CameraControls for Free-Look)
+  // Center/Follow moved to BondedGroupCallbacks (Phase 10 legacy cleanup)
+  cameraCallbacks: { onReturnToObject?: () => void; onFreeze?: () => void } | null;
+  setCameraCallbacks: (cbs: { onReturnToObject?: () => void; onFreeze?: () => void }) => void;
 
   // Focus handle for camera pivot (validated before use — molecule may be removed)
-  // TODO(migration): Remove lastFocusedMoleculeId after bonded-group Center/Follow ships
-  // and old molecule-only CameraControls are retired. cameraTargetRef is the new authority.
+  // TODO: Remove lastFocusedMoleculeId once focus-runtime.ts and orbit-follow-update.ts
+  // migrate to cameraTargetRef exclusively. Bonded-group Center/Follow and CameraControls
+  // cleanup are complete — this is the last legacy fallback path.
   lastFocusedMoleculeId: number | null;
   setLastFocusedMoleculeId: (id: number | null) => void;
   /** Generic camera target — replaces molecule-only lastFocusedMoleculeId for new paths. */
@@ -189,12 +195,17 @@ export interface AppStore {
   selectedBondedGroupId: string | null;
   hoveredBondedGroupId: string | null;
   hasTrackedBondedHighlight: boolean;
+  /** Which group's color editor popover is open (null = closed).
+   *  Cleared automatically by setBondedGroups when the open group disappears
+   *  from the projected topology (e.g. after a merge or split). */
+  colorEditorOpenForGroupId: string | null;
   setBondedGroups: (groups: BondedGroupSummary[]) => void;
   toggleBondedGroupsExpanded: () => void;
   toggleBondedSmallGroupsExpanded: () => void;
   setBondedGroupsSide: (side: 'left' | 'right') => void;
   setSelectedBondedGroup: (id: string | null) => void;
   setHoveredBondedGroup: (id: string | null) => void;
+  setColorEditorOpenForGroupId: (id: string | null) => void;
   // hasTrackedBondedHighlight is read-only from the public interface.
   // Only bonded-group-highlight-runtime may write highlight state (via useAppStore.setState).
   // No public clear action — use highlight runtime's clearHighlight() instead.
@@ -353,6 +364,7 @@ export const useAppStore = create<AppStore>((set) => ({
   selectedBondedGroupId: null,
   hoveredBondedGroupId: null,
   hasTrackedBondedHighlight: false,
+  colorEditorOpenForGroupId: null,
   atomCount: 0,
   activeAtomCount: 0,
   wallRemovedCount: 0,
@@ -424,12 +436,19 @@ export const useAppStore = create<AppStore>((set) => ({
   setTargetSpeed: (speed) => set({ targetSpeed: speed }),
   togglePause: () => set((s) => ({ paused: !s.paused })),
 
-  setBondedGroups: (groups) => set({ bondedGroups: groups }),
+  setBondedGroups: (groups) => set((s) => {
+    const openId = s.colorEditorOpenForGroupId;
+    return {
+      bondedGroups: groups,
+      colorEditorOpenForGroupId: openId && groups.some(g => g.id === openId) ? openId : null,
+    };
+  }),
   toggleBondedGroupsExpanded: () => set((s) => ({ bondedGroupsExpanded: !s.bondedGroupsExpanded })),
   toggleBondedSmallGroupsExpanded: () => set((s) => ({ bondedSmallGroupsExpanded: !s.bondedSmallGroupsExpanded })),
   setBondedGroupsSide: (side) => set({ bondedGroupsSide: side }),
   setSelectedBondedGroup: (id) => set({ selectedBondedGroupId: id }),
   setHoveredBondedGroup: (id) => set({ hoveredBondedGroupId: id }),
+  setColorEditorOpenForGroupId: (id) => set({ colorEditorOpenForGroupId: id }),
   // clearBondedGroupHighlightState removed — highlight runtime owns the full clear path via useAppStore.setState()
 
   updateAtomCount: (n) => set({ atomCount: n }),
@@ -529,6 +548,7 @@ export const useAppStore = create<AppStore>((set) => ({
     selectedBondedGroupId: null,
     hoveredBondedGroupId: null,
     hasTrackedBondedHighlight: false,
+    colorEditorOpenForGroupId: null,
     // Scene
     atomCount: 0,
     activeAtomCount: 0,

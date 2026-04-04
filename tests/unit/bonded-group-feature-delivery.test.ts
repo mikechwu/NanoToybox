@@ -128,20 +128,20 @@ describe('Bonded group camera targeting (Phase 4)', () => {
   });
 });
 
-describe('Bonded group capabilities (inspect + target shipped, color UI pending)', () => {
-  it('review allows inspect/target, defers color edit, blocks mutation', () => {
+describe('Bonded group capabilities (all phases complete)', () => {
+  it('review allows inspect/target/edit, blocks mutation', () => {
     const caps = selectBondedGroupCapabilities({ timelineMode: 'review' } as any);
     expect(caps.canInspectBondedGroups).toBe(true);
     expect(caps.canTargetBondedGroups).toBe(true);
-    expect(caps.canEditBondedGroupColor).toBe(false);
+    expect(caps.canEditBondedGroupColor).toBe(true);
     expect(caps.canMutateSimulation).toBe(false);
   });
 
-  it('live allows inspect/target/mutate, defers color edit', () => {
+  it('live allows all capabilities', () => {
     const caps = selectBondedGroupCapabilities({ timelineMode: 'live' } as any);
     expect(caps.canInspectBondedGroups).toBe(true);
     expect(caps.canTargetBondedGroups).toBe(true);
-    expect(caps.canEditBondedGroupColor).toBe(false);
+    expect(caps.canEditBondedGroupColor).toBe(true);
     expect(caps.canMutateSimulation).toBe(true);
   });
 });

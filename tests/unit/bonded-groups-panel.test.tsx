@@ -16,6 +16,8 @@ import { render, fireEvent } from '@testing-library/react';
 import { BondedGroupsPanel } from '../../page/js/components/BondedGroupsPanel';
 import { useAppStore, type BondedGroupSummary } from '../../page/js/store/app-store';
 import { createBondedGroupHighlightRuntime } from '../../page/js/runtime/bonded-group-highlight-runtime';
+import { CONFIG } from '../../page/js/config';
+import { THEMES } from '../../page/js/themes';
 import type { BondedGroupRuntime } from '../../page/js/runtime/bonded-group-runtime';
 
 const FIXTURE_GROUPS: BondedGroupSummary[] = [
@@ -45,7 +47,13 @@ describe('BondedGroupsPanel', () => {
     getDisplaySourceKind: () => 'live' as const,
   };
 
+  /** Track color overrides applied via callbacks. */
+  let appliedColors: Record<string, string>;
+  let clearedGroups: string[];
+
   beforeEach(() => {
+    appliedColors = {};
+    clearedGroups = [];
     useAppStore.getState().resetTransientState();
     // Wire real highlight runtime via store-registered callbacks (same as main.ts)
     const hl = createBondedGroupHighlightRuntime({
@@ -57,6 +65,9 @@ describe('BondedGroupsPanel', () => {
       onToggleSelect: (id) => hl.toggleSelectedGroup(id),
       onHover: (id) => hl.setHoveredGroup(id),
       onClearHighlight: () => hl.clearHighlight(),
+      onApplyGroupColor: (id, hex) => { appliedColors[id] = hex; },
+      onClearGroupColor: (id) => { clearedGroups.push(id); },
+      getGroupAtoms: (id) => atomMap[id] ?? null,
     });
   });
 
@@ -192,9 +203,8 @@ describe('BondedGroupsPanel', () => {
     const hovered = c.querySelector('.bonded-groups-hovered');
     expect(hovered).toBeTruthy();
 
-    // Hover clears when leaving the list container (not per-row)
-    const list = c.querySelector('.bonded-groups-list');
-    fireEvent.mouseLeave(list!);
+    // Hover clears when leaving the row
+    fireEvent.mouseLeave(rows[0]);
     expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
   });
 
@@ -308,5 +318,306 @@ describe('BondedGroupsPanel', () => {
     // Space also toggles selection
     fireEvent.keyDown(row, { key: ' ' });
     expect(useAppStore.getState().selectedBondedGroupId).toBe('a');
+  });
+
+  // ── Inline color chip + anchored popover tests ──
+
+  it('color chip is visible in every row without requiring selection', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    const chips = c.querySelectorAll('.bonded-groups-color-chip');
+    // 2 large clusters visible
+    expect(chips.length).toBe(2);
+    // No selection needed — chips present before any click
+    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
+  });
+
+  it('color chip defaults to base atom color (no has-color class) when no override', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
+    expect(chip).toBeTruthy();
+    // No authored color → no inline background style, no has-color class
+    expect(chip.classList.contains('has-color')).toBe(false);
+    expect(chip.style.background).toBe('');
+  });
+
+  it('clicking chip opens portalled popover, not a grid-row child', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    const chip = c.querySelector('.bonded-groups-color-chip')!;
+
+    fireEvent.click(chip);
+
+    // Popover is portalled to document.body (escapes panel overflow)
+    const popover = document.querySelector('.bonded-groups-color-popover');
+    expect(popover).toBeTruthy();
+    // It is NOT inside the panel (portalled out)
+    expect(popover!.closest('.bonded-groups-panel')).toBeNull();
+    // Backdrop exists for click-outside-to-close
+    expect(document.querySelector('.bonded-groups-color-backdrop')).toBeTruthy();
+  });
+
+  it('clicking chip does not toggle row selection', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    const chip = c.querySelector('.bonded-groups-color-chip')!;
+
+    fireEvent.click(chip);
+    // Selection should remain null — chip click is independent
+    expect(useAppStore.getState().selectedBondedGroupId).toBeNull();
+  });
+
+  it('choosing a swatch calls onApplyGroupColor and updates chip', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    // Set an override so chip reflects it
+    useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff5555' } });
+    const c = renderPanel();
+
+    const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
+    fireEvent.click(chip); // open popover
+
+    // Swatches inside the active popover (6 presets + 1 original = 7)
+    const popover = document.querySelector('.bonded-groups-color-popover')!;
+    const swatches = popover.querySelectorAll('.bonded-groups-swatch');
+    expect(swatches.length).toBe(7);
+
+    // Click the blue swatch (#55aaff is index 3 in PRESET_COLORS)
+    fireEvent.click(swatches[3]);
+    expect(appliedColors['a']).toBe('#55aaff');
+
+    // Chip now shows has-color class (already had override, so it was present)
+    expect(chip.classList.contains('has-color')).toBe(true);
+  });
+
+  it('second chip click closes the popover', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    const chip = c.querySelector('.bonded-groups-color-chip')!;
+
+    fireEvent.click(chip);
+    expect(document.querySelector('.bonded-groups-color-popover')).toBeTruthy();
+
+    fireEvent.click(chip);
+    expect(document.querySelector('.bonded-groups-color-popover')).toBeNull();
+  });
+
+  it('clicking backdrop closes the popover', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    const chip = c.querySelector('.bonded-groups-color-chip')!;
+
+    fireEvent.click(chip);
+    expect(document.querySelector('.bonded-groups-color-popover')).toBeTruthy();
+
+    const backdrop = document.querySelector('.bonded-groups-color-backdrop')!;
+    fireEvent.click(backdrop);
+    expect(document.querySelector('.bonded-groups-color-popover')).toBeNull();
+  });
+
+  it('row gets bonded-groups-color-open class when popover is active', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    const chip = c.querySelector('.bonded-groups-color-chip')!;
+
+    fireEvent.click(chip);
+    const row = chip.closest('.bonded-groups-row');
+    expect(row?.classList.contains('bonded-groups-color-open')).toBe(true);
+  });
+
+  // ── Hover clearing regressions ──
+
+  it('hover clears when cursor leaves row', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
+
+    fireEvent.mouseEnter(rows[0]);
+    expect(useAppStore.getState().hoveredBondedGroupId).toBe('a');
+
+    fireEvent.mouseLeave(rows[0]);
+    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+  });
+
+  it('moving across rows switches preview correctly', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
+
+    fireEvent.mouseEnter(rows[0]);
+    expect(useAppStore.getState().hoveredBondedGroupId).toBe('a');
+
+    // Move to second row — leave first, enter second
+    fireEvent.mouseLeave(rows[0]);
+    fireEvent.mouseEnter(rows[1]);
+    expect(useAppStore.getState().hoveredBondedGroupId).toBe('b');
+
+    fireEvent.mouseLeave(rows[1]);
+    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+  });
+
+  it('opening color popover clears hover preview', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
+
+    // Hover row, then open its color popover
+    fireEvent.mouseEnter(rows[0]);
+    expect(useAppStore.getState().hoveredBondedGroupId).toBe('a');
+
+    const chip = c.querySelector('.bonded-groups-color-chip')!;
+    fireEvent.click(chip);
+
+    // Hover should be cleared — user is now in color-edit mode
+    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+    // Popover is open
+    expect(document.querySelector('.bonded-groups-color-popover')).toBeTruthy();
+  });
+
+  // ── Original-color swatch + multi-color chip regressions ──
+
+  it('popover has original-color swatch instead of ✕ clear button', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff5555' } });
+    const c = renderPanel();
+    const chip = c.querySelector('.bonded-groups-color-chip')!;
+
+    fireEvent.click(chip);
+
+    // No ✕ clear button
+    expect(document.querySelector('.bonded-groups-swatch-clear')).toBeNull();
+    // Original-color swatch exists
+    const original = document.querySelector('.bonded-groups-swatch-original');
+    expect(original).toBeTruthy();
+    expect(original!.getAttribute('aria-label')).toBe('Restore original color');
+  });
+
+  it('clicking original-color swatch calls onClearGroupColor', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff5555' } });
+    const c = renderPanel();
+    const chip = c.querySelector('.bonded-groups-color-chip')!;
+    fireEvent.click(chip);
+
+    const original = document.querySelector('.bonded-groups-swatch-original')!;
+    fireEvent.click(original);
+    expect(clearedGroups).toContain('a');
+  });
+
+  it('original-color swatch gets active class when no override exists', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    // No overrides — default state
+    const c = renderPanel();
+    const chip = c.querySelector('.bonded-groups-color-chip')!;
+    fireEvent.click(chip);
+
+    const original = document.querySelector('.bonded-groups-swatch-original');
+    expect(original!.classList.contains('active')).toBe(true);
+  });
+
+  it('multi-color group chip gets multi-color class and conic gradient', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    // Two different colors on atoms in group 'a'
+    useAppStore.getState().setBondedGroupColorOverrides({
+      0: { hex: '#ff5555' }, 1: { hex: '#ff5555' },
+      2: { hex: '#33dd66' }, 3: { hex: '#33dd66' },
+    });
+    const c = renderPanel();
+
+    const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
+    expect(chip.classList.contains('multi-color')).toBe(true);
+    expect(chip.classList.contains('has-color')).toBe(true);
+    // Background should contain conic-gradient
+    expect(chip.style.background).toContain('conic-gradient');
+  });
+
+  it('colored + default atoms shows multi-color chip with default segment', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    // Only atoms 0, 1 have overrides — atoms 2, 3, 4 are default
+    useAppStore.getState().setBondedGroupColorOverrides({
+      0: { hex: '#ff5555' }, 1: { hex: '#ff5555' },
+    });
+    const c = renderPanel();
+
+    const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
+    expect(chip.classList.contains('multi-color')).toBe(true);
+    // Conic gradient should include atom-base-color for the default segment
+    expect(chip.style.background).toContain('conic-gradient');
+    expect(chip.style.background).toContain('var(--atom-base-color');
+  });
+
+  it('single-color group chip does not get multi-color class', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    // ALL atoms in group 'a' have the same color — no default atoms remain
+    useAppStore.getState().setBondedGroupColorOverrides({
+      0: { hex: '#ff5555' }, 1: { hex: '#ff5555' }, 2: { hex: '#ff5555' },
+      3: { hex: '#ff5555' }, 4: { hex: '#ff5555' },
+    });
+    const c = renderPanel();
+
+    const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
+    expect(chip.classList.contains('multi-color')).toBe(false);
+    expect(chip.classList.contains('has-color')).toBe(true);
+  });
+
+  it('portalled popover does not keep hoveredBondedGroupId alive', () => {
+    useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
+    useAppStore.getState().toggleBondedGroupsExpanded();
+    const c = renderPanel();
+    const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle)');
+
+    // Hover row, open popover (which clears hover)
+    fireEvent.mouseEnter(rows[0]);
+    const chip = c.querySelector('.bonded-groups-color-chip')!;
+    fireEvent.click(chip);
+    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+
+    // Closing popover via backdrop still has no hover
+    const backdrop = document.querySelector('.bonded-groups-color-backdrop')!;
+    fireEvent.click(backdrop);
+    expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
+  });
+});
+
+// ── Highlight intensity contract ──
+
+describe('panelHighlight config contract', () => {
+  it('selected highlight opacity stays below authored-color readability threshold', () => {
+    expect(CONFIG.panelHighlight.selected.opacity).toBeLessThanOrEqual(0.4);
+    expect(CONFIG.panelHighlight.selected.emissiveIntensity).toBeLessThanOrEqual(0.8);
+  });
+
+  it('hover highlight is more subtle than selected', () => {
+    expect(CONFIG.panelHighlight.hover.opacity).toBeLessThan(CONFIG.panelHighlight.selected.opacity);
+    expect(CONFIG.panelHighlight.hover.emissiveIntensity).toBeLessThan(CONFIG.panelHighlight.selected.emissiveIntensity);
+    expect(CONFIG.panelHighlight.hover.scale).toBeLessThan(CONFIG.panelHighlight.selected.scale);
+  });
+});
+
+describe('theme atom color contract', () => {
+  it('every theme defines a numeric atom color for CSS and renderer parity', () => {
+    for (const [, t] of Object.entries(THEMES)) {
+      expect(typeof t.atom).toBe('number');
+      // Must produce a valid 6-char hex for --atom-base-color CSS variable
+      const hex = '#' + t.atom.toString(16).padStart(6, '0');
+      expect(hex).toMatch(/^#[0-9a-f]{6}$/);
+    }
   });
 });

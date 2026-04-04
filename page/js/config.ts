@@ -30,15 +30,26 @@ export const CONFIG = {
     metalness: 0.0,
   },
 
+  // Perceptual lift for authored atom color overrides — HSL floor clamps
+  // (minimum saturation and lightness) that ensure override colors remain
+  // readable under the shared atom lighting/material stack.
+  // Tuned against THEMES atom colors and camera lighting intensities.
+  atomColorOverride: {
+    minSaturation: 0.7,
+    minLightness: 0.55,
+  },
+
   bondMaterial: {
     roughness: 0.35,     // smoother than atoms — cleaner specular highlight on tubes
     metalness: 0.0,
   },
 
-  // Panel highlight (bonded group selection/hover) — warm palette, persistent
+  // Panel highlight (bonded group selection/hover) — warm palette, persistent.
+  // Tuned to stay readable alongside authored atom color overrides:
+  // selected = light halo emphasis, hover = subtle preview.
   panelHighlight: {
-    selected: { color: 0xffe45c, emissive: 0xffcc33, emissiveIntensity: 1.5, opacity: 0.6, scale: 1.2 },
-    hover:    { color: 0xfff0a0, emissive: 0xffdd66, emissiveIntensity: 0.8, opacity: 0.4, scale: 1.1 },
+    selected: { color: 0xffe45c, emissive: 0xffcc33, emissiveIntensity: 0.6, opacity: 0.35, scale: 1.12 },
+    hover:    { color: 0xfff0a0, emissive: 0xffdd66, emissiveIntensity: 0.4, opacity: 0.2, scale: 1.06 },
   },
 
   // Interaction highlight (Move/Rotate mode) — cool palette, transient

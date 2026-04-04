@@ -199,14 +199,46 @@ The bonded-group subsystem is display-source-aware with a centralized capability
 | Projection | `runtime/bonded-group-runtime.ts` | Consumes `getDisplaySource()`, stable IDs, store projection |
 | Capability policy | `selectors/bonded-group-capabilities.ts` | `selectCanInspectBondedGroups` gates panel + highlight |
 | Highlight | `runtime/bonded-group-highlight-runtime.ts` | Select/hover gated by `canInspectBondedGroupsNow()` |
-| Appearance | `runtime/bonded-group-appearance-runtime.ts` | Group color → atom overrides via `renderer.setAtomColorOverrides()` |
-| Store | `app-store.ts` | `bondedGroupColorOverrides` (annotation-global) |
+| Appearance | `runtime/bonded-group-appearance-runtime.ts` | Group-to-atom color mapping, group color intents (`Map<string, string>`), renderer sync |
+| Store | `app-store.ts` | `bondedGroupColorOverrides` (annotation-global), `colorEditorOpenForGroupId` |
 
 Key rules:
 - Bonded-group runtime reads `getDisplaySource()`, never physics directly
 - Review inspection disabled until historical topology + review highlight rendering exist
 - Color overrides are annotations (Option B) — persist across live/review, not part of timeline
 - Highlight overlays and color overrides are independent renderer layers
+
+#### Color Editing Module Ownership & Wiring
+
+**Appearance runtime** (`runtime/bonded-group-appearance-runtime.ts`):
+- Owns group-to-atom color mapping, group color intents (`Map<string, string>`), and renderer sync
+- `syncGroupIntents()` propagates intents to uncolored atoms after topology changes (newly joined atoms inherit the group's color)
+- Wired to both projection trigger points in main.ts: `onSceneMutated` (scene changes) and `syncBondedGroupsForDisplayFrame` (timeline coordinator)
+
+**Store additions** (`store/app-store.ts`):
+- `colorEditorOpenForGroupId: string | null` — tracks which group's color popover is open
+- Cleared conditionally in `setBondedGroups`: only when the open group disappears from the new group list
+- `bondedGroupColorOverrides` — per-atom color overrides (annotation-global)
+
+**CONFIG additions** (`config.ts`):
+- `atomColorOverride.minSaturation` (0.7) — perceptual saturation lift threshold for override colors
+- `atomColorOverride.minLightness` (0.55) — perceptual lightness lift threshold for override colors
+
+**Renderer changes** (`renderer.ts`):
+- `_applyAtomColorOverrides()` sets atom material to white when overrides are active, restores on clear. Uses CONFIG thresholds for HSL lift
+- Re-applied after `populateAppendedAtoms()` and `applyTheme()` for lifecycle resilience
+- `clearAtomColorOverrides()` removed (dead code)
+
+**BondedGroupsPanel.tsx**:
+- Uses `createPortal` for color popover (portal + backdrop)
+- `useGroupColorState` hook returns `GroupColorState` with `hasDefault` flag (detects atoms still at base color within a partially colored group)
+- `panelSide` prop threaded to `ClusterRow` for popover positioning (left/right)
+- Escape key handler closes color editor
+- ARIA attributes on interactive elements
+
+**CSS** (`page/index.html`):
+- 5-column grid for bonded-group list: color-chip | label | atoms | center | follow
+- Portal popover + backdrop at z-index 199 (backdrop) / 200 (popover)
 
 ### Highlight Composition Policy (Dual-Channel Architecture)
 
@@ -315,7 +347,7 @@ E2E tests inject `?e2e=1` via `gotoApp()` from `tests/e2e/helpers.ts`.
 | Focus resolution & onboarding | `page/js/runtime/focus-runtime.ts`, `page/js/runtime/onboarding.ts`, `page/js/components/OnboardingOverlay.tsx` |
 | Object View & icons | `page/js/components/CameraControls.tsx`, `page/js/components/Icons.tsx` |
 | E2E test helpers | `tests/e2e/helpers.ts` (gotoApp), `tests/e2e/camera-onboarding.spec.ts` |
-| Bonded clusters (panel + highlight) | `page/js/runtime/bonded-group-runtime.ts`, `page/js/runtime/bonded-group-highlight-runtime.ts`, `page/js/runtime/bonded-group-coordinator.ts`, `page/js/components/BondedGroupsPanel.tsx`, `page/js/runtime/interaction-highlight-runtime.ts` |
+| Bonded clusters (panel + highlight + color) | `page/js/runtime/bonded-group-runtime.ts`, `page/js/runtime/bonded-group-highlight-runtime.ts`, `page/js/runtime/bonded-group-appearance-runtime.ts`, `page/js/runtime/bonded-group-coordinator.ts`, `page/js/components/BondedGroupsPanel.tsx`, `page/js/runtime/interaction-highlight-runtime.ts` |
 | Highlight tests | `tests/unit/bonded-group-highlight.test.ts`, `tests/unit/renderer-interaction-highlight.test.ts`, `tests/unit/highlight-test-utils.ts` |
 | Store callback wiring | `page/js/runtime/ui-bindings.ts`, `page/js/store/app-store.ts` |
 | Scene / placement | `page/js/scene.ts`, `page/js/placement.ts`, `page/js/runtime/placement-solver.ts`, `tests/unit/placement-solver.test.ts` |

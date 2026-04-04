@@ -61,19 +61,19 @@ describe('bonded-group display source', () => {
 // ── Capability Policy Tests ──
 
 describe('bonded-group capabilities', () => {
-  it('8: live allows inspect/target/mutate, defers color edit until UI', () => {
+  it('8: live allows all capabilities', () => {
     const caps = selectBondedGroupCapabilities({ timelineMode: 'live' } as any);
     expect(caps.canInspectBondedGroups).toBe(true);
     expect(caps.canTargetBondedGroups).toBe(true);
-    expect(caps.canEditBondedGroupColor).toBe(false); // until panel color UI
+    expect(caps.canEditBondedGroupColor).toBe(true);
     expect(caps.canMutateSimulation).toBe(true);
   });
 
-  it('9: review allows inspect/target, defers color edit, blocks mutation', () => {
+  it('9: review allows inspect/target/edit, blocks mutation', () => {
     const caps = selectBondedGroupCapabilities({ timelineMode: 'review' } as any);
     expect(caps.canInspectBondedGroups).toBe(true);
     expect(caps.canTargetBondedGroups).toBe(true);
-    expect(caps.canEditBondedGroupColor).toBe(false); // until panel color UI
+    expect(caps.canEditBondedGroupColor).toBe(true);
     expect(caps.canMutateSimulation).toBe(false);
   });
 });
@@ -133,6 +133,100 @@ describe('bonded-group appearance runtime', () => {
     expect(mockRenderer.setAtomColorOverrides).toHaveBeenCalled();
     const lastCall = mockRenderer.setAtomColorOverrides.mock.calls.at(-1)![0];
     expect(lastCall[0]).toEqual({ hex: '#ff0000' });
+  });
+
+  it('14: syncGroupIntents propagates color to newly joined uncolored atoms', () => {
+    // Mutable atom map simulating topology change
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1, 2] };
+    const mockRenderer = { setAtomColorOverrides: vi.fn() };
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => mockRenderer,
+    });
+
+    // Apply red to g1 (atoms 0, 1, 2)
+    runtime.applyGroupColor('g1', '#ff0000');
+    let overrides = useAppStore.getState().bondedGroupColorOverrides;
+    expect(overrides[0]).toEqual({ hex: '#ff0000' });
+    expect(overrides[3]).toBeUndefined();
+
+    // Simulate topology change: atoms 3, 4 join g1
+    groupAtoms.g1 = [0, 1, 2, 3, 4];
+
+    // Sync intents — should propagate red to new uncolored atoms
+    runtime.syncGroupIntents();
+    overrides = useAppStore.getState().bondedGroupColorOverrides;
+    expect(overrides[3]).toEqual({ hex: '#ff0000' });
+    expect(overrides[4]).toEqual({ hex: '#ff0000' });
+  });
+
+  it('14b: syncGroupIntents does NOT overwrite existing overrides from merged groups', () => {
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1], g2: [2, 3] };
+    const mockRenderer = { setAtomColorOverrides: vi.fn() };
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => mockRenderer,
+    });
+
+    // Apply red to g1, green to g2
+    runtime.applyGroupColor('g1', '#ff0000');
+    runtime.applyGroupColor('g2', '#00ff00');
+
+    // Simulate merge: g2 absorbed into g1
+    groupAtoms.g1 = [0, 1, 2, 3];
+    delete groupAtoms.g2;
+
+    // Sync intents — g1's red intent should NOT overwrite g2's green atoms
+    runtime.syncGroupIntents();
+    const overrides = useAppStore.getState().bondedGroupColorOverrides;
+    expect(overrides[0]).toEqual({ hex: '#ff0000' }); // g1 original — red
+    expect(overrides[1]).toEqual({ hex: '#ff0000' }); // g1 original — red
+    expect(overrides[2]).toEqual({ hex: '#00ff00' }); // g2 original — green preserved
+    expect(overrides[3]).toEqual({ hex: '#00ff00' }); // g2 original — green preserved
+  });
+
+  it('15: syncGroupIntents prunes intents for groups that no longer exist', () => {
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1] };
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
+    });
+
+    runtime.applyGroupColor('g1', '#ff0000');
+    // Group g1 disappears from topology
+    delete groupAtoms.g1;
+
+    // Should not crash and should prune the intent
+    runtime.syncGroupIntents();
+    // Overrides for old atoms are NOT removed (they might be in other groups now),
+    // but the intent is pruned so future syncs won't try to re-apply.
+  });
+
+  it('16: clearGroupColor removes intent so syncGroupIntents does not re-apply', () => {
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1] };
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
+    });
+
+    runtime.applyGroupColor('g1', '#ff0000');
+    runtime.clearGroupColor('g1');
+
+    // Atom 2 joins g1
+    groupAtoms.g1 = [0, 1, 2];
+    runtime.syncGroupIntents();
+
+    // Atom 2 should NOT get colored (intent was cleared)
+    const overrides = useAppStore.getState().bondedGroupColorOverrides;
+    expect(overrides[2]).toBeUndefined();
   });
 });
 

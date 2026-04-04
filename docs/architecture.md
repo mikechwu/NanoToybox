@@ -328,6 +328,14 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 
 **Atom appearance (annotation model):** `bondedGroupColorOverrides` in the store holds authored atom colors as global annotations (not timeline history). The appearance runtime translates group-level color intent to atom-level overrides via `renderer.setAtomColorOverrides()`, separate from highlight overlays. Colors survive scrub/restart/mode transitions.
 
+**Group color intents:** The appearance runtime maintains `groupColorIntents: Map<string, string>` — a group-level color intent that persists across topology changes. `syncGroupIntents()` propagates intents to newly joined uncolored atoms without overwriting existing per-atom overrides from merged groups (preserves multi-color after merges). Stale intents for disappeared groups are pruned on each sync. `syncGroupIntents()` is called after both projection trigger points: `onSceneMutated` and `syncBondedGroupsForDisplayFrame` (timeline coordinator callback).
+
+**Material white trick:** `_applyAtomColorOverrides()` sets the atom material to white (`0xffffff`) when per-instance overrides are active, because `InstancedMesh.setColorAt()` MULTIPLIES with the material color. When overrides are cleared, material is restored to the theme color and instance colors are reset to white. Re-applied after `populateAppendedAtoms()` and `applyTheme()` for lifecycle resilience.
+
+**Perceptual HSL lift:** Override colors receive a perceptual lift — saturation floor from `CONFIG.atomColorOverride.minSaturation`, lightness floor from `CONFIG.atomColorOverride.minLightness` — so they remain readable under the atom material's lighting stack.
+
+**Color editor popover:** The color swatch popover in `BondedGroupsPanel.tsx` is rendered via `createPortal(…, document.body)` to escape the panel's `overflow-y: auto` clipping. Positioned via `chipRef.getBoundingClientRect()` relative to the chip button. `colorEditorOpenForGroupId: string | null` in the store tracks which group's editor is open; `setBondedGroups` clears it conditionally (only when the open group's ID disappears from the new groups list).
+
 ## Key Design Decisions
 
 1. **Python reference + Numba acceleration** — pure Python for correctness, Numba for speed
@@ -356,7 +364,7 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - **bonded-group-highlight-runtime.ts** — persistent atom tracking, hover preview, panel highlight resolution (warm palette via `setHighlightedAtoms`)
 - **bonded-group-coordinator.ts** — coordinated projection + highlight lifecycle (update + teardown)
 - **bonded-group-display-source.ts** — resolves bonded-group topology source: live physics components or review historical topology. Pure function, no side effects.
-- **bonded-group-appearance-runtime.ts** — translates group-level color edits into atom-level overrides via renderer `setAtomColorOverrides()`. Annotation model: colors persist across live/review modes.
+- **bonded-group-appearance-runtime.ts** — translates group-level color edits into atom-level overrides via renderer `setAtomColorOverrides()`. Annotation model: colors persist across live/review modes. Maintains `groupColorIntents` map for topology-resilient intent propagation; `syncGroupIntents()` fills newly joined atoms without overwriting existing overrides.
 - **simulation-timeline.ts** — ring buffers for dense review frames, restart frames, and checkpoints; RestartState contract; frozen review range; truncation on restart
 - **simulation-timeline-coordinator.ts** — orchestrates review/restart across physics, renderer, worker, store
 - **timeline-context-capture.ts** — capture/restore interaction and boundary state via public physics API
@@ -456,7 +464,8 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | Timeline state (`mode`, `currentTimePs`, `reviewTimePs`, `rangePs`, etc.) | simulation-timeline-coordinator.ts (via store) | TimelineBar (scrub, restart), timeline-recording-orchestrator (range updates) |
 | Timeline recording arm state | timeline-recording-policy.ts | interaction-dispatch (first atom interaction: drag/move/rotate/flick) |
 | Review UI lock state | Derived by `selectIsReviewLocked()` from `timelineMode` | Components (visual lock), ui-bindings.ts (runtime guards) |
-| Bonded-group color overrides | app-store (`bondedGroupColorOverrides`) | bonded-group-appearance-runtime (applyGroupColor, clearGroupColor) |
+| Bonded-group color overrides | app-store (`bondedGroupColorOverrides`) | bonded-group-appearance-runtime (applyGroupColor, clearGroupColor); `groupColorIntents` map propagated by `syncGroupIntents()` |
+| Color editor popover | app-store (`colorEditorOpenForGroupId`) | BondedGroupsPanel (chip click); `setBondedGroups` clears when open group disappears |
 | Bonded-group display source | bonded-group-display-source.ts (resolved per projection) | bonded-group-runtime (consumes via getDisplaySource) |
 | Timeline buffers (review frames, restart frames, checkpoints) | simulation-timeline.ts | timeline-recording-orchestrator (writes), simulation-timeline-coordinator (reads) |
 
@@ -518,7 +527,7 @@ bonded-group-highlight-runtime.ts          interaction-highlight-runtime.ts
 
 **Lifecycle cleanup:** `_disposeHighlightLayers()` disposes both InstancedMesh layers and resets all associated state. It is called from `loadStructure()` and `resetToEmpty()` to prevent stale highlight geometry from surviving across structure transitions. The old save/restore pattern (`_restorePanelHighlight`) has been removed entirely.
 
-**Atom color overrides (third visual layer):** `renderer.setAtomColorOverrides()` applies authored per-atom colors to the base InstancedMesh, independent of both highlight layers. The highlight overlays render on top of colored atoms. Color overrides are re-applied after `populateAppendedAtoms()` and `applyTheme()` for lifecycle resilience. The appearance runtime (`bonded-group-appearance-runtime.ts`) translates group-level color intent into atom-level overrides.
+**Atom color overrides (third visual layer):** `renderer.setAtomColorOverrides()` applies authored per-atom colors to the base InstancedMesh, independent of both highlight layers. The highlight overlays render on top of colored atoms. `_applyAtomColorOverrides()` uses the material white trick (material set to `0xffffff` when overrides are active, because `setColorAt()` multiplies with material color) and applies a perceptual HSL lift (`CONFIG.atomColorOverride.minSaturation` / `minLightness` floors) so colors remain readable under the lighting stack. Re-applied after `populateAppendedAtoms()` and `applyTheme()` for lifecycle resilience. The appearance runtime (`bonded-group-appearance-runtime.ts`) translates group-level color intent into atom-level overrides.
 
 ### Deferred Phases
 

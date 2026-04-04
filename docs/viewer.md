@@ -34,7 +34,7 @@ npm run dev
 | Text size | Normal (default) / Large — Appearance section in settings. CSS-only token override via `[data-text-size]` attribute |
 | Settings sheet | Adjustable drag strength, rotation strength, damping, speed, boundary mode, theme, and text size — organized in grouped sections (Scene, Simulation, Interaction, Appearance, Boundary, Help) |
 | Containment boundary | Contain mode (soft harmonic wall bounces atoms back) or Remove mode (atoms deleted past boundary). Live atom count in Settings sheet (Scene section). Wall radius auto-scales with atom count (CONFIG.wall.density). Toggle in Settings sheet (Boundary section). |
-| Bonded clusters | Side panel showing live connected components. Click to select (persistent panel-layer highlight, warm amber), hover to preview (pale yellow, desktop). Two-level expand: large clusters + collapsible small clusters. Clear Highlight button when tracked set exists. |
+| Bonded clusters | Side panel showing live connected components. Click to select (persistent panel-layer highlight, warm amber), hover to preview (pale yellow, desktop). Two-level expand: large clusters + collapsible small clusters. Clear Highlight button when tracked set exists. Per-cluster color chip for authored color overrides (see Color Editing UX below). |
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
 | Pause | Primary control — freezes physics, camera/UI remain active |
 | Timeline | TimelineBar with scrub track, review mode (display-only playback of history), and restart from dense frames. Recording arms on first atom interaction (drag/move/rotate/flick) |
@@ -80,6 +80,30 @@ The bonded-group panel is display-source-aware: it projects from live physics to
 **Atom Color Overrides (Annotation Model)**
 
 Authored atom color overrides (`bondedGroupColorOverrides`) are global annotations that persist across live/review mode transitions. They are applied via `renderer.setAtomColorOverrides()` independently of highlight overlays. Colors survive theme changes, structure appends, scrub, and restart.
+
+**Color Editing UX**
+
+Each cluster row in the bonded-group panel has a 16 px circular color chip to the left of the label. The chip reflects the current color state of the cluster:
+
+| Chip state | Appearance |
+|------------|------------|
+| Default (no overrides) | Base atom color (`--atom-base-color`) |
+| Single override | The authored color (solid fill) |
+| Multi-color | Conic gradient of unique override colors + a default-color segment if some atoms in the cluster are uncolored |
+
+Clicking the color chip opens a portalled popover (escapes panel overflow). The popover contains 6 preset color swatches plus 1 "original color" swatch that restores the default.
+
+**Preset palette:** `#ff5555, #ffbb33, #33dd66, #55aaff, #aa77ff, #ff66aa` — tuned for luminance separation under 3D atom lighting.
+
+**Popover positioning:** left of chip for right-side panels, right of chip for left-side panels.
+
+**Popover dismissal:** chip toggle (re-click), backdrop click, or Escape key.
+
+**Group color intents:** Applied colors persist across topology changes. When atoms join a colored group, they inherit the group's color. When colored groups merge, each group's atoms keep their original color (the chip transitions to the multi-color conic gradient).
+
+**Interaction independence:** Clicking the color chip does NOT toggle row selection or highlight. Hover preview clears when the popover opens.
+
+**Accessibility:** The popover has `role="menu"`, each swatch has `role="menuitem"`, and the backdrop has `role="presentation"`. The multi-color chip announces "Multiple colors in cluster N".
 
 ### Speed & Pause
 

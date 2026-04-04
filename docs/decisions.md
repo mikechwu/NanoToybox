@@ -369,4 +369,30 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Historical color state (Option A) would require extending timeline frames, restart state, and review rendering. Annotation-global colors are simpler to implement and match the UX expectation that color edits are user preferences, not simulation state. Color editing in review is gated on inspection capability (currently disabled).
 
+**Update:** Group-level color intents (D46) now supplement per-atom overrides. The appearance runtime resolves `groupColorIntents` into per-atom overrides, filling only atoms with no existing override. Per-atom overrides remain the renderer-facing contract; group intents are a higher-level annotation layer.
+
 **Evidence:** `page/js/store/app-store.ts` (AtomColorOverrideMap, bondedGroupColorOverrides), `page/js/runtime/bonded-group-appearance-runtime.ts`, `page/js/renderer.ts` (setAtomColorOverrides, _applyAtomColorOverrides), `tests/unit/bonded-group-prefeature.test.ts` (persistence semantics)
+
+## D46: Group Color Intents Over Per-Atom-Only Overrides
+
+**Decision:** Store group-level color intents (`groupColorIntents: Map<string, string>`) that survive topology changes and propagate to uncolored atoms. Intents fill atoms with NO existing override, preserving multi-color after group merges.
+
+**Rationale:** Per-atom-index-only overrides broke on topology changes: when groups merged, newly joined atoms did not inherit the group's color. Group-level intents are resolved by the appearance runtime on each frame, so new atoms entering a group pick up the intent color automatically. Atoms that already carry a per-atom override are left untouched, preserving intentional multi-color within a merged group.
+
+## D47: Material White for InstancedMesh Color Overrides
+
+**Decision:** Set the atom InstancedMesh material to white (`0xffffff`) when color overrides are active; restore the original dark material color on clear.
+
+**Rationale:** `InstancedMesh.setColorAt()` multiplies the per-instance color with the material's base color. With the default dark atom material (`0x444444`), all override colors appeared nearly black regardless of the chosen hue. White is the neutral element for multiplication, so override colors render at their intended value.
+
+## D48: Perceptual HSL Lift for Override Colors
+
+**Decision:** Apply perceptual saturation and lightness floors (from CONFIG) to override colors before passing them to `setColorAt()`.
+
+**Rationale:** Small shaded spheres under strong directional lighting compress hue differences — pale or desaturated colors become indistinguishable. The HSL lift ensures override colors remain visually distinct on 3D-lit geometry without requiring users to manually pick high-saturation values.
+
+## D49: Portal Popover for Color Editor
+
+**Decision:** Render the color swatch popover via `createPortal(document.body)` with a transparent backdrop for click-outside-to-close.
+
+**Rationale:** The bonded-groups panel lives inside a scrollable container with `overflow-y: auto`, which clipped the popover. Portaling to `document.body` escapes all ancestor overflow/stacking contexts. The transparent backdrop provides a standard click-outside dismiss without requiring global event listeners or focus-trap complexity.

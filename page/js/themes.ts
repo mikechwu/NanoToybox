@@ -91,6 +91,9 @@ export function applyThemeTokens(name) {
   s.setProperty('--color-danger', t.uiDanger);
   s.setProperty('--color-fps-text', t.uiFpsText);
   s.setProperty('--color-hint-bg', t.uiHintBg);
+  // --atom-base-color mirrors THEMES[name].atom — the same source the renderer uses
+  // for InstancedMesh default color (renderer.ts _createAtomMaterial, _applyAtomColorOverrides).
+  s.setProperty('--atom-base-color', '#' + t.atom.toString(16).padStart(6, '0'));
 }
 
 /**

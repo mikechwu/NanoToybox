@@ -845,25 +845,55 @@ export class Renderer {
     this._applyAtomColorOverrides();
   }
 
-  /** Clear all authored atom color overrides, restoring default appearance. */
-  clearAtomColorOverrides(): void {
-    this._atomColorOverrides = null;
-    this._applyAtomColorOverrides();
-  }
-
-  /** Apply atom color overrides to the InstancedMesh. Called internally after changes. */
+  /** Apply atom color overrides to the InstancedMesh. Called internally after changes.
+   *
+   *  Key: InstancedMesh.setColorAt() MULTIPLIES with the material's base color.
+   *  So when overrides are active, we set the material to white (neutral multiply)
+   *  and carry the full color in per-instance attributes. When cleared, we restore
+   *  the material color and neutralize instance colors to white.
+   *
+   *  Override colors receive a perceptual HSL lift — saturation and lightness are
+   *  floored to CONFIG.atomColorOverride.minSaturation / minLightness so they
+   *  remain readable under the atom material's lighting stack.
+   *
+   *  The clear path guards against instanceColor being null (lazy-initialized by
+   *  Three.js on the first setColorAt call), so this is safe to call before any
+   *  overrides have ever been applied. */
   private _applyAtomColorOverrides(): void {
-    if (!this._instancedAtoms) return;
-    const defaultColor = new THREE.Color(THEMES[this.currentTheme].atomColor);
+    if (!this._instancedAtoms || !this._atomMat) return;
+    const theme = THEMES[this.currentTheme];
     const overrides = this._atomColorOverrides;
     const n = this._atomCount;
-    for (let i = 0; i < n; i++) {
-      if (overrides && overrides[i]) {
-        this._instancedAtoms.setColorAt(i, new THREE.Color(overrides[i].hex));
-      } else {
-        this._instancedAtoms.setColorAt(i, defaultColor);
+
+    if (overrides) {
+      // Material → white so instance colors are the exact final albedo
+      this._atomMat.color.set(0xffffff);
+      const defaultColor = new THREE.Color(theme.atom);
+      const lifted = new THREE.Color();
+      const hsl = { h: 0, s: 0, l: 0 };
+      for (let i = 0; i < n; i++) {
+        if (overrides[i]) {
+          lifted.set(overrides[i].hex);
+          lifted.getHSL(hsl);
+          hsl.s = Math.max(hsl.s, CONFIG.atomColorOverride.minSaturation);
+          hsl.l = Math.max(hsl.l, CONFIG.atomColorOverride.minLightness);
+          lifted.setHSL(hsl.h, hsl.s, hsl.l);
+          this._instancedAtoms.setColorAt(i, lifted);
+        } else {
+          this._instancedAtoms.setColorAt(i, defaultColor);
+        }
+      }
+    } else {
+      // No overrides — restore material color, neutralize instance colors
+      this._atomMat.color.set(theme.atom);
+      if (this._instancedAtoms.instanceColor) {
+        const white = new THREE.Color(0xffffff);
+        for (let i = 0; i < n; i++) {
+          this._instancedAtoms.setColorAt(i, white);
+        }
       }
     }
+
     if (this._instancedAtoms.instanceColor) {
       this._instancedAtoms.instanceColor.needsUpdate = true;
     }
@@ -1121,9 +1151,9 @@ export class Renderer {
       this._bondMat.roughness = t.bondRoughness ?? CONFIG.bondMaterial.roughness;
       this._bondMat.metalness = t.bondMetalness ?? CONFIG.bondMaterial.metalness;
     }
-    // Update highlight overlay material if active
     if (this._highlightMat) this._highlightMat.color.set(t.atom);
-    // Reapply authored color overrides (default color changed with theme)
+    // Re-apply authored color overrides: default atom color changed with theme,
+    // and _applyAtomColorOverrides sets material to white when overrides are active.
     this._applyAtomColorOverrides();
   }
 

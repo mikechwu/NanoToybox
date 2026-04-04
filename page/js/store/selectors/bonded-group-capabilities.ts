@@ -2,16 +2,10 @@
  * Bonded group capabilities selector — determines what bonded-group actions
  * are available based on the current app mode (live vs review).
  *
- * Replaces hardcoded timelineMode === 'review' blocks in:
- * - BondedGroupsPanel.tsx (panel visibility via selectCanInspectBondedGroups)
- * - bonded-group-highlight-runtime.ts (select/hover via canInspectBondedGroupsNow)
- *
- * Current phased rollout state:
- * - Review inspection: ENABLED (historical topology + review highlight rendering ready)
- * - Review targeting: ENABLED (panel Center/Follow buttons shipped)
- * - Review color editing: DEFERRED (callbacks wired, panel color UI not yet shipped)
- *
- * Color-edit follows Option B (annotation model) but is gated on panel UI shipping.
+ * All bonded-group features (inspection, targeting, color editing) are shipped.
+ * Only canMutateSimulation is mode-gated (disabled in review).
+ * Color editing uses the annotation model (Option B): global overrides,
+ * not part of timeline history.
  */
 
 import type { AppStore } from '../app-store';
@@ -29,32 +23,15 @@ export interface BondedGroupCapabilities {
 }
 
 /** Full capability object. Prefer primitive selectors in React components. */
-/**
- * Phased rollout flags — centralized here, not scattered across modules.
- * Each flag should be true only when the full stack (runtime + UI) is shipped.
- * TODO: derive from real readiness seams once rollout stabilizes.
- */
-/**
- * Phased rollout flags. Each flag = true only when the full stack is shipped.
- * Flip: update the flag here + add/update the corresponding test in bonded-group-prefeature.test.ts.
- *
- * reviewInspect → requires: simulation-timeline.ts historical topology, renderer review highlight
- * panelTargetUI → requires: BondedGroupsPanel.tsx Center/Follow buttons, main.ts callbacks
- * colorEditUI   → requires: BondedGroupsPanel.tsx color picker UI, main.ts onApplyGroupColor wiring
- */
-const ROLLOUT = {
-  reviewInspect: true,   // Phase 3: topology + highlight rendering shipped
-  panelTargetUI: true,   // Phase 5: Center/Follow buttons + handleBondedGroupFollowToggle shipped
-  colorEditUI: false,    // Phase 8: color picker UI not yet built
-} as const;
-
 export function selectBondedGroupCapabilities(s: AppStore): BondedGroupCapabilities {
-  const _isReview = s.timelineMode === 'review';
+  const isReview = s.timelineMode === 'review';
+  // All bonded-group features shipped (Phases 1-10 complete).
+  // Only canMutateSimulation is mode-gated.
   return {
-    canInspectBondedGroups: ROLLOUT.reviewInspect,
-    canTargetBondedGroups: ROLLOUT.panelTargetUI,
-    canEditBondedGroupColor: ROLLOUT.colorEditUI,
-    canMutateSimulation: !_isReview,
+    canInspectBondedGroups: true,
+    canTargetBondedGroups: true,
+    canEditBondedGroupColor: true,
+    canMutateSimulation: !isReview,
   };
 }
 
@@ -67,6 +44,11 @@ export function selectCanInspectBondedGroups(s: AppStore): boolean {
 /** Primitive selector: true when bonded groups can be camera-targeted. React-stable (boolean). */
 export function selectCanTargetBondedGroups(s: AppStore): boolean {
   return selectBondedGroupCapabilities(s).canTargetBondedGroups;
+}
+
+/** Primitive selector: true when bonded-group color editing is available. */
+export function selectCanEditBondedGroupColor(s: AppStore): boolean {
+  return selectBondedGroupCapabilities(s).canEditBondedGroupColor;
 }
 
 /** Imperative check: reads current store for runtime guards. */

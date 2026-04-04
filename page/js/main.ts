@@ -22,7 +22,7 @@ import { createInputBindings, type InputBindings } from './runtime/input-binding
 import { registerStoreCallbacks } from './runtime/ui-bindings';
 import { createAtomSource } from './runtime/atom-source';
 import { createSceneRuntime, type SceneRuntime } from './runtime/scene-runtime';
-import { handleCenterObject as _handleCenterObject, ensureFollowTarget, resolveReturnTarget } from './runtime/focus-runtime';
+import { handleCenterObject as _handleCenterObject, resolveReturnTarget } from './runtime/focus-runtime';
 import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/snapshot-reconciler';
 import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecycle';
 import { createOnboardingController, subscribeOnboardingReadiness } from './runtime/onboarding';
@@ -348,7 +348,7 @@ async function init() {
     partialProfilerReset,
     recoverFromWorkerFailure: recoverLocalPhysicsAfterWorkerFailure,
     getPauseSyncPromise: () => _pauseSyncPromise,
-    onSceneMutated: () => { _bondedGroupCoordinator?.update(); _bondedGroupAppearance?.syncToRenderer(); },
+    onSceneMutated: () => { _bondedGroupCoordinator?.update(); _bondedGroupAppearance?.syncGroupIntents(); _bondedGroupAppearance?.syncToRenderer(); },
   });
 
   // Load manifest
@@ -640,6 +640,7 @@ async function init() {
     onClearGroupColor: (id) => {
       _bondedGroupAppearance?.clearGroupColor(id);
     },
+    getGroupAtoms: (id) => _bondedGroups?.getAtomIndicesForGroup(id) ?? null,
   });
 
   // ── Simulation timeline subsystem ──
@@ -661,7 +662,7 @@ async function init() {
     forceRender: () => { scheduler.forceRenderThisTick = true; },
     clearBondedGroupHighlight: () => { _bondedGroupHighlight?.clearHighlight(); },
     clearRendererFeedback: () => { if (renderer) renderer.clearFeedback(); },
-    syncBondedGroupsForDisplayFrame: () => { _bondedGroupCoordinator?.update(); },
+    syncBondedGroupsForDisplayFrame: () => { _bondedGroupCoordinator?.update(); _bondedGroupAppearance?.syncGroupIntents(); },
   });
   _timelineSub.installAndEnable(); // Atomic: install callbacks + enter ready state (no transient off flash)
 
@@ -772,14 +773,9 @@ async function init() {
 
   // Camera target deps already hoisted as _focusTargetDeps above bonded-group callbacks
 
-  // Register camera control callbacks via store (consumed by CameraControls.tsx)
+  // Register camera control callbacks via store (Free-Look only after Phase 10 legacy cleanup)
+  // Center/Follow moved to BondedGroupCallbacks
   useAppStore.getState().setCameraCallbacks({
-    onCenterObject: () => { _handleCenterObject(renderer, _focusTargetDeps); },
-    onEnableFollow: () => {
-      if (!ensureFollowTarget(renderer, _focusTargetDeps)) return false;
-      _handleCenterObject(renderer, _focusTargetDeps);
-      return true;
-    },
     onReturnToObject: () => {
       renderer.animateToFocusedObject({
         levelUp: true,
