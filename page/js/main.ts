@@ -348,7 +348,7 @@ async function init() {
     partialProfilerReset,
     recoverFromWorkerFailure: recoverLocalPhysicsAfterWorkerFailure,
     getPauseSyncPromise: () => _pauseSyncPromise,
-    onSceneMutated: () => { _bondedGroupCoordinator?.update(); _bondedGroupAppearance?.syncGroupIntents(); _bondedGroupAppearance?.syncToRenderer(); },
+    onSceneMutated: () => { _bondedGroupCoordinator?.update(); if (physics) _bondedGroupAppearance?.pruneAndSync(physics.n); },
   });
 
   // Load manifest
@@ -640,6 +640,9 @@ async function init() {
     onClearGroupColor: (id) => {
       _bondedGroupAppearance?.clearGroupColor(id);
     },
+    onClearColorAssignment: (assignmentId) => {
+      _bondedGroupAppearance?.clearColorAssignment(assignmentId);
+    },
     getGroupAtoms: (id) => _bondedGroups?.getAtomIndicesForGroup(id) ?? null,
   });
 
@@ -662,7 +665,7 @@ async function init() {
     forceRender: () => { scheduler.forceRenderThisTick = true; },
     clearBondedGroupHighlight: () => { _bondedGroupHighlight?.clearHighlight(); },
     clearRendererFeedback: () => { if (renderer) renderer.clearFeedback(); },
-    syncBondedGroupsForDisplayFrame: () => { _bondedGroupCoordinator?.update(); _bondedGroupAppearance?.syncGroupIntents(); },
+    syncBondedGroupsForDisplayFrame: () => { _bondedGroupCoordinator?.update(); },
   });
   _timelineSub.installAndEnable(); // Atomic: install callbacks + enter ready state (no transient off flash)
 

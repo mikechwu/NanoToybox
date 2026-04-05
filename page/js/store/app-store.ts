@@ -83,10 +83,14 @@ export interface BondedGroupCallbacks {
   onHover: (id: string | null) => void;
   onCenterGroup?: (id: string) => void;
   onFollowGroup?: (id: string) => void;
-  /** Apply a color to all atoms in the given bonded group (stores intent + immediate override). */
+  /** Apply a color to all atoms in the given bonded group (freezes atom set into assignment). */
   onApplyGroupColor?: (id: string, colorHex: string) => void;
-  /** Remove the color override and intent for the given bonded group. */
+  /** Remove the color assignment for the given bonded group. */
   onClearGroupColor?: (id: string) => void;
+  /** Remove a specific color assignment by its unique id (survives source group disappearing).
+   *  Wired in main.ts. UI surface deferred — use this seam for a future "authored colors"
+   *  management affordance rather than inventing a second runtime path. */
+  onClearColorAssignment?: (assignmentId: string) => void;
   /** Read-only: returns atom indices for a group (used by color editor to detect current color). */
   getGroupAtoms?: (id: string) => number[] | null;
 
@@ -102,8 +106,17 @@ export interface AtomColorValue {
   hex: string;
 }
 
-/** Map of atom index → color override. Authored by the user, separate from transient highlight. */
+/** Map of atom index → color override. Derived from assignments for rendering. */
 export type AtomColorOverrideMap = Record<number, AtomColorValue>;
+
+/** Frozen color assignment — captures the exact atom set at the time of coloring.
+ *  Topology changes never expand atomIndices. Only atom removal can shrink the visible set. */
+export interface BondedGroupColorAssignment {
+  id: string;
+  atomIndices: number[];
+  colorHex: string;
+  sourceGroupId: string;
+}
 
 /** Summary of a bonded connected component — projected from physics topology, not scene metadata.
  *  id: stable topology identity (survives merge/split via overlap reconciliation)
@@ -343,10 +356,19 @@ export interface AppStore {
   setChooserCallbacks: (cbs: ChooserCallbacks) => void;
   bondedGroupCallbacks: BondedGroupCallbacks | null;
   setBondedGroupCallbacks: (cbs: BondedGroupCallbacks | null) => void;
-  /** Authored atom color overrides — global annotations (persist across live/review). */
+  /** Authored color assignments — frozen atom ownership, source of truth.
+   *  Each assignment captures the exact atom set at click time.
+   *  Topology changes never expand assignments.
+   *
+   *  WRITE AUTHORITY: the appearance runtime owns all color writes via
+   *  writeAssignments / clearAllColors / clearGroupColor / clearColorAssignment.
+   *  Raw useAppStore.setState({...}) should be limited to tests or internal
+   *  runtime paths — Zustand's open store does not enforce this structurally,
+   *  so this is a project convention, not a hard boundary. */
+  bondedGroupColorAssignments: BondedGroupColorAssignment[];
+  /** Derived atom-level overrides for rendering — rebuilt from assignments.
+   *  Same write authority as above — no public store setter. */
   bondedGroupColorOverrides: AtomColorOverrideMap;
-  setBondedGroupColorOverrides: (overrides: AtomColorOverrideMap) => void;
-  clearBondedGroupColorOverrides: () => void;
 
   // Lifecycle
   resetTransientState: () => void;
@@ -420,6 +442,7 @@ export const useAppStore = create<AppStore>((set) => ({
   settingsCallbacks: null,
   chooserCallbacks: null,
   bondedGroupCallbacks: null,
+  bondedGroupColorAssignments: [],
   bondedGroupColorOverrides: {},
 
   // Actions
@@ -526,9 +549,6 @@ export const useAppStore = create<AppStore>((set) => ({
   setSettingsCallbacks: (cbs) => set({ settingsCallbacks: cbs }),
   setChooserCallbacks: (cbs) => set({ chooserCallbacks: cbs }),
   setBondedGroupCallbacks: (cbs) => set({ bondedGroupCallbacks: cbs }),
-  setBondedGroupColorOverrides: (overrides) => set({ bondedGroupColorOverrides: overrides }),
-  clearBondedGroupColorOverrides: () => set({ bondedGroupColorOverrides: {} }),
-
   resetTransientState: () => set({
     // Callbacks
     closeOverlay: null,
@@ -536,6 +556,7 @@ export const useAppStore = create<AppStore>((set) => ({
     settingsCallbacks: null,
     chooserCallbacks: null,
     bondedGroupCallbacks: null,
+    bondedGroupColorAssignments: [],
     bondedGroupColorOverrides: {},
     // UI chrome
     activeSheet: null,

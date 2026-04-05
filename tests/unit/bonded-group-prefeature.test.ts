@@ -1,8 +1,12 @@
 /**
  * Bonded group pre-feature cleanup tests.
  *
- * Covers: display-source resolution, capability policy, appearance runtime,
- * and persistence semantics (annotation model).
+ * Covers: display-source resolution, capability policy, appearance runtime
+ * (frozen-atom-set ownership), and persistence semantics (annotation model).
+ *
+ * Future cleanup: split appearance runtime ownership + lifecycle regression
+ * tests into a dedicated bonded-group-color-ownership.test.ts for clearer
+ * subsystem isolation.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useAppStore } from '../../page/js/store/app-store';
@@ -137,35 +141,51 @@ describe('bonded-group appearance runtime', () => {
     expect(lastCall[0]).toEqual({ hex: '#ff0000' });
   });
 
-  it('14: syncGroupIntents propagates color to newly joined uncolored atoms', () => {
-    // Mutable atom map simulating topology change
+  // ── Frozen atom-set ownership tests ──
+
+  it('14: applyGroupColor freezes current atom set', () => {
     const groupAtoms: Record<string, number[]> = { g1: [0, 1, 2] };
-    const mockRenderer = { setAtomColorOverrides: vi.fn() };
     const runtime = createBondedGroupAppearanceRuntime({
       getBondedGroupRuntime: () => ({
         getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
       }),
-      getRenderer: () => mockRenderer,
+      getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
     });
 
-    // Apply red to g1 (atoms 0, 1, 2)
     runtime.applyGroupColor('g1', '#ff0000');
-    let overrides = useAppStore.getState().bondedGroupColorOverrides;
-    expect(overrides[0]).toEqual({ hex: '#ff0000' });
-    expect(overrides[3]).toBeUndefined();
 
-    // Simulate topology change: atoms 3, 4 join g1
+    // Topology changes: atoms 3, 4 join g1
     groupAtoms.g1 = [0, 1, 2, 3, 4];
 
-    // Sync intents — should propagate red to new uncolored atoms
-    runtime.syncGroupIntents();
-    overrides = useAppStore.getState().bondedGroupColorOverrides;
-    expect(overrides[3]).toEqual({ hex: '#ff0000' });
-    expect(overrides[4]).toEqual({ hex: '#ff0000' });
+    // Overrides remain ONLY on the original frozen set — no propagation
+    const overrides = useAppStore.getState().bondedGroupColorOverrides;
+    expect(overrides[0]).toEqual({ hex: '#ff0000' });
+    expect(overrides[1]).toEqual({ hex: '#ff0000' });
+    expect(overrides[2]).toEqual({ hex: '#ff0000' });
+    expect(overrides[3]).toBeUndefined();
+    expect(overrides[4]).toBeUndefined();
   });
 
-  it('14b: syncGroupIntents does NOT overwrite existing overrides from merged groups', () => {
-    const groupAtoms: Record<string, number[]> = { g1: [0, 1], g2: [2, 3] };
+  it('15: clearGroupColor removes assignments for the source group', () => {
+    const { runtime } = makeAppearanceRuntime();
+    runtime.applyGroupColor('g1', '#ff0000');
+    runtime.applyGroupColor('g2', '#00ff00');
+    runtime.clearGroupColor('g1');
+
+    const overrides = useAppStore.getState().bondedGroupColorOverrides;
+    expect(overrides[0]).toBeUndefined();
+    expect(overrides[1]).toBeUndefined();
+    expect(overrides[3]).toEqual({ hex: '#00ff00' });
+    expect(overrides[4]).toEqual({ hex: '#00ff00' });
+
+    // Assignments reflect the clear
+    const assignments = useAppStore.getState().bondedGroupColorAssignments;
+    expect(assignments.length).toBe(1);
+    expect(assignments[0].sourceGroupId).toBe('g2');
+  });
+
+  it('16: topology change does not expand color ownership', () => {
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1] };
     const mockRenderer = { setAtomColorOverrides: vi.fn() };
     const runtime = createBondedGroupAppearanceRuntime({
       getBondedGroupRuntime: () => ({
@@ -174,61 +194,147 @@ describe('bonded-group appearance runtime', () => {
       getRenderer: () => mockRenderer,
     });
 
-    // Apply red to g1, green to g2
+    runtime.applyGroupColor('g1', '#ff0000');
+    mockRenderer.setAtomColorOverrides.mockClear();
+
+    // Group grows — frozen atom set does not expand
+    groupAtoms.g1 = [0, 1, 2, 3];
+
+    // Normal renderer sync does NOT recolor new atoms
+    runtime.syncToRenderer();
+    const overrides = useAppStore.getState().bondedGroupColorOverrides;
+    expect(overrides[0]).toEqual({ hex: '#ff0000' });
+    expect(overrides[1]).toEqual({ hex: '#ff0000' });
+    expect(overrides[2]).toBeUndefined();
+    expect(overrides[3]).toBeUndefined();
+  });
+
+  it('17: later assignment wins for overlapping atoms', () => {
+    const { runtime } = makeAppearanceRuntime();
+    // g1 has atoms [0,1,2], g2 has atoms [3,4]
+    // Apply red to g1, then apply blue to a group that overlaps atom 0
+    runtime.applyGroupColor('g1', '#ff0000');
+    runtime.applyGroupColor('g2', '#0000ff');
+
+    const overrides = useAppStore.getState().bondedGroupColorOverrides;
+    // g1 atoms
+    expect(overrides[0]).toEqual({ hex: '#ff0000' });
+    // g2 atoms
+    expect(overrides[3]).toEqual({ hex: '#0000ff' });
+    expect(overrides[4]).toEqual({ hex: '#0000ff' });
+  });
+
+  // ── Integration-style regressions (frozen ownership under lifecycle) ──
+
+  it('18: review scrub does not increase colored atom count', () => {
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1, 2] };
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
+    });
+
+    // Apply color in "review frame A"
+    runtime.applyGroupColor('g1', '#ff0000');
+    const originalIndices = [...useAppStore.getState().bondedGroupColorAssignments[0].atomIndices];
+
+    // Simulate scrub: group membership changes across frames
+    groupAtoms.g1 = [0, 1, 2, 5, 6, 7];
+    // syncToRenderer just pushes existing frozen overrides — no expansion
+    runtime.syncToRenderer();
+
+    // Return to "frame A" — group returns to original membership
+    groupAtoms.g1 = [0, 1, 2];
+    runtime.syncToRenderer();
+
+    // Assert: same atom indices colored, no expansion
+    const finalAssignment = useAppStore.getState().bondedGroupColorAssignments[0];
+    expect(finalAssignment.atomIndices).toEqual(originalIndices);
+    const overrides = useAppStore.getState().bondedGroupColorOverrides;
+    expect(Object.keys(overrides).map(Number).sort()).toEqual([0, 1, 2]);
+  });
+
+  it('19: live topology evolution with stable groupId does not expand colored set', () => {
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1, 2] };
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
+    });
+
+    runtime.applyGroupColor('g1', '#ff0000');
+
+    // Live: group grows over several frames (same stable ID from reconciliation)
+    for (const atoms of [[0,1,2,3], [0,1,2,3,4], [0,1,2,3,4,5]]) {
+      groupAtoms.g1 = atoms;
+      runtime.syncToRenderer(); // called by onSceneMutated
+    }
+
+    // Only the original 3 atoms should be colored
+    const overrides = useAppStore.getState().bondedGroupColorOverrides;
+    expect(overrides[0]).toEqual({ hex: '#ff0000' });
+    expect(overrides[1]).toEqual({ hex: '#ff0000' });
+    expect(overrides[2]).toEqual({ hex: '#ff0000' });
+    expect(overrides[3]).toBeUndefined();
+    expect(overrides[4]).toBeUndefined();
+    expect(overrides[5]).toBeUndefined();
+  });
+
+  it('20: clearColorAssignment removes a specific assignment by id', () => {
+    const { runtime } = makeAppearanceRuntime();
     runtime.applyGroupColor('g1', '#ff0000');
     runtime.applyGroupColor('g2', '#00ff00');
 
-    // Simulate merge: g2 absorbed into g1
-    groupAtoms.g1 = [0, 1, 2, 3];
-    delete groupAtoms.g2;
+    const assignments = useAppStore.getState().bondedGroupColorAssignments;
+    expect(assignments.length).toBe(2);
 
-    // Sync intents — g1's red intent should NOT overwrite g2's green atoms
-    runtime.syncGroupIntents();
+    // Clear the first assignment by its id
+    runtime.clearColorAssignment(assignments[0].id);
+    const remaining = useAppStore.getState().bondedGroupColorAssignments;
+    expect(remaining.length).toBe(1);
+    expect(remaining[0].sourceGroupId).toBe('g2');
+
+    // Overrides updated: g1 atoms cleared, g2 atoms remain
     const overrides = useAppStore.getState().bondedGroupColorOverrides;
-    expect(overrides[0]).toEqual({ hex: '#ff0000' }); // g1 original — red
-    expect(overrides[1]).toEqual({ hex: '#ff0000' }); // g1 original — red
-    expect(overrides[2]).toEqual({ hex: '#00ff00' }); // g2 original — green preserved
-    expect(overrides[3]).toEqual({ hex: '#00ff00' }); // g2 original — green preserved
+    expect(overrides[0]).toBeUndefined();
+    expect(overrides[3]).toEqual({ hex: '#00ff00' });
   });
 
-  it('15: syncGroupIntents prunes intents for groups that no longer exist', () => {
-    const groupAtoms: Record<string, number[]> = { g1: [0, 1] };
+  // ── Production callback wiring tests ──
+
+  it('21: installed callback shape mirrors main.ts wiring', () => {
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1, 2], g2: [3, 4] };
+    const mockRenderer = { setAtomColorOverrides: vi.fn() };
     const runtime = createBondedGroupAppearanceRuntime({
       getBondedGroupRuntime: () => ({
         getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
       }),
-      getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
+      getRenderer: () => mockRenderer,
     });
 
-    runtime.applyGroupColor('g1', '#ff0000');
-    // Group g1 disappears from topology
-    delete groupAtoms.g1;
+    // Wire callbacks as main.ts does
+    const callbacks = {
+      onApplyGroupColor: (id: string, hex: string) => runtime.applyGroupColor(id, hex),
+      onClearGroupColor: (id: string) => runtime.clearGroupColor(id),
+      onClearColorAssignment: (assignmentId: string) => runtime.clearColorAssignment(assignmentId),
+    };
 
-    // Should not crash and should prune the intent
-    runtime.syncGroupIntents();
-    // Overrides for old atoms are NOT removed (they might be in other groups now),
-    // but the intent is pruned so future syncs won't try to re-apply.
-  });
+    // Apply via callback (like panel swatch click)
+    callbacks.onApplyGroupColor('g1', '#ff0000');
+    expect(useAppStore.getState().bondedGroupColorOverrides[0]).toEqual({ hex: '#ff0000' });
 
-  it('16: clearGroupColor removes intent so syncGroupIntents does not re-apply', () => {
-    const groupAtoms: Record<string, number[]> = { g1: [0, 1] };
-    const runtime = createBondedGroupAppearanceRuntime({
-      getBondedGroupRuntime: () => ({
-        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
-      }),
-      getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
-    });
+    // Simulate scene mutation (onSceneMutated path) — group grows
+    groupAtoms.g1 = [0, 1, 2, 5, 6];
+    runtime.pruneAndSync(7); // 7 atoms exist
+    // Frozen set not expanded
+    expect(useAppStore.getState().bondedGroupColorOverrides[5]).toBeUndefined();
 
-    runtime.applyGroupColor('g1', '#ff0000');
-    runtime.clearGroupColor('g1');
-
-    // Atom 2 joins g1
-    groupAtoms.g1 = [0, 1, 2];
-    runtime.syncGroupIntents();
-
-    // Atom 2 should NOT get colored (intent was cleared)
-    const overrides = useAppStore.getState().bondedGroupColorOverrides;
-    expect(overrides[2]).toBeUndefined();
+    // Clear via assignment id (orphan-safe path)
+    const assignmentId = useAppStore.getState().bondedGroupColorAssignments[0].id;
+    callbacks.onClearColorAssignment(assignmentId);
+    expect(useAppStore.getState().bondedGroupColorAssignments.length).toBe(0);
   });
 });
 
@@ -262,8 +368,9 @@ describe('bonded-group appearance wiring', () => {
       getRenderer: () => mockRenderer,
     });
 
-    // Preload store with color overrides (simulates existing state at app init)
-    useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff0000' }, 1: { hex: '#ff0000' } });
+    // Raw override seeding — this test validates renderer sync from existing state,
+    // not authored ownership. Use seedColorAssignments() for assignment-authoritative tests.
+    useAppStore.setState({ bondedGroupColorOverrides: { 0: { hex: '#ff0000' }, 1: { hex: '#ff0000' } } });
 
     // Initial sync should drive renderer
     runtime.syncToRenderer();
@@ -298,7 +405,8 @@ describe('bonded-group color persistence (annotation model)', () => {
   });
 
   it('21a: color overrides persist across timeline mode changes', () => {
-    useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff0000' } });
+    // Raw override seeding — tests persistence semantics, not authored ownership
+    useAppStore.setState({ bondedGroupColorOverrides: { 0: { hex: '#ff0000' } } });
     useAppStore.getState().setTimelineMode('review');
     expect(useAppStore.getState().bondedGroupColorOverrides[0]).toEqual({ hex: '#ff0000' });
 
@@ -307,9 +415,8 @@ describe('bonded-group color persistence (annotation model)', () => {
   });
 
   it('21b: color overrides are annotation-global, not timeline-historical', () => {
-    // Verify color overrides are not part of timeline/review state
-    // They persist in the store independently of timelineMode
-    useAppStore.getState().setBondedGroupColorOverrides({ 5: { hex: '#00ff00' } });
+    // Raw override seeding — tests persistence semantics, not authored ownership
+    useAppStore.setState({ bondedGroupColorOverrides: { 5: { hex: '#00ff00' } } });
     // Timeline mode changes do not clear overrides
     useAppStore.getState().setTimelineMode('review');
     useAppStore.getState().setTimelineMode('live');

@@ -2,42 +2,53 @@
  * Bonded group appearance runtime — translates group-level color edits
  * into atom-level color overrides applied via the renderer.
  *
- * Owns: group-to-atom color mapping, renderer sync for authored colors.
+ * Owns: frozen-atom-set color assignments, renderer sync for authored colors.
  * Does not: own highlight overlays, manage topology, or decide persistence.
  * Called by: BondedGroupsPanel preset color swatch editor (onApplyGroupColor, onClearGroupColor).
  *
  * Color edits use the annotation model (Option B): they are global overrides
  * that persist across live/review modes and are not part of timeline history.
  *
- * Group color intents: when a user colors a group, the intent is stored by
- * group ID. After each topology projection, syncGroupIntents() re-applies
- * intents to atoms that have NO existing override — filling in newly joined
- * atoms while preserving colors from other merged groups (multi-color safe).
- *
- * Wiring: callers must invoke syncGroupIntents() after every projectNow()
- * call so that topology changes (merges, splits, new bonds) are reflected
- * in atom colors. The frame-runtime orchestrates this at each projection
- * trigger point.
+ * Frozen atom ownership: when a user colors a group, the exact atom indices
+ * at that moment are frozen into a BondedGroupColorAssignment. Topology
+ * changes (merges, splits, new bonds) never expand color ownership.
+ * Only atom removal can shrink the visible colored set.
  */
 
-import { useAppStore, type AtomColorOverrideMap } from '../store/app-store';
+import { useAppStore, type AtomColorOverrideMap, type BondedGroupColorAssignment } from '../store/app-store';
 
 export interface BondedGroupAppearanceRenderer {
   setAtomColorOverrides(overrides: Record<number, { hex: string }> | null): void;
 }
 
 export interface BondedGroupAppearanceRuntime {
-  /** Apply a color to all atoms in the given bonded group. */
+  /** Apply a color to all atoms in the given bonded group (freezes atom set). */
   applyGroupColor(groupId: string, colorHex: string): void;
-  /** Clear the color override for all atoms in the given bonded group. */
+  /** Clear color assignments whose sourceGroupId matches. */
   clearGroupColor(groupId: string): void;
-  /** Clear all authored color overrides and group intents. */
+  /** Clear a specific color assignment by its unique id. */
+  clearColorAssignment(assignmentId: string): void;
+  /** Clear all authored color assignments and overrides. */
   clearAllColors(): void;
   /** Sync current authored overrides to the renderer. */
   syncToRenderer(): void;
-  /** Re-apply group color intents after topology projection.
-   *  Call after projectNow() so newly joined atoms inherit group colors. */
-  syncGroupIntents(): void;
+  /** Prune assignments for atom indices that no longer exist, then rebuild + sync.
+   *  Call after scene mutations that remove atoms (clearPlayground, wall removal). */
+  pruneAndSync(atomCount: number): void;
+}
+
+/** Deterministic projection: assignments → atom-level override map.
+ *  Later assignments win for overlapping atom indices. */
+export function rebuildOverridesFromAssignments(
+  assignments: BondedGroupColorAssignment[],
+): AtomColorOverrideMap {
+  const overrides: AtomColorOverrideMap = {};
+  for (const a of assignments) {
+    for (const idx of a.atomIndices) {
+      overrides[idx] = { hex: a.colorHex };
+    }
+  }
+  return overrides;
 }
 
 export function createBondedGroupAppearanceRuntime(deps: {
@@ -45,94 +56,53 @@ export function createBondedGroupAppearanceRuntime(deps: {
   getRenderer: () => BondedGroupAppearanceRenderer | null;
 }): BondedGroupAppearanceRuntime {
 
-  /** Group-level color intent — survives topology changes. */
-  const groupColorIntents = new Map<string, string>();
+  let nextAssignmentId = 1;
 
-  /** Store a color intent for the group and immediately apply it to all current atoms. */
   function applyGroupColor(groupId: string, colorHex: string): void {
-    groupColorIntents.set(groupId, colorHex);
-    applyIntentToAtoms(groupId, colorHex);
+    const bgr = deps.getBondedGroupRuntime();
+    const atoms = bgr?.getAtomIndicesForGroup(groupId);
+    if (!atoms || atoms.length === 0) return;
+
+    // Freeze atom indices — clone so future topology changes cannot mutate ownership
+    const assignment: BondedGroupColorAssignment = {
+      id: `ca${nextAssignmentId++}`,
+      atomIndices: [...atoms],
+      colorHex,
+      sourceGroupId: groupId,
+    };
+
+    // Replace any prior assignment for the same source group, then append
+    const current = useAppStore.getState().bondedGroupColorAssignments
+      .filter(a => a.sourceGroupId !== groupId);
+    const updated = [...current, assignment];
+
+    writeAssignments(updated);
   }
 
-  /** Remove the group's color intent and delete overrides from its current atoms. */
   function clearGroupColor(groupId: string): void {
-    groupColorIntents.delete(groupId);
-    const bgr = deps.getBondedGroupRuntime();
-    const atoms = bgr?.getAtomIndicesForGroup(groupId);
-    if (!atoms || atoms.length === 0) return;
-
-    const current = { ...useAppStore.getState().bondedGroupColorOverrides };
-    for (const idx of atoms) {
-      delete current[idx];
-    }
-    useAppStore.getState().setBondedGroupColorOverrides(current);
-    syncToRenderer();
+    const current = useAppStore.getState().bondedGroupColorAssignments;
+    const updated = current.filter(a => a.sourceGroupId !== groupId);
+    writeAssignments(updated);
   }
 
-  /** Clear every group intent and all atom color overrides, then null out renderer overrides. */
+  function clearColorAssignment(assignmentId: string): void {
+    const current = useAppStore.getState().bondedGroupColorAssignments;
+    const updated = current.filter(a => a.id !== assignmentId);
+    writeAssignments(updated);
+  }
+
   function clearAllColors(): void {
-    groupColorIntents.clear();
-    useAppStore.getState().clearBondedGroupColorOverrides();
-    const r = deps.getRenderer();
-    if (r) r.setAtomColorOverrides(null);
+    writeAssignments([]);
   }
 
-  /** Apply a single group's intent to its current atoms. */
-  function applyIntentToAtoms(groupId: string, colorHex: string): void {
-    const bgr = deps.getBondedGroupRuntime();
-    const atoms = bgr?.getAtomIndicesForGroup(groupId);
-    if (!atoms || atoms.length === 0) return;
-
-    const current = { ...useAppStore.getState().bondedGroupColorOverrides };
-    for (const idx of atoms) {
-      current[idx] = { hex: colorHex };
-    }
-    useAppStore.getState().setBondedGroupColorOverrides(current);
+  /** Write assignments to store, rebuild derived overrides, sync renderer.
+   *  Uses a single setState call to avoid intermediate inconsistency. */
+  function writeAssignments(assignments: BondedGroupColorAssignment[]): void {
+    const overrides = rebuildOverridesFromAssignments(assignments);
+    useAppStore.setState({ bondedGroupColorAssignments: assignments, bondedGroupColorOverrides: overrides });
     syncToRenderer();
   }
 
-  /**
-   * Re-apply stored group color intents after a topology projection.
-   * Fills only uncolored atoms — existing overrides from other groups are
-   * preserved, keeping multi-color appearance after merges intact.
-   * Prunes intents whose groups no longer exist.
-   */
-  function syncGroupIntents(): void {
-    if (groupColorIntents.size === 0) return;
-    const bgr = deps.getBondedGroupRuntime();
-    if (!bgr) return;
-
-    // Prune intents for groups that no longer exist
-    for (const [groupId] of groupColorIntents) {
-      const atoms = bgr.getAtomIndicesForGroup(groupId);
-      if (!atoms || atoms.length === 0) {
-        groupColorIntents.delete(groupId);
-      }
-    }
-    if (groupColorIntents.size === 0) return;
-
-    // Re-apply intents only to atoms that have NO existing override.
-    // This fills in newly joined atoms without overwriting colors from
-    // other merged groups (preserves multi-color after group merges).
-    const current = { ...useAppStore.getState().bondedGroupColorOverrides };
-    let changed = false;
-    for (const [groupId, hex] of groupColorIntents) {
-      const atoms = bgr.getAtomIndicesForGroup(groupId);
-      if (!atoms) continue;
-      for (const idx of atoms) {
-        if (!current[idx]) {
-          current[idx] = { hex };
-          changed = true;
-        }
-      }
-    }
-    if (changed) {
-      useAppStore.getState().setBondedGroupColorOverrides(current);
-      syncToRenderer();
-    }
-  }
-
-  /** Push the current authored color overrides to the renderer (null if empty). */
   function syncToRenderer(): void {
     const r = deps.getRenderer();
     if (!r) return;
@@ -141,5 +111,28 @@ export function createBondedGroupAppearanceRuntime(deps: {
     r.setAtomColorOverrides(hasOverrides ? overrides : null);
   }
 
-  return { applyGroupColor, clearGroupColor, clearAllColors, syncToRenderer, syncGroupIntents };
+  /** Prune assignments for atom indices that no longer exist, then rebuild + sync.
+   *
+   *  Contract: atom removal compacts active atoms to 0..atomCount-1.
+   *  Indices >= atomCount are guaranteed invalid (owned by PhysicsEngine compaction).
+   *  This is the main lifecycle guard for post-mutation color safety — if atom
+   *  indexing rules ever change, this function must be updated to match. */
+  function pruneAndSync(atomCount: number): void {
+    const assignments = useAppStore.getState().bondedGroupColorAssignments;
+    if (assignments.length === 0) { syncToRenderer(); return; }
+    // Filter out atom indices >= atomCount (removed atoms)
+    const pruned = assignments.map(a => ({
+      ...a,
+      atomIndices: a.atomIndices.filter(idx => idx < atomCount),
+    })).filter(a => a.atomIndices.length > 0);
+    const changed = pruned.length !== assignments.length
+      || pruned.some((a, i) => a.atomIndices.length !== assignments[i].atomIndices.length);
+    if (changed) {
+      writeAssignments(pruned); // rebuilds overrides + syncs renderer
+    } else {
+      syncToRenderer(); // no-change recovery sync
+    }
+  }
+
+  return { applyGroupColor, clearGroupColor, clearColorAssignment, clearAllColors, syncToRenderer, pruneAndSync };
 }

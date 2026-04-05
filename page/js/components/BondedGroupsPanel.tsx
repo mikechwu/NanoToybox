@@ -121,13 +121,16 @@ function ColorSwatch({ option, active, onSelect }: {
 /**
  * Derived color state for a group's chip.
  *
- * The chip is a summary indicator, not an exact histogram:
+ * The chip reflects the **current effective colors** of the row's displayed
+ * atoms, NOT the historical authored assignment. Under frozen-atom ownership,
+ * a once-colored row may later appear mixed or partial if topology moves
+ * some originally colored atoms to a different group. This is intentional —
+ * the chip shows what the user sees in the 3D scene right now.
+ *
+ * Design simplifications:
  * - Capped to the first 4 unique override colors for readability.
  * - Conic-gradient slices are equal-angle (not proportional to atom count).
  * - When a group has mixed colors, no single preset swatch is marked active.
- *
- * These are intentional design simplifications. Proportional display can
- * be added later if exact per-atom color breakdown becomes important.
  */
 type GroupColorState =
   | { kind: 'default' }

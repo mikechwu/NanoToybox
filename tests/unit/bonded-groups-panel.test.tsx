@@ -15,8 +15,17 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import React from 'react';
 import { render, fireEvent } from '@testing-library/react';
 import { BondedGroupsPanel, buildGroupColorLayout, computeHexGeometry, SWATCH_DIAMETER, ACTIVE_SCALE, RING_GAP } from '../../page/js/components/BondedGroupsPanel';
-import { useAppStore, type BondedGroupSummary } from '../../page/js/store/app-store';
+import { useAppStore, type BondedGroupSummary, type BondedGroupColorAssignment } from '../../page/js/store/app-store';
 import { createBondedGroupHighlightRuntime } from '../../page/js/runtime/bonded-group-highlight-runtime';
+import { rebuildOverridesFromAssignments } from '../../page/js/runtime/bonded-group-appearance-runtime';
+
+/** Seed color assignments + derived overrides in one call (matches production write path). */
+function seedColorAssignments(assignments: BondedGroupColorAssignment[]) {
+  useAppStore.setState({
+    bondedGroupColorAssignments: assignments,
+    bondedGroupColorOverrides: rebuildOverridesFromAssignments(assignments),
+  });
+}
 import { CONFIG } from '../../page/js/config';
 import { THEMES } from '../../page/js/themes';
 import type { BondedGroupRuntime } from '../../page/js/runtime/bonded-group-runtime';
@@ -369,7 +378,7 @@ describe('BondedGroupsPanel', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
 
     // Set an override so chip reflects it
-    useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff5555' } });
+    seedColorAssignments([{ id: 'ca1', atomIndices: [0], colorHex: '#ff5555', sourceGroupId: 'a' }]);
     const c = renderPanel();
 
     const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
@@ -477,7 +486,7 @@ describe('BondedGroupsPanel', () => {
   it('popover has original-color swatch instead of ✕ clear button', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
 
-    useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff5555' } });
+    seedColorAssignments([{ id: 'ca1', atomIndices: [0], colorHex: '#ff5555', sourceGroupId: 'a' }]);
     const c = renderPanel();
     const chip = c.querySelector('.bonded-groups-color-chip')!;
 
@@ -494,7 +503,7 @@ describe('BondedGroupsPanel', () => {
   it('clicking original-color swatch calls onClearGroupColor', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
 
-    useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff5555' } });
+    seedColorAssignments([{ id: 'ca1', atomIndices: [0], colorHex: '#ff5555', sourceGroupId: 'a' }]);
     const c = renderPanel();
     const chip = c.querySelector('.bonded-groups-color-chip')!;
     fireEvent.click(chip);
@@ -519,10 +528,10 @@ describe('BondedGroupsPanel', () => {
   it('multi-color group chip shows conic gradient', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
 
-    useAppStore.getState().setBondedGroupColorOverrides({
-      0: { hex: '#ff5555' }, 1: { hex: '#ff5555' },
-      2: { hex: '#33dd66' }, 3: { hex: '#33dd66' },
-    });
+    seedColorAssignments([
+      { id: 'ca1', atomIndices: [0, 1], colorHex: '#ff5555', sourceGroupId: 'a' },
+      { id: 'ca2', atomIndices: [2, 3], colorHex: '#33dd66', sourceGroupId: 'a' },
+    ]);
     const c = renderPanel();
 
     const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
@@ -532,9 +541,7 @@ describe('BondedGroupsPanel', () => {
   it('colored + default atoms shows conic gradient with default segment', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
 
-    useAppStore.getState().setBondedGroupColorOverrides({
-      0: { hex: '#ff5555' }, 1: { hex: '#ff5555' },
-    });
+    seedColorAssignments([{ id: 'ca1', atomIndices: [0, 1], colorHex: '#ff5555', sourceGroupId: 'a' }]);
     const c = renderPanel();
 
     const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
@@ -545,10 +552,7 @@ describe('BondedGroupsPanel', () => {
   it('single-color chip shows solid background, not conic gradient', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
 
-    useAppStore.getState().setBondedGroupColorOverrides({
-      0: { hex: '#ff5555' }, 1: { hex: '#ff5555' }, 2: { hex: '#ff5555' },
-      3: { hex: '#ff5555' }, 4: { hex: '#ff5555' },
-    });
+    seedColorAssignments([{ id: 'ca1', atomIndices: [0, 1, 2, 3, 4], colorHex: '#ff5555', sourceGroupId: 'a' }]);
     const c = renderPanel();
 
     const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
@@ -592,7 +596,7 @@ describe('BondedGroupsPanel', () => {
 
   it('default swatch in hex center clears color', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-    useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff5555' } });
+    seedColorAssignments([{ id: 'ca1', atomIndices: [0], colorHex: '#ff5555', sourceGroupId: 'a' }]);
     const c = renderPanel();
     fireEvent.click(c.querySelector('.bonded-groups-color-chip')!);
     const original = document.querySelector('.bonded-groups-swatch-original')!;
