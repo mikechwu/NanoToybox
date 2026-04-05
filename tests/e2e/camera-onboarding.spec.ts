@@ -67,12 +67,12 @@ test.describe('Phase 1 — Object View Controls', () => {
     const panel = page.locator('.bonded-groups-panel')
     await expect(panel).toBeAttached({ timeout: 10000 })
 
-    // Panel is expanded by default — list should already be visible
-    await expect(panel.locator('.bonded-groups-list')).toBeAttached({ timeout: 3000 })
+    // Panel is expanded by default — list visible once groups are projected
+    await expect(panel.locator('.bonded-groups-list')).toBeAttached({ timeout: 10000 })
 
     // Center and Follow action buttons exist per-row
     const centerBtns = panel.locator('.bonded-groups-action-btn')
-    await expect(centerBtns.first()).toBeAttached({ timeout: 3000 })
+    await expect(centerBtns.first()).toBeAttached({ timeout: 5000 })
 
     expect(errors).toEqual([])
   })

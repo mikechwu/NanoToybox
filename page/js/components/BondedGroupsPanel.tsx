@@ -6,9 +6,9 @@
  * Grid layout: color | label | atoms | center | follow columns.
  *
  * Interactions:
- * - Color chip (plain solid): opens a portalled popover with the primary
- *   swatch (default / restore) centered on top and preset swatches in a
- *   responsive grid below.  Each swatch is a reusable ColorSwatch component.
+ * - Color chip (plain solid): opens a portalled honeycomb popover with the
+ *   default swatch in the center and preset swatches in a computed ring.
+ *   Each swatch is a reusable ColorSwatch component.
  * - Row hover: temporary preview highlight
  * - Center: one-shot camera frame
  * - Follow: toggle orbit-follow (frozen atom set)
@@ -41,13 +41,13 @@ const GROUP_COLOR_OPTIONS: GroupColorOption[] = [
   { kind: 'preset', hex: '#ff66aa' },
 ];
 
-/** Layout split: primary (default) centered on top, secondary (presets) in responsive grid. */
+/** Layout split: primary (default) in hex center, secondary (presets) in hex ring. */
 interface GroupColorLayout {
   primary: GroupColorOption | null;
   secondary: GroupColorOption[];
 }
 
-/** Split options into primary (the default entry, if any) and secondary (all presets). */
+/** Split options into primary (hex center) and secondary (hex ring). */
 export function buildGroupColorLayout(options: GroupColorOption[]): GroupColorLayout {
   const primary = options.find(o => o.kind === 'default') ?? null;
   const secondary = options.filter(o => o.kind !== 'default');
@@ -55,6 +55,49 @@ export function buildGroupColorLayout(options: GroupColorOption[]): GroupColorLa
 }
 
 const COLOR_LAYOUT = buildGroupColorLayout(GROUP_COLOR_OPTIONS);
+
+/**
+ * Honeycomb geometry — single source of truth for popover sizing.
+ *
+ * All dimensions are derived from SWATCH_DIAMETER, ACTIVE_SCALE, RING_GAP,
+ * and the ring item count.
+ * Adding/removing palette entries or changing swatch size automatically
+ * adjusts the ring radius, container size, and slot positions.
+ *
+ * The minimum center-to-center distance between adjacent ring items must
+ * exceed SWATCH_DIAMETER × ACTIVE_SCALE to prevent overlap at max scale.
+ */
+const SWATCH_DIAMETER = 20;   // px — must match .bonded-groups-swatch width/height
+const ACTIVE_SCALE = 1.3;     // must match .bonded-groups-swatch.active transform scale
+const RING_GAP = 4;           // px — minimum gap between adjacent swatches at active scale
+
+/** Derive ring radius and container size so adjacent swatches don't overlap even at active scale. */
+export function computeHexGeometry(n: number, swatchDiam: number, activeScale: number, gap: number) {
+  if (n <= 1) return { radius: 0, containerSize: swatchDiam * activeScale + gap * 2 };
+  // Minimum center-to-center = swatchDiam × activeScale + gap
+  const minSpacing = swatchDiam * activeScale + gap;
+  // For n items on a circle: chord = 2R sin(π/n) ≥ minSpacing
+  const radius = minSpacing / (2 * Math.sin(Math.PI / n));
+  // Container must fit: center swatch + ring + scaled swatch edges + padding
+  const containerSize = Math.ceil(2 * radius + swatchDiam * activeScale + gap * 2);
+  return { radius, containerSize };
+}
+
+const HEX_GEO = computeHexGeometry(COLOR_LAYOUT.secondary.length, SWATCH_DIAMETER, ACTIVE_SCALE, RING_GAP);
+const HEX_CONTAINER_STYLE: React.CSSProperties = {
+  position: 'relative',
+  width: HEX_GEO.containerSize,
+  height: HEX_GEO.containerSize,
+};
+
+/** Compute ring slot position for item i of n. Starts at 12 o'clock, clockwise. */
+function ringSlotStyle(i: number, n: number): React.CSSProperties {
+  const angle = (i * 2 * Math.PI) / n;
+  const radiusPct = (HEX_GEO.radius / HEX_GEO.containerSize) * 100;
+  const xPct = 50 + radiusPct * Math.sin(angle);
+  const yPct = 50 - radiusPct * Math.cos(angle);
+  return { left: `${xPct.toFixed(1)}%`, top: `${yPct.toFixed(1)}%` };
+}
 
 /** Reusable swatch button — owns active class, visual treatment, and aria-label. */
 function ColorSwatch({ option, active, onSelect }: {
@@ -259,23 +302,26 @@ function ClusterRow({ id, displayIndex, atomCount, isSmall, canTarget, canEditCo
         <>
           <div className="bonded-groups-color-backdrop" role="presentation" onClick={handleColorChipClick} />
           <div className="bonded-groups-color-popover" role="menu" aria-label="Color swatches" style={popoverStyle} onClick={(e) => e.stopPropagation()}>
-            {COLOR_LAYOUT.primary && (
-              <div className="bonded-groups-color-primary">
-                <ColorSwatch
-                  option={COLOR_LAYOUT.primary}
-                  active={colorState.kind === 'default'}
-                  onSelect={handleSelectOption}
-                />
-              </div>
-            )}
-            <div className="bonded-groups-color-grid">
-              {COLOR_LAYOUT.secondary.map(option => (
-                <ColorSwatch
-                  key={option.kind === 'preset' ? option.hex : 'default'}
-                  option={option}
-                  active={option.kind === 'preset' && activeHex === option.hex}
-                  onSelect={handleSelectOption}
-                />
+            <div className="bonded-groups-color-hex" style={HEX_CONTAINER_STYLE}>
+              {/* Center: default swatch */}
+              {COLOR_LAYOUT.primary && (
+                <div className="bonded-groups-hex-slot" style={{ left: '50%', top: '50%' }}>
+                  <ColorSwatch
+                    option={COLOR_LAYOUT.primary}
+                    active={colorState.kind === 'default'}
+                    onSelect={handleSelectOption}
+                  />
+                </div>
+              )}
+              {/* Ring: preset swatches — positions computed from palette size */}
+              {COLOR_LAYOUT.secondary.map((option, i) => (
+                <div key={option.kind === 'preset' ? option.hex : 'default'} className="bonded-groups-hex-slot" style={ringSlotStyle(i, COLOR_LAYOUT.secondary.length)}>
+                  <ColorSwatch
+                    option={option}
+                    active={option.kind === 'preset' && activeHex === option.hex}
+                    onSelect={handleSelectOption}
+                  />
+                </div>
               ))}
             </div>
           </div>
@@ -326,9 +372,10 @@ export function BondedGroupsPanel() {
   return (
     <div className={`bonded-groups-panel side-${side}`}>
       <button className="bonded-groups-header" onClick={toggleExpanded} aria-expanded={expanded} aria-controls="bonded-groups-list" type="button">
-        <span className="bonded-groups-header-title">Bonded Clusters</span>
-        <span className="bonded-groups-count">{groups.length}</span>
-        <span className="bonded-groups-header-action">{expanded ? 'Collapse' : 'Expand'}</span>
+        <span className="bonded-groups-header-label">
+          Bonded Clusters: <span className="bonded-groups-count">{groups.length}</span>
+        </span>
+        <span className="bonded-groups-header-toggle">{expanded ? 'Collapse' : 'Expand'}</span>
       </button>
       {isFollowActive && (
         <button className="bonded-groups-follow-indicator" onClick={handleStopFollow} aria-label="Stop following" type="button">

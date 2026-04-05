@@ -405,6 +405,8 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 ## D51: Unified Popover Layout (CSS-Only Responsive)
 
+**Superseded by D53.** The CSS grid approach was replaced by derived honeycomb geometry (`computeHexGeometry`).
+
 **Decision:** Replace hex-ring popover with primary (default) + CSS grid (presets). Same JSX on all platforms — mobile 3×2, desktop 6×1 via `@media` breakpoint. No platform-specific JSX branches.
 
 **Rationale:** Simpler to maintain. Layout changes are CSS-only. Palette changes require editing data array only.
@@ -414,3 +416,9 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Decision:** `bondedGroupsExpanded` defaults to `true`. `resetTransientState` does NOT reset it — user's collapse/expand choice survives scene reloads and mode transitions. `bondedSmallGroupsExpanded` still resets because it is data-dependent.
 
 **Rationale:** "Default open" should mean initial state, not always-reopen. User intent wins after first interaction.
+
+## D53: Derived Honeycomb Geometry (Single Source of Truth)
+
+**Decision:** `computeHexGeometry()` derives ring radius and container size from swatch count, diameter, active scale, and minimum gap. All layout constants (`SWATCH_DIAMETER`, `ACTIVE_SCALE`, `RING_GAP`) live in one place. Adding/removing palette entries auto-adjusts geometry without editing CSS or position constants.
+
+**Rationale:** The previous fixed-size hex container (80px with 36% radius) only worked for exactly 6 presets at 20px. Any change to palette size, swatch size, or scale broke the layout silently. Deriving geometry from a formula guarantees non-overlapping swatches at any scale.

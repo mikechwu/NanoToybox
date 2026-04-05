@@ -436,7 +436,11 @@ fieldset.segmented {
 .dock-add-btn.dock-placement-accent { color: var(--color-accent-text); }
 
 /* ── Bonded groups side panel ── */
+/* Panel width: fixed for up to 3-digit cluster indices (e.g. "Cluster 999").
+   Uses min-width so 4+ digit edge cases can still expand gracefully.
+   --panel-width is the single tuning point for panel sizing. */
 .bonded-groups-panel {
+  --panel-width: 260px;
   position: fixed;
   /* top set per-side below (secondary slot, offset below primary overlays) */
   z-index: 150;
@@ -449,18 +453,24 @@ fieldset.segmented {
   padding: 6px 10px;
   user-select: none;
   -webkit-user-select: none;
-  min-width: 80px;
+  width: var(--panel-width);
+  min-width: var(--panel-width);
   max-height: 60vh;
   overflow-y: auto;
+  /* Reserve scrollbar space permanently so content never shifts when scrollbar appears */
+  scrollbar-gutter: stable;
   font-size: var(--font-sm);
   color: var(--color-text);
   transition: max-height 0.2s ease;
 }
+/* Header: two groups — label (title:count) left, toggle pill right.
+   Uses justify-content: space-between so layout adapts to content width. */
 .bonded-groups-header {
   font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px;
   cursor: pointer;
   background: none;
   border: none;
@@ -470,17 +480,23 @@ fieldset.segmented {
   width: 100%;
   text-align: left;
 }
-.bonded-groups-header-title { flex: 1; }
-.bonded-groups-count {
-  font-weight: 400;
+.bonded-groups-header-label {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bonded-groups-count { font-weight: 400; opacity: 0.7; }
+/* Toggle pill — styled as a clickable affordance, not status text */
+.bonded-groups-header-toggle {
+  font-weight: 500; font-size: var(--font-xs);
+  padding: 1px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
   opacity: 0.7;
+  white-space: nowrap;
+  transition: opacity 0.15s, border-color 0.15s;
 }
-/* Header action — Collapse/Expand hint, fades in on header hover */
-.bonded-groups-header-action {
-  font-weight: 400; font-size: var(--font-xs);
-  opacity: 0.65;
+.bonded-groups-header:hover .bonded-groups-header-toggle {
+  opacity: 1; border-color: var(--color-text);
 }
-.bonded-groups-header:hover .bonded-groups-header-action { opacity: 0.8; }
 .bonded-groups-list {
   margin-top: 6px;
   display: flex;
@@ -552,25 +568,21 @@ fieldset.segmented {
   position: fixed; inset: 0; z-index: 199;
 }
 /* Portalled color popover — escapes panel overflow, positioned via inline style.
-   Unified structure: primary (default) centered on top, secondary in responsive grid.
-   Mobile: 3×2 grid. Desktop: 6×1 row. Same JSX — CSS-only breakpoint. */
+   Honeycomb layout: default in center, presets in computed ring around it.
+   Ring positions are derived from palette size — no per-slot CSS needed. */
 .bonded-groups-color-popover {
   z-index: 200;
-  padding: 8px 10px;
+  padding: 8px;
   background: var(--panel-bg); backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   border: 1px solid var(--color-border); border-radius: var(--radius-sm);
   box-shadow: 0 4px 16px rgba(0,0,0,0.35);
 }
-.bonded-groups-color-primary {
-  display: flex; justify-content: center; margin-bottom: 6px;
-}
-.bonded-groups-color-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
-  justify-items: center;
-}
-@media (min-width: 768px) {
-  .bonded-groups-color-grid { grid-template-columns: repeat(6, 1fr); }
+/* Hex container — width/height set by inline style derived from computeHexGeometry(). */
+.bonded-groups-color-hex { position: relative; }
+.bonded-groups-hex-slot {
+  position: absolute;
+  transform: translate(-50%, -50%);
 }
 /* Soften selected-row highlight when color popover is open */
 .bonded-groups-color-open.bonded-groups-selected { background: var(--color-surface-hover) !important; }

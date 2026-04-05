@@ -338,7 +338,9 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 
 **Color editor popover:** The color swatch popover in `BondedGroupsPanel.tsx` is rendered via `createPortal(…, document.body)` to escape the panel's `overflow-y: auto` clipping. Positioned via `chipRef.getBoundingClientRect()` relative to the chip button. `colorEditorOpenForGroupId: string | null` in the store tracks which group's editor is open; `setBondedGroups` clears it conditionally (only when the open group's ID disappears from the new groups list).
 
-**Popover layout:** Unified across all screen sizes — same JSX, CSS-only responsive. Primary row: default swatch (restore original color) centered on top. Secondary row: preset swatches in a responsive CSS grid (3×2 on mobile, 6×1 at `@media (min-width: 768px)` breakpoint).
+**Honeycomb swatch geometry:** `computeHexGeometry(n, swatchDiam, activeScale, gap)` derives ring radius and container size from swatch count, diameter, active scale, and gap. Constants `SWATCH_DIAMETER`, `ACTIVE_SCALE`, `RING_GAP` are the single source of truth. Container sized via inline style (not a CSS custom property).
+
+**Popover layout:** Unified across all screen sizes — same JSX, layout computed by `computeHexGeometry()`. Default swatch in center, preset swatches in a honeycomb ring. Ring radius and container size derived from swatch count and diameter.
 
 **GroupColorOption + buildGroupColorLayout:** `GroupColorOption` is a discriminated union (`'default' | 'preset'`) modelling the default restore action and preset hex colors. `buildGroupColorLayout()` splits options into `primary` (the default swatch) and `secondary` (preset swatches) for the two-row popover layout.
 
@@ -346,7 +348,11 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 
 **Color chip style:** Plain solid circle, no border (`border: 2px solid transparent`). Active swatch scales 1.3× (`transform: scale(1.3)`) with transparent border and no box-shadow — the swatch's own color is the sole active indicator.
 
-**Panel disclosure:** Panel is expanded by default (`bondedGroupsExpanded: true`). The header is a `<button>` acting as a disclosure control with Collapse/Expand hint text, `aria-expanded`, and `aria-controls="bonded-groups-list"`. The user's expand/collapse preference is preserved across `resetTransientState` (intentionally NOT reset — the choice survives resets).
+**Panel fixed width:** `--panel-width: 260px` CSS custom property. Stable for up to 3-digit cluster indices. 4+ digit edge cases expand gracefully via `min-width` fallback.
+
+**Scrollbar gutter:** `scrollbar-gutter: stable` reserves scrollbar space permanently — no layout reflow when the cluster list grows beyond the viewport.
+
+**Panel disclosure:** Panel is expanded by default (`bondedGroupsExpanded: true`). Header comprises a label group ("Bonded Clusters: N") + toggle pill button ("Collapse"/"Expand"). Label truncates with ellipsis on narrow panels (`min-width: 0; overflow: hidden; text-overflow: ellipsis`). The header `<button>` acts as a disclosure control with `aria-expanded` and `aria-controls="bonded-groups-list"`. The user's expand/collapse preference is preserved across `resetTransientState` (intentionally NOT reset — the choice survives resets).
 
 ## Key Design Decisions
 

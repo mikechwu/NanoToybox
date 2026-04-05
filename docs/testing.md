@@ -192,16 +192,16 @@ Architecture extractions should be guarded at the extracted owner, not only thro
 | `frame-runtime.test.ts` | Per-frame pipeline ordering (worker-mode sequencing proof, review-mode gating, drag-refresh gating, sync-mode fallback, placement framing integration: framing runs during placement, orbit-follow suppressed, idle shrink allowed, drag framing + reprojection, drag reprojection not called when idle) |
 | `app-lifecycle.test.ts` | Teardown sequence ordering (exact dependency-ordered call sequence, subscription cleanup, partial-init safety) |
 
-### UI Components (54 tests across 2 files)
+### UI Components (58 tests across 2 files)
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
-| `bonded-groups-panel.test.tsx` | 47 | Full BondedGroupsPanel contract (see breakdown below) |
+| `bonded-groups-panel.test.tsx` | 51 | Full BondedGroupsPanel contract (see breakdown below) |
 | `status-bar-precedence.test.tsx` | 7 | Rewritten for message-only contract: status message precedence rules across simulation states |
 
 Previously-skipped StatusBar tests have been unskipped and now pass.
 
-#### BondedGroupsPanel Test Breakdown (47 tests)
+#### BondedGroupsPanel Test Breakdown (51 tests)
 
 Tests cover the disclosure pattern, two-level UI, highlight wiring, color editing, popover layout, highlight hide behavior, buildGroupColorLayout, and config contracts:
 
@@ -213,13 +213,15 @@ Tests cover the disclosure pattern, two-level UI, highlight wiring, color editin
 
 **Color chip and popover:** color chip visible in every row without requiring selection, chip defaults to base atom color (no inline style), clicking chip opens portalled popover (not a grid-row child), chip click does not toggle row selection (independent of selection), choosing a swatch calls `onApplyGroupColor` (7 swatches: 6 presets + original), second chip click closes popover, clicking backdrop closes popover, row gets `bonded-groups-color-open` class when popover active.
 
-**Popover structure (primary + grid layout):** popover has primary section with 1 default swatch centered and grid section with 6 preset swatches in responsive grid (replaces hex ring), default swatch in primary section clears color, preset swatch in grid applies color.
+**Popover structure (honeycomb layout):** popover has honeycomb layout with default swatch in center and 6 preset swatches in computed ring, default swatch in hex center clears color, preset swatch in hex ring applies color.
 
 **Hover clearing regressions:** hover clears when cursor leaves row, moving across rows switches preview correctly, opening color popover clears hover preview.
 
 **Original-color swatch and multi-color chip:** popover has original-color swatch instead of clear button (calls `clearGroupColor`), clicking original-color swatch calls onClearGroupColor, original-color swatch gets active class when no override exists, multi-color group chip shows conic gradient (2+ authored colors), colored + default atoms shows conic gradient with `var(--atom-base-color)` segment, single-color chip shows solid background (not conic gradient) when ALL atoms have same override, portalled popover does not keep `hoveredBondedGroupId` alive.
 
 **buildGroupColorLayout:** default option placed in primary slot, secondary preserves original preset order, primary is null when no default option exists, works with varying palette sizes.
+
+**computeHexGeometry:** adjacent swatches do not overlap at active scale (tested for n=3,4,5,6,8,10), container fits all swatches including scaled edges, n=1 handled without division by zero, ring slot positions do not overlap for 6 presets (pairwise distance check).
 
 **Config contracts:** selected highlight opacity/emissive below readability thresholds, hover highlight more subtle than selected (opacity, emissive, scale), every theme defines numeric atom color for CSS and renderer parity.
 

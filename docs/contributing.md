@@ -257,7 +257,8 @@ Persistent tracked highlights are feature-gated off via `canTrackBondedGroupHigh
 - `clearAtomColorOverrides()` removed (dead code)
 
 **BondedGroupsPanel.tsx**:
-- Unified popover uses `buildGroupColorLayout` + `ColorSwatch` component: primary (default) centered on top, secondary presets in responsive grid — no platform-specific JSX
+- Unified popover uses `buildGroupColorLayout` + `ColorSwatch` component: primary (default) centered on top, secondary presets in honeycomb ring — no platform-specific JSX
+- `computeHexGeometry()` (exported) derives ring radius and container size from swatch count + `SWATCH_DIAMETER` (20 px) + `ACTIVE_SCALE` (1.3) + `RING_GAP` (4 px). Minimum center-to-center distance between adjacent ring items exceeds `SWATCH_DIAMETER * ACTIVE_SCALE` to prevent overlap at max scale. Adding/removing palette entries automatically adjusts the ring radius, container size, and slot positions
 - Panel expanded by default with disclosure header (`aria-expanded` + `aria-controls="bonded-groups-list"`)
 - `useGroupColorState` hook returns `GroupColorState` with `hasDefault` flag (detects atoms still at base color within a partially colored group)
 - `panelSide` prop threaded to `ClusterRow` for popover positioning (left/right)
@@ -265,15 +266,21 @@ Persistent tracked highlights are feature-gated off via `canTrackBondedGroupHigh
 - ARIA attributes on interactive elements
 
 **CSS** (`page/index.html`):
+- `--panel-width: 260px` on `.bonded-groups-panel` — single tuning point for fixed panel width
+- `scrollbar-gutter: stable` on the panel body prevents content reflow when the scrollbar appears
 - 5-column grid for bonded-group list: color-chip | label | atoms | center | follow
 - Portal popover + backdrop at z-index 199 (backdrop) / 200 (popover)
-- Responsive grid for color popover: 3x2 mobile, 6x1 desktop via `@media (min-width: 768px)` — same JSX, CSS-only breakpoint
+- Hex container width/height set by inline style derived from `computeHexGeometry()`
 - Plain borderless color chips (`.bonded-groups-swatch`); active swatch scales 1.3x with no border/box-shadow
+
+**Header structure**:
+- `.bonded-groups-header-label` — contains title ("Bonded Clusters:") + `.bonded-groups-count` (group count). Uses `min-width: 0` + `overflow: hidden` + `text-overflow: ellipsis` for narrow-width safety
+- `.bonded-groups-header-toggle` — pill button ("Collapse"/"Expand") styled as a clickable affordance with border-radius, opacity transition, and hover highlight
 
 **Data model** (`BondedGroupsPanel.tsx`):
 - `GroupColorOption` — discriminated union: `{ kind: 'default' }` | `{ kind: 'preset'; hex: string }`
 - `GROUP_COLOR_OPTIONS` — static palette array (1 default + 6 presets, tuned for luminance separation under 3D atom lighting)
-- `buildGroupColorLayout(options)` — splits the options array into `{ primary, secondary }` (`GroupColorLayout`); primary is the default swatch, secondary is the preset grid
+- `buildGroupColorLayout(options)` — splits the options array into `{ primary, secondary }` (`GroupColorLayout`); primary is the default swatch, secondary is the preset ring
 
 ### Highlight Composition Policy (Dual-Channel Architecture)
 

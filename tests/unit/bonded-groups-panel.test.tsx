@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import React from 'react';
 import { render, fireEvent } from '@testing-library/react';
-import { BondedGroupsPanel, buildGroupColorLayout } from '../../page/js/components/BondedGroupsPanel';
+import { BondedGroupsPanel, buildGroupColorLayout, computeHexGeometry } from '../../page/js/components/BondedGroupsPanel';
 import { useAppStore, type BondedGroupSummary } from '../../page/js/store/app-store';
 import { createBondedGroupHighlightRuntime } from '../../page/js/runtime/bonded-group-highlight-runtime';
 import { CONFIG } from '../../page/js/config';
@@ -375,13 +375,13 @@ describe('BondedGroupsPanel', () => {
     const chip = c.querySelector('.bonded-groups-color-chip') as HTMLElement;
     fireEvent.click(chip); // open popover
 
-    // Primary (1 default) + grid (6 presets) = 7 swatches total
+    // Center (1 default) + ring (6 presets) = 7 swatches total
     const popover = document.querySelector('.bonded-groups-color-popover')!;
-    const gridSwatches = popover.querySelectorAll('.bonded-groups-color-grid .bonded-groups-swatch');
-    expect(gridSwatches.length).toBe(6);
+    const presetSwatches = popover.querySelectorAll('.bonded-groups-swatch:not(.bonded-groups-swatch-original)');
+    expect(presetSwatches.length).toBe(6);
 
     // Click the blue swatch (#55aaff is index 3 in presets)
-    fireEvent.click(gridSwatches[3]);
+    fireEvent.click(presetSwatches[3]);
     expect(appliedColors['a']).toBe('#55aaff');
 
     // Chip has inline background from the override
@@ -574,27 +574,24 @@ describe('BondedGroupsPanel', () => {
     expect(useAppStore.getState().hoveredBondedGroupId).toBeNull();
   });
 
-  // ── Unified popover structure ──
+  // ── Honeycomb popover structure ──
 
-  it('popover has primary + grid layout: default on top, 6 presets in grid', () => {
+  it('popover has honeycomb layout: center default + ring presets', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     const c = renderPanel();
     fireEvent.click(c.querySelector('.bonded-groups-color-chip')!);
 
     const popover = document.querySelector('.bonded-groups-color-popover')!;
-    // Primary section: 1 default swatch
-    const primary = popover.querySelector('.bonded-groups-color-primary')!;
-    expect(primary).toBeTruthy();
-    expect(primary.querySelector('.bonded-groups-swatch-original')).toBeTruthy();
-    // Grid section: 6 preset swatches
-    const grid = popover.querySelector('.bonded-groups-color-grid')!;
-    expect(grid).toBeTruthy();
-    expect(grid.querySelectorAll('.bonded-groups-swatch').length).toBe(6);
+    const hex = popover.querySelector('.bonded-groups-color-hex')!;
+    expect(hex).toBeTruthy();
+    // 7 slots: 1 center + 6 ring
+    expect(hex.querySelectorAll('.bonded-groups-hex-slot').length).toBe(7);
+    expect(hex.querySelector('.bonded-groups-swatch-original')).toBeTruthy();
+    expect(hex.querySelectorAll('.bonded-groups-swatch:not(.bonded-groups-swatch-original)').length).toBe(6);
   });
 
-  it('default swatch in primary section clears color', () => {
+  it('default swatch in hex center clears color', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
-
     useAppStore.getState().setBondedGroupColorOverrides({ 0: { hex: '#ff5555' } });
     const c = renderPanel();
     fireEvent.click(c.querySelector('.bonded-groups-color-chip')!);
@@ -603,12 +600,12 @@ describe('BondedGroupsPanel', () => {
     expect(clearedGroups).toContain('a');
   });
 
-  it('preset swatch in grid applies color', () => {
+  it('preset swatch in hex ring applies color', () => {
     useAppStore.getState().setBondedGroups(FIXTURE_GROUPS);
     const c = renderPanel();
     fireEvent.click(c.querySelector('.bonded-groups-color-chip')!);
-    const gridSwatches = document.querySelectorAll('.bonded-groups-color-grid .bonded-groups-swatch');
-    fireEvent.click(gridSwatches[0]); // first preset in grid
+    const presets = document.querySelectorAll('.bonded-groups-swatch:not(.bonded-groups-swatch-original)');
+    fireEvent.click(presets[0]); // first preset in ring
     expect(appliedColors['a']).toBe('#ff5555');
   });
 });
@@ -677,6 +674,62 @@ describe('buildGroupColorLayout', () => {
       { kind: 'preset', hex: '#ddd' },
     ]);
     expect(layout.secondary.length).toBe(4);
+  });
+});
+
+describe('computeHexGeometry', () => {
+  const SWATCH = 20;
+  const SCALE = 1.3;
+  const GAP = 4;
+
+  it('derives radius so adjacent swatches do not overlap at active scale', () => {
+    for (const n of [3, 4, 5, 6, 8, 10]) {
+      const { radius } = computeHexGeometry(n, SWATCH, SCALE, GAP);
+      // Chord between adjacent items = 2R sin(π/n)
+      const chord = 2 * radius * Math.sin(Math.PI / n);
+      const minSpacing = SWATCH * SCALE + GAP;
+      expect(chord).toBeGreaterThanOrEqual(minSpacing - 0.01);
+    }
+  });
+
+  it('container fits all swatches including scaled edges', () => {
+    for (const n of [3, 6, 8]) {
+      const { radius, containerSize } = computeHexGeometry(n, SWATCH, SCALE, GAP);
+      // Outermost scaled edge: radius + half scaled swatch
+      const outerEdge = radius + (SWATCH * SCALE) / 2;
+      // Container must fit from center to edge in both directions + gap
+      expect(containerSize).toBeGreaterThanOrEqual(2 * outerEdge);
+    }
+  });
+
+  it('handles n=1 without division by zero', () => {
+    const { radius, containerSize } = computeHexGeometry(1, SWATCH, SCALE, GAP);
+    expect(radius).toBe(0);
+    expect(containerSize).toBeGreaterThan(0);
+  });
+
+  it('ring slot positions do not overlap for 6 presets', () => {
+    const n = 6;
+    const { radius, containerSize } = computeHexGeometry(n, SWATCH, SCALE, GAP);
+    const positions: { x: number; y: number }[] = [];
+    for (let i = 0; i < n; i++) {
+      const angle = (i * 2 * Math.PI) / n;
+      const rPct = (radius / containerSize) * 100;
+      positions.push({
+        x: 50 + rPct * Math.sin(angle),
+        y: 50 - rPct * Math.cos(angle),
+      });
+    }
+    // Check all pairs: distance in % must exceed swatch diameter as % of container
+    const swatchPct = (SWATCH * SCALE / containerSize) * 100;
+    for (let a = 0; a < n; a++) {
+      for (let b = a + 1; b < n; b++) {
+        const dx = positions[a].x - positions[b].x;
+        const dy = positions[a].y - positions[b].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        expect(dist).toBeGreaterThan(swatchPct);
+      }
+    }
   });
 });
 
