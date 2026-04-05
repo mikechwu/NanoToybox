@@ -2,8 +2,8 @@
  * Unit tests for dock surface selector.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useAppStore } from '../../page/js/store/app-store';
-import { selectDockSurface } from '../../page/js/store/selectors/dock';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { selectDockSurface } from '../../lab/js/store/selectors/dock';
 
 describe('selectDockSurface', () => {
   beforeEach(() => {

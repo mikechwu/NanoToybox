@@ -86,7 +86,7 @@ The trajectory viewer uses individual `THREE.Mesh` per atom and an O(N²) nested
 | 1,000 | 2,500 | 499,500 | 525 | 2 |
 | 5,000 | 12,500 | 12.5M | 12,600 | <1 |
 
-The trajectory viewer's rendering limit at 30 FPS is approximately **250 atoms**. The interactive page (`page/`) has no such limit — InstancedMesh rendering is linear in instance count (2 draw calls regardless of atom count).
+The trajectory viewer's rendering limit at 30 FPS is approximately **250 atoms**. The interactive page (`lab/`) has no such limit — InstancedMesh rendering is linear in instance count (2 draw calls regardless of atom count).
 
 ### Bottleneck 3: Data Transfer (XYZ File Size)
 
@@ -120,7 +120,7 @@ Collision trajectories are saved as XYZ files in `outputs/scaling_research/` and
 
 ## Practical Limits Summary
 
-> **Update (2026-03-25):** The interactive page (`page/`) now uses InstancedMesh rendering, on-the-fly Tersoff distances, spatial-hash neighbor/bond search, and a dedicated Web Worker for physics (`simulation-worker.ts`). The "unoptimized viewer" row below is historical. See `docs/viewer.md` for current optimization status. Browser benchmark data is in `page/bench/`.
+> **Update (2026-03-25):** The interactive page (`lab/`) now uses InstancedMesh rendering, on-the-fly Tersoff distances, spatial-hash neighbor/bond search, and a dedicated Web Worker for physics (`simulation-worker.ts`). The "unoptimized viewer" row below is historical. See `docs/viewer.md` for current optimization status. Browser benchmark data is in `lab/bench/`.
 
 | Configuration | Max Atoms (30 FPS) | Limiting Bottleneck |
 |---------------|-------------------:|---------------------|
@@ -185,5 +185,5 @@ open viewer/index.html
 # Use Stride=20 at 30 fps for long trajectories
 
 # Or interact with structures in real-time
-# Open http://localhost:5173/page/ (requires npm run dev)
+# Open http://localhost:5173/lab/ (requires npm run dev)
 ```

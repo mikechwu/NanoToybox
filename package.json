@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
-    "lint:dock-contract": "grep -q \"const DOCK_ROOT_SELECTOR = '\\[data-dock-root\\]'\" page/js/runtime/overlay-layout.ts && ! grep -q \"querySelector('.dock')\" page/js/runtime/overlay-layout.ts && echo 'dock-contract: PASS' || (echo 'dock-contract: FAIL — overlay-layout.ts must use DOCK_ROOT_SELECTOR, not hardcoded .dock' && exit 1)"
+    "lint:dock-contract": "grep -q \"const DOCK_ROOT_SELECTOR = '\\[data-dock-root\\]'\" lab/js/runtime/overlay-layout.ts && ! grep -q \"querySelector('.dock')\" lab/js/runtime/overlay-layout.ts && echo 'dock-contract: PASS' || (echo 'dock-contract: FAIL — overlay-layout.ts must use DOCK_ROOT_SELECTOR, not hardcoded .dock' && exit 1)"
   },
   "repository": {
     "type": "git",
@@ -27,7 +27,7 @@
   "bugs": {
     "url": "https://github.com/mikechwu/NanoToybox/issues"
   },
-  "homepage": "https://atomdojo.pages.dev/page/",
+  "homepage": "https://atomdojo.pages.dev/lab/",
   "devDependencies": {
     "@playwright/test": "^1.58.2",
     "@testing-library/jest-dom": "^6.9.1",

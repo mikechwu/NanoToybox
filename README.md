@@ -13,10 +13,10 @@ git clone https://github.com/mikechwu/NanoToybox.git
 cd NanoToybox
 npm install
 npm run dev
-# Open http://localhost:5173/page/
+# Open http://localhost:5173/lab/
 ```
 
-Or visit the live demo at [atomdojo.pages.dev](https://atomdojo.pages.dev/page/).
+Or visit the live demo at [atomdojo.pages.dev](https://atomdojo.pages.dev/lab/).
 
 ## Features
 
@@ -78,7 +78,7 @@ Select **Atom**, **Move**, or **Rotate** in the dock's segmented control.
 
 ```
 NanoToybox/
-├── page/                       # Interactive playground (main app)
+├── lab/                       # Interactive playground (main app)
 │   ├── index.html
 │   └── js/
 │       ├── main.ts             # Composition root — RAF lifecycle, global wiring, delegates to app/ and runtime/

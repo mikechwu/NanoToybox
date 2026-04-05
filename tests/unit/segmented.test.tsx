@@ -10,7 +10,7 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render } from '@testing-library/react';
-import { Segmented } from '../../page/js/components/Segmented';
+import { Segmented } from '../../lab/js/components/Segmented';
 
 const ITEMS = [
   { value: 'a', label: 'Alpha' },

@@ -9,8 +9,8 @@
  * - teardown() clears highlight → callbacks → runtime in correct order
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { createBondedGroupCoordinator } from '../../page/js/runtime/bonded-group-coordinator';
-import { useAppStore } from '../../page/js/store/app-store';
+import { createBondedGroupCoordinator } from '../../lab/js/runtime/bonded-group-coordinator';
+import { useAppStore } from '../../lab/js/store/app-store';
 
 describe('bonded group coordinator', () => {
   beforeEach(() => {

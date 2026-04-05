@@ -11,7 +11,7 @@
  * - capture failure fallback: pointerleave aborts drag
  */
 import { describe, it, expect, vi } from 'vitest';
-import { PlacementController } from '../../page/js/placement';
+import { PlacementController } from '../../lab/js/placement';
 
 // ── Test infrastructure ──
 

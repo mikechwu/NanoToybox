@@ -4,12 +4,12 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as THREE from 'three';
-import { useAppStore } from '../../page/js/store/app-store';
-import { selectBondedGroupCapabilities } from '../../page/js/store/selectors/bonded-group-capabilities';
-import { resolveCameraTargetRef, type CameraTargetDeps } from '../../page/js/runtime/camera-target-runtime';
-import { handleCenterObject, ensureFollowTarget } from '../../page/js/runtime/focus-runtime';
-import { updateOrbitFollowFromStore } from '../../page/js/runtime/orbit-follow-update';
-import { handleBondedGroupFollowToggle } from '../../page/js/runtime/bonded-group-follow-actions';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { selectBondedGroupCapabilities } from '../../lab/js/store/selectors/bonded-group-capabilities';
+import { resolveCameraTargetRef, type CameraTargetDeps } from '../../lab/js/runtime/camera-target-runtime';
+import { handleCenterObject, ensureFollowTarget } from '../../lab/js/runtime/focus-runtime';
+import { updateOrbitFollowFromStore } from '../../lab/js/runtime/orbit-follow-update';
+import { handleBondedGroupFollowToggle } from '../../lab/js/runtime/bonded-group-follow-actions';
 
 function mockRendererForBondedGroup() {
   return {

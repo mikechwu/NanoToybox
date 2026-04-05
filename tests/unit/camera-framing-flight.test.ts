@@ -6,9 +6,9 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as THREE from 'three';
-import { CONFIG } from '../../page/js/config';
-import { useAppStore } from '../../page/js/store/app-store';
-import { resolveReturnTarget, focusMoleculeByAtom } from '../../page/js/runtime/focus-runtime';
+import { CONFIG } from '../../lab/js/config';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { resolveReturnTarget, focusMoleculeByAtom } from '../../lab/js/runtime/focus-runtime';
 
 // ── Framing math tests ──
 

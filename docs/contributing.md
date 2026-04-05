@@ -57,20 +57,20 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 
 ## Completed Milestones
 
-- Real-time Tersoff simulation in the browser (`page/js/physics.ts`)
-- Interactive page with drag/rotate/structure presets (`page/index.html`)
+- Real-time Tersoff simulation in the browser (`lab/js/physics.ts`)
+- Interactive page with drag/rotate/structure presets (`lab/index.html`)
 - Camera-plane force projection (forces align with user's visual perspective)
 - Inertia-normalized rotation (consistent feel across molecule sizes)
 - Interactive 3D axis triad (drag=orbit, tap=snap, double-tap=reset on mobile), dark/light themes, dock + sheet settings
-- InstancedMesh rendering — 2 draw calls for atoms+bonds, geometric capacity growth (`page/js/renderer.ts`)
-- On-the-fly Tersoff kernel — 45% faster than cached at 2040 atoms, eliminates 127 MB N×N cache (`page/js/physics.ts`)
-- Cell-list spatial acceleration — O(N) neighbor and bond detection instead of O(N²) (`page/js/physics.ts`)
-- C/Wasm Tersoff kernel — ~11% faster than JS JIT, enabled by default, automatic JS fallback (`sim/wasm/`, `page/js/tersoff-wasm.ts`)
-- Containment boundary — dynamic soft harmonic wall (`page/js/physics.ts`), Contain/Remove toggle, live atom count, auto-scaling radius with hysteresis shrinkage
-- Dock + sheet navigation — responsive two-tier UI with React components (`page/js/components/`)
+- InstancedMesh rendering — 2 draw calls for atoms+bonds, geometric capacity growth (`lab/js/renderer.ts`)
+- On-the-fly Tersoff kernel — 45% faster than cached at 2040 atoms, eliminates 127 MB N×N cache (`lab/js/physics.ts`)
+- Cell-list spatial acceleration — O(N) neighbor and bond detection instead of O(N²) (`lab/js/physics.ts`)
+- C/Wasm Tersoff kernel — ~11% faster than JS JIT, enabled by default, automatic JS fallback (`sim/wasm/`, `lab/js/tersoff-wasm.ts`)
+- Containment boundary — dynamic soft harmonic wall (`lab/js/physics.ts`), Contain/Remove toggle, live atom count, auto-scaling radius with hysteresis shrinkage
+- Dock + sheet navigation — responsive two-tier UI with React components (`lab/js/components/`)
 - React UI migration — primary surfaces (DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar) are React-authoritative with Zustand store. Supporting subcomponents: Segmented, Icons, TimelineActionHint
-- Web Worker physics — off-thread simulation via `page/js/simulation-worker.ts` with automatic JS fallback
-- Runtime module extraction — feature modules in `page/js/runtime/`, orchestration modules in `page/js/app/` (frame-runtime, app-lifecycle); see `docs/architecture.md` for the full inventory. main.ts is the composition root
+- Web Worker physics — off-thread simulation via `lab/js/simulation-worker.ts` with automatic JS fallback
+- Runtime module extraction — feature modules in `lab/js/runtime/`, orchestration modules in `lab/js/app/` (frame-runtime, app-lifecycle); see `docs/architecture.md` for the full inventory. main.ts is the composition root
 - Object View panel — Center + Follow buttons with inline SVG icons, positioned below status block
 - Page-load onboarding overlay — welcome card with sink-to-Settings animation, page-lifetime dismissal
 
@@ -83,9 +83,9 @@ See `docs/architecture.md` for the full module map and state ownership model.
 - **Callbacks flow through the store.** React components invoke imperative callbacks (dockCallbacks, settingsCallbacks, chooserCallbacks) registered by main.ts into the Zustand store.
 - **New globals require teardown.** Register via `addGlobalListener()` in main.ts.
 - **Do not re-grow main.ts.** Route new code by kind:
-  - **Feature-specific runtime behavior** → `page/js/runtime/` (e.g. highlight resolver, placement solver, snapshot reconciler)
-  - **Orchestration (frame sequencing, teardown order)** → `page/js/app/` (e.g. frame-runtime.ts, app-lifecycle.ts)
-  - **New UI surfaces** → `page/js/components/` (React components, Zustand-driven)
+  - **Feature-specific runtime behavior** → `lab/js/runtime/` (e.g. highlight resolver, placement solver, snapshot reconciler)
+  - **Orchestration (frame sequencing, teardown order)** → `lab/js/app/` (e.g. frame-runtime.ts, app-lifecycle.ts)
+  - **New UI surfaces** → `lab/js/components/` (React components, Zustand-driven)
 - **State writes go through authoritative writers.** See state ownership table in architecture.md.
 
 ### Owner Map / Routing Guide
@@ -100,7 +100,7 @@ See `docs/architecture.md` for the full module map and state ownership model.
 
 ### New Runtime Module Contract
 
-Every `page/js/runtime/*.ts` **and** `page/js/app/*.ts` module must start with a contract header:
+Every `lab/js/runtime/*.ts` **and** `lab/js/app/*.ts` module must start with a contract header:
 
 ```
 /**
@@ -121,7 +121,7 @@ Rules:
 
 ### Placement Solver Policy (3-Surface Architecture)
 
-The placement solver (`page/js/runtime/placement-solver.ts`) uses a 3-surface architecture that must be kept in sync. The module header documents this, but the key constraint is:
+The placement solver (`lab/js/runtime/placement-solver.ts`) uses a 3-surface architecture that must be kept in sync. The module header documents this, but the key constraint is:
 
 | Surface | Role |
 |---------|------|
@@ -139,7 +139,7 @@ When changing placement policy:
 
 ### Placement Camera Framing Contract
 
-The placement camera framing system (`page/js/runtime/placement-camera-framing.ts`) is a pure solver with no THREE/renderer/store imports. When changing placement framing behavior:
+The placement camera framing system (`lab/js/runtime/placement-camera-framing.ts`) is a pure solver with no THREE/renderer/store imports. When changing placement framing behavior:
 
 1. **Pure math changes** go in `placement-camera-framing.ts` — tested via `tests/unit/placement-camera-framing.test.ts`
 2. **Orchestration changes** (when to run, drag policy) go in `app/frame-runtime.ts` — tested via `tests/unit/frame-runtime.test.ts`
@@ -265,7 +265,7 @@ Persistent tracked highlights are feature-gated off via `canTrackBondedGroupHigh
 - Escape key handler closes color editor
 - ARIA attributes on interactive elements
 
-**CSS** (`page/index.html`):
+**CSS** (`lab/index.html`):
 - `--panel-width: 250px` on `.bonded-groups-panel` — single tuning point for fixed panel width
 - `scrollbar-gutter: stable` on the panel body prevents content reflow when the scrollbar appears
 - 5-column grid for bonded-group list: color-chip | label | atoms | center | follow
@@ -338,7 +338,7 @@ Both are shared across `bonded-group-highlight.test.ts` and `renderer-interactio
 The following items are intentionally deferred — do not start them without an explicit decision:
 
 - **Phase 3B-D: Interface narrowing** — further narrowing the dependency surfaces passed between modules.
-- **Phase 4: Folder reorganization** — restructuring `page/js/` subdirectories beyond the current `app/`, `runtime/`, `components/` split.
+- **Phase 4: Folder reorganization** — restructuring `lab/js/` subdirectories beyond the current `app/`, `runtime/`, `components/` split.
 - **Phase 5: Workspace assessment** — evaluating monorepo / workspace tooling changes.
 
 ## Development Workflow
@@ -347,7 +347,7 @@ The following items are intentionally deferred — do not start them without an 
 
 ```
 1. npm run dev                    # Vite dev server with HMR
-2. Make changes to page/js/ code
+2. Make changes to lab/js/ code
 3. npm run typecheck              # TypeScript type-checking
 4. npm run test:unit              # Vitest unit suite
 5. npm run test:e2e               # Playwright E2E suite
@@ -381,19 +381,19 @@ E2E tests inject `?e2e=1` via `gotoApp()` from `tests/e2e/helpers.ts`.
 
 | If you're working on... | Read these files |
 |--------------------------|-----------------|
-| Interactive page | `page/index.html`, `page/js/main.ts`, `page/js/components/*`, `page/js/store/app-store.ts`, `docs/viewer.md` |
-| React UI components | `page/js/components/*.tsx`, `page/js/store/app-store.ts`, `page/js/hooks/*`, `page/js/react-root.tsx` |
-| Web Worker / bridge | `page/js/simulation-worker.ts`, `page/js/worker-bridge.ts`, `src/types/worker-protocol.ts` |
-| Runtime modules (scene, worker, input) | `page/js/runtime/scene-runtime.ts`, `page/js/runtime/worker-lifecycle.ts`, `page/js/runtime/snapshot-reconciler.ts`, `page/js/runtime/input-bindings.ts`, `page/js/runtime/interaction-dispatch.ts` |
-| Overlay layout & open/close policy | `page/js/runtime/overlay-layout.ts`, `page/js/runtime/overlay-runtime.ts` |
-| Focus resolution & onboarding | `page/js/runtime/focus-runtime.ts`, `page/js/runtime/onboarding.ts`, `page/js/components/OnboardingOverlay.tsx` |
-| Object View & icons | `page/js/components/CameraControls.tsx`, `page/js/components/Icons.tsx` |
+| Interactive page | `lab/index.html`, `lab/js/main.ts`, `lab/js/components/*`, `lab/js/store/app-store.ts`, `docs/viewer.md` |
+| React UI components | `lab/js/components/*.tsx`, `lab/js/store/app-store.ts`, `lab/js/hooks/*`, `lab/js/react-root.tsx` |
+| Web Worker / bridge | `lab/js/simulation-worker.ts`, `lab/js/worker-bridge.ts`, `src/types/worker-protocol.ts` |
+| Runtime modules (scene, worker, input) | `lab/js/runtime/scene-runtime.ts`, `lab/js/runtime/worker-lifecycle.ts`, `lab/js/runtime/snapshot-reconciler.ts`, `lab/js/runtime/input-bindings.ts`, `lab/js/runtime/interaction-dispatch.ts` |
+| Overlay layout & open/close policy | `lab/js/runtime/overlay-layout.ts`, `lab/js/runtime/overlay-runtime.ts` |
+| Focus resolution & onboarding | `lab/js/runtime/focus-runtime.ts`, `lab/js/runtime/onboarding.ts`, `lab/js/components/OnboardingOverlay.tsx` |
+| Object View & icons | `lab/js/components/CameraControls.tsx`, `lab/js/components/Icons.tsx` |
 | E2E test helpers | `tests/e2e/helpers.ts` (gotoApp), `tests/e2e/camera-onboarding.spec.ts` |
-| Bonded clusters (panel + highlight + color) | `page/js/runtime/bonded-group-runtime.ts`, `page/js/runtime/bonded-group-highlight-runtime.ts`, `page/js/runtime/bonded-group-appearance-runtime.ts`, `page/js/runtime/bonded-group-coordinator.ts`, `page/js/components/BondedGroupsPanel.tsx`, `page/js/runtime/interaction-highlight-runtime.ts` |
+| Bonded clusters (panel + highlight + color) | `lab/js/runtime/bonded-group-runtime.ts`, `lab/js/runtime/bonded-group-highlight-runtime.ts`, `lab/js/runtime/bonded-group-appearance-runtime.ts`, `lab/js/runtime/bonded-group-coordinator.ts`, `lab/js/components/BondedGroupsPanel.tsx`, `lab/js/runtime/interaction-highlight-runtime.ts` |
 | Highlight tests | `tests/unit/bonded-group-highlight.test.ts`, `tests/unit/renderer-interaction-highlight.test.ts`, `tests/unit/highlight-test-utils.ts` |
-| Store callback wiring | `page/js/runtime/ui-bindings.ts`, `page/js/store/app-store.ts` |
-| Scene / placement | `page/js/scene.ts`, `page/js/placement.ts`, `page/js/runtime/placement-solver.ts`, `tests/unit/placement-solver.test.ts` |
-| Browser physics | `page/js/physics.ts` (JS Tersoff), `sim/wasm/tersoff.c` (Wasm kernel) |
+| Store callback wiring | `lab/js/runtime/ui-bindings.ts`, `lab/js/store/app-store.ts` |
+| Scene / placement | `lab/js/scene.ts`, `lab/js/placement.ts`, `lab/js/runtime/placement-solver.ts`, `tests/unit/placement-solver.test.ts` |
+| Browser physics | `lab/js/physics.ts` (JS Tersoff), `sim/wasm/tersoff.c` (Wasm kernel) |
 | Force calculation (Python) | `sim/potentials/tersoff.py`, `tersoff_fast.py` |
 | Running simulations | `sim/integrators/velocity_verlet.py`, `sim/atoms.py` |
 | Adding structures | `sim/structures/generate.py`, `scripts/library_cli.py` |

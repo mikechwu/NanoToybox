@@ -12,8 +12,8 @@
 import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
-import { DockLayout } from '../../page/js/components/DockLayout';
-import { selectDockSurface, type DockSurface } from '../../page/js/store/selectors/dock';
+import { DockLayout } from '../../lab/js/components/DockLayout';
+import { selectDockSurface, type DockSurface } from '../../lab/js/store/selectors/dock';
 
 describe('Layout contract — behavioral', () => {
   it('DockLayout renders [data-dock-root] attribute on root element', () => {

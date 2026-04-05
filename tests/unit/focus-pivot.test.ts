@@ -5,8 +5,8 @@
  * Part B: Behavioral tests (handleCommand calls focusMoleculeForAtom on all start modes).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useAppStore } from '../../page/js/store/app-store';
-import { handleCommand } from '../../page/js/interaction';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { handleCommand } from '../../lab/js/interaction';
 
 describe('Focus-aware pivot — store contract', () => {
   beforeEach(() => {

@@ -56,7 +56,7 @@ afterEach(() => {
 });
 
 async function createBridge() {
-  const mod = await import('../../page/js/worker-bridge');
+  const mod = await import('../../lab/js/worker-bridge');
   return new mod.WorkerBridge();
 }
 

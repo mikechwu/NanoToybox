@@ -20,7 +20,7 @@ import {
   type PlacementFramingPoint,
   type PlacementCameraBasis,
   type PlacementFramingSafeRegion,
-} from '../../page/js/runtime/placement-camera-framing';
+} from '../../lab/js/runtime/placement-camera-framing';
 
 // ── Helpers ──
 

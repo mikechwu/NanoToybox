@@ -76,7 +76,7 @@ test.describe('Milestone A — Hard-Supported Pages', () => {
   test('main app: boot, load structure list, verify scene status', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
 
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
 
     // App initializes — core DOM present (React-authoritative components)
     const toolbar = page.getByRole('toolbar', { name: 'Simulation controls' })
@@ -105,7 +105,7 @@ test.describe('Milestone A — Hard-Supported Pages', () => {
   test('bench-wasm: runs Wasm validation and reports results', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
 
-    await page.goto(`${baseURL}/page/bench/bench-wasm.html`)
+    await page.goto(`${baseURL}/lab/bench/bench-wasm.html`)
 
     await expect(page.locator('h2')).toContainText('Wasm Tersoff')
 
@@ -141,7 +141,7 @@ test.describe('Milestone A — Hard-Supported Pages', () => {
   test('rollback test: runs physics tests and all pass', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
 
-    await page.goto(`${baseURL}/page/test-rollback.html`)
+    await page.goto(`${baseURL}/lab/test-rollback.html`)
 
     // Tests run automatically — wait for summary
     const summaryLocator = page.locator('#results pre', { hasText: 'Results:' })
@@ -161,7 +161,7 @@ test.describe('Milestone A — Hard-Supported Pages', () => {
 test.describe('Initial-load bond regression', () => {
   test('first-load C60 has nonzero bond count before any sheet interaction', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
 
     // Wait for app to fully initialize (toolbar = React mounted + init complete)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
@@ -183,7 +183,7 @@ test.describe('Milestone D — React UI Migration', () => {
 
   test('settings sheet: opens, shows controls, closes', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
 
     // Wait for app to initialize
 
@@ -212,7 +212,7 @@ test.describe('Milestone D — React UI Migration', () => {
 
   test('settings sheet: theme switch updates CSS tokens', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
 
     // Open settings
     await page.getByRole('toolbar', { name: 'Simulation controls' }).getByRole('button', { name: 'Settings' }).click()
@@ -240,7 +240,7 @@ test.describe('Milestone D — React UI Migration', () => {
 
   test('settings sheet: help drill-in and back', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
 
     // Open settings
     await page.getByRole('toolbar', { name: 'Simulation controls' }).getByRole('button', { name: 'Settings' }).click()
@@ -264,7 +264,7 @@ test.describe('Milestone D — React UI Migration', () => {
 
   test('settings sheet: help page resets on close and reopen', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
 
     const settingsBtn = page.getByRole('toolbar', { name: 'Simulation controls' }).getByRole('button', { name: 'Settings' })
     const sheet = page.locator('.sheet').filter({ hasText: 'Settings' })
@@ -293,7 +293,7 @@ test.describe('Milestone D — React UI Migration', () => {
     // Collect errors only BEFORE the structure click. After the click,
     // placement.start() may produce renderer errors in headless mode (no WebGL).
     const preClickErrors = collectErrors(page)
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
 
     // Open chooser via Add button
     await page.getByRole('toolbar', { name: 'Simulation controls' }).getByRole('button', { name: /Add|Place/ }).click()
@@ -329,7 +329,7 @@ test.describe('Milestone D — React UI Migration', () => {
 
   test('settings sheet: speed control updates store', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
 
     // Verify initial speed is 1x
@@ -361,7 +361,7 @@ test.describe('Milestone D — React UI Migration', () => {
 
   test('settings sheet: speed group keyboard navigation with disabled options', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
 
     // Open settings
@@ -399,7 +399,7 @@ test.describe('Milestone D — React UI Migration', () => {
 
   test('settings sheet: boundary mode updates store', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
 
     // Verify initial boundary mode
@@ -425,7 +425,7 @@ test.describe('Milestone D — React UI Migration', () => {
 
   test('dock: interaction mode switching', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
 
     const toolbar = page.getByRole('toolbar', { name: 'Simulation controls' })
@@ -454,7 +454,7 @@ test.describe('Milestone D — React UI Migration', () => {
 
   test('dock: keyboard arrow-key navigation in mode segmented control', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
     const toolbar = page.getByRole('toolbar', { name: 'Simulation controls' })
     await expect(toolbar).toBeAttached({ timeout: 10000 })
 
@@ -501,7 +501,7 @@ test.describe('Tooltip touch suppression', () => {
     const errors = collectErrors(page)
 
     try {
-      await gotoApp(page, baseURL!, '/page/')
+      await gotoApp(page, baseURL!, '/lab/')
       await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
 
       // Confirm touch emulation is active

@@ -14,10 +14,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import React from 'react';
 import { render, fireEvent } from '@testing-library/react';
-import { BondedGroupsPanel, buildGroupColorLayout, computeHexGeometry, SWATCH_DIAMETER, ACTIVE_SCALE, RING_GAP } from '../../page/js/components/BondedGroupsPanel';
-import { useAppStore, type BondedGroupSummary, type BondedGroupColorAssignment } from '../../page/js/store/app-store';
-import { createBondedGroupHighlightRuntime } from '../../page/js/runtime/bonded-group-highlight-runtime';
-import { rebuildOverridesFromAssignments } from '../../page/js/runtime/bonded-group-appearance-runtime';
+import { BondedGroupsPanel, buildGroupColorLayout, computeHexGeometry, SWATCH_DIAMETER, ACTIVE_SCALE, RING_GAP } from '../../lab/js/components/BondedGroupsPanel';
+import { useAppStore, type BondedGroupSummary, type BondedGroupColorAssignment } from '../../lab/js/store/app-store';
+import { createBondedGroupHighlightRuntime } from '../../lab/js/runtime/bonded-group-highlight-runtime';
+import { rebuildOverridesFromAssignments } from '../../lab/js/runtime/bonded-group-appearance-runtime';
 
 /** Seed color assignments + derived overrides in one call (matches production write path). */
 function seedColorAssignments(assignments: BondedGroupColorAssignment[]) {
@@ -26,9 +26,9 @@ function seedColorAssignments(assignments: BondedGroupColorAssignment[]) {
     bondedGroupColorOverrides: rebuildOverridesFromAssignments(assignments),
   });
 }
-import { CONFIG } from '../../page/js/config';
-import { THEMES } from '../../page/js/themes';
-import type { BondedGroupRuntime } from '../../page/js/runtime/bonded-group-runtime';
+import { CONFIG } from '../../lab/js/config';
+import { THEMES } from '../../lab/js/themes';
+import type { BondedGroupRuntime } from '../../lab/js/runtime/bonded-group-runtime';
 
 const FIXTURE_GROUPS: BondedGroupSummary[] = [
   { id: 'a', displayIndex: 1, atomCount: 42, minAtomIndex: 0, orderKey: 0 },

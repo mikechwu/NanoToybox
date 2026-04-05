@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   createSimulationTimeline,
   type SimulationTimeline,
-} from '../../page/js/runtime/simulation-timeline';
+} from '../../lab/js/runtime/simulation-timeline';
 import {
   captureInteractionState,
   captureBoundaryState,
@@ -21,7 +21,7 @@ import {
   restoreBoundaryState,
   type TimelineInteractionState,
   type TimelineBoundaryState,
-} from '../../page/js/runtime/timeline-context-capture';
+} from '../../lab/js/runtime/timeline-context-capture';
 
 // ── Helpers ──
 

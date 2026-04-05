@@ -43,7 +43,7 @@ vi.mock('three', () => {
 });
 
 // Stub CONFIG
-vi.mock('../../page/js/config', () => ({
+vi.mock('../../lab/js/config', () => ({
   CONFIG: {
     isTouchInteraction: () => true, // simulate mobile
     orbit: { rotateSpeed: 0.01 },
@@ -54,7 +54,7 @@ vi.mock('../../page/js/config', () => ({
   },
 }));
 
-import { InputManager } from '../../page/js/input';
+import { InputManager } from '../../lab/js/input';
 
 function createRealInputManager() {
   // Minimal canvas stub

@@ -5,16 +5,16 @@ BASE="${1:-http://127.0.0.1:4173}"
 echo "=== Deploy Smoke Test ==="
 
 echo "Checking product pages..."
-curl -sf "$BASE/page/" > /dev/null
-echo "  ✓ /page/"
+curl -sf "$BASE/lab/" > /dev/null
+echo "  ✓ /lab/"
 curl -sf "$BASE/viewer/" > /dev/null
 echo "  ✓ /viewer/"
 
 echo "Checking dev pages (sample)..."
-curl -sf "$BASE/page/bench/bench-physics.html" > /dev/null
-echo "  ✓ /page/bench/bench-physics.html"
-curl -sf "$BASE/page/bench/bench-wasm.html" > /dev/null
-echo "  ✓ /page/bench/bench-wasm.html"
+curl -sf "$BASE/lab/bench/bench-physics.html" > /dev/null
+echo "  ✓ /lab/bench/bench-physics.html"
+curl -sf "$BASE/lab/bench/bench-wasm.html" > /dev/null
+echo "  ✓ /lab/bench/bench-wasm.html"
 
 echo "Checking static assets..."
 curl -sf "$BASE/structures/library/manifest.json" > /dev/null

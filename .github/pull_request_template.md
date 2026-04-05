@@ -6,7 +6,7 @@
 
 These checks cannot run in headless CI. Complete before merging to main:
 
-- [ ] **Main app:** `/page/` — Add structure → place on canvas → verify atom count → Settings → Clear → verify "Empty playground"
+- [ ] **Main app:** `/lab/` — Add structure → place on canvas → verify atom count → Settings → Clear → verify "Empty playground"
 - [ ] **Settings:** Open/close settings sheet, switch Dark/Light theme
 - [ ] **Viewer:** `/viewer/` — Drag-drop `.xyz` file → atoms and bonds render
 

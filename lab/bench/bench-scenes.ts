@@ -4,7 +4,7 @@
  */
 import { loadStructure } from '../js/loader';
 
-// From page/bench/, library is at ../../structures/library
+// From lab/bench/, library is at ../../structures/library
 const BENCH_LIBRARY_PATH = '../../structures/library';
 const _cache = {};
 

@@ -87,7 +87,7 @@ structures/archive/
 # =============================================================================
 # EXPLICITLY TRACKED (do NOT ignore these)
 # =============================================================================
-# page/                  — Interactive playground (main app)
+# lab/                  — Interactive playground (main app)
 # structures/library/    — Canonical relaxed 0K structures (small XYZ files)
 # sim/                   — Python simulation engine
 # tests/                 — Validation tests

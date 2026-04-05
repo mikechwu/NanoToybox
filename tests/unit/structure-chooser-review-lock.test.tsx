@@ -8,9 +8,9 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, fireEvent, cleanup } from '@testing-library/react';
-import { useAppStore } from '../../page/js/store/app-store';
-import { StructureChooser } from '../../page/js/components/StructureChooser';
-import { REVIEW_LOCK_STATUS } from '../../page/js/store/selectors/review-ui-lock';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { StructureChooser } from '../../lab/js/components/StructureChooser';
+import { REVIEW_LOCK_STATUS } from '../../lab/js/store/selectors/review-ui-lock';
 
 describe('StructureChooser review-lock rendering', () => {
   beforeEach(() => {

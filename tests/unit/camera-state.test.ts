@@ -10,12 +10,12 @@ import { describe, it, expect } from 'vitest';
 
 describe('getCameraState (structural)', () => {
   it('Renderer exposes getCameraState on its prototype', async () => {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     expect(typeof mod.Renderer.prototype.getCameraState).toBe('function');
   });
 
   it('getCameraState takes no arguments', async () => {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     expect(mod.Renderer.prototype.getCameraState.length).toBe(0);
   });
 });

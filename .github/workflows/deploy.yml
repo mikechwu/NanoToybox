@@ -37,20 +37,23 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Verify build output (all 13 HTML entrypoints + assets)
+      - name: Verify build output (all 15 HTML entrypoints + assets)
         run: |
-          # Product pages (2)
-          test -f dist/page/index.html || (echo "MISSING: dist/page/index.html" && exit 1)
+          # Root redirect (1)
+          test -f dist/index.html || (echo "MISSING: dist/index.html (root redirect)" && exit 1)
+          # Product pages (3)
+          test -f dist/lab/index.html || (echo "MISSING: dist/lab/index.html" && exit 1)
           test -f dist/viewer/index.html || (echo "MISSING: dist/viewer/index.html" && exit 1)
+          test -f dist/watch/index.html || (echo "MISSING: dist/watch/index.html" && exit 1)
           # Dev/diagnostic pages (11)
-          test -f dist/page/test.html || (echo "MISSING: dist/page/test.html" && exit 1)
-          test -f dist/page/test-rollback.html || (echo "MISSING: dist/page/test-rollback.html" && exit 1)
-          test -f dist/page/test-worker.html || (echo "MISSING: dist/page/test-worker.html" && exit 1)
-          COUNT=$(ls dist/page/bench/bench-*.html | wc -l | tr -d ' ')
+          test -f dist/lab/test.html || (echo "MISSING: dist/lab/test.html" && exit 1)
+          test -f dist/lab/test-rollback.html || (echo "MISSING: dist/lab/test-rollback.html" && exit 1)
+          test -f dist/lab/test-worker.html || (echo "MISSING: dist/lab/test-worker.html" && exit 1)
+          COUNT=$(ls dist/lab/bench/bench-*.html | wc -l | tr -d ' ')
           [ "$COUNT" -eq 8 ] || (echo "Expected 8 bench pages, found $COUNT" && exit 1)
-          # Total: 2 product + 3 test + 8 bench = 13
+          # Total: 1 redirect + 3 product + 3 test + 8 bench = 15
           TOTAL=$(find dist -name "*.html" | wc -l | tr -d ' ')
-          [ "$TOTAL" -eq 13 ] || (echo "Expected 13 HTML entrypoints, found $TOTAL" && exit 1)
+          [ "$TOTAL" -eq 15 ] || (echo "Expected 15 HTML entrypoints, found $TOTAL" && exit 1)
           # Static assets
           test -f dist/structures/library/manifest.json || (echo "MISSING: manifest.json" && exit 1)
           ls dist/assets/tersoff-*.wasm >/dev/null 2>&1 || (echo "MISSING: Wasm binary" && exit 1)
@@ -68,13 +71,13 @@ jobs:
           SERVER_PID=$!
           trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
           for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:4173/page/ > /dev/null 2>&1; then
+            if curl -sf http://127.0.0.1:4173/lab/ > /dev/null 2>&1; then
               echo "Server ready after ~$((i / 2))s"
               break
             fi
             sleep 0.5
           done
-          if ! curl -sf http://127.0.0.1:4173/page/ > /dev/null 2>&1; then
+          if ! curl -sf http://127.0.0.1:4173/lab/ > /dev/null 2>&1; then
             echo "ERROR: Vite preview server failed to become ready within 15s"
             exit 1
           fi

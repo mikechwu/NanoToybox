@@ -10,7 +10,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { computeOrbitDelta, applyOrbitRotation, TRIAD_CAMERA_DISTANCE } from '../../page/js/orbit-math';
+import { computeOrbitDelta, applyOrbitRotation, TRIAD_CAMERA_DISTANCE } from '../../lab/js/orbit-math';
 
 // ── Shared orbit math from orbit-math.ts — tested directly, no duplication ──
 
@@ -228,7 +228,7 @@ describe('arcball orbit invariants', () => {
   it('triad sync: real _syncTriadFromCamera preserves camera quaternion exactly', async () => {
     // Call the real Renderer method — guards against the exact regression where
     // a lookAt() call after quaternion.copy() silently overwrites the orientation.
-    const { Renderer } = await import('../../page/js/renderer');
+    const { Renderer } = await import('../../lab/js/renderer');
     const sync = (Renderer.prototype as any)._syncTriadFromCamera;
 
     // Build a minimal context with real Three.js cameras

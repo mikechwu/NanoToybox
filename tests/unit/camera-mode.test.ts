@@ -4,9 +4,9 @@
  * These tests temporarily enable the flag to verify internal behavior.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { useAppStore } from '../../page/js/store/app-store';
-import { selectCameraMode } from '../../page/js/store/selectors/camera';
-import { CONFIG } from '../../page/js/config';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { selectCameraMode } from '../../lab/js/store/selectors/camera';
+import { CONFIG } from '../../lab/js/config';
 
 describe('Camera mode store', () => {
   const savedFlag = CONFIG.camera.freeLookEnabled;

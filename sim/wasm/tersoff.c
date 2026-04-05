@@ -1,7 +1,7 @@
 /**
  * Tersoff (1988) force kernel for carbon — Wasm implementation.
  *
- * Line-for-line port of the JS on-the-fly distance kernel in page/js/physics.js.
+ * Line-for-line port of the JS on-the-fly distance kernel in lab/js/physics.ts.
  * Uses CSR neighbor list format instead of per-atom arrays.
  * Compiled with Emscripten: emcc -O3 -s WASM=1 ...
  */

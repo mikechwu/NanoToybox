@@ -4,7 +4,7 @@
  * This is the single source of truth for the React FPSDisplay component.
  */
 import { describe, it, expect } from 'vitest';
-import { formatStatusText, type StatusInputs } from '../../page/js/format-status';
+import { formatStatusText, type StatusInputs } from '../../lab/js/format-status';
 
 const BASE: StatusInputs = {
   workerStalled: false,

@@ -20,7 +20,7 @@ NanoToybox/
 │   │   └── output.py             # XYZ trajectory + CSV energy writers
 │   └── wasm/
 │       ├── tersoff.c             # C Tersoff kernel for Wasm (Emscripten)
-│       └── Makefile              # Build: emcc -O3 -fno-math-errno -ffinite-math-only → page/wasm/
+│       └── Makefile              # Build: emcc -O3 -fno-math-errno -ffinite-math-only → lab/wasm/
 ├── tests/                        # Python validation + JS unit + E2E suites (see testing.md)
 ├── scripts/                      # CLI tools and analysis scripts
 │   ├── library_cli.py            # Structure library management CLI
@@ -34,7 +34,7 @@ NanoToybox/
 │   └── generate_*.py             # Dataset generation scripts
 ├── structures/
 │   └── library/                  # 15 canonical relaxed 0K structures (XYZ + manifest.json)
-├── page/                         # Interactive carbon playground (real-time simulation)
+├── lab/                         # Interactive carbon playground (real-time simulation)
 │   ├── index.html                # HTML shell + #react-root mount + #hint surface
 │   ├── bench/                    # Performance benchmarks
 │   │   ├── bench-physics.html    # Physics-only microbench (per-stage timing)
@@ -316,7 +316,7 @@ When `timelineMode === 'review'`, live-edit actions are disabled at two layers:
 **Desktop:** ActionHint tooltips with `REVIEW_LOCK_TOOLTIP` (short copy).
 **Mobile:** Transient status hint with `REVIEW_LOCK_STATUS` (fuller copy explaining exits).
 
-Hint copy lives in `page/js/store/selectors/review-ui-lock.ts`. Hint timing (`statusHintMs`) lives in `CONFIG.reviewModeUi`.
+Hint copy lives in `lab/js/store/selectors/review-ui-lock.ts`. Hint timing (`statusHintMs`) lives in `CONFIG.reviewModeUi`.
 
 **Dock slot geometry:** The dock uses CSS grid with stable slot widths (`--dock-slot-action` for action buttons, `1fr` for the mode slot) so Pause↔Resume label changes do not rebalance the layout. Each control renders inside a named `.dock-slot` wrapper. The Segmented control uses stable `.seg-item` wrappers for every option so live and review modes produce identical flex children.
 
@@ -361,11 +361,11 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 3. **No periodic boundaries** — all structures are finite/free-standing (simplifies force calculation)
 4. **XYZ format throughout** — human-readable, viewer-compatible, ASE-compatible
 5. **Analytical first, ML later** — ML explored and deferred; analytical is faster for <1000 atoms
-6. **Centralized page config** — all tuning constants, thresholds, and defaults in `page/js/config.ts`; no scattered magic numbers
+6. **Centralized page config** — all tuning constants, thresholds, and defaults in `lab/js/config.ts`; no scattered magic numbers
 
 ### Composition Root Pattern
 
-`main.ts` is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns RAF start/stop, and wires global listeners. Per-frame sequencing is delegated to `app/frame-runtime.ts` and teardown sequencing to `app/app-lifecycle.ts`. Feature-level runtime responsibilities are delegated to modules in `page/js/runtime/`:
+`main.ts` is the composition root: it creates all subsystems (renderer, physics, stateMachine), mounts the React UI, owns RAF start/stop, and wires global listeners. Per-frame sequencing is delegated to `app/frame-runtime.ts` and teardown sequencing to `app/app-lifecycle.ts`. Feature-level runtime responsibilities are delegated to modules in `lab/js/runtime/`:
 
 - **scene-runtime.ts** — scene mutation wrappers, scene-to-store projection, worker scene mirroring
 - **worker-lifecycle.ts** — worker bridge creation, init, stall detection (5s warning / 15s fatal), teardown
@@ -406,7 +406,7 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - `onReturnToObject?()` — fly back to orbit target *(Free-Look only, when `freeLookEnabled` is true)*
 - `onFreeze?()` — stop flight velocity *(Free-Look only)*
 
-`main.ts` must not be re-grown: new runtime logic goes into `page/js/runtime/`, new UI surfaces into `page/js/components/`.
+`main.ts` must not be re-grown: new runtime logic goes into `lab/js/runtime/`, new UI surfaces into `lab/js/components/`.
 
 ### Runtime Responsibility Classes
 
@@ -420,7 +420,7 @@ Four-tier layering (top to bottom):
 - Does NOT own per-frame business logic — delegates to `app/frame-runtime.ts`
 - Does NOT own teardown sequencing — delegates to `app/app-lifecycle.ts`
 
-**2. App orchestration** (`page/js/app/`):
+**2. App orchestration** (`lab/js/app/`):
 
 - **`frame-runtime.ts`** (`executeFrame()`):
   - Owns the per-frame update pipeline sequence (physics → reconciliation → feedback → highlight → recording → placement framing → drag reprojection → render)
@@ -434,7 +434,7 @@ Four-tier layering (top to bottom):
   - Subsystem-specific cleanup stays inside each subsystem's own destroy/teardown
   - Tested by `tests/unit/app-lifecycle.test.ts` — full sequence verified
 
-**3. Feature runtimes** (`page/js/runtime/*.ts`):
+**3. Feature runtimes** (`lab/js/runtime/*.ts`):
 - Each module owns one concern (e.g., bonded-group projection, drag refresh, timeline recording)
 - Each module documents: owns / depends on / called by / teardown
 - Modules do NOT attach global listeners or write to `window` — main.ts wires those

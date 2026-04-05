@@ -8,9 +8,9 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** Scaling benchmarks showed analytical Tersoff handles all target scenes (60–300 atoms) at interactive frame rates. The JavaScript implementation achieves sufficient performance for the target range without requiring Wasm. ML provided no speed advantage — descriptor computation has the same O(N·neighbors²) complexity as the analytical force. ML only becomes worthwhile for >1000 atoms with a GNN that avoids explicit descriptors.
 
-**Update:** The interactive page (`page/`) now runs the full Tersoff potential with a C/Wasm kernel enabled by default (`config.ts` `useWasm: true`), providing ~11% speedup over JS JIT. Automatic fallback to JavaScript if Wasm fails to load. Physics runs on a dedicated Web Worker (`simulation-worker.ts`).
+**Update:** The interactive page (`lab/`) now runs the full Tersoff potential with a C/Wasm kernel enabled by default (`config.ts` `useWasm: true`), providing ~11% speedup over JS JIT. Automatic fallback to JavaScript if Wasm fails to load. Physics runs on a dedicated Web Worker (`simulation-worker.ts`).
 
-**Evidence:** dev_report_simdev9, dev_report_simdev10, page/js/physics.ts
+**Evidence:** dev_report_simdev9, dev_report_simdev10, lab/js/physics.ts
 
 ## D2: Python Reference + Numba Acceleration
 
@@ -90,7 +90,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** The old bottom strip scrolled horizontally on mobile, hiding controls. The dock provides large tap targets and no scrolling. The settings sheet organizes controls into grouped sections with drill-in navigation. One overlay at a time (settings | chooser). Placement mode swaps dock slots via CSS class.
 
-**Update:** DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, StatusBar, FPSDisplay, and SheetOverlay are now React components (`page/js/components/`). UI state is owned by the Zustand store (`page/js/store/app-store.ts`). Placement mode is communicated via `placementActive` flag in the store; DockBar uses `selectDockSurface` (`store/selectors/dock.ts`) to conditionally render surface-specific controls (JSX branching, not CSS class toggling).
+**Update:** DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, StatusBar, FPSDisplay, and SheetOverlay are now React components (`lab/js/components/`). UI state is owned by the Zustand store (`lab/js/store/app-store.ts`). Placement mode is communicated via `placementActive` flag in the store; DockBar uses `selectDockSurface` (`store/selectors/dock.ts`) to conditionally render surface-specific controls (JSX branching, not CSS class toggling).
 
 ## D13: Controller Module Extraction
 
@@ -106,7 +106,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** Moves the O(N·neighbors²) Tersoff force computation off the main thread, preventing jank on the render/input thread. The protocol provides mutation acks with scene versioning, `requestFrame`/`frameResult` round-trip for position snapshots, and generation bumping to invalidate in-flight requests on scene clear. Automatic fallback to sync-mode physics if the worker fails or stalls (5s warning, 15s fatal).
 
-**Evidence:** `page/js/simulation-worker.ts`, `page/js/worker-bridge.ts`, `src/types/worker-protocol.ts`, `page/js/runtime/worker-lifecycle.ts`, `page/js/runtime/snapshot-reconciler.ts`
+**Evidence:** `lab/js/simulation-worker.ts`, `lab/js/worker-bridge.ts`, `src/types/worker-protocol.ts`, `lab/js/runtime/worker-lifecycle.ts`, `lab/js/runtime/snapshot-reconciler.ts`
 
 ## D15: React + Zustand for UI Chrome
 
@@ -114,7 +114,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** The imperative DOM controllers required explicit sync of every state change to the DOM. React provides declarative re-renders; Zustand provides a single, typed, subscribable state surface. Diagnostics and playback metrics are throttled to 5 Hz via the frame loop's coalesced status tick, avoiding per-frame React re-renders. Imperative callbacks from main.ts are registered into the store (`dockCallbacks`, `settingsCallbacks`, `chooserCallbacks`) so React components can invoke them without importing main.ts.
 
-**Evidence:** `page/js/react-root.tsx`, `page/js/store/app-store.ts`, `page/js/components/` (DockLayout.tsx, DockBar.tsx, Segmented.tsx, SettingsSheet.tsx, StructureChooser.tsx, StatusBar.tsx, FPSDisplay.tsx, SheetOverlay.tsx)
+**Evidence:** `lab/js/react-root.tsx`, `lab/js/store/app-store.ts`, `lab/js/components/` (DockLayout.tsx, DockBar.tsx, Segmented.tsx, SettingsSheet.tsx, StructureChooser.tsx, StatusBar.tsx, FPSDisplay.tsx, SheetOverlay.tsx)
 
 ## D16: Interactive Triad + Mobile Camera Orbit
 
@@ -122,7 +122,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** Desktop users orbit via right-drag, but touch devices had no orbit gesture. The triad is the primary mobile orbit control because it is always visible and works regardless of scene density. Background orbit (1-finger on empty space) is a secondary convenience — unreliable in dense scenes where atoms fill the viewport. Both gestures use the same rotation convention (drag-up = camera rotates down). Gesture priority: triad hit > atom raycast > background orbit. Atom hit always wins — no heuristics. Three triad gesture levels: drag=orbit, tap-axis=snap-to-canonical-view (±X/±Y/±Z), double-tap-center=reset. Dynamic `controls.touches.ONE` toggle per-gesture for background orbit. `CONFIG.isTouchInteraction()` (coarse pointer + no hover) gates mobile-only behavior — stable across resize, excludes hybrid desktops.
 
-**Evidence:** `page/js/input.ts` (triad drag/tap/double-tap, background orbit), `page/js/renderer.ts` (applyOrbitDelta, snapToAxis, animatedResetView, getNearestAxisEndpoint, showAxisHighlight, pulseTriad), `page/js/config.ts` (CONFIG.orbit, isTouchInteraction), `page/js/runtime/input-bindings.ts` (triad source wiring), `docs/testing.md` (B1-B8, C1-C6, D1-D9)
+**Evidence:** `lab/js/input.ts` (triad drag/tap/double-tap, background orbit), `lab/js/renderer.ts` (applyOrbitDelta, snapToAxis, animatedResetView, getNearestAxisEndpoint, showAxisHighlight, pulseTriad), `lab/js/config.ts` (CONFIG.orbit, isTouchInteraction), `lab/js/runtime/input-bindings.ts` (triad source wiring), `docs/testing.md` (B1-B8, C1-C6, D1-D9)
 
 ## D17: Two-Mode Camera System (Orbit + Free-Look)
 
@@ -142,7 +142,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Store is sole authority for camera mode** (`cameraMode: 'orbit' | 'freelook'`). Renderer, input, and UI are consumers only.
 
-**Evidence:** `page/js/components/CameraControls.tsx`, `page/js/components/OnboardingOverlay.tsx`, `page/js/renderer.ts` (applyFreeLookDelta, resetOrientation, setOrbitControlsForMode), `page/js/input.ts` (mode-aware routing), `page/js/runtime/onboarding.ts`, `page/js/runtime/focus-runtime.ts` (ensureFollowTarget), `page/js/store/app-store.ts` (cameraMode, orbitFollowEnabled, onboardingPhase, cameraCallbacks)
+**Evidence:** `lab/js/components/CameraControls.tsx`, `lab/js/components/OnboardingOverlay.tsx`, `lab/js/renderer.ts` (applyFreeLookDelta, resetOrientation, setOrbitControlsForMode), `lab/js/input.ts` (mode-aware routing), `lab/js/runtime/onboarding.ts`, `lab/js/runtime/focus-runtime.ts` (ensureFollowTarget), `lab/js/store/app-store.ts` (cameraMode, orbitFollowEnabled, onboardingPhase, cameraCallbacks)
 
 ## D18: Simulation Timeline with Review and Restart
 
@@ -164,7 +164,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Update:** The original implementation incorrectly armed on `startPlacement` and on several non-atom callbacks (pause, speed, physics settings). This was narrowed to atom-interaction-only arming, the method was renamed from `markUserEngaged()` to `markAtomInteractionStarted()`, and arming was moved from the `sendWorkerInteraction` callback (which was gated by `isWorkerActive`) into the dispatch function itself (unconditional). This ensures recording arms in both worker and sync/local modes.
 
-**Evidence:** `page/js/runtime/timeline-recording-policy.ts`, `page/js/runtime/interaction-dispatch.ts`, `tests/unit/interaction-dispatch-arming.test.ts`, `tests/unit/store-callbacks-arming.test.ts`
+**Evidence:** `lab/js/runtime/timeline-recording-policy.ts`, `lab/js/runtime/interaction-dispatch.ts`, `tests/unit/interaction-dispatch-arming.test.ts`, `tests/unit/store-callbacks-arming.test.ts`
 
 ## D21: Object View Panel
 
@@ -172,7 +172,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** The old cluster relied on hidden gestures (long-press for follow, "?" glyph for help) that were not discoverable. Center and Follow are now separate visible buttons. Follow uses `ensureFollowTarget()`: resolve a valid target first, then enable tracking. If no molecules exist, follow stays off. Touch devices show secondary hint text; desktop uses title tooltips. The panel is positioned below the status block via `[data-status-root]` layout anchor with named tokens (`STATUS_TO_OBJECT_VIEW_GAP`, `OBJECT_VIEW_FALLBACK_TOP`, `SAFE_EDGE_INSET`).
 
-**Evidence:** `page/js/components/CameraControls.tsx`, `page/js/components/Icons.tsx`, `page/js/runtime/focus-runtime.ts` (ensureFollowTarget), `page/js/runtime/overlay-layout.ts`, `tests/unit/camera-controls-render.test.tsx`, `tests/unit/focus-runtime.test.ts`
+**Evidence:** `lab/js/components/CameraControls.tsx`, `lab/js/components/Icons.tsx`, `lab/js/runtime/focus-runtime.ts` (ensureFollowTarget), `lab/js/runtime/overlay-layout.ts`, `tests/unit/camera-controls-render.test.tsx`, `tests/unit/focus-runtime.test.ts`
 
 ## D22: Page-Load Onboarding Overlay
 
@@ -180,7 +180,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** The overlay teaches that guidance lives in Settings via a two-phase sink animation (~950ms) toward the Settings button. A reactive readiness gate (`subscribeOnboardingReadiness()`) waits for atomCount > 0 and no blockers (sheets, placement, review) before showing. The Settings button receives a highlight class during the sink animation. `?e2e=1` debug param suppresses in E2E tests (via `getDebugParam()`).
 
-**Evidence:** `page/js/components/OnboardingOverlay.tsx`, `page/js/runtime/onboarding.ts` (isOnboardingEligible, subscribeOnboardingReadiness), `page/js/store/app-store.ts` (onboardingPhase), `page/js/config.ts` (getDebugParam), `tests/unit/onboarding-overlay.test.tsx`, `tests/e2e/camera-onboarding.spec.ts`
+**Evidence:** `lab/js/components/OnboardingOverlay.tsx`, `lab/js/runtime/onboarding.ts` (isOnboardingEligible, subscribeOnboardingReadiness), `lab/js/store/app-store.ts` (onboardingPhase), `lab/js/config.ts` (getDebugParam), `tests/unit/onboarding-overlay.test.tsx`, `tests/e2e/camera-onboarding.spec.ts`
 
 ## D23: Inline SVG Icon System
 
@@ -188,7 +188,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** Consistent visual language with accessibility defaults (`aria-hidden`, `focusable={false}`). Icons use a 20x20 viewBox with currentColor stroke. Optional `size`, `strokeWidth`, `title`, `className` props for responsive refinement. DockBar uses Add, Check, Cancel, Pause, Resume, Settings. CameraControls uses Center, Follow, Freeze, Return.
 
-**Evidence:** `page/js/components/Icons.tsx`, `page/js/components/DockBar.tsx`, `page/js/components/CameraControls.tsx`
+**Evidence:** `lab/js/components/Icons.tsx`, `lab/js/components/DockBar.tsx`, `lab/js/components/CameraControls.tsx`
 
 ## D24: Mode-Aware Interaction Group Highlight
 
@@ -196,7 +196,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** Physics applies force to the full connected component in Move and Rotate modes. Highlighting only the picked atom made the interaction appear narrower than it actually was. The resolver (`interaction-highlight-runtime.ts`) maps interaction state + session mode to the correct highlight target using live `physics.componentId` / `physics.components`. The renderer has separate interaction and panel highlight channels so bonded-group panel selection is not clobbered. Both layers coexist additively — panel highlight stays visible during interaction (see D31-D33 for the composition model that superseded the earlier save/restore pattern). Review mode clears both channels.
 
-**Evidence:** `page/js/runtime/interaction-highlight-runtime.ts`, `page/js/renderer.ts` (setInteractionHighlightedAtoms, clearInteractionHighlight, updateFeedback with sessionMode), `page/js/main.ts` (resolveInteractionHighlight in frame loop), `tests/unit/interaction-highlight.test.ts`, `tests/unit/renderer-interaction-highlight.test.ts`
+**Evidence:** `lab/js/runtime/interaction-highlight-runtime.ts`, `lab/js/renderer.ts` (setInteractionHighlightedAtoms, clearInteractionHighlight, updateFeedback with sessionMode), `lab/js/main.ts` (resolveInteractionHighlight in frame loop), `tests/unit/interaction-highlight.test.ts`, `tests/unit/renderer-interaction-highlight.test.ts`
 
 ## D25: Placement Orientation — Camera-First Vertical-Preferred Policy
 
@@ -204,7 +204,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** Molecules displayed upright relative to the user's viewport are the most immediately readable default. The threshold prevents degenerate near-horizontal alignments from being forced vertical — when m1 is nearly parallel to the camera's right axis, the vertical family would produce a foreshortened, unreadable orientation. If the primary axis is foreshortened in the camera plane entirely (`PROJ_WEAK`), an m2 fallback is attempted before defaulting to vertical.
 
-**Evidence:** `page/js/runtime/placement-solver.ts` (chooseCameraFamily, VERT_READABLE_THRESHOLD = 0.25)
+**Evidence:** `lab/js/runtime/placement-solver.ts` (chooseCameraFamily, VERT_READABLE_THRESHOLD = 0.25)
 
 ## D26: Geometry-Aware Family Selection as Final Runtime Arbiter
 
@@ -212,7 +212,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** `chooseCameraFamily()` operates on the molecule's intrinsic frame axes and the camera, without seeing how the actual atom cloud appears after rotation. The geometry-aware selector closes this gap by scoring what the user will actually see. Both candidate rotations are fully built and projected before comparison, so the decision is grounded in observable readability, not axis algebra alone. The 20% margin prevents jittery family flipping when both orientations are similarly readable.
 
-**Evidence:** `page/js/runtime/placement-solver.ts` (selectOrientationByGeometry, GEOMETRY_FAMILY_SWITCH_MARGIN = 0.2, scoreProjectedReadability)
+**Evidence:** `lab/js/runtime/placement-solver.ts` (selectOrientationByGeometry, GEOMETRY_FAMILY_SWITCH_MARGIN = 0.2, scoreProjectedReadability)
 
 ## D27: Perspective-Projected 2D PCA Geometry Refinement
 
@@ -220,7 +220,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** The frame-alignment rotation places the molecule's intrinsic axis near the policy target, but residual twist can leave the visible silhouette rotated away from the intended screen-space direction. Perspective projection (not orthographic) is used so the refinement optimizes exactly what the user sees. The clamp prevents over-rotation from noisy PCA on near-circular projections. Two passes handle cases where the first correction shifts the silhouette enough to reveal a second-order error.
 
-**Evidence:** `page/js/runtime/placement-solver.ts` (refineOrientationFromGeometry, computeGeometryError, projected2DPCA, BASE_GEOMETRY_CORRECTION = 0.12)
+**Evidence:** `lab/js/runtime/placement-solver.ts` (refineOrientationFromGeometry, computeGeometryError, projected2DPCA, BASE_GEOMETRY_CORRECTION = 0.12)
 
 ## D28: Scored Regime Classification (Planarity Wins Ties)
 
@@ -228,7 +228,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** The original threshold-order classification checked elongation first, causing thin sheets like graphene to misroute through the line-dominant solver when their major/mid ratio happened to exceed the elongation threshold. Scored comparison fixes this: graphene's mid/minor ratio (planarity) is much stronger than its major/mid ratio (elongation), so it correctly routes through the plane-facing solver. Planarity wins ties because thin sheets benefit more from the plane-facing solver than near-round rods benefit from the line solver.
 
-**Evidence:** `page/js/runtime/placement-solver.ts` (classifyFrameMode, lineScore, planeScore)
+**Evidence:** `lab/js/runtime/placement-solver.ts` (classifyFrameMode, lineScore, planeScore)
 
 ## D29: No Vertical Bias — Purely Readability-Driven Solver
 
@@ -236,7 +236,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** An earlier iteration applied a vertical bias to make molecules "look nicer" by tilting them upright regardless of geometry. This created incorrect orientations for molecules whose readable axis was horizontal in the camera frame (e.g., a CNT viewed from the side). The vertical preference in `chooseCameraFamily()` (D25) provides a soft default, but it is overridable by geometry scoring (D26), keeping the solver purely readability-driven.
 
-**Evidence:** `page/js/runtime/placement-solver.ts` (no VERTICAL_BIAS constant, no bias term in scoring)
+**Evidence:** `lab/js/runtime/placement-solver.ts` (no VERTICAL_BIAS constant, no bias term in scoring)
 
 ## D30: Placement Test Suite — 3-Layer Acceptance Architecture
 
@@ -257,7 +257,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** The single-mesh approach required saving and restoring panel highlight state around interaction highlights, creating fragile ordering dependencies and edge cases where restore could silently clobber an updated panel selection. Two independent meshes eliminate the save/restore lifecycle entirely — each layer writes to its own mesh, and the GPU composites them via renderOrder. The panel mesh (renderOrder 2) is always visible; the interaction mesh (renderOrder 3) draws on top without touching panel state.
 
-**Evidence:** `page/js/renderer.ts` (panel and interaction InstancedMesh instances, renderOrder 2 and 3)
+**Evidence:** `lab/js/renderer.ts` (panel and interaction InstancedMesh instances, renderOrder 2 and 3)
 
 ## D32: Highlight Setters Are State-Only — Single Compositor
 
@@ -265,7 +265,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** When setters both stored state and directly mutated mesh attributes, multiple code paths could produce highlight visuals, making it impossible to reason about what the user actually sees. Separating concerns — setters write to state arrays, a single compositor reads them and writes to both meshes — ensures every visual update goes through one code path. Overlap computation (atoms in both panel and interaction sets) happens in exactly one place, eliminating the class of bugs where two renderers disagree.
 
-**Evidence:** `page/js/renderer.ts` (`_updateGroupHighlight` as sole rendering path for both highlight meshes)
+**Evidence:** `lab/js/renderer.ts` (`_updateGroupHighlight` as sole rendering path for both highlight meshes)
 
 ## D33: Overlap Atoms Rendered on Both Layers
 
@@ -273,7 +273,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** When an atom belongs to both the panel selection and the interaction highlight, it must be visually present on both meshes so that neither layer appears to have a hole. The compositor partitions atoms into three sets: panelOnly, interactionOnly, and overlap. Overlap atoms are written to both meshes with their respective colors, ensuring that removing the interaction highlight reveals the panel highlight underneath without a flash or gap. This partition is computed from the state arrays on every compositor pass, so it is always consistent with the current selection.
 
-**Evidence:** `page/js/renderer.ts` (`_updateGroupHighlight` overlap set computation and dual-mesh writes)
+**Evidence:** `lab/js/renderer.ts` (`_updateGroupHighlight` overlap set computation and dual-mesh writes)
 
 ## D34: CONFIG.groupHighlight Renamed to CONFIG.panelHighlight
 
@@ -281,23 +281,23 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** The old name `groupHighlight` was ambiguous — it could refer to any group-level highlight, but it only controlled the panel selection appearance. Renaming to `panelHighlight` makes the config key self-documenting for the two-layer architecture. Extracting interaction highlight parameters (color, opacity) from hardcoded values in the renderer into `CONFIG.interactionHighlight` makes both layers configurable in the same way and discoverable in the same config namespace. The vocabulary (panel vs. interaction) now matches the mesh layer names, the compositor logic, and the public API.
 
-**Evidence:** `page/js/config.ts` (`CONFIG.panelHighlight`, `CONFIG.interactionHighlight`)
+**Evidence:** `lab/js/config.ts` (`CONFIG.panelHighlight`, `CONFIG.interactionHighlight`)
 
 ## D35: Frame-Loop Sequencing Extracted to app/frame-runtime.ts
 
-**Decision:** The per-frame update pipeline was extracted from main.ts into page/js/app/frame-runtime.ts as executeFrame(). main.ts retains only RAF lifecycle (start/stop/teardown) as a thin wrapper constructing FrameRuntimeSurface.
+**Decision:** The per-frame update pipeline was extracted from main.ts into lab/js/app/frame-runtime.ts as executeFrame(). main.ts retains only RAF lifecycle (start/stop/teardown) as a thin wrapper constructing FrameRuntimeSurface.
 
 **Rationale:** Gives frame sequencing a single testable owner. Ordering invariants (recording after reconciliation, highlights after feedback) are enforced in one place.
 
-**Evidence:** `page/js/app/frame-runtime.ts`, `tests/unit/frame-runtime.test.ts` (worker-mode ordering proof, review-mode gating)
+**Evidence:** `lab/js/app/frame-runtime.ts`, `tests/unit/frame-runtime.test.ts` (worker-mode ordering proof, review-mode gating)
 
 ## D36: Teardown Sequencing Extracted to app/app-lifecycle.ts
 
-**Decision:** The ordered teardown sequence was extracted from main.ts into page/js/app/app-lifecycle.ts as teardownAllSubsystems(). Reset helpers (resetSchedulerState, resetSessionState, resetEffectsGate) are also exported. main.ts constructs TeardownSurface and delegates.
+**Decision:** The ordered teardown sequence was extracted from main.ts into lab/js/app/app-lifecycle.ts as teardownAllSubsystems(). Reset helpers (resetSchedulerState, resetSessionState, resetEffectsGate) are also exported. main.ts constructs TeardownSurface and delegates.
 
 **Rationale:** Makes teardown ordering testable and explicit. Fixes a Zustand camera-mode subscription leak that was discovered during extraction.
 
-**Evidence:** `page/js/app/app-lifecycle.ts`, `tests/unit/app-lifecycle.test.ts` (exact dependency-ordered sequence verified)
+**Evidence:** `lab/js/app/app-lifecycle.ts`, `tests/unit/app-lifecycle.test.ts` (exact dependency-ordered sequence verified)
 
 ## D37: Package/Workspace Split Remains Deferred and Optional
 
@@ -313,7 +313,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Placement framing is about keeping what the user was already viewing plus the preview visible — not about framing the entire scene. The pure solver enables thorough unit testing without DOM/WebGL dependencies. The adaptive search prefers target shift over zoom-out, matching the UX goal of "making room" rather than "backing away."
 
-**Evidence:** `page/js/runtime/placement-camera-framing.ts` (pure solver), `tests/unit/placement-camera-framing.test.ts` (20 tests including orientation independence and visible-anchor regressions), `page/js/app/frame-runtime.ts` (frozen anchor capture + orchestration)
+**Evidence:** `lab/js/runtime/placement-camera-framing.ts` (pure solver), `tests/unit/placement-camera-framing.test.ts` (20 tests including orientation independence and visible-anchor regressions), `lab/js/app/frame-runtime.ts` (frozen anchor capture + orchestration)
 
 ## D39: Placement Focus Decoupled from Commit (Policy A)
 
@@ -321,7 +321,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Placement framing handles visibility; Center/Follow handle explicit focus. Coupling these caused a sudden camera jump on Place click. Decoupling makes focus selection and camera framing different concerns.
 
-**Evidence:** `page/js/runtime/scene-runtime.ts` (no focusNewestPlaced import), `page/js/runtime/focus-runtime.ts` (function removed, module header updated), `tests/unit/focus-runtime.test.ts` (Policy A tests)
+**Evidence:** `lab/js/runtime/scene-runtime.ts` (no focusNewestPlaced import), `lab/js/runtime/focus-runtime.ts` (function removed, module header updated), `tests/unit/focus-runtime.test.ts` (Policy A tests)
 
 ## D40: Continuous Drag with Pointer Capture and Per-Frame Reprojection
 
@@ -329,7 +329,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Event-driven-only drag breaks when the camera moves between pointer events. Pointer capture is the browser-standard way to maintain drag past element boundaries. Per-frame reprojection from stored screen coordinates closes the gap between camera motion and cursor fidelity.
 
-**Evidence:** `page/js/placement.ts` (pointer capture, `_beginPreviewDrag`, `_endPreviewDrag`, `_reprojectDragAtScreenPoint`, `updateDragFromLatestPointer`), `tests/unit/placement-drag-lifecycle.test.ts` (7 controller-path tests including capture failure fallback)
+**Evidence:** `lab/js/placement.ts` (pointer capture, `_beginPreviewDrag`, `_endPreviewDrag`, `_reprojectDragAtScreenPoint`, `updateDragFromLatestPointer`), `tests/unit/placement-drag-lifecycle.test.ts` (7 controller-path tests including capture failure fallback)
 
 ## D41: Review Mode UI Lock — Centralized Selector with Defense-in-Depth Guards
 
@@ -337,7 +337,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Review mode was enforced at the scene-input layer but not at the React action layer. Users could still trigger Add, mode changes, and pause through exposed dock/settings controls. Defense-in-depth ensures correctness even with stale UI state. The centralized `selectIsReviewLocked` selector prevents policy drift across surfaces. Desktop uses `ActionHint` tooltips (`REVIEW_LOCK_TOOLTIP`); mobile uses transient status hints (`REVIEW_LOCK_STATUS`) explaining the exits.
 
-**Evidence:** `page/js/store/selectors/review-ui-lock.ts` (selector + copy constants), `page/js/runtime/ui-bindings.ts` (6 guarded callbacks), `page/js/components/ReviewLockedControl.tsx` + `ReviewLockedListItem.tsx` (visual lock wrappers), `page/js/hooks/useReviewLockedInteraction.ts` (shared behavior hook), `tests/unit/review-ui-lock-*.test.ts` + `tests/unit/dock-bar-review-lock.test.tsx` + `tests/unit/structure-chooser-review-lock.test.tsx` (35+ tests across 6 files)
+**Evidence:** `lab/js/store/selectors/review-ui-lock.ts` (selector + copy constants), `lab/js/runtime/ui-bindings.ts` (6 guarded callbacks), `lab/js/components/ReviewLockedControl.tsx` + `ReviewLockedListItem.tsx` (visual lock wrappers), `lab/js/hooks/useReviewLockedInteraction.ts` (shared behavior hook), `tests/unit/review-ui-lock-*.test.ts` + `tests/unit/dock-bar-review-lock.test.tsx` + `tests/unit/structure-chooser-review-lock.test.tsx` (35+ tests across 6 files)
 
 ## D42: Dock Slot Geometry — CSS Grid with Stable Widths
 
@@ -345,7 +345,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** `space-around` caused layout shift when Pause↔Resume toggled because the labels have different widths. Fixed-width action slots and a `1fr` mode slot eliminate content-driven rebalancing. The `.seg-item` wrapper prevents alignment differences between live mode (bare labels) and review mode (ActionHint-wrapped labels). The `.seg-item__content` node owns layout filling so the segmented control does not depend on ActionHint's internal class names.
 
-**Evidence:** `page/index.html` (grid-template-columns, --dock-slot-action, .seg-item, .seg-item__content), `page/js/components/DockBar.tsx` (dock-slot wrappers), `page/js/components/Segmented.tsx` (SegmentedItemShell), `tests/unit/dock-bar-layout-stability.test.tsx` (6 structural tests), `tests/unit/dock-bar-review-lock.test.tsx` (live/review parity test)
+**Evidence:** `lab/index.html` (grid-template-columns, --dock-slot-action, .seg-item, .seg-item__content), `lab/js/components/DockBar.tsx` (dock-slot wrappers), `lab/js/components/Segmented.tsx` (SegmentedItemShell), `tests/unit/dock-bar-layout-stability.test.tsx` (6 structural tests), `tests/unit/dock-bar-review-lock.test.tsx` (live/review parity test)
 
 ## D43: Display-Source-Aware Bonded Groups
 
@@ -353,7 +353,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** The bonded-group system was live-only by architecture. Making it display-source-aware prepares for review-mode bonded-group inspection without duplicating topology logic. The abstraction allows future review topology to plug in without changing the runtime.
 
-**Evidence:** `page/js/runtime/bonded-group-display-source.ts`, `page/js/runtime/bonded-group-runtime.ts` (getDisplaySource, getDisplaySourceKind), `page/js/main.ts` (wiring with resolveBondedGroupDisplaySource)
+**Evidence:** `lab/js/runtime/bonded-group-display-source.ts`, `lab/js/runtime/bonded-group-runtime.ts` (getDisplaySource, getDisplaySourceKind), `lab/js/main.ts` (wiring with resolveBondedGroupDisplaySource)
 
 ## D44: Bonded Group Capability Policy
 
@@ -361,7 +361,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Hardcoded `timelineMode === 'review'` blocks were scattered across components and runtimes. A centralized policy makes capability changes a single-selector edit. Primitive selectors avoid React infinite-render issues with object selectors.
 
-**Evidence:** `page/js/store/selectors/bonded-group-capabilities.ts`, `page/js/components/BondedGroupsPanel.tsx` (selectCanInspectBondedGroups), `page/js/runtime/bonded-group-highlight-runtime.ts` (canInspectBondedGroupsNow)
+**Evidence:** `lab/js/store/selectors/bonded-group-capabilities.ts`, `lab/js/components/BondedGroupsPanel.tsx` (selectCanInspectBondedGroups), `lab/js/runtime/bonded-group-highlight-runtime.ts` (canInspectBondedGroupsNow)
 
 ## D45: Annotation Model for Atom Color Persistence (Option B)
 
@@ -371,7 +371,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Update:** Group-level color intents (D46) now supplement per-atom overrides. The appearance runtime resolves `groupColorIntents` into per-atom overrides, filling only atoms with no existing override. Per-atom overrides remain the renderer-facing contract; group intents are a higher-level annotation layer.
 
-**Evidence:** `page/js/store/app-store.ts` (AtomColorOverrideMap, bondedGroupColorOverrides), `page/js/runtime/bonded-group-appearance-runtime.ts`, `page/js/renderer.ts` (setAtomColorOverrides, _applyAtomColorOverrides), `tests/unit/bonded-group-prefeature.test.ts` (persistence semantics)
+**Evidence:** `lab/js/store/app-store.ts` (AtomColorOverrideMap, bondedGroupColorOverrides), `lab/js/runtime/bonded-group-appearance-runtime.ts`, `lab/js/renderer.ts` (setAtomColorOverrides, _applyAtomColorOverrides), `tests/unit/bonded-group-prefeature.test.ts` (persistence semantics)
 
 ## D46: Group Color Intents Over Per-Atom-Only Overrides
 

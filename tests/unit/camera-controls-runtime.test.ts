@@ -8,8 +8,8 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as THREE from 'three';
-import { useAppStore } from '../../page/js/store/app-store';
-import { createOverlayRuntime } from '../../page/js/runtime/overlay-runtime';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { createOverlayRuntime } from '../../lab/js/runtime/overlay-runtime';
 
 // ── overlay-runtime.close() behavior ──
 
@@ -30,7 +30,7 @@ describe('overlay-runtime.close() clears transient UI', () => {
 
 // ── Center Object: tests call the real handleCenterObject from focus-runtime ──
 
-import { handleCenterObject } from '../../page/js/runtime/focus-runtime';
+import { handleCenterObject } from '../../lab/js/runtime/focus-runtime';
 
 describe('Center Object (handleCenterObject from focus-runtime)', () => {
   let mockRenderer: any;
@@ -98,7 +98,7 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
 
 // ── Interaction dispatch — normal start (no pick-focus) ──
 
-import { createInteractionDispatch } from '../../page/js/runtime/interaction-dispatch';
+import { createInteractionDispatch } from '../../lab/js/runtime/interaction-dispatch';
 
 describe('interaction-dispatch normal start', () => {
   beforeEach(() => {
@@ -165,7 +165,7 @@ describe('interaction-dispatch normal start', () => {
 
 // ── Paused worker placement visual sync (scene-runtime integration) ──
 
-import { createSceneRuntime } from '../../page/js/runtime/scene-runtime';
+import { createSceneRuntime } from '../../lab/js/runtime/scene-runtime';
 
 describe('paused worker placement calls renderer.updatePositions', () => {
   it('paused + worker active → renderer.updatePositions called after commit', async () => {
@@ -355,7 +355,7 @@ describe('paused worker placement calls renderer.updatePositions', () => {
     const mockPhysics = { n: 0, pos: new Float64Array(0), vel: new Float64Array(0) } as any;
 
     // Mock loadStructure to reject
-    const origLoadStructure = await import('../../page/js/loader');
+    const origLoadStructure = await import('../../lab/js/loader');
     const loadSpy = vi.spyOn(origLoadStructure, 'loadStructure').mockRejectedValue(new Error('test load failure'));
 
     const scene = createSceneRuntime({

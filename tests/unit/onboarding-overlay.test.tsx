@@ -7,9 +7,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import React from 'react';
 import { render, cleanup, fireEvent, act } from '@testing-library/react';
-import { useAppStore } from '../../page/js/store/app-store';
-import { OnboardingOverlay, finalizeDismissAction, SINK_DURATION_MS, FALLBACK_MARGIN_MS } from '../../page/js/components/OnboardingOverlay';
-import { isOnboardingEligible, subscribeOnboardingReadiness } from '../../page/js/runtime/onboarding';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { OnboardingOverlay, finalizeDismissAction, SINK_DURATION_MS, FALLBACK_MARGIN_MS } from '../../lab/js/components/OnboardingOverlay';
+import { isOnboardingEligible, subscribeOnboardingReadiness } from '../../lab/js/runtime/onboarding';
 
 describe('subscribeOnboardingReadiness', () => {
   beforeEach(() => {

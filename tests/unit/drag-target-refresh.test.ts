@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as THREE from 'three';
-import { createDragTargetRefresh, dragRefreshAction, type DragTargetRefresh } from '../../page/js/runtime/drag-target-refresh';
+import { createDragTargetRefresh, dragRefreshAction, type DragTargetRefresh } from '../../lab/js/runtime/drag-target-refresh';
 
 function mockPhysics(dragAtom = 0) {
   return {

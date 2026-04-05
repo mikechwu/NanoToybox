@@ -4,8 +4,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getPhysicsTiming, CONFIG } from '../../page/js/config';
-import { PhysicsEngine } from '../../page/js/physics';
+import { getPhysicsTiming, CONFIG } from '../../lab/js/config';
+import { PhysicsEngine } from '../../lab/js/physics';
 
 describe('getPhysicsTiming — derived scheduler rate', () => {
   it('derives 240 steps/s from dt=0.5fs and rate=0.12 ps/s', () => {

@@ -6,7 +6,7 @@ test.describe('Milestone C.1 — Worker Integration', () => {
     const errors: string[] = []
     page.on('pageerror', err => errors.push(err.message))
 
-    await page.goto(`${baseURL}/page/test-worker.html`)
+    await page.goto(`${baseURL}/lab/test-worker.html`)
 
     const summaryLocator = page.locator('#results pre', { hasText: 'Results:' })
     await expect(summaryLocator).toBeAttached({ timeout: 30000 })
@@ -19,7 +19,7 @@ test.describe('Milestone C.1 — Worker Integration', () => {
   })
 
   test('verifies kernel=wasm and key protocol fields in test page output', async ({ page, baseURL }) => {
-    await page.goto(`${baseURL}/page/test-worker.html`)
+    await page.goto(`${baseURL}/lab/test-worker.html`)
 
     const summaryLocator = page.locator('#results pre', { hasText: 'Results:' })
     await expect(summaryLocator).toBeAttached({ timeout: 30000 })

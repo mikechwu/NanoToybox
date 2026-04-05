@@ -11,8 +11,8 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
-import { useAppStore } from '../../page/js/store/app-store';
-import { StatusBar } from '../../page/js/components/StatusBar';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { StatusBar } from '../../lab/js/components/StatusBar';
 
 function renderAndGetText(): string {
   const { container } = render(<StatusBar />);

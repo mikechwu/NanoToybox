@@ -24,7 +24,7 @@ npm install
 
 # Launch the interactive page (Vite dev server with HMR)
 npm run dev
-# Open http://localhost:5173/page/
+# Open http://localhost:5173/lab/
 
 # Run all checks
 npm run typecheck       # TypeScript type-checking
@@ -40,7 +40,7 @@ python -m pytest tests/test_*.py -v
 
 These checks require a real browser with WebGL and cannot run in headless CI. Run before merging to main or deploying:
 
-- [ ] **Main app:** Open `/page/`, click Add → select a structure → place on canvas → verify atom count in status → open Settings → Clear → verify "Empty playground"
+- [ ] **Main app:** Open `/lab/`, click Add → select a structure → place on canvas → verify atom count in status → open Settings → Clear → verify "Empty playground"
 - [ ] **Drag interactions:** Atom mode (drag single atom), Move mode (translate molecule), Rotate mode (spin molecule). Flick an atom — verify no ghost spring after release
 - [ ] **Settings panel:** Fixed 250px width, scrollbar-gutter stable; open/close settings sheet, switch Dark/Light theme, change speed, boundary mode
 - [ ] **Viewer:** Open `/viewer/`, drag-drop an `.xyz` file, verify atoms and bonds render
@@ -113,7 +113,7 @@ Browser                          Web Worker
 - **Worker-first physics** — simulation runs off-thread via Web Worker with snapshot protocol. Automatic fallback to sync-mode if worker fails (5s warning, 15s fatal).
 - **Dual Tersoff kernels** — JS fallback + C/Wasm kernel (compiled with Emscripten). Wasm enabled by default, ~11% faster. Force via `?kernel=js` for debugging.
 - **Momentum-conserving force clamp** — global scaling (not per-atom) preserves Newton's 3rd law and force field shape. Interaction forces added after clamp.
-- **Runtime module extraction** — main.ts delegates to feature modules in `page/js/runtime/` and orchestration modules in `page/js/app/` (frame-runtime.ts, app-lifecycle.ts). See `docs/architecture.md` for the full module inventory.
+- **Runtime module extraction** — main.ts delegates to feature modules in `lab/js/runtime/` and orchestration modules in `lab/js/app/` (frame-runtime.ts, app-lifecycle.ts). See `docs/architecture.md` for the full module inventory.
 
 ## Current Status
 
@@ -129,7 +129,7 @@ Browser                          Web Worker
 - Structure library: 15 canonical relaxed structures (60–720 atoms) with derived honeycomb geometry
 - Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)
 - Three.js trajectory viewer: functional at `viewer/index.html`
-- Performance benchmarks in `page/bench/`
+- Performance benchmarks in `lab/bench/`
 - **Bonded group architecture** — display-source-aware projection, capability policy, annotation-model atom color overrides; inline color editing via per-row color chip with portal popover (preset swatches, responsive layout, disclosure-pattern panel expanded by default), conic-gradient multi-color chips, group color intents persist across topology changes; persistent tracked highlight feature-gated off (hover preview remains active); review-mode inspection deferred until historical topology exists
 
 ## Project Goal

@@ -9,8 +9,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, cleanup } from '@testing-library/react';
-import { useAppStore } from '../../page/js/store/app-store';
-import { CameraControls } from '../../page/js/components/CameraControls';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { CameraControls } from '../../lab/js/components/CameraControls';
 
 describe('CameraControls (Free-Look only after Phase 10)', () => {
   beforeEach(() => {

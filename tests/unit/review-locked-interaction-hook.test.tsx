@@ -8,9 +8,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, fireEvent, act, cleanup } from '@testing-library/react';
-import { useAppStore } from '../../page/js/store/app-store';
-import { useReviewLockedInteraction } from '../../page/js/hooks/useReviewLockedInteraction';
-import { REVIEW_LOCK_STATUS } from '../../page/js/store/selectors/review-ui-lock';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { useReviewLockedInteraction } from '../../lab/js/hooks/useReviewLockedInteraction';
+import { REVIEW_LOCK_STATUS } from '../../lab/js/store/selectors/review-ui-lock';
 
 /** Minimal harness component that exposes the hook's handlers on a button. */
 function HookHarness() {

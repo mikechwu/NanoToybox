@@ -38,7 +38,7 @@ async function dismissOnboardingIfPresent(page: import('@playwright/test').Page)
 
 /** Navigate with ?e2e=1 to suppress onboarding. */
 async function skipOnboarding(page: import('@playwright/test').Page, baseURL: string) {
-  await gotoApp(page, baseURL, '/page/')
+  await gotoApp(page, baseURL, '/lab/')
 }
 
 test.describe('Phase 1 — Object View Controls', () => {
@@ -97,7 +97,7 @@ test.describe('Phase 3 — Onboarding Overlay', () => {
   test('onboarding overlay appears on page load and dismisses on click', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
 
-    await page.goto(`${baseURL}/page/`)
+    await page.goto(`${baseURL}/lab/`)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
     await page.waitForTimeout(500)
 
@@ -120,7 +120,7 @@ test.describe('Phase 3 — Onboarding Overlay', () => {
   test('onboarding reappears on page reload (page-lifetime dismissal)', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
 
-    await page.goto(`${baseURL}/page/`)
+    await page.goto(`${baseURL}/lab/`)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
 
     // Dismiss onboarding
@@ -143,7 +143,7 @@ test.describe('Phase 3 — Onboarding Overlay', () => {
   test('onboarding does not block interaction after dismiss', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
 
-    await page.goto(`${baseURL}/page/`)
+    await page.goto(`${baseURL}/lab/`)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
 
     // Dismiss onboarding and wait for it to fully disappear

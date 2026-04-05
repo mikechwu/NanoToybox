@@ -8,9 +8,9 @@
  * mode and show the review hint, while allowing them in live mode.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { registerStoreCallbacks, type UIBindingsDeps } from '../../page/js/runtime/ui-bindings';
-import { useAppStore } from '../../page/js/store/app-store';
-import { REVIEW_LOCK_STATUS } from '../../page/js/store/selectors/review-ui-lock';
+import { registerStoreCallbacks, type UIBindingsDeps } from '../../lab/js/runtime/ui-bindings';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { REVIEW_LOCK_STATUS } from '../../lab/js/store/selectors/review-ui-lock';
 
 function makeDeps(): UIBindingsDeps {
   return {

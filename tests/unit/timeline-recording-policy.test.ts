@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { createTimelineRecordingPolicy } from '../../page/js/runtime/timeline-recording-policy';
+import { createTimelineRecordingPolicy } from '../../lab/js/runtime/timeline-recording-policy';
 
 describe('TimelineRecordingPolicy', () => {
   it('starts in off mode', () => {

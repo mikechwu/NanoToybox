@@ -10,7 +10,7 @@ import {
   shouldSkipRender,
   computeMaxSpeed,
   computeWallRadius,
-} from '../../page/js/scheduler-pure';
+} from '../../lab/js/scheduler-pure';
 
 // ── computeSubstepCount ─────────────────────────────────────────────
 

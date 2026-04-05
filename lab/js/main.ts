@@ -971,10 +971,10 @@ function frameLoop(timestamp: number) {
   if (_appRunning) _rafId = requestAnimationFrame(frameLoop);
 }
 
-// ── Frame loop body extracted to page/js/app/frame-runtime.ts ──
+// ── Frame loop body extracted to lab/js/app/frame-runtime.ts ──
 // (~350 lines of sequenced update pipeline moved to executeFrame())
 
-// Frame loop body (~350 lines) extracted to page/js/app/frame-runtime.ts.
+// Frame loop body (~350 lines) extracted to lab/js/app/frame-runtime.ts.
 // main.ts retains only RAF lifecycle (start/stop/teardown).
 
 // --- Start ---

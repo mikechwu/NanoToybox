@@ -13,9 +13,9 @@
  * - Panel expand/collapse via store
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createBondedGroupRuntime } from '../../page/js/runtime/bonded-group-runtime';
-import type { BondedGroupDisplaySource } from '../../page/js/runtime/bonded-group-display-source';
-import { useAppStore } from '../../page/js/store/app-store';
+import { createBondedGroupRuntime } from '../../lab/js/runtime/bonded-group-runtime';
+import type { BondedGroupDisplaySource } from '../../lab/js/runtime/bonded-group-display-source';
+import { useAppStore } from '../../lab/js/store/app-store';
 
 function makeSource(components: { atoms: number[]; size: number }[]): BondedGroupDisplaySource {
   const totalAtoms = components.reduce((sum, c) => sum + c.size, 0);
@@ -297,7 +297,7 @@ describe('panel store behavior', () => {
 
 describe('partitionBondedGroups', () => {
   it('partitions into large and small buckets', async () => {
-    const { partitionBondedGroups } = await import('../../page/js/store/selectors/bonded-groups');
+    const { partitionBondedGroups } = await import('../../lab/js/store/selectors/bonded-groups');
     const groups = [
       { id: 'a', displayIndex: 1, atomCount: 42, minAtomIndex: 0, orderKey: 0 },
       { id: 'b', displayIndex: 2, atomCount: 3, minAtomIndex: 42, orderKey: 1 },
@@ -314,7 +314,7 @@ describe('partitionBondedGroups', () => {
   });
 
   it('custom threshold works', async () => {
-    const { partitionBondedGroups } = await import('../../page/js/store/selectors/bonded-groups');
+    const { partitionBondedGroups } = await import('../../lab/js/store/selectors/bonded-groups');
     const groups = [
       { id: 'a', displayIndex: 1, atomCount: 5, minAtomIndex: 0, orderKey: 0 },
       { id: 'b', displayIndex: 2, atomCount: 4, minAtomIndex: 5, orderKey: 1 },

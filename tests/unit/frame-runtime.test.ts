@@ -8,7 +8,7 @@
  * - sync-mode fallback updates positions when atom counts diverge
  */
 import { describe, it, expect, vi } from 'vitest';
-import { executeFrame, type FrameRuntimeSurface } from '../../page/js/app/frame-runtime';
+import { executeFrame, type FrameRuntimeSurface } from '../../lab/js/app/frame-runtime';
 
 /** Build a minimal FrameRuntimeSurface stub for testing. */
 function makeStub(overrides: Partial<FrameRuntimeSurface> = {}): FrameRuntimeSurface {

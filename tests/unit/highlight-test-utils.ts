@@ -9,7 +9,7 @@ import * as THREE from 'three';
  *  No real meshes — _physicsRef and _atomGeom are null, so _applyHighlightLayer
  *  early-returns. Good for testing state flow without mesh creation. */
 export async function makeStateFake(overrides: Record<string, any> = {}) {
-  const mod = await import('../../page/js/renderer');
+  const mod = await import('../../lab/js/renderer');
   const proto = mod.Renderer.prototype;
   const fake: any = {
     _panelHighlightMesh: null,
@@ -47,7 +47,7 @@ export async function makeStateFake(overrides: Record<string, any> = {}) {
 /** Build a real-mesh renderer context with THREE geometry.
  *  Creates actual InstancedMesh objects for testing mesh behavior. */
 export async function makeRealMeshCtx(atomCount = 5) {
-  const { Renderer } = await import('../../page/js/renderer');
+  const { Renderer } = await import('../../lab/js/renderer');
   const atomGeom = new THREE.SphereGeometry(0.35, 4, 4);
   const dummyObj = new THREE.Object3D();
   const scene = new THREE.Scene();

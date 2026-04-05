@@ -5,7 +5,7 @@
  * The PhysicsEngine operates on typed arrays and can be instantiated in Node.
  */
 import { describe, it, expect } from 'vitest';
-import { PhysicsEngine } from '../../page/js/physics';
+import { PhysicsEngine } from '../../lab/js/physics';
 
 // Minimal atom set for testing
 const DIMER_ATOMS = [

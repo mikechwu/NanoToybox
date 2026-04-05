@@ -9,17 +9,17 @@
  * subsystem isolation.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useAppStore } from '../../page/js/store/app-store';
+import { useAppStore } from '../../lab/js/store/app-store';
 import {
   resolveBondedGroupDisplaySource,
   type BondedGroupDisplaySourceDeps,
-} from '../../page/js/runtime/bonded-group-display-source';
+} from '../../lab/js/runtime/bonded-group-display-source';
 import {
   selectBondedGroupCapabilities,
-} from '../../page/js/store/selectors/bonded-group-capabilities';
+} from '../../lab/js/store/selectors/bonded-group-capabilities';
 import {
   createBondedGroupAppearanceRuntime,
-} from '../../page/js/runtime/bonded-group-appearance-runtime';
+} from '../../lab/js/runtime/bonded-group-appearance-runtime';
 
 // ── Display Source Tests ──
 

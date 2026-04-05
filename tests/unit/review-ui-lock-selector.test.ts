@@ -9,7 +9,7 @@ import {
   selectReviewUiLockState,
   REVIEW_LOCK_TOOLTIP,
   REVIEW_LOCK_STATUS,
-} from '../../page/js/store/selectors/review-ui-lock';
+} from '../../lab/js/store/selectors/review-ui-lock';
 
 function mockStore(timelineMode: 'live' | 'review'): any {
   return { timelineMode };

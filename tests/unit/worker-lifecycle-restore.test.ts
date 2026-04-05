@@ -45,7 +45,7 @@ const dummyBoundary = {
 async function createInitedRuntime() {
   const onFailure = vi.fn();
   const onSchedulerTiming = vi.fn();
-  const mod = await import('../../page/js/runtime/worker-lifecycle');
+  const mod = await import('../../lab/js/runtime/worker-lifecycle');
   const runtime = mod.createWorkerRuntime({ onSchedulerTiming, onFailure });
 
   // Init with one atom so the bridge actually sends init

@@ -7,7 +7,7 @@
  * - Stale async completion after cancel is ignored (commit generation)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { PlacementController } from '../../page/js/placement';
+import { PlacementController } from '../../lab/js/placement';
 
 describe('async placement commit lifecycle', () => {
   // Simulate the PlacementController's async commit logic

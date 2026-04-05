@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { resolveReconciledSteps } from '../../page/js/runtime/reconciled-steps';
+import { resolveReconciledSteps } from '../../lab/js/runtime/reconciled-steps';
 
 describe('resolveReconciledSteps', () => {
   it('returns stepsCompleted for a new snapshot version', () => {

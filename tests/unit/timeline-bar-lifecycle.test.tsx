@@ -18,10 +18,10 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, act, fireEvent } from '@testing-library/react';
-import { useAppStore } from '../../page/js/store/app-store';
-import type { TimelineCallbacks } from '../../page/js/store/app-store';
-import { TimelineBar } from '../../page/js/components/TimelineBar';
-import { HINT_DELAY_MS } from '../../page/js/components/TimelineActionHint';
+import { useAppStore } from '../../lab/js/store/app-store';
+import type { TimelineCallbacks } from '../../lab/js/store/app-store';
+import { TimelineBar } from '../../lab/js/components/TimelineBar';
+import { HINT_DELAY_MS } from '../../lab/js/components/TimelineActionHint';
 
 const noop = () => {};
 

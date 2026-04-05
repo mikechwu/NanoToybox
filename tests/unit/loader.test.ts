@@ -5,7 +5,7 @@
  * Tests pure functions: parseXYZ and buildBondTopology.
  */
 import { describe, it, expect } from 'vitest';
-import { parseXYZ, buildBondTopology } from '../../page/js/loader';
+import { parseXYZ, buildBondTopology } from '../../lab/js/loader';
 
 describe('parseXYZ', () => {
   it('parses a valid 2-atom XYZ string', () => {

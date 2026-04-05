@@ -99,7 +99,7 @@ Properties: symplectic, time-reversible, second-order accurate. Guarantees bound
 a (Å/fs²) = F (eV/Å) × 1.602176634×10⁻²⁹ / m (kg)
 ```
 
-In the browser engine this is `ACC_FACTOR` in `page/js/physics.ts`; in the Python engine it is `EV_ANGSTROM_TO_ACC` in `sim/integrators/velocity_verlet.py`.
+In the browser engine this is `ACC_FACTOR` in `lab/js/physics.ts`; in the Python engine it is `EV_ANGSTROM_TO_ACC` in `sim/integrators/velocity_verlet.py`.
 
 ## Energy Minimization
 
@@ -151,8 +151,8 @@ The simulator uses the standard cosine cutoff transition (not the exponential va
 |---------------|----------|-----|
 | Pure Python | `sim/potentials/tersoff.py` | Reference, validation, force decomposition |
 | Numba JIT | `sim/potentials/tersoff_fast.py` | Server-side relaxation, library building |
-| TypeScript | `page/js/physics.ts` | Browser interactive page (JS fallback kernel) |
-| C/Wasm | `sim/wasm/tersoff.c` → `page/wasm/tersoff.wasm` | Browser default (~11% faster than JS JIT) |
+| TypeScript | `lab/js/physics.ts` | Browser interactive page (JS fallback kernel) |
+| C/Wasm | `sim/wasm/tersoff.c` → `lab/wasm/tersoff.wasm` | Browser default (~11% faster than JS JIT) |
 
 All four use identical Tersoff (1988) carbon parameters and produce consistent results.
 
@@ -179,10 +179,10 @@ The interactive page applies a soft containment boundary to prevent atoms from e
 
 ### JavaScript Implementation Details
 
-The browser implementation (`page/js/physics.ts`) includes several optimizations beyond a direct port:
+The browser implementation (`lab/js/physics.ts`) includes several optimizations beyond a direct port:
 
 - **On-the-fly distance computation** — distances and unit vectors are computed inline from the `pos` array instead of pre-cached in N×N `Float64Array` buffers. Benchmarked 45% faster than the cached approach at 2040 atoms because the `pos` array (~49 KB) fits in L1 cache while the N×N arrays (~127 MB at 2040 atoms) cause main-memory random-access traffic.
-- **Spatial hash acceleration** — `buildNeighborList()` and `updateBondList()` use a Teschner spatial hash (3-pass: count, prefix-sum, scatter) instead of O(N²) all-pairs scans. `tableSize = 2N` — O(N) time and memory regardless of domain extent. No dense grid allocation, no span-dependent costs. Neighbor hash uses 2.60 Å cells; bond hash uses 1.8 Å cells. Shared `_buildCellGrid()` helper with 27-cell stencil lookup and cell-coordinate collision filtering. Validated via `page/bench/bench-celllist.html` (equivalence against all-pairs reference) and `page/bench/bench-spread.html` (span-independence under dynamic expansion).
+- **Spatial hash acceleration** — `buildNeighborList()` and `updateBondList()` use a Teschner spatial hash (3-pass: count, prefix-sum, scatter) instead of O(N²) all-pairs scans. `tableSize = 2N` — O(N) time and memory regardless of domain extent. No dense grid allocation, no span-dependent costs. Neighbor hash uses 2.60 Å cells; bond hash uses 1.8 Å cells. Shared `_buildCellGrid()` helper with 27-cell stencil lookup and cell-coordinate collision filtering. Validated via `lab/bench/bench-celllist.html` (equivalence against all-pairs reference) and `lab/bench/bench-spread.html` (span-independence under dynamic expansion).
 - **InstancedMesh rendering** — atoms and bonds are rendered via `THREE.InstancedMesh` (2 draw calls total) instead of individual `THREE.Mesh` objects. Active-instance compaction for bonds (only visible bonds uploaded). Highlight via separate overlay mesh.
 
 ### Force Safety Controls
@@ -195,6 +195,6 @@ The browser implementation (`page/js/physics.ts`) includes several optimizations
 
 ### Worker Architecture
 
-`page/js/simulation-worker.ts` runs `PhysicsEngine` on a dedicated Web Worker thread. The main thread communicates via `page/js/worker-bridge.ts` using a typed `WorkerCommand` / `WorkerEvent` message protocol (`src/types/worker-protocol.ts`). Worker lifecycle (creation, init, stall detection, teardown) is managed by `page/js/runtime/worker-lifecycle.ts`. Worker snapshot reconciliation (position sync, atom-remap, bond refresh) is owned by `page/js/runtime/snapshot-reconciler.ts`. If the worker fails to initialize or stalls (5s warning sets stalled flag, 15s fatal triggers sync fallback), the engine falls back to synchronous `PhysicsEngine` on the main thread. Both paths use identical `physics.ts` code.
+`lab/js/simulation-worker.ts` runs `PhysicsEngine` on a dedicated Web Worker thread. The main thread communicates via `lab/js/worker-bridge.ts` using a typed `WorkerCommand` / `WorkerEvent` message protocol (`src/types/worker-protocol.ts`). Worker lifecycle (creation, init, stall detection, teardown) is managed by `lab/js/runtime/worker-lifecycle.ts`. Worker snapshot reconciliation (position sync, atom-remap, bond refresh) is owned by `lab/js/runtime/snapshot-reconciler.ts`. If the worker fails to initialize or stalls (5s warning sets stalled flag, 15s fatal triggers sync fallback), the engine falls back to synchronous `PhysicsEngine` on the main thread. Both paths use identical `physics.ts` code.
 
 CNT geometry is generated via the graphene-sheet-rolling algorithm with chiral vector rotation (`sim/structures/generate.py`). Fullerene coordinates (C60, C180, C540, C720) are stored as relaxed structures in the library.

@@ -307,12 +307,12 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 ## Frontend Smoke Test
 
-Manual verification checklist for the interactive page (`page/index.html`). Run after any changes to `page/` code.
+Manual verification checklist for the interactive page (`lab/index.html`). Run after any changes to `lab/` code.
 
 ### Setup
 ```bash
 npm run dev
-# Open http://localhost:5173/page/
+# Open http://localhost:5173/lab/
 ```
 
 ### Checklist
@@ -442,7 +442,7 @@ npm run dev
 
 **Transaction rollback verification:**
 
-- **Automated physics tests:** open `page/test-rollback.html` in a browser (requires serving from repo root). Tests physics append/rollback/clear/invariants/components directly against the real `PhysicsEngine` class. Does NOT test the full `commitMolecule` orchestration path (renderer + session state coordination).
+- **Automated physics tests:** open `lab/test-rollback.html` in a browser (requires serving from repo root). Tests physics append/rollback/clear/invariants/components directly against the real `PhysicsEngine` class. Does NOT test the full `commitMolecule` orchestration path (renderer + session state coordination).
 - **Manual commit-path testing:** set `CONFIG.debug.failAfterPhysicsAppend = true` or `CONFIG.debug.failRendererAppend = true` in config.ts, then place a molecule via the UI. Verify: placement fails gracefully, no orphan meshes, physics atom count restored, scene molecule list unchanged. Set `CONFIG.debug.assertions = true` to enable post-append invariant checks inside the rollback-protected block.
 - **Coverage summary:** physics-level transaction safety is automated; full commit-path rollback (physics + renderer + session) requires manual flag toggling and UI interaction. Both complement manual smoke tests for interaction flow.
 - **Future milestone — full integration test harness:** automate commitMolecule transaction path (physics + renderer + session coordination), preview hit-preference threshold tests (atom-vs-bond within/outside CONFIG.picker.previewAtomPreference), and remove CDN dependency from test page. Tracked as a separate infrastructure investment.
@@ -574,7 +574,7 @@ Test after changes to CameraControls, OnboardingOverlay, or object-view controls
 
 ### E2E Test Conventions
 
-- **`gotoApp(page, baseURL, path)`** from `tests/e2e/helpers.ts` — appends `?e2e=1` for onboarding suppression. All `/page/` navigation in non-onboarding specs must use `gotoApp()`.
+- **`gotoApp(page, baseURL, path)`** from `tests/e2e/helpers.ts` — appends `?e2e=1` for onboarding suppression. All `/lab/` navigation in non-onboarding specs must use `gotoApp()`.
 - **`dismissOnboardingIfPresent(page)`** — local helper in `camera-onboarding.spec.ts` that waits for the overlay, clicks to dismiss, and waits for removal. Used by onboarding tests that need the overlay to appear first.
 - **Why:** Page-lifetime onboarding blocks pointer events until dismissed. Tests that don't test onboarding need the `?e2e=1` bypass via `gotoApp()`.
 

@@ -2,10 +2,10 @@
 # Requires Emscripten (emcc). Install: https://emscripten.org/docs/getting_started/
 #
 # Usage: make -C sim/wasm
-# Output: page/wasm/tersoff.js + page/wasm/tersoff.wasm
+# Output: lab/wasm/tersoff.js + lab/wasm/tersoff.wasm
 
 CC = emcc
-OUT_DIR = ../../page/wasm
+OUT_DIR = ../../lab/wasm
 CFLAGS = -O3 -fno-math-errno -ffinite-math-only \
          -s WASM=1 \
          -s EXPORTED_FUNCTIONS='["_computeTersoffForces", "_malloc", "_free"]' \

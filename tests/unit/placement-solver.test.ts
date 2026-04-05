@@ -19,7 +19,7 @@ import {
   chooseCameraFamily,
   type StructureAtom,
   type CameraFrame,
-} from '../../page/js/runtime/placement-solver';
+} from '../../lab/js/runtime/placement-solver';
 
 // ── Helper: generate atom positions ──
 

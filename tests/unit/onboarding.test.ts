@@ -23,8 +23,8 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 });
 
-import { createOnboardingController, type OnboardingController } from '../../page/js/runtime/onboarding';
-import { useAppStore } from '../../page/js/store/app-store';
+import { createOnboardingController, type OnboardingController } from '../../lab/js/runtime/onboarding';
+import { useAppStore } from '../../lab/js/store/app-store';
 
 function makeSurface() {
   return {
@@ -277,8 +277,8 @@ describe('onboarding controller', () => {
 // Tests that the triad source wrappers in input-bindings emit achievements
 // with correct mode-gating. Uses the real createInputBindings with mocked deps.
 
-import { createInputBindings } from '../../page/js/runtime/input-bindings';
-import { CONFIG } from '../../page/js/config';
+import { createInputBindings } from '../../lab/js/runtime/input-bindings';
+import { CONFIG } from '../../lab/js/config';
 import * as THREE from 'three';
 
 describe('achievement source wiring (input-bindings)', () => {

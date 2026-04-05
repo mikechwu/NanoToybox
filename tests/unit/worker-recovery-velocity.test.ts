@@ -288,12 +288,12 @@ describe('integration: pause-sync promise gate', () => {
 describe('integration: real createSceneRuntime pause gate', () => {
   it('commitMolecule awaits pause-sync promise via real scene-runtime', async () => {
     // Mock the scene.ts module so commitMolecule doesn't try real physics append
-    vi.doMock('../../page/js/scene', () => ({
+    vi.doMock('../../lab/js/scene', () => ({
       commitMolecule: vi.fn(),
       clearPlayground: vi.fn(),
       addMoleculeToScene: vi.fn(),
     }));
-    const { createSceneRuntime } = await import('../../page/js/runtime/scene-runtime');
+    const { createSceneRuntime } = await import('../../lab/js/runtime/scene-runtime');
 
     let resolveSync!: () => void;
     const pausePromise = new Promise<void>((r) => { resolveSync = r; });

@@ -7,7 +7,7 @@
  *
  * Used by TimelineBar and CameraControls.
  * CSS class family: .timeline-hint-* is retained as shared hint infrastructure
- * (not timeline-specific despite the name). See page/index.html.
+ * (not timeline-specific despite the name). See lab/index.html.
  */
 
 import React, { useState, useRef, useCallback, useEffect, useId } from 'react';

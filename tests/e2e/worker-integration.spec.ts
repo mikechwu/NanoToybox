@@ -27,7 +27,7 @@ test.describe('C.2 Integration — Worker-Driven Main App', () => {
     const errors: string[] = []
     page.on('pageerror', err => errors.push(err.message))
 
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
 
     // Wait for app to fully initialize (React StatusBar renders scene info)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 15000 })
@@ -71,7 +71,7 @@ test.describe('C.2 Integration — Worker-Driven Main App', () => {
   })
 
   test('worker snapshot drives rendering (atoms visible)', async ({ page, baseURL }) => {
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
 
     // Wait for app to initialize (dock visible = React mounted)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 15000 })
@@ -87,7 +87,7 @@ test.describe('C.2 Integration — Worker-Driven Main App', () => {
   })
 
   test('stalled-worker detection: 5s warning triggers workerStalled flag and status text', async ({ page, baseURL }) => {
-    await gotoApp(page, baseURL!, '/page/')
+    await gotoApp(page, baseURL!, '/lab/')
 
     // Wait for worker to be active
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 15000 })

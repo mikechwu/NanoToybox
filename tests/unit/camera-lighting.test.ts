@@ -10,15 +10,15 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as THREE from 'three';
-import { CONFIG, DEFAULT_THEME } from '../../page/js/config';
-import { THEMES } from '../../page/js/themes';
-import { computeOrbitDelta, applyOrbitRotation } from '../../page/js/orbit-math';
+import { CONFIG, DEFAULT_THEME } from '../../lab/js/config';
+import { THEMES } from '../../lab/js/themes';
+import { computeOrbitDelta, applyOrbitRotation } from '../../lab/js/orbit-math';
 
 // Lazily cached Renderer class — imported once, reused across all tests.
 let _RendererClass: any = null;
 async function getRendererClass() {
   if (!_RendererClass) {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     _RendererClass = mod.Renderer;
   }
   return _RendererClass;

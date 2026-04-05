@@ -9,12 +9,12 @@
  */
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { THEMES } from '../../page/js/themes';
-import { CONFIG } from '../../page/js/config';
+import { THEMES } from '../../lab/js/themes';
+import { CONFIG } from '../../lab/js/config';
 
 /** Build a fake renderer context with a real InstancedMesh for color testing. */
 async function makeColorCtx(atomCount = 5, theme: 'dark' | 'light' = 'dark') {
-  const { Renderer } = await import('../../page/js/renderer');
+  const { Renderer } = await import('../../lab/js/renderer');
   const proto = Renderer.prototype;
   const geom = new THREE.SphereGeometry(0.35, 4, 4);
   const atomMat = new THREE.MeshStandardMaterial({ color: THEMES[theme].atom });

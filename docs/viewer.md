@@ -6,10 +6,10 @@ NanoToybox has two browser interfaces:
 
 | Interface | Path | Purpose |
 |-----------|------|---------|
-| **Interactive Page** | `page/index.html` | Real-time Tersoff simulation with drag/rotate interaction |
+| **Interactive Page** | `lab/index.html` | Real-time Tersoff simulation with drag/rotate interaction |
 | **Trajectory Viewer** | `viewer/index.html` | Pre-computed trajectory playback with stride control |
 
-## Interactive Page (`page/`)
+## Interactive Page (`lab/`)
 
 The interactive page is the primary user-facing application. It runs a full Tersoff potential in JavaScript, allowing users to drag, rotate, and interact with carbon nanostructures in real-time.
 
@@ -17,7 +17,7 @@ The interactive page is the primary user-facing application. It runs a full Ters
 
 ```bash
 npm run dev
-# Open http://localhost:5173/page/
+# Open http://localhost:5173/lab/
 ```
 
 ### Features
@@ -165,7 +165,7 @@ StatusBar is now message-only (no persistent scene summary). It shows `statusErr
 
 ### Placement Solver
 
-The placement solver (`page/js/runtime/placement-solver.ts`) computes a rigid transform (rotation + translation) for molecule preview placement in the user's current camera frame. `PlacementController` calls `solvePlacement()` and consumes the result; the solver does not own preview lifecycle, drag-plane, or commit flow.
+The placement solver (`lab/js/runtime/placement-solver.ts`) computes a rigid transform (rotation + translation) for molecule preview placement in the user's current camera frame. `PlacementController` calls `solvePlacement()` and consumes the result; the solver does not own preview lifecycle, drag-plane, or commit flow.
 
 **Orientation Pipeline**
 
@@ -378,4 +378,4 @@ For trajectory playback of large structures, use high stride values (20–100).
 | **C/Wasm Tersoff** | Done | ~11% faster than JS JIT. Enabled by default (`config.ts` `useWasm: true`). CSR neighbor marshaling. Automatic JS fallback on load failure. |
 | **Web Workers** | Done | Physics runs on a dedicated Web Worker (`simulation-worker.ts`). Main thread handles rendering + React UI. `WorkerBridge` provides mutation-acked protocol with scene versioning. |
 
-Benchmark scripts are in `page/bench/`. Run via local server to collect data.
+Benchmark scripts are in `lab/bench/`. Run via local server to collect data.

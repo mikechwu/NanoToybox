@@ -7,7 +7,7 @@
  * - Review with more bonds than live renders the full historical set
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { createSimulationTimeline, type SimulationTimeline } from '../../page/js/runtime/simulation-timeline';
+import { createSimulationTimeline, type SimulationTimeline } from '../../lab/js/runtime/simulation-timeline';
 
 // ── Timeline historical bond lookup ──
 
@@ -62,7 +62,7 @@ describe('getReviewBondTopology', () => {
 
 describe('coordinator applyReviewFrame integration', () => {
   it('passes historical bonds from timeline to renderer', async () => {
-    const { createTimelineCoordinator } = await import('../../page/js/runtime/simulation-timeline-coordinator');
+    const { createTimelineCoordinator } = await import('../../lab/js/runtime/simulation-timeline-coordinator');
 
     const historicalBonds: [number, number, number][] = [[0, 1, 1.5], [1, 2, 1.6]];
     const frame = { frameId: 1, timePs: 0.5, n: 3, positions: new Float64Array(9), interaction: null, boundary: {} as any };
@@ -107,7 +107,7 @@ describe('coordinator applyReviewFrame integration', () => {
   });
 
   it('passes empty array when no historical topology exists', async () => {
-    const { createTimelineCoordinator } = await import('../../page/js/runtime/simulation-timeline-coordinator');
+    const { createTimelineCoordinator } = await import('../../lab/js/runtime/simulation-timeline-coordinator');
 
     const frame = { frameId: 1, timePs: 0.1, n: 2, positions: new Float64Array(6), interaction: null, boundary: {} as any };
 
@@ -152,14 +152,14 @@ describe('coordinator applyReviewFrame integration', () => {
 
 describe('renderer updateReviewFrame with explicit bonds', () => {
   it('updateReviewFrame accepts optional reviewBonds parameter', async () => {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     const proto = mod.Renderer.prototype;
     // Signature check: 2 required + 1 optional
     expect(typeof proto.updateReviewFrame).toBe('function');
   });
 
   it('uses provided review bonds instead of live physics bonds', async () => {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     const proto = mod.Renderer.prototype;
 
     const liveBonds: [number, number, number][] = [[0, 1, 1.5]];
@@ -188,7 +188,7 @@ describe('renderer updateReviewFrame with explicit bonds', () => {
   });
 
   it('renders no bonds when reviewBonds is empty (no live fallback)', async () => {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     const proto = mod.Renderer.prototype;
 
     let capturedBonds: any = null;
@@ -216,7 +216,7 @@ describe('renderer updateReviewFrame with explicit bonds', () => {
 
 describe('regression: historical bonds exceed live bond count', () => {
   it('review renders historical bond count, not live bond count', async () => {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     const proto = mod.Renderer.prototype;
 
     const liveBonds: [number, number, number][] = [[0, 1, 1.5]]; // 1 bond

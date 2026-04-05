@@ -12,8 +12,8 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useAppStore } from '../../page/js/store/app-store';
-import { CONFIG } from '../../page/js/config';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { CONFIG } from '../../lab/js/config';
 
 // Mock matchMedia for InputManager
 Object.defineProperty(window, 'matchMedia', {
@@ -25,7 +25,7 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 });
 
-import { InputManager } from '../../page/js/input';
+import { InputManager } from '../../lab/js/input';
 import * as THREE from 'three';
 
 describe('Free-Look disabled (feature flag)', () => {

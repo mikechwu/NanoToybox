@@ -9,22 +9,22 @@ import { describe, it, expect } from 'vitest';
 
 describe('Renderer display-source API (structural)', () => {
   it('exports getDisplayedMoleculeCentroid', async () => {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     expect(typeof mod.Renderer.prototype.getDisplayedMoleculeCentroid).toBe('function');
   });
 
   it('exports getDisplayedMoleculeBounds', async () => {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     expect(typeof mod.Renderer.prototype.getDisplayedMoleculeBounds).toBe('function');
   });
 
   it('exports isDisplayingReviewFrame', async () => {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     expect(typeof mod.Renderer.prototype.isDisplayingReviewFrame).toBe('function');
   });
 
   it('updateReviewFrame exists and accepts (positions, n)', async () => {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     expect(typeof mod.Renderer.prototype.updateReviewFrame).toBe('function');
     expect(mod.Renderer.prototype.updateReviewFrame.length).toBeGreaterThanOrEqual(2);
   });
@@ -39,7 +39,7 @@ describe('Renderer display-source state transitions (prototype-level)', () => {
     physicsPos: Float64Array;
     physicsN: number;
   }> = {}) {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     const fake: any = {
       _displaySource: overrides.displaySource ?? 'live',
       _reviewPositions: overrides.reviewPositions ?? null,
@@ -100,7 +100,7 @@ describe('Renderer display-source state transitions (prototype-level)', () => {
 
 describe('Renderer display-source transitions (real methods)', () => {
   it('updateReviewFrame sets review source and caches positions', async () => {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     const proto = mod.Renderer.prototype;
     const positions = new Float64Array([10, 20, 30]);
     const fake: any = {
@@ -118,7 +118,7 @@ describe('Renderer display-source transitions (real methods)', () => {
   });
 
   it('updatePositions restores live source and clears cache', async () => {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     const proto = mod.Renderer.prototype;
     const physics = { n: 1, pos: new Float64Array([1, 2, 3]), getBonds: () => [] };
     const fake: any = {
@@ -140,7 +140,7 @@ describe('Renderer display-source transitions (real methods)', () => {
   });
 
   it('updateFromSnapshot restores live source', async () => {
-    const mod = await import('../../page/js/renderer');
+    const mod = await import('../../lab/js/renderer');
     const proto = mod.Renderer.prototype;
     const fake: any = {
       _displaySource: 'review',

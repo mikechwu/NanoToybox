@@ -8,7 +8,7 @@
  * - resetRuntimeState is called last
  */
 import { describe, it, expect, vi } from 'vitest';
-import { teardownAllSubsystems, type TeardownSurface } from '../../page/js/app/app-lifecycle';
+import { teardownAllSubsystems, type TeardownSurface } from '../../lab/js/app/app-lifecycle';
 
 function makeTeardownSurface(): { surface: TeardownSurface; order: string[] } {
   const order: string[] = [];

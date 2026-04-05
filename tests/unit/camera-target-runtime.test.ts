@@ -11,7 +11,7 @@ import {
   resolveBestDefaultCameraTarget,
   isCameraTargetRefValid,
   type CameraTargetDeps,
-} from '../../page/js/runtime/camera-target-runtime';
+} from '../../lab/js/runtime/camera-target-runtime';
 
 function makeDeps(overrides: Partial<CameraTargetDeps> = {}): CameraTargetDeps {
   return {

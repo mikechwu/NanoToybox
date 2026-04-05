@@ -5,7 +5,7 @@
  * Tests: state transitions, command types, invariants (INV-1 through INV-5).
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { StateMachine, State } from '../../page/js/state-machine';
+import { StateMachine, State } from '../../lab/js/state-machine';
 
 describe('StateMachine', () => {
   let sm: StateMachine;

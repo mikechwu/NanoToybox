@@ -11,8 +11,8 @@
 import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, act } from '@testing-library/react';
-import { useAppStore } from '../../page/js/store/app-store';
-import { DockBar } from '../../page/js/components/DockBar';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { DockBar } from '../../lab/js/components/DockBar';
 
 describe('DockBar focus repair', () => {
   beforeEach(() => {

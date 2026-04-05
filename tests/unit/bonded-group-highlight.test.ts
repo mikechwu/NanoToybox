@@ -15,15 +15,15 @@
  * - Clear Highlight clears persistent tracked set
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from '../../page/js/runtime/bonded-group-highlight-runtime';
-import { useAppStore } from '../../page/js/store/app-store';
-import type { BondedGroupRuntime } from '../../page/js/runtime/bonded-group-runtime';
+import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from '../../lab/js/runtime/bonded-group-highlight-runtime';
+import { useAppStore } from '../../lab/js/store/app-store';
+import type { BondedGroupRuntime } from '../../lab/js/runtime/bonded-group-runtime';
 
 // Mock canTrackBondedGroupHighlightNow — default true for semantic tests,
 // individual tests override to false for gating verification.
 const mockCanTrack = vi.fn(() => true);
-vi.mock('../../page/js/store/selectors/bonded-group-capabilities', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../page/js/store/selectors/bonded-group-capabilities')>();
+vi.mock('../../lab/js/store/selectors/bonded-group-capabilities', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lab/js/store/selectors/bonded-group-capabilities')>();
   return { ...actual, canTrackBondedGroupHighlightNow: () => mockCanTrack() };
 });
 
@@ -335,7 +335,7 @@ describe('tracked highlight gating (canTrackBondedGroupHighlight: false)', () =>
 
 describe('renderer alignment with persistent tracking', () => {
   it('_updateGroupHighlight tracks positions for frozen atom set', async () => {
-    const { Renderer } = await import('../../page/js/renderer');
+    const { Renderer } = await import('../../lab/js/renderer');
     const update = (Renderer.prototype as any)._updateGroupHighlight;
     const applyLayer = (Renderer.prototype as any)._applyHighlightLayer;
     const THREE = await import('three');

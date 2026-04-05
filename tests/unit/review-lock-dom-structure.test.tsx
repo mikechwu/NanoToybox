@@ -12,12 +12,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import React from 'react';
 import { render } from '@testing-library/react';
-import { useAppStore } from '../../page/js/store/app-store';
+import { useAppStore } from '../../lab/js/store/app-store';
 import {
   selectReviewUiLockState,
   REVIEW_LOCK_TOOLTIP,
-} from '../../page/js/store/selectors/review-ui-lock';
-import { ReviewLockedListItem } from '../../page/js/components/ReviewLockedListItem';
+} from '../../lab/js/store/selectors/review-ui-lock';
+import { ReviewLockedListItem } from '../../lab/js/components/ReviewLockedListItem';
 
 describe('ReviewLockedListItem DOM contract', () => {
   it('renders <li> as a direct child of <ul> — no span wrapper', () => {

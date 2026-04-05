@@ -6,7 +6,7 @@
  * accidental misconfiguration that could break physics or rendering.
  */
 import { describe, it, expect } from 'vitest';
-import { CONFIG, DEFAULT_THEME, getPhysicsTiming } from '../../page/js/config';
+import { CONFIG, DEFAULT_THEME, getPhysicsTiming } from '../../lab/js/config';
 describe('default theme', () => {
   it('DEFAULT_THEME constant is light', () => {
     expect(DEFAULT_THEME).toBe('light');

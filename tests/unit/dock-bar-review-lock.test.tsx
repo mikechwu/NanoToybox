@@ -8,9 +8,9 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, fireEvent, cleanup } from '@testing-library/react';
-import { useAppStore } from '../../page/js/store/app-store';
-import { DockBar } from '../../page/js/components/DockBar';
-import { REVIEW_LOCK_TOOLTIP } from '../../page/js/store/selectors/review-ui-lock';
+import { useAppStore } from '../../lab/js/store/app-store';
+import { DockBar } from '../../lab/js/components/DockBar';
+import { REVIEW_LOCK_TOOLTIP } from '../../lab/js/store/selectors/review-ui-lock';
 
 describe('DockBar review-lock rendering', () => {
   beforeEach(() => {

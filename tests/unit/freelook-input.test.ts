@@ -29,8 +29,8 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 });
 
-import { InputManager } from '../../page/js/input';
-import { CONFIG } from '../../page/js/config';
+import { InputManager } from '../../lab/js/input';
+import { CONFIG } from '../../lab/js/config';
 
 // Minimal stubs for InputManager construction
 function makeCanvas() {

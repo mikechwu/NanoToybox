@@ -12,9 +12,9 @@
     }
   },
   "include": [
-    "page/js/**/*.ts",
-    "page/js/**/*.tsx",
-    "page/bench/**/*.ts",
+    "lab/js/**/*.ts",
+    "lab/js/**/*.tsx",
+    "lab/bench/**/*.ts",
     "src/**/*.ts",
     "tests/unit/**/*.ts",
     "tests/unit/**/*.tsx",
