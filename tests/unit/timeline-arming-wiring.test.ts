@@ -258,4 +258,27 @@ describe('Timeline arming wiring (integration)', () => {
     sub.recordAfterReconciliation(4);
     expect(useAppStore.getState().timelineRangePs).not.toBeNull();
   });
+
+  // ── Mobile touch → recording chain integration ──
+
+  it('pinch-over-atom does not arm recording (touch pending intent cancelled)', () => {
+    // This models the real bug: first finger on atom → second finger arrives for pinch.
+    // The input layer's pending-intent mechanism prevents onPointerDown from firing,
+    // so markAtomInteractionStarted is never reached.
+    // We model this by NOT calling simulateAtomInteraction (which mirrors the
+    // production path where onPointerDown → dispatch → markAtomInteractionStarted).
+    sub.recordAfterReconciliation(4);
+    sub.recordAfterReconciliation(4);
+    // No simulateAtomInteraction — pinch cancelled the pending intent
+    expect(useAppStore.getState().timelineRangePs).toBeNull();
+  });
+
+  it('committed single-finger atom drag arms recording (touch intent committed)', () => {
+    // The input layer committed the drag (exceeded threshold), so onPointerDown
+    // fired → dispatch → markAtomInteractionStarted.
+    sub.recordAfterReconciliation(4);
+    callbacks.simulateAtomInteraction(); // models the committed drag path
+    sub.recordAfterReconciliation(4);
+    expect(useAppStore.getState().timelineRangePs).not.toBeNull();
+  });
 });

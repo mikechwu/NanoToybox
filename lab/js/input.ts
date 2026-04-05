@@ -75,6 +75,22 @@ export class InputManager {
   _triadLastTapWasCenter: boolean;
   _triadDragCommitted: boolean; // true once movement exceeds 5px — enables orbit delta
   _triadTapIntentTimer: ReturnType<typeof setTimeout> | null;
+
+  // Pending single-touch atom intent — separates "finger landed on atom" from
+  // "user is actually manipulating an atom." Prevents pinch/tap from arming recording.
+  // State machine: _pendingTouchAtomIndex >= 0 && !isDragging = pending;
+  //               isDragging = committed (pending fields irrelevant until reset).
+  // Reset as a unit via _clearPendingTouchIntent().
+  _pendingTouchAtomIndex: number;  // -1 = no pending intent
+  _pendingTouchStartX: number;
+  _pendingTouchStartY: number;
+
+  /** Reset the pending atom touch intent as a unit. */
+  _clearPendingTouchIntent() {
+    this._pendingTouchAtomIndex = -1;
+    this._pendingTouchStartX = 0;
+    this._pendingTouchStartY = 0;
+  }
   _scratchVec3: THREE.Vector3;
   _scratchProjected: THREE.Vector3;
   _scratchNDC: THREE.Vector2;
@@ -121,6 +137,9 @@ export class InputManager {
     this._triadLastTapWasCenter = false;
     this._triadDragCommitted = false;
     this._triadTapIntentTimer = null;
+    this._pendingTouchAtomIndex = -1;
+    this._pendingTouchStartX = 0;
+    this._pendingTouchStartY = 0;
 
     // Pre-allocated scratch objects for picking and interaction (zero per-event allocations)
     this._scratchVec3 = new THREE.Vector3();
@@ -536,6 +555,10 @@ export class InputManager {
     this._triadSource?.cancelCameraAnimation?.();
     if (e.touches.length >= 2) {
       // 2+ fingers → cancel any active gesture, let OrbitControls handle camera
+      // Cancel pending atom intent — finger was on atom but user is starting a pinch
+      if (this._pendingTouchAtomIndex >= 0 && !this.isDragging) {
+        this._clearPendingTouchIntent();
+      }
       if (this.isDragging) {
         this.isDragging = false;
         this.cb.onPointerUp?.();
@@ -597,14 +620,21 @@ export class InputManager {
       return;
     }
 
-    // 3. Try atom interaction — atom hit always wins (live mode only)
+    // 3. Try atom interaction — atom hit stores pending intent (not committed yet).
+    //    Commitment happens in _onTouchMove after exceeding CONFIG.touch.atomDragCommitPx.
+    //    This prevents pinch-over-atom and tap from arming timeline recording.
     const atomIdx = this._raycastAtom(touch.clientX, touch.clientY);
     if (atomIdx >= 0) {
       if (this._getCameraMode() === 'freelook') {
         this._triadSource?.onFreeLookFocusSelect?.(atomIdx);
       } else {
-        this.isDragging = true;
-        this.cb.onPointerDown?.(atomIdx, touch.clientX, touch.clientY, false);
+        // Store pending intent — do NOT dispatch onPointerDown yet.
+        // Note: interaction mode (atom/move/rotate) is resolved by input-bindings
+        // at commit time, not frozen here. This is acceptable because the dock
+        // segmented control requires lifting the finger to change mode.
+        this._pendingTouchAtomIndex = atomIdx;
+        this._pendingTouchStartX = touch.clientX;
+        this._pendingTouchStartY = touch.clientY;
       }
       return;
     }
@@ -654,6 +684,23 @@ export class InputManager {
     if (this.isDragging) {
       e.preventDefault();
       this.cb.onPointerMove?.(touch.clientX, touch.clientY);
+      return;
+    }
+
+    // Pending atom intent — own the touch entirely to prevent browser-native interference.
+    if (this._pendingTouchAtomIndex >= 0 && !this.isDragging) {
+      e.preventDefault();
+      const dx = touch.clientX - this._pendingTouchStartX;
+      const dy = touch.clientY - this._pendingTouchStartY;
+      if (Math.sqrt(dx * dx + dy * dy) > CONFIG.touch.atomDragCommitPx) {
+        // Commit: real atom drag confirmed
+        this.isDragging = true;
+        this.cb.onPointerDown?.(this._pendingTouchAtomIndex, this._pendingTouchStartX, this._pendingTouchStartY, false);
+        this.cb.onPointerMove?.(touch.clientX, touch.clientY);
+      }
+      // Sub-threshold movements are intentionally swallowed — not routed to
+      // orbit or drag. This prevents accidental atom interaction from pinch
+      // start or micro-jitter. The dead zone is CONFIG.touch.atomDragCommitPx.
       return;
     }
 
@@ -717,6 +764,10 @@ export class InputManager {
       }
       this.isTriadDragging = false;
     }
+    // Clear pending atom intent (tap without movement, or drag end cleanup)
+    if (this._pendingTouchAtomIndex >= 0) {
+      this._clearPendingTouchIntent();
+    }
     if (this.isDragging) {
       this.isDragging = false;
       this.cb.onPointerUp?.();
@@ -737,6 +788,7 @@ export class InputManager {
     }
     this.isDragging = false;
     this.isTriadDragging = false;
+    this._clearPendingTouchIntent();
     if (this._triadTapIntentTimer) { clearTimeout(this._triadTapIntentTimer); this._triadTapIntentTimer = null; }
     this._triadSource?.showAxisHighlight?.(null);
     if (this.isCamera) {

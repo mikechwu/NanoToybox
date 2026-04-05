@@ -58,6 +58,12 @@ export const CONFIG = {
     hover:  { color: 0x336688, emissive: 0x445566, emissiveIntensity: 0.8, opacity: 0.2, scale: 1.08 },
   },
 
+  // Mobile touch intent — prevents accidental atom interaction from pinch/tap gestures.
+  // Same pattern as the triad's 5px drag commit threshold.
+  touch: {
+    atomDragCommitPx: 5,  // px — single-finger movement before committing atom drag
+  },
+
   picker: {
     desktopExpansion: 0.12,  // NDC — fallback hit radius for desktop
     mobileExpansion: 0.20,   // NDC — fallback hit radius for mobile

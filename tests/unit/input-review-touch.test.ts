@@ -49,6 +49,7 @@ vi.mock('../../lab/js/config', () => ({
     orbit: { rotateSpeed: 0.01 },
     picker: { mobileExpansion: 0.15, desktopExpansion: 0.08, previewAtomPreference: 0.5 },
     camera: { freeLookEnabled: false },
+    touch: { atomDragCommitPx: 5 },
     freeLook: {},
     debug: { input: false },
   },
@@ -174,13 +175,111 @@ describe('Real InputManager — review touch routing', () => {
     expect(ctx.orbitStartFn).toHaveBeenCalled();
   });
 
-  it('live + touch + atom → atom drag', () => {
+  it('live + touch + atom → pending intent, not immediate drag', () => {
     ctx.setReviewMode(false);
     ctx.setAtomUnderCursor(5);
     (ctx.mgr as any)._onTouchStart(makeTouchEvent('touchstart', 200, 200));
-    expect(ctx.mgr.isDragging).toBe(true);
+    // Pending intent stored but NOT committed — no drag yet
+    expect(ctx.mgr.isDragging).toBe(false);
     expect(ctx.mgr.isCamera).toBe(false);
-    expect(ctx.cb.onPointerDown).toHaveBeenCalled();
+    expect(ctx.cb.onPointerDown).not.toHaveBeenCalled();
+    expect((ctx.mgr as any)._pendingTouchAtomIndex).toBe(5);
+  });
+
+  it('live + touch + atom + drag past threshold → commits atom drag', () => {
+    ctx.setReviewMode(false);
+    ctx.setAtomUnderCursor(5);
+    (ctx.mgr as any)._onTouchStart(makeTouchEvent('touchstart', 200, 200));
+    // Move past threshold (5px default)
+    (ctx.mgr as any)._onTouchMove(makeTouchEvent('touchmove', 210, 200));
+    expect(ctx.mgr.isDragging).toBe(true);
+    expect(ctx.cb.onPointerDown).toHaveBeenCalledWith(5, 200, 200, false);
+    expect(ctx.cb.onPointerMove).toHaveBeenCalledWith(210, 200);
+  });
+
+  it('live + touch + atom + pinch cancels pending intent', () => {
+    ctx.setReviewMode(false);
+    ctx.setAtomUnderCursor(5);
+    (ctx.mgr as any)._onTouchStart(makeTouchEvent('touchstart', 200, 200));
+    expect((ctx.mgr as any)._pendingTouchAtomIndex).toBe(5);
+    // Second finger arrives — pinch gesture
+    const pinchEvent = {
+      type: 'touchstart',
+      touches: [
+        { clientX: 200, clientY: 200, identifier: 0, target: null },
+        { clientX: 250, clientY: 250, identifier: 1, target: null },
+      ] as any,
+      changedTouches: [{ clientX: 250, clientY: 250, identifier: 1, target: null }] as any,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as any;
+    (ctx.mgr as any)._onTouchStart(pinchEvent);
+    // Pending intent cancelled — no atom interaction
+    expect((ctx.mgr as any)._pendingTouchAtomIndex).toBe(-1);
+    expect(ctx.mgr.isDragging).toBe(false);
+    expect(ctx.cb.onPointerDown).not.toHaveBeenCalled();
+  });
+
+  it('live + touch + atom + tap (no movement) does not dispatch', () => {
+    ctx.setReviewMode(false);
+    ctx.setAtomUnderCursor(5);
+    (ctx.mgr as any)._onTouchStart(makeTouchEvent('touchstart', 200, 200));
+    // Lift finger immediately without moving
+    (ctx.mgr as any)._onTouchEnd(makeTouchEvent('touchend', 200, 200));
+    expect(ctx.cb.onPointerDown).not.toHaveBeenCalled();
+    expect((ctx.mgr as any)._pendingTouchAtomIndex).toBe(-1);
+  });
+
+  // ── Integration: recording chain protection ──
+
+  it('pinch over atom does not trigger markAtomInteractionStarted (recording stays unarmed)', () => {
+    ctx.setReviewMode(false);
+    ctx.setAtomUnderCursor(5);
+    // The onPointerDown callback is the only path to recording arming.
+    // If it is not called, markAtomInteractionStarted cannot be reached
+    // through interaction-dispatch (startDrag → markAtomInteractionStarted).
+    (ctx.mgr as any)._onTouchStart(makeTouchEvent('touchstart', 200, 200));
+    // Second finger — pinch
+    const pinchEvent = {
+      type: 'touchstart',
+      touches: [
+        { clientX: 200, clientY: 200, identifier: 0, target: null },
+        { clientX: 250, clientY: 250, identifier: 1, target: null },
+      ] as any,
+      changedTouches: [{ clientX: 250, clientY: 250, identifier: 1, target: null }] as any,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    } as any;
+    (ctx.mgr as any)._onTouchStart(pinchEvent);
+    // Full chain: onPointerDown never called → startDrag never dispatched →
+    // markAtomInteractionStarted never reached → recording stays unarmed
+    expect(ctx.cb.onPointerDown).not.toHaveBeenCalled();
+  });
+
+  it('committed single-finger drag does trigger onPointerDown (recording can arm)', () => {
+    ctx.setReviewMode(false);
+    ctx.setAtomUnderCursor(5);
+    (ctx.mgr as any)._onTouchStart(makeTouchEvent('touchstart', 200, 200));
+    // Move past threshold → commits
+    (ctx.mgr as any)._onTouchMove(makeTouchEvent('touchmove', 210, 200));
+    // onPointerDown called → startDrag will dispatch → markAtomInteractionStarted fires
+    expect(ctx.cb.onPointerDown).toHaveBeenCalledWith(5, 200, 200, false);
+  });
+
+  it('pending intent uses current interaction mode at commit time (not frozen at touch start)', () => {
+    // Accepted behavior: interaction mode is resolved by input-bindings at commit time.
+    // The dock segmented control requires lifting the finger to change mode, so
+    // mode drift during a single-finger pending intent is not reachable in practice.
+    // This test documents the contract explicitly.
+    ctx.setReviewMode(false);
+    ctx.setAtomUnderCursor(5);
+    (ctx.mgr as any)._onTouchStart(makeTouchEvent('touchstart', 200, 200));
+    // Pending intent stored — onPointerDown not yet called
+    expect(ctx.cb.onPointerDown).not.toHaveBeenCalled();
+    // Commit
+    (ctx.mgr as any)._onTouchMove(makeTouchEvent('touchmove', 210, 200));
+    // onPointerDown is called with isRightClick=false — mode resolution
+    // happens downstream in input-bindings, not captured in the pending state.
+    expect(ctx.cb.onPointerDown).toHaveBeenCalledWith(5, 200, 200, false);
   });
 
   it('review + triad touch → triad wins', () => {
