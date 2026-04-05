@@ -6,7 +6,7 @@ Drag atoms, spin molecules, and watch carbon structures respond with real Tersof
 
 ## Demo
 
-Serve locally and open in your browser:
+Serve locally and open in your browser: 
 
 ```bash
 git clone https://github.com/mikechwu/NanoToybox.git
