@@ -24,7 +24,7 @@ npm install
 
 # Launch the interactive page (Vite dev server with HMR)
 npm run dev
-# Open http://localhost:5173/NanoToybox/page/
+# Open http://localhost:5173/page/
 
 # Run all checks
 npm run typecheck       # TypeScript type-checking

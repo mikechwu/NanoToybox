@@ -5,7 +5,7 @@ import copy from 'rollup-plugin-copy'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
-  base: '/NanoToybox/',
+  base: '/',
   test: {
     include: ['tests/unit/**/*.test.{ts,tsx}'],
   },

@@ -42,18 +42,22 @@ jobs:
 
       - name: Deploy smoke check
         run: |
-          npx vite preview --base /NanoToybox/ --host 127.0.0.1 --port 4173 --strictPort &
+          npx vite preview --host 127.0.0.1 --port 4173 --strictPort &
           SERVER_PID=$!
           trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
 
           # Readiness loop — poll until server responds (max 15s)
           for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:4173/NanoToybox/page/ > /dev/null 2>&1; then
+            if curl -sf http://127.0.0.1:4173/page/ > /dev/null 2>&1; then
               echo "Server ready after ~$((i / 2))s"
               break
             fi
             sleep 0.5
           done
+          if ! curl -sf http://127.0.0.1:4173/page/ > /dev/null 2>&1; then
+            echo "ERROR: Vite preview server failed to become ready within 15s"
+            exit 1
+          fi
 
           bash scripts/deploy-smoke.sh
 

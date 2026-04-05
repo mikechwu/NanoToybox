@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --base /NanoToybox/",
+    "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
@@ -27,7 +27,7 @@
   "bugs": {
     "url": "https://github.com/mikechwu/NanoToybox/issues"
   },
-  "homepage": "https://github.com/mikechwu/NanoToybox#readme",
+  "homepage": "https://atomdojo.pages.dev/page/",
   "devDependencies": {
     "@playwright/test": "^1.58.2",
     "@testing-library/jest-dom": "^6.9.1",

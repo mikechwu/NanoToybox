@@ -17,7 +17,7 @@ The interactive page is the primary user-facing application. It runs a full Ters
 
 ```bash
 npm run dev
-# Open http://localhost:5173/NanoToybox/page/
+# Open http://localhost:5173/page/
 ```
 
 ### Features
@@ -341,7 +341,7 @@ open viewer/index.html
 
 # Or serve via Vite and auto-load example trajectories
 npm run dev
-# Open http://localhost:5173/NanoToybox/viewer/
+# Open http://localhost:5173/viewer/
 ```
 
 ### Features

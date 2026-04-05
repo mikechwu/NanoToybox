@@ -1,0 +1,7 @@
+# Cloudflare Pages configuration for atomdojo
+# Deploy: npx wrangler pages deploy dist --project-name=atomdojo
+# Docs: https://developers.cloudflare.com/pages/functions/wrangler-configuration/
+
+name = "atomdojo"
+pages_build_output_dir = "dist"
+compatibility_date = "2025-01-01"

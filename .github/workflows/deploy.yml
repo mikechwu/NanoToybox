@@ -1,4 +1,4 @@
-name: Deploy to GitHub Pages
+name: Deploy to Cloudflare Pages
 
 on:
   push:
@@ -7,18 +7,16 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 concurrency:
-  group: pages
+  group: deploy
   cancel-in-progress: false
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -66,32 +64,32 @@ jobs:
 
       - name: Deploy smoke check
         run: |
-          npx vite preview --base /NanoToybox/ --host 127.0.0.1 --port 4173 --strictPort &
+          npx vite preview --host 127.0.0.1 --port 4173 --strictPort &
           SERVER_PID=$!
           trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
           for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:4173/NanoToybox/page/ > /dev/null 2>&1; then
+            if curl -sf http://127.0.0.1:4173/page/ > /dev/null 2>&1; then
+              echo "Server ready after ~$((i / 2))s"
               break
             fi
             sleep 0.5
           done
+          if ! curl -sf http://127.0.0.1:4173/page/ > /dev/null 2>&1; then
+            echo "ERROR: Vite preview server failed to become ready within 15s"
+            exit 1
+          fi
           bash scripts/deploy-smoke.sh
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v4
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        uses: cloudflare/wrangler-action@v3
         with:
-          path: 'dist'
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=atomdojo
 
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Post-deploy smoke check (live URL)
+        run: |
+          # Wait for deployment to propagate (Cloudflare edge cache)
+          sleep 10
+          bash scripts/deploy-smoke.sh https://atomdojo.pages.dev

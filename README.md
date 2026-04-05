@@ -13,10 +13,10 @@ git clone https://github.com/mikechwu/NanoToybox.git
 cd NanoToybox
 npm install
 npm run dev
-# Open http://localhost:5173/NanoToybox/page/
+# Open http://localhost:5173/page/
 ```
 
-Or visit the live demo at [mikechwu.github.io/NanoToybox](https://mikechwu.github.io/NanoToybox/page/).
+Or visit the live demo at [atomdojo.pages.dev](https://atomdojo.pages.dev/page/).
 
 ## Features
 
@@ -144,7 +144,7 @@ make -C sim/wasm     # Rebuild tersoff.wasm + glue
 ## CI/CD
 
 - **CI** runs on every push/PR: typecheck, unit tests, build, Playwright E2E, deploy smoke check, Python physics tests
-- **Deploy** to GitHub Pages on push to main: build → verify → E2E → deploy
+- **Deploy** to Cloudflare Pages on push to main: build → verify → E2E → deploy
 
 ## Documentation
 

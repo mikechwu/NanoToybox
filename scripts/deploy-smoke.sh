@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-BASE="${1:-http://127.0.0.1:4173/NanoToybox}"
+BASE="${1:-http://127.0.0.1:4173}"
 
 echo "=== Deploy Smoke Test ==="
 

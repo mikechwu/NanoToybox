@@ -312,7 +312,7 @@ Manual verification checklist for the interactive page (`page/index.html`). Run 
 ### Setup
 ```bash
 npm run dev
-# Open http://localhost:5173/NanoToybox/page/
+# Open http://localhost:5173/page/
 ```
 
 ### Checklist
