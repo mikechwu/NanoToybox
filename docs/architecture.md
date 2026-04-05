@@ -348,7 +348,7 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 
 **Color chip style:** Plain solid circle, no border (`border: 2px solid transparent`). Active swatch scales 1.3× (`transform: scale(1.3)`) with transparent border and no box-shadow — the swatch's own color is the sole active indicator.
 
-**Panel fixed width:** `--panel-width: 260px` CSS custom property. Stable for up to 3-digit cluster indices. 4+ digit edge cases expand gracefully via `min-width` fallback.
+**Panel fixed width:** `--panel-width: 250px` CSS custom property. Stable for compact cluster labels (#N) plus action columns. Edge cases expand gracefully via `min-width` fallback.
 
 **Scrollbar gutter:** `scrollbar-gutter: stable` reserves scrollbar space permanently — no layout reflow when the cluster list grows beyond the viewport.
 

@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import React from 'react';
 import { render, fireEvent } from '@testing-library/react';
-import { BondedGroupsPanel, buildGroupColorLayout, computeHexGeometry } from '../../page/js/components/BondedGroupsPanel';
+import { BondedGroupsPanel, buildGroupColorLayout, computeHexGeometry, SWATCH_DIAMETER, ACTIVE_SCALE, RING_GAP } from '../../page/js/components/BondedGroupsPanel';
 import { useAppStore, type BondedGroupSummary } from '../../page/js/store/app-store';
 import { createBondedGroupHighlightRuntime } from '../../page/js/runtime/bonded-group-highlight-runtime';
 import { CONFIG } from '../../page/js/config';
@@ -97,8 +97,8 @@ describe('BondedGroupsPanel', () => {
     // Large clusters visible by default (expanded)
     const rows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle):not(.bonded-groups-small-row)');
     expect(rows.length).toBe(2);
-    expect(rows[0].textContent).toContain('Cluster 1');
-    expect(rows[1].textContent).toContain('Cluster 2');
+    expect(rows[0].textContent).toContain('#1');
+    expect(rows[1].textContent).toContain('#2');
   });
 
   it('header shows Collapse when expanded, Expand when collapsed', () => {
@@ -133,7 +133,7 @@ describe('BondedGroupsPanel', () => {
     // Small cluster rows now visible
     const smallRows = c.querySelectorAll('.bonded-groups-small-row');
     expect(smallRows.length).toBe(3);
-    expect(smallRows[0].textContent).toContain('Cluster 3');
+    expect(smallRows[0].textContent).toContain('#3');
 
     // Large clusters still visible
     const largeRows = c.querySelectorAll('.bonded-groups-row:not(.bonded-groups-small-toggle):not(.bonded-groups-small-row)');
@@ -678,9 +678,10 @@ describe('buildGroupColorLayout', () => {
 });
 
 describe('computeHexGeometry', () => {
-  const SWATCH = 20;
-  const SCALE = 1.3;
-  const GAP = 4;
+  // Use the actual production constants — tests catch drift if CSS/JS values diverge
+  const SWATCH = SWATCH_DIAMETER;
+  const SCALE = ACTIVE_SCALE;
+  const GAP = RING_GAP;
 
   it('derives radius so adjacent swatches do not overlap at active scale', () => {
     for (const n of [3, 4, 5, 6, 8, 10]) {

@@ -266,7 +266,7 @@ Persistent tracked highlights are feature-gated off via `canTrackBondedGroupHigh
 - ARIA attributes on interactive elements
 
 **CSS** (`page/index.html`):
-- `--panel-width: 260px` on `.bonded-groups-panel` — single tuning point for fixed panel width
+- `--panel-width: 250px` on `.bonded-groups-panel` — single tuning point for fixed panel width
 - `scrollbar-gutter: stable` on the panel body prevents content reflow when the scrollbar appears
 - 5-column grid for bonded-group list: color-chip | label | atoms | center | follow
 - Portal popover + backdrop at z-index 199 (backdrop) / 200 (popover)

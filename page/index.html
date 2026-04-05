@@ -436,11 +436,11 @@ fieldset.segmented {
 .dock-add-btn.dock-placement-accent { color: var(--color-accent-text); }
 
 /* ── Bonded groups side panel ── */
-/* Panel width: fixed for up to 3-digit cluster indices (e.g. "Cluster 999").
-   Uses min-width so 4+ digit edge cases can still expand gracefully.
+/* Panel width: fixed for compact cluster labels (#N) plus action columns.
+   Uses min-width so edge cases (large counts, long text) can still expand.
    --panel-width is the single tuning point for panel sizing. */
 .bonded-groups-panel {
-  --panel-width: 260px;
+  --panel-width: 250px;
   position: fixed;
   /* top set per-side below (secondary slot, offset below primary overlays) */
   z-index: 150;
@@ -525,9 +525,20 @@ fieldset.segmented {
 .bonded-groups-selected { background: var(--color-accent-soft) !important; }
 .bonded-groups-label { opacity: 0.7; }
 .bonded-groups-atoms { font-variant-numeric: tabular-nums; }
+/* Small-clusters disclosure — matches main header's label + toggle pill pattern.
+   Spans all grid columns so it acts as a section divider. */
 .bonded-groups-small-toggle {
-  opacity: 0.8;
+  grid-column: 1 / -1;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 4px 0; margin-top: 4px;
+  border-top: 1px solid var(--color-border);
+  background: none; border-left: none; border-right: none; border-bottom: none;
+  color: inherit; font: inherit; font-size: var(--font-xs); font-weight: 500;
+  cursor: pointer; width: 100%; text-align: left; opacity: 0.8;
 }
+.bonded-groups-small-toggle:hover { opacity: 1; }
+.bonded-groups-small-toggle:hover .bonded-groups-header-toggle { opacity: 1; border-color: var(--color-text); }
+.bonded-groups-small-label { white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .bonded-groups-hovered { background: var(--color-surface-hover); }
 .bonded-groups-small-row { opacity: 0.7; }
 .bonded-groups-clear {
@@ -605,10 +616,13 @@ fieldset.segmented {
 /* Bonded-group list is a single 5-column grid. Header and rows all participate
    in the same column tracks via subgrid, so columns align perfectly regardless
    of atom-count digit width.
-   Columns: color-chip | label | atoms | center | follow */
+   Columns: color-chip | label | atoms | center | follow
+   Atoms column fixed at 4ch — preallocated for up to 4-digit counts.
+   Center/Follow fixed at 3em — fits both header text and icon buttons.
+   All non-flex columns are fixed so layout never shifts with content. */
 .bonded-groups-list {
   display: grid;
-  grid-template-columns: 24px 1fr max-content max-content max-content;
+  grid-template-columns: 24px 1fr 4ch 3em 3em;
   column-gap: 6px;
   padding: 0 8px;
 }
@@ -625,7 +639,8 @@ fieldset.segmented {
   text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.6;
   text-align: center; padding: 0 2px;
 }
-.bonded-groups-col-header > span:nth-child(2) { text-align: left; }
+/* "Cluster" header spans both color-chip + index columns when color editing is enabled */
+.bonded-groups-col-cluster { grid-column: span 2; text-align: center; }
 .bonded-groups-atoms { text-align: right; padding: 0 6px; font-variant-numeric: tabular-nums; }
 .bonded-groups-action-btn {
   background: none; border: 1px solid transparent; color: var(--color-accent-text);

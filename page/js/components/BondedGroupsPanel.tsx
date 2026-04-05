@@ -67,9 +67,9 @@ const COLOR_LAYOUT = buildGroupColorLayout(GROUP_COLOR_OPTIONS);
  * The minimum center-to-center distance between adjacent ring items must
  * exceed SWATCH_DIAMETER × ACTIVE_SCALE to prevent overlap at max scale.
  */
-const SWATCH_DIAMETER = 20;   // px — must match .bonded-groups-swatch width/height
-const ACTIVE_SCALE = 1.3;     // must match .bonded-groups-swatch.active transform scale
-const RING_GAP = 4;           // px — minimum gap between adjacent swatches at active scale
+export const SWATCH_DIAMETER = 20;   // px — must match .bonded-groups-swatch width/height
+export const ACTIVE_SCALE = 1.3;     // must match .bonded-groups-swatch.active transform scale
+export const RING_GAP = 4;           // px — minimum gap between adjacent swatches at active scale
 
 /** Derive ring radius and container size so adjacent swatches don't overlap even at active scale. */
 export function computeHexGeometry(n: number, swatchDiam: number, activeScale: number, gap: number) {
@@ -279,7 +279,7 @@ function ClusterRow({ id, displayIndex, atomCount, isSmall, canTarget, canEditCo
           type="button"
         />
       ) : <span />}
-      <span className="bonded-groups-label">Cluster {displayIndex}</span>
+      <span className="bonded-groups-label">#{displayIndex}</span>
       <span className="bonded-groups-atoms">{atomCount}</span>
       {canTarget && (
         <>
@@ -387,9 +387,11 @@ export function BondedGroupsPanel() {
         <div id="bonded-groups-list" className="bonded-groups-list" onMouseLeave={handleListLeave}>
           {(canTarget || canEditColor) && (
             <div className="bonded-groups-col-header">
-              {canEditColor && <span />}
-              <span />
-              <span>atoms</span>
+              {/* When canEditColor is true, "Cluster" spans both color-chip + index columns.
+                  When false, a placeholder keeps the 5-column subgrid aligned. */}
+              {!canEditColor && <span />}
+              <span className={canEditColor ? 'bonded-groups-col-cluster' : undefined}>Cluster</span>
+              <span>Atoms</span>
               {canTarget && <span>Center</span>}
               {canTarget && <span>Follow</span>}
             </div>
@@ -401,10 +403,13 @@ export function BondedGroupsPanel() {
           ))}
           {small.length > 0 && (
             <>
-              <button className="bonded-groups-row bonded-groups-small-toggle"
-                onClick={(e) => { e.stopPropagation(); toggleSmall(); }} type="button">
-                <span className="bonded-groups-label">Small clusters</span>
-                <span className="bonded-groups-atoms">{small.length}</span>
+              <button className="bonded-groups-small-toggle"
+                onClick={(e) => { e.stopPropagation(); toggleSmall(); }}
+                aria-expanded={smallExpanded} type="button">
+                <span className="bonded-groups-small-label">
+                  Small Clusters: <span className="bonded-groups-count">{small.length}</span>
+                </span>
+                <span className="bonded-groups-header-toggle">{smallExpanded ? 'Collapse' : 'Expand'}</span>
               </button>
               {smallExpanded && small.map((g) => (
                 <ClusterRow key={g.id} id={g.id} displayIndex={g.displayIndex} atomCount={g.atomCount} isSmall
