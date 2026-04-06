@@ -72,6 +72,7 @@ export interface ChooserCallbacks {
 export interface TimelineCallbacks {
   onScrub: (timePs: number) => void;
   onReturnToLive: () => void;
+  onEnterReview: () => void;
   onRestartFromHere: () => void;
   onStartRecordingNow: () => void;
   onTurnRecordingOff: () => void;

@@ -2,18 +2,14 @@
  * @vitest-environment jsdom
  */
 /**
- * Tests for TimelineBar component rendering with 3-state recording mode.
+ * Tests for TimelineBar component with 2-column shell layout.
  *
- * Verifies:
- *   - Bar returns null when timeline subsystem is not installed
- *   - Off state renders gray disabled bar with "Start Recording" button
- *   - Ready state renders "Ready" badge with helper text
- *   - Active state renders full scrubber with "Recording" badge
- *   - Review mode shows action buttons (Live, Restart, Stop & Clear)
- *   - Component re-renders correctly when store recording mode changes
- *   - 2-row grid lanes: badge, time, track (row 1), meta, actions (row 2)
- *   - Button clicks invoke the correct store callbacks
- *   - Startup uses atomic installTimelineUI (no transient off flash)
+ * All states (off, ready, live, review) render through one shared shell:
+ *   - .timeline-shell with __left (mode rail) and __center (timeline lane)
+ *   - Mode rail uses vertical segmented control across all states
+ *   - Timeline lane: time + track + clear icon (track is dominant)
+ *   - Review adds restart chip above thumb; Simulation segment returns to live
+ *   - Destructive clear uses compact icon consistently across ready/live/review
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -21,65 +17,61 @@ import { render, cleanup, act, fireEvent } from '@testing-library/react';
 import { useAppStore } from '../../lab/js/store/app-store';
 import type { TimelineCallbacks } from '../../lab/js/store/app-store';
 import { TimelineBar } from '../../lab/js/components/TimelineBar';
-import { HINT_DELAY_MS } from '../../lab/js/components/TimelineActionHint';
 
 const noop = () => {};
 
 const defaultCallbacks: TimelineCallbacks = {
-  onScrub: noop, onReturnToLive: noop, onRestartFromHere: noop,
-  onStartRecordingNow: noop, onTurnRecordingOff: noop,
+  onScrub: noop, onReturnToLive: noop, onEnterReview: noop,
+  onRestartFromHere: noop, onStartRecordingNow: noop, onTurnRecordingOff: noop,
 };
 
-/** Install subsystem via the real atomic store helper. */
 function installSubsystem(mode: 'off' | 'ready' | 'active' = 'off') {
   useAppStore.getState().installTimelineUI({ ...defaultCallbacks }, mode);
 }
 
-/** Install subsystem with custom callbacks (for spy/assertion tests). */
 function installSubsystemWithCallbacks(mode: 'off' | 'ready' | 'active', callbacks: Partial<TimelineCallbacks>) {
   useAppStore.getState().installTimelineUI({ ...defaultCallbacks, ...callbacks }, mode);
 }
 
-describe('TimelineBar lifecycle', () => {
-  beforeEach(() => {
-    useAppStore.getState().resetTransientState();
-  });
-
-  afterEach(() => {
-    cleanup();
-  });
+describe('TimelineBar unified shell', () => {
+  beforeEach(() => { useAppStore.getState().resetTransientState(); });
+  afterEach(() => { cleanup(); });
 
   // ── Render gate ──
 
   it('returns null when timeline subsystem is not installed', () => {
     const { container } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-bar')).toBeNull();
+    expect(container.querySelector('.timeline-shell')).toBeNull();
   });
 
-  // ── Static state rendering ──
+  // ── All states use unified shell ──
 
-  it('renders off state when recording mode is off', () => {
+  it('off state renders simple label, not segmented switch', () => {
     act(() => { installSubsystem('off'); });
     const { container } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-bar')).not.toBeNull();
-    expect(container.querySelector('.timeline-badge--off')?.textContent).toBe('History Off');
-    expect(container.querySelector('.timeline-track--disabled')).not.toBeNull();
-    const buttons = container.querySelectorAll('.timeline-action');
-    expect(Array.from(buttons).some(b => b.textContent === 'Start Recording')).toBe(true);
+    const shell = container.querySelector('.timeline-shell');
+    expect(shell).not.toBeNull();
+    expect(shell!.querySelector('.timeline-shell__left')).not.toBeNull();
+    expect(shell!.querySelector('.timeline-shell__center')).not.toBeNull();
+    // Simple label, not segmented control
+    expect(container.querySelector('.timeline-mode-label__text')?.textContent).toBe('History Off');
+    expect(container.querySelector('.timeline-mode-switch')).toBeNull();
+    // Start Recording as center overlay
+    expect(container.querySelector('.timeline-start-overlay')?.textContent).toBe('Start Recording');
   });
 
-  it('renders ready state with numeric time and helper text', () => {
+  it('ready state renders simple label with clear icon', () => {
     act(() => { installSubsystem('ready'); });
     const { container } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-badge--ready')?.textContent).toBe('Ready');
-    expect(container.querySelector('.timeline-time')?.textContent).toBe('0.0 fs');
-    expect(container.querySelector('.timeline-helper')?.textContent).toContain('Recording starts');
-    expect(container.querySelector('.timeline-track--disabled')).not.toBeNull();
-    const buttons = container.querySelectorAll('.timeline-action');
-    expect(Array.from(buttons).some(b => b.textContent === 'Stop & Clear')).toBe(true);
+    expect(container.querySelector('.timeline-shell')).not.toBeNull();
+    // Simple label, not segmented control
+    expect(container.querySelector('.timeline-mode-label__text')?.textContent).toBe('Ready');
+    expect(container.querySelector('.timeline-mode-switch')).toBeNull();
+    // Clear icon
+    expect(container.querySelector('.timeline-clear-trigger')).not.toBeNull();
   });
 
-  it('renders active live state with scrubber', () => {
+  it('active live state renders two-segment mode switch with Simulation active', () => {
     act(() => {
       installSubsystem('active');
       useAppStore.getState().updateTimelineState({
@@ -89,14 +81,21 @@ describe('TimelineBar lifecycle', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-badge--live')?.textContent).toBe('Recording');
-    expect(container.querySelector('.timeline-track')).not.toBeNull();
+    expect(container.querySelector('.timeline-shell')).not.toBeNull();
+    // Two-segment mode switch: Simulation (active) | Review
+    const segs = container.querySelectorAll('.timeline-mode-switch__seg');
+    expect(segs.length).toBe(2);
+    expect(segs[0].textContent).toBe('Simulation');
+    expect(segs[0].classList.contains('timeline-mode-switch__seg--active')).toBe(true);
+    expect(segs[1].textContent).toBe('Review');
+    // Thick track with thumb
+    expect(container.querySelector('.timeline-track--thick')).not.toBeNull();
     expect(container.querySelector('.timeline-thumb')).not.toBeNull();
-    const buttons = container.querySelectorAll('.timeline-action');
-    expect(Array.from(buttons).some(b => b.textContent === 'Stop & Clear')).toBe(true);
+    // Clear icon (not text button)
+    expect(container.querySelector('.timeline-clear-trigger')).not.toBeNull();
   });
 
-  it('renders review mode with all action buttons', () => {
+  it('review state renders two-segment mode switch with Review active', () => {
     act(() => {
       installSubsystem('active');
       useAppStore.getState().updateTimelineState({
@@ -106,60 +105,292 @@ describe('TimelineBar lifecycle', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-badge--review')?.textContent).toBe('Review');
-    const buttons = container.querySelectorAll('.timeline-action');
-    const labels = Array.from(buttons).map(b => b.textContent);
-    expect(labels).toContain('Live');
-    expect(labels).toContain('Restart');
-    expect(labels).toContain('Stop & Clear');
-    expect(container.querySelector('.timeline-restart-target')?.textContent).toBe('Restart at 500.0 ps');
+    expect(container.querySelector('.timeline-shell')).not.toBeNull();
+    // Two-segment mode switch: Simulation | Review (active)
+    const segs = container.querySelectorAll('.timeline-mode-switch__seg');
+    expect(segs.length).toBe(2);
+    expect(segs[0].textContent).toBe('Simulation');
+    expect(segs[1].textContent).toBe('Review');
+    expect(segs[1].classList.contains('timeline-mode-switch__seg--active')).toBe(true);
+    // Simulation segment has return-to-sim accessible label
+    expect(segs[0].getAttribute('aria-label')).toBe('Back to simulation');
+    // Restart chip (compact label; full time in aria-label)
+    expect(container.querySelector('.timeline-restart-anchor')?.textContent).toContain('Restart here');
+    // Clear icon (same as live/ready)
+    expect(container.querySelector('.timeline-clear-trigger')).not.toBeNull();
   });
 
-  it('active state with no range yet shows disabled track', () => {
-    act(() => { installSubsystem('active'); });
-    const { container } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-badge--live')).not.toBeNull();
-    expect(container.querySelector('.timeline-track--disabled')).not.toBeNull();
-    expect(container.querySelector('.timeline-thumb')).toBeNull();
-  });
+  // ── Invariant 2-slot mode rail ──
 
-  // ── Component re-renders on store mode changes ──
-
-  it('renders off, ready, and active states correctly on store mode changes', () => {
+  it('off/ready use simple label; active uses two-segment switch', () => {
+    // Off → label
     act(() => { installSubsystem('off'); });
-    const { container, rerender } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-badge--off')).not.toBeNull();
+    let { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-mode-label')).not.toBeNull();
+    expect(container.querySelector('.timeline-mode-switch')).toBeNull();
+    cleanup();
 
-    act(() => { useAppStore.getState().setTimelineRecordingMode('ready'); });
-    rerender(<TimelineBar />);
-    expect(container.querySelector('.timeline-badge--ready')).not.toBeNull();
+    // Ready → label
+    act(() => { installSubsystem('ready'); });
+    ({ container } = render(<TimelineBar />));
+    expect(container.querySelector('.timeline-mode-label')).not.toBeNull();
+    expect(container.querySelector('.timeline-mode-switch')).toBeNull();
+    cleanup();
 
+    // Active → two-segment switch
     act(() => {
-      useAppStore.getState().setTimelineRecordingMode('active');
+      installSubsystem('active');
       useAppStore.getState().updateTimelineState({
-        mode: 'live', currentTimePs: 0.002, reviewTimePs: null,
-        rangePs: { start: 0.002, end: 0.002 },
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
         canReturnToLive: false, canRestart: false, restartTargetPs: null,
       });
     });
-    rerender(<TimelineBar />);
-    expect(container.querySelector('.timeline-badge--live')).not.toBeNull();
+    ({ container } = render(<TimelineBar />));
+    expect(container.querySelector('.timeline-mode-switch')).not.toBeNull();
+    expect(container.querySelectorAll('.timeline-mode-switch__seg').length).toBe(2);
+    expect(container.querySelector('.timeline-mode-label')).toBeNull();
+    cleanup();
   });
 
-  // ── Button callback tests (use custom spy callbacks) ──
+  // ── No old layout remnants ──
 
-  it('Start Recording button invokes onStartRecordingNow callback', () => {
+  it('no state uses old row1/row2 layout', () => {
+    for (const mode of ['off', 'ready', 'active'] as const) {
+      act(() => { installSubsystem(mode); });
+      const { container } = render(<TimelineBar />);
+      expect(container.querySelector('.timeline-row1')).toBeNull();
+      expect(container.querySelector('.timeline-row2')).toBeNull();
+      cleanup();
+    }
+  });
+
+  // ── Thick track across all modes ──
+
+  it('all states use thick track (timeline-track--thick)', () => {
+    // Off
+    act(() => { installSubsystem('off'); });
+    let { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-track--thick')).not.toBeNull();
+    cleanup();
+
+    // Ready
+    act(() => { installSubsystem('ready'); });
+    ({ container } = render(<TimelineBar />));
+    expect(container.querySelector('.timeline-track--thick')).not.toBeNull();
+    cleanup();
+
+    // Active/live
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    ({ container } = render(<TimelineBar />));
+    expect(container.querySelector('.timeline-track--thick')).not.toBeNull();
+    cleanup();
+
+    // Active/review
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'review', currentTimePs: 100, reviewTimePs: 100,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: true, canRestart: false, restartTargetPs: null,
+      });
+    });
+    ({ container } = render(<TimelineBar />));
+    expect(container.querySelector('.timeline-track--thick')).not.toBeNull();
+    cleanup();
+  });
+
+  it('ready state has no helper text — label is sufficient', () => {
+    act(() => { installSubsystem('ready'); });
+    const { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-helper')).toBeNull();
+    expect(container.querySelector('.timeline-mode-label__text')?.textContent).toBe('Ready');
+  });
+
+  // ── Layout contract: time in center, mode switch in left ──
+
+  it('all modes render invariant lane skeleton: time + overlay-zone + track + action-zone', () => {
+    for (const mode of ['off', 'ready', 'active'] as const) {
+      act(() => { installSubsystem(mode); });
+      if (mode === 'active') {
+        act(() => {
+          useAppStore.getState().updateTimelineState({
+            mode: 'live', currentTimePs: 100, reviewTimePs: null,
+            rangePs: { start: 0, end: 200 },
+            canReturnToLive: false, canRestart: false, restartTargetPs: null,
+          });
+        });
+      }
+      const { container } = render(<TimelineBar />);
+      const lane = container.querySelector('.timeline-shell__center')!;
+      const rail = container.querySelector('.timeline-shell__left')!;
+      // Mode rail has content (label or switch)
+      expect(rail.children.length).toBeGreaterThan(0);
+      // Invariant lane skeleton
+      expect(lane.querySelector('.timeline-time')).not.toBeNull();
+      expect(lane.querySelector('.timeline-track-zone')).not.toBeNull();
+      expect(lane.querySelector('.timeline-overlay-zone')).not.toBeNull();
+      expect(lane.querySelector('.timeline-track--thick')).not.toBeNull();
+      expect(lane.querySelector('.timeline-action-zone')).not.toBeNull();
+      cleanup();
+    }
+  });
+
+  it('lane structure is identical for short and long time values', () => {
+    // Short time (3.0 ps)
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 3, reviewTimePs: null,
+        rangePs: { start: 0, end: 100 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container: c1 } = render(<TimelineBar />);
+    const lane1 = c1.querySelector('.timeline-shell__center')!;
+    const children1 = lane1.children.length;
+    cleanup();
+
+    // Long time (12345.67 ps → ns range)
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 12345.67, reviewTimePs: null,
+        rangePs: { start: 0, end: 100000 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container: c2 } = render(<TimelineBar />);
+    const lane2 = c2.querySelector('.timeline-shell__center')!;
+    // Same number of grid children regardless of time string length
+    expect(lane2.children.length).toBe(children1);
+    // Both have the same structural elements
+    expect(lane2.querySelector('.timeline-time')).not.toBeNull();
+    expect(lane2.querySelector('.timeline-track-zone')).not.toBeNull();
+    expect(lane2.querySelector('.timeline-action-zone')).not.toBeNull();
+    cleanup();
+  });
+
+  // ── Restart anchor ──
+
+  it('restart anchor absent when canRestart is false', () => {
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'review', currentTimePs: 500, reviewTimePs: 500,
+        rangePs: { start: 0, end: 1000 },
+        canReturnToLive: true, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-restart-anchor')).toBeNull();
+  });
+
+  it('restart anchor clamps to safe inset at range start (0% progress)', () => {
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'review', currentTimePs: 0, reviewTimePs: 0,
+        rangePs: { start: 0, end: 1000 },
+        canReturnToLive: true, canRestart: true, restartTargetPs: 0,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    const anchor = container.querySelector('.timeline-restart-anchor') as HTMLElement;
+    expect(anchor).not.toBeNull();
+    // Clamped to 5%, not 0%
+    expect(anchor.style.left).toBe('5%');
+  });
+
+  it('restart anchor clamps to safe inset at range end (100% progress)', () => {
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'review', currentTimePs: 1000, reviewTimePs: 1000,
+        rangePs: { start: 0, end: 1000 },
+        canReturnToLive: true, canRestart: true, restartTargetPs: 1000,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    const anchor = container.querySelector('.timeline-restart-anchor') as HTMLElement;
+    expect(anchor).not.toBeNull();
+    // Clamped to 95%, not 100%
+    expect(anchor.style.left).toBe('95%');
+  });
+
+  // ── Bidirectional mode switch ──
+
+  it('clicking Review in live mode calls onEnterReview', () => {
+    const onEnterReview = vi.fn();
+    act(() => {
+      installSubsystemWithCallbacks('active', { onEnterReview });
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 500, reviewTimePs: null,
+        rangePs: { start: 0, end: 1000 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    const segs = container.querySelectorAll('.timeline-mode-switch__seg');
+    const reviewSeg = segs[1] as HTMLButtonElement;
+    expect(reviewSeg.textContent).toBe('Review');
+    expect(reviewSeg.disabled).toBe(false);
+    act(() => { reviewSeg.click(); });
+    expect(onEnterReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('clicking Simulation in review mode calls onReturnToLive', () => {
+    const onReturnToLive = vi.fn();
+    act(() => {
+      installSubsystemWithCallbacks('active', { onReturnToLive });
+      useAppStore.getState().updateTimelineState({
+        mode: 'review', currentTimePs: 500, reviewTimePs: 500,
+        rangePs: { start: 0, end: 1000 },
+        canReturnToLive: true, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    const segs = container.querySelectorAll('.timeline-mode-switch__seg');
+    const simSeg = segs[0] as HTMLButtonElement;
+    expect(simSeg.textContent).toBe('Simulation');
+    expect(simSeg.disabled).toBe(false);
+    act(() => { simSeg.click(); });
+    expect(onReturnToLive).toHaveBeenCalledTimes(1);
+  });
+
+  it('Review segment disabled in live when no recorded range', () => {
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 0, reviewTimePs: null,
+        rangePs: null,
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    const segs = container.querySelectorAll('.timeline-mode-switch__seg');
+    expect((segs[1] as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  // ── Callback tests ──
+
+  it('Start Recording button invokes onStartRecordingNow', () => {
     const onStart = vi.fn();
     act(() => { installSubsystemWithCallbacks('off', { onStartRecordingNow: onStart }); });
     const { container } = render(<TimelineBar />);
-    const startBtn = Array.from(container.querySelectorAll('.timeline-action'))
-      .find(b => b.textContent === 'Start Recording') as HTMLButtonElement;
-    expect(startBtn).not.toBeUndefined();
+    const startBtn = container.querySelector('.timeline-action') as HTMLButtonElement;
     act(() => { startBtn.click(); });
     expect(onStart).toHaveBeenCalledTimes(1);
   });
 
-  it('Stop & Clear button invokes onTurnRecordingOff callback', () => {
+  it('clear icon always opens confirmation dialog before destructive action', () => {
     const onTurnOff = vi.fn();
     act(() => {
       installSubsystemWithCallbacks('active', { onTurnRecordingOff: onTurnOff });
@@ -170,261 +401,138 @@ describe('TimelineBar lifecycle', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    const stopBtn = Array.from(container.querySelectorAll('.timeline-action'))
-      .find(b => b.textContent === 'Stop & Clear') as HTMLButtonElement;
-    expect(stopBtn).not.toBeUndefined();
-    act(() => { stopBtn.click(); });
+    const clearBtn = container.querySelector('.timeline-clear-trigger') as HTMLButtonElement;
+    act(() => { clearBtn.click(); });
+    // Should NOT fire immediately — confirmation dialog opens first
+    expect(onTurnOff).not.toHaveBeenCalled();
+    // Dialog should be visible
+    expect(document.querySelector('.timeline-clear-dialog')).not.toBeNull();
+    expect(document.querySelector('.timeline-clear-backdrop')).not.toBeNull();
+    // Confirm fires the destructive action
+    const confirmBtn = document.querySelector('.timeline-clear-dialog__confirm') as HTMLButtonElement;
+    act(() => { confirmBtn.click(); });
     expect(onTurnOff).toHaveBeenCalledTimes(1);
   });
 
-  // ── Startup sequence (atomic install) ──
-
-  it('startup: no render before installed, ready immediately after installAndEnable', () => {
-    const { container, rerender } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-bar')).toBeNull();
-
-    act(() => { installSubsystem('ready'); });
-    rerender(<TimelineBar />);
-    expect(container.querySelector('.timeline-badge--ready')).not.toBeNull();
-    expect(container.querySelector('.timeline-time')?.textContent).toBe('0.0 fs');
-    expect(container.querySelector('.timeline-badge--off')).toBeNull();
-  });
-
-  // ── UI state transition tests (callback mutates store, bar re-renders) ──
-
-  it('Start Recording click transitions bar from off to active', () => {
+  it('clear confirmation dialog Cancel does not invoke destructive action', () => {
+    const onTurnOff = vi.fn();
     act(() => {
-      installSubsystemWithCallbacks('off', {
-        onStartRecordingNow: () => { useAppStore.getState().setTimelineRecordingMode('active'); },
-      });
-    });
-    const { container, rerender } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-badge--off')).not.toBeNull();
-
-    const startBtn = Array.from(container.querySelectorAll('.timeline-action'))
-      .find(b => b.textContent === 'Start Recording') as HTMLButtonElement;
-    act(() => { startBtn.click(); });
-    rerender(<TimelineBar />);
-    expect(container.querySelector('.timeline-badge--live')).not.toBeNull();
-  });
-
-  it('Stop & Clear click transitions bar from active to off', () => {
-    act(() => {
-      installSubsystemWithCallbacks('active', {
-        onTurnRecordingOff: () => {
-          useAppStore.getState().setTimelineRecordingMode('off');
-          useAppStore.getState().updateTimelineState({
-            mode: 'live', currentTimePs: 0, reviewTimePs: null,
-            rangePs: null, canReturnToLive: false, canRestart: false, restartTargetPs: null,
-          });
-        },
-      });
+      installSubsystemWithCallbacks('active', { onTurnRecordingOff: onTurnOff });
       useAppStore.getState().updateTimelineState({
         mode: 'live', currentTimePs: 100, reviewTimePs: null,
         rangePs: { start: 0, end: 200 },
         canReturnToLive: false, canRestart: false, restartTargetPs: null,
       });
     });
-    const { container, rerender } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-badge--live')).not.toBeNull();
-
-    const stopBtn = Array.from(container.querySelectorAll('.timeline-action'))
-      .find(b => b.textContent === 'Stop & Clear') as HTMLButtonElement;
-    act(() => { stopBtn.click(); });
-    rerender(<TimelineBar />);
-    expect(container.querySelector('.timeline-badge--off')).not.toBeNull();
-    expect(container.querySelector('.timeline-track--disabled')).not.toBeNull();
+    const { container } = render(<TimelineBar />);
+    act(() => { (container.querySelector('.timeline-clear-trigger') as HTMLButtonElement).click(); });
+    // Click Cancel
+    const cancelBtn = document.querySelector('.timeline-clear-dialog__cancel') as HTMLButtonElement;
+    act(() => { cancelBtn.click(); });
+    expect(onTurnOff).not.toHaveBeenCalled();
+    // Dialog should be dismissed
+    expect(document.querySelector('.timeline-clear-dialog')).toBeNull();
   });
 
-  // ── Grid lane structure ──
+  // ── Mode transitions ──
 
-  it('review mode has 2-row layout: row1 (badge+time+track) and row2 (meta+actions)', () => {
+  it('renders off, ready, and active states correctly on store mode changes', () => {
+    act(() => { installSubsystem('off'); });
+    const { container, rerender } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-mode-label__text')?.textContent).toBe('History Off');
+
+    act(() => { useAppStore.getState().setTimelineRecordingMode('ready'); });
+    rerender(<TimelineBar />);
+    expect(container.querySelector('.timeline-mode-label__text')?.textContent).toBe('Ready');
+
+    act(() => {
+      useAppStore.getState().setTimelineRecordingMode('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 0.002, reviewTimePs: null,
+        rangePs: { start: 0.002, end: 0.002 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    rerender(<TimelineBar />);
+    expect(container.querySelector('.timeline-mode-switch__seg--active')?.textContent).toBe('Simulation');
+  });
+
+  it('startup: no render before installed, ready immediately after installAndEnable', () => {
+    const { container, rerender } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-shell')).toBeNull();
+
+    act(() => { installSubsystem('ready'); });
+    rerender(<TimelineBar />);
+    expect(container.querySelector('.timeline-mode-label__text')?.textContent).toBe('Ready');
+  });
+
+  // ── Accessibility ──
+
+  it('review mode Simulation segment has accessible return label', () => {
     act(() => {
       installSubsystem('active');
       useAppStore.getState().updateTimelineState({
         mode: 'review', currentTimePs: 500, reviewTimePs: 500,
         rangePs: { start: 0, end: 1000 },
-        canReturnToLive: true, canRestart: true, restartTargetPs: 400,
+        canReturnToLive: true, canRestart: true, restartTargetPs: 500,
       });
     });
     const { container } = render(<TimelineBar />);
-    const bar = container.querySelector('.timeline-bar')!;
-    // Row 1: grid with badge + time + track (independent of row 2 sizing)
-    const row1 = bar.querySelector('.timeline-row1')!;
-    expect(row1).not.toBeNull();
-    expect(row1.querySelector('.timeline-badge')).not.toBeNull();
-    expect(row1.querySelector('.timeline-time')).not.toBeNull();
-    expect(row1.querySelector('.timeline-track')).not.toBeNull();
-    // Row 2: flex with meta + actions (variable width, doesn't affect track)
-    const row2 = bar.querySelector('.timeline-row2')!;
-    expect(row2).not.toBeNull();
-    expect(row2.querySelector('.timeline-lane-meta')).not.toBeNull();
-    expect(row2.querySelector('.timeline-lane-actions')).not.toBeNull();
-    expect(row2.querySelector('.timeline-lane-meta .timeline-restart-target')?.textContent).toBe('Restart at 400.0 ps');
+    const simSeg = container.querySelectorAll('.timeline-mode-switch__seg')[0];
+    expect(simSeg?.getAttribute('aria-label')).toBe('Back to simulation');
   });
 
-  // ── Tooltip hint tests ──
-
-  describe('TimelineActionHint tooltips', () => {
-    beforeEach(() => {
-      vi.useFakeTimers();
-    });
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it('Start Recording shows hint on hover after delay', () => {
-      act(() => { installSubsystem('off'); });
-      const { container } = render(<TimelineBar />);
-      const anchor = container.querySelector('.timeline-hint-anchor')!;
-      act(() => { fireEvent.mouseEnter(anchor); });
-      // Not visible before delay
-      expect(container.querySelector('.timeline-hint--visible')).toBeNull();
-      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
-      expect(container.querySelector('.timeline-hint--visible')).not.toBeNull();
-      expect(container.querySelector('.timeline-hint--visible')?.textContent).toContain('Start saving timeline history now.');
-    });
-
-    it('hint hides on mouse leave', () => {
-      act(() => { installSubsystem('off'); });
-      const { container } = render(<TimelineBar />);
-      const anchor = container.querySelector('.timeline-hint-anchor')!;
-      act(() => { fireEvent.mouseEnter(anchor); });
-      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
-      expect(container.querySelector('.timeline-hint--visible')).not.toBeNull();
-      act(() => { fireEvent.mouseLeave(anchor); });
-      expect(container.querySelector('.timeline-hint--visible')).toBeNull();
-    });
-
-    it('hint appears on focus and hides on blur', () => {
-      act(() => { installSubsystem('off'); });
-      const { container } = render(<TimelineBar />);
-      const anchor = container.querySelector('.timeline-hint-anchor')!;
-      act(() => { fireEvent.focus(anchor); });
-      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
-      expect(container.querySelector('.timeline-hint--visible')).not.toBeNull();
-      act(() => { fireEvent.blur(anchor); });
-      expect(container.querySelector('.timeline-hint--visible')).toBeNull();
-    });
-
-    it('Stop & Clear shows destructive hint on hover', () => {
-      act(() => { installSubsystem('ready'); });
-      const { container } = render(<TimelineBar />);
-      const anchor = container.querySelector('.timeline-hint-anchor')!;
-      act(() => { fireEvent.mouseEnter(anchor); });
-      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
-      expect(container.querySelector('.timeline-hint--visible')?.textContent).toContain('Stop recording and erase all saved history.');
-    });
-
-    it('Live shows review-mode hint', () => {
-      act(() => {
-        installSubsystem('active');
-        useAppStore.getState().updateTimelineState({
-          mode: 'review', currentTimePs: 500, reviewTimePs: 500,
-          rangePs: { start: 0, end: 1000 },
-          canReturnToLive: true, canRestart: true, restartTargetPs: 500,
-        });
+  it('restart anchor has accessible label with time', () => {
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'review', currentTimePs: 500, reviewTimePs: 500,
+        rangePs: { start: 0, end: 1000 },
+        canReturnToLive: true, canRestart: true, restartTargetPs: 500,
       });
-      const { container } = render(<TimelineBar />);
-      const anchors = container.querySelectorAll('.timeline-hint-anchor');
-      // First anchor in review: Live button
-      act(() => { fireEvent.mouseEnter(anchors[0]); });
-      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
-      expect(anchors[0].querySelector('.timeline-hint--visible')?.textContent).toContain('Jump back to the current simulation.');
     });
+    const { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-restart-anchor')?.getAttribute('aria-label')).toContain('Restart simulation at 500.0 ps');
+  });
 
-    it('Restart shows enabled hint when canRestart is true', () => {
+  // ── Time formatting contract ──
+
+  it('formatTime renders correct units across all ranges', () => {
+    // Each entry: [inputPs, expectedOutput]
+    // Width-fit is enforced by --tl-time-width in CSS; this test protects formatting policy.
+    const cases: [number, string][] = [
+      [0.0001, '0.1 fs'],    // sub-fs
+      [0.5, '500 fs'],       // fs range
+      [3.14, '3.14 ps'],     // ps range
+      [9999.9, '9999.9 ps'], // upper ps
+      [500000, '500.00 ns'], // ns range
+      [2000000, '2.00 µs'],  // µs range
+    ];
+    for (const [inputPs, expected] of cases) {
       act(() => {
         installSubsystem('active');
         useAppStore.getState().updateTimelineState({
-          mode: 'review', currentTimePs: 500, reviewTimePs: 500,
-          rangePs: { start: 0, end: 1000 },
-          canReturnToLive: true, canRestart: true, restartTargetPs: 500,
-        });
-      });
-      const { container } = render(<TimelineBar />);
-      const anchors = container.querySelectorAll('.timeline-hint-anchor');
-      // Second anchor: Restart button
-      act(() => { fireEvent.mouseEnter(anchors[1]); });
-      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
-      expect(anchors[1].querySelector('.timeline-hint--visible')?.textContent).toContain('Restart the simulation from this saved point.');
-    });
-
-    it('Restart shows disabled hint when canRestart is false', () => {
-      act(() => {
-        installSubsystem('active');
-        useAppStore.getState().updateTimelineState({
-          mode: 'review', currentTimePs: 500, reviewTimePs: 500,
-          rangePs: { start: 0, end: 1000 },
-          canReturnToLive: true, canRestart: false, restartTargetPs: null,
-        });
-      });
-      const { container } = render(<TimelineBar />);
-      const anchors = container.querySelectorAll('.timeline-hint-anchor');
-      // Second anchor: Restart button (disabled)
-      act(() => { fireEvent.mouseEnter(anchors[1]); });
-      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
-      expect(anchors[1].querySelector('.timeline-hint--visible')?.textContent).toContain('No restart point is available here.');
-    });
-
-    it('disabled Restart wrapper is keyboard-focusable with accessible name', () => {
-      act(() => {
-        installSubsystem('active');
-        useAppStore.getState().updateTimelineState({
-          mode: 'review', currentTimePs: 500, reviewTimePs: 500,
-          rangePs: { start: 0, end: 1000 },
-          canReturnToLive: true, canRestart: false, restartTargetPs: null,
-        });
-      });
-      const { container } = render(<TimelineBar />);
-      const anchors = container.querySelectorAll('.timeline-hint-anchor');
-      // Restart anchor (second) should have tabIndex=0 when button is disabled
-      expect(anchors[1].getAttribute('tabindex')).toBe('0');
-      // Should have aria-label so screen readers announce the control name
-      expect(anchors[1].getAttribute('aria-label')).toBe('Restart');
-      expect(anchors[1].getAttribute('aria-disabled')).toBe('true');
-      // Focus the wrapper and verify hint appears
-      act(() => { fireEvent.focus(anchors[1]); });
-      act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
-      expect(anchors[1].querySelector('.timeline-hint--visible')?.textContent).toContain('No restart point is available here.');
-    });
-
-    it('enabled Restart wrapper does not have tabIndex', () => {
-      act(() => {
-        installSubsystem('active');
-        useAppStore.getState().updateTimelineState({
-          mode: 'review', currentTimePs: 500, reviewTimePs: 500,
-          rangePs: { start: 0, end: 1000 },
-          canReturnToLive: true, canRestart: true, restartTargetPs: 500,
-        });
-      });
-      const { container } = render(<TimelineBar />);
-      const anchors = container.querySelectorAll('.timeline-hint-anchor');
-      // Restart anchor (second) should NOT have tabIndex when button is enabled
-      expect(anchors[1].hasAttribute('tabindex')).toBe(false);
-    });
-
-    it('Stop & Clear tooltip uses top-end placement class in ready state', () => {
-      act(() => { installSubsystem('ready'); });
-      const { container } = render(<TimelineBar />);
-      const anchor = container.querySelector('.timeline-hint-anchor')!;
-      const hint = anchor.querySelector('.timeline-hint')!;
-      expect(hint.classList.contains('timeline-hint--top-end')).toBe(true);
-    });
-
-    it('Stop & Clear tooltip uses top-end placement class in active state', () => {
-      act(() => {
-        installSubsystem('active');
-        useAppStore.getState().updateTimelineState({
-          mode: 'live', currentTimePs: 100, reviewTimePs: null,
-          rangePs: { start: 0, end: 200 },
+          mode: 'live', currentTimePs: inputPs, reviewTimePs: null,
+          rangePs: { start: 0, end: inputPs + 1 },
           canReturnToLive: false, canRestart: false, restartTargetPs: null,
         });
       });
       const { container } = render(<TimelineBar />);
-      const anchors = container.querySelectorAll('.timeline-hint-anchor');
-      const lastHint = anchors[anchors.length - 1].querySelector('.timeline-hint')!;
-      expect(lastHint.classList.contains('timeline-hint--top-end')).toBe(true);
+      expect(container.querySelector('.timeline-time')?.textContent).toBe(expected);
+      cleanup();
+    }
+  });
+
+  it('clear trigger has accessible label', () => {
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
     });
+    const { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-clear-trigger')?.getAttribute('aria-label')).toBe('Stop recording and clear history');
   });
 });

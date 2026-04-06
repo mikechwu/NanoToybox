@@ -817,18 +817,11 @@ fieldset.segmented {
 }
 
 /* ── Timeline bar (inside dock-region, normal flow above dock-bar) ── */
-/* ── Timeline bar: 2-row CSS grid ──
-   Row 1: badge | time | track  — track width is stable across all modes
-   Row 2: meta  | meta | actions — actions never compete with track for space
-   The track column always gets minmax(80px, 1fr) regardless of how many
-   buttons appear in the actions area. */
-/* Row 1 is a 3-column grid (badge | time | track) with all fixed or 1fr columns.
-   Row 2 is a plain flex row (meta + actions) OUTSIDE the grid, so its variable-
-   width buttons never affect track width. This is the only way to guarantee
-   the track column is identical across off/ready/active/review states. */
+/* ── Timeline bar ──
+   Unified timeline shell — all states (off, ready, live, review) share one flex row.
+   Slots: left (status) | time | center (track) | right (action).
+   Height, track position, and action alignment stay stable across mode transitions. */
 .timeline-bar {
-  display: flex; flex-direction: column;
-  padding: 2px var(--space-md) 4px;
   font-family: var(--font-family);
   font-size: var(--font-xs);
   color: var(--color-text-secondary);
@@ -836,39 +829,109 @@ fieldset.segmented {
   user-select: none;
 }
 .timeline-bar + .dock-bar { border-top: none; }
-.timeline-row1 {
-  display: grid; align-items: center; gap: var(--space-sm);
-  grid-template-columns: 80px 60px 1fr;
-  height: 28px;
+/* ── Timeline layout contract ──
+   All timeline dimensions are centralized here. The track width is invariant
+   because every column is fixed or 1fr — no auto-sizing anywhere.
+   Rail = mode switch. Lane = time + track + action. */
+.timeline-bar {
+  --tl-rail-width: 96px;
+  --tl-time-width: 56px;
+  --tl-action-width: 32px;
+  --tl-shell-height: 44px;
+  --tl-mode-height: 36px;
+  min-height: 64px;
+  position: relative;
+  display: flex; flex-direction: column; justify-content: flex-end;
 }
-.timeline-row2 {
-  display: flex; align-items: center; gap: var(--space-sm);
-  min-height: 18px;
+.timeline-shell {
+  display: grid;
+  grid-template-columns: var(--tl-rail-width) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 6px var(--space-md);
+  height: var(--tl-shell-height);
 }
-.timeline-lane-meta { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.timeline-lane-actions { flex: 0 0 auto; }
-.timeline-badge {
-  display: inline-block;
-  text-align: center;
-  padding: 2px 8px; border-radius: 4px;
-  font-size: 10px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.5px;
+/* Rail stretches its child (label or switch) to fill the full column width */
+.timeline-shell__left {
+  display: flex; align-items: center;
+  min-width: 0;
 }
-.timeline-badge--live {
-  background: rgba(80, 200, 80, 0.15); color: var(--color-accent-text);
+.timeline-shell__left > * { width: 100%; }
+/* Timeline lane: time (fixed) | track (1fr primary) | action (fixed).
+   All three columns are fixed or 1fr so the track width never changes. */
+.timeline-shell__center {
+  display: grid;
+  grid-template-columns: var(--tl-time-width) minmax(0, 1fr) var(--tl-action-width);
+  align-items: center;
+  column-gap: var(--space-md);
+  min-width: 0;
 }
-.timeline-badge--review {
-  background: rgba(255, 180, 60, 0.15); color: var(--color-text);
+@media (max-width: 599px) {
+  .timeline-bar {
+    --tl-rail-width: 84px;
+    --tl-time-width: 48px;
+    --tl-shell-height: 38px;
+    --tl-mode-height: 32px;
+    min-height: 56px;
+  }
 }
-.timeline-badge--off {
-  background: var(--color-border); color: var(--color-text-secondary);
+/* ── Timeline mode rail ──
+   Off/ready: simple label. Live/review: 2-segment vertical switch.
+   Both fill the same rail width; only internal presentation varies. */
+.timeline-mode-label {
+  display: flex; align-items: center; justify-content: center;
+  height: var(--tl-mode-height);
 }
-.timeline-badge--ready {
-  background: rgba(80, 160, 255, 0.15); color: var(--color-accent-text);
+.timeline-mode-label__text {
+  font-size: var(--font-xs); font-family: var(--font-family); font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase; letter-spacing: 0.3px;
 }
+/* Active-state segmented switch (live/review only) */
+.timeline-mode-switch {
+  display: flex; flex-direction: column;
+  background: var(--color-btn);
+  border-radius: var(--radius-sm);
+  padding: 1px;
+  position: relative;
+  min-width: 0;
+  height: var(--tl-mode-height);
+}
+.timeline-mode-switch::before {
+  content: '';
+  position: absolute;
+  left: 1px; right: 1px; top: 1px;
+  height: calc((100% - 2px) / 2);
+  background: var(--color-surface-active);
+  border-radius: calc(var(--radius-sm) - 1px);
+  transform: translateY(calc(var(--tms-active, 0) * 100%));
+  transition: transform var(--duration-normal) var(--ease-spring);
+  pointer-events: none;
+  z-index: 1;
+}
+.timeline-mode-switch__seg {
+  flex: 1 1 0%;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 4px;
+  font-size: var(--font-xs); font-family: var(--font-family); font-weight: 500;
+  color: var(--color-text-secondary);
+  cursor: pointer; z-index: 2;
+  border: none; background: none;
+  white-space: nowrap; min-height: 0;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  transition: color var(--duration-fast);
+}
+.timeline-mode-switch__seg--active { color: var(--color-text); font-weight: 600; }
+.timeline-mode-switch__seg:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
+.timeline-mode-switch__seg:not(:disabled):hover { color: var(--color-text); }
 .timeline-time {
   font-variant-numeric: tabular-nums;
+  font-size: var(--font-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
   text-align: right;
+  overflow: hidden;
 }
 .timeline-track {
   position: relative;
@@ -898,14 +961,8 @@ fieldset.segmented {
   transition: transform 0.1s ease;
 }
 .timeline-track:active .timeline-thumb { transform: translate(-50%, -50%) scale(1.2); }
-.timeline-actions {
-  display: flex; align-items: center; gap: 4px;
-  justify-content: flex-end;
-}
-.timeline-restart-target {
-  font-variant-numeric: tabular-nums;
-  font-size: 10px; opacity: 0.7;
-}
+/* .timeline-actions removed — unified shell handles action placement */
+/* .timeline-restart-target removed — review redesign uses .timeline-restart-anchor */
 .timeline-action {
   padding: 4px 10px; border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
@@ -916,28 +973,122 @@ fieldset.segmented {
 }
 .timeline-action:disabled { opacity: 0.45; cursor: default; pointer-events: none; }
 .timeline-action:hover { background: var(--color-border); }
-.timeline-action--restart {
-  border-color: var(--color-accent-text);
-  color: var(--color-accent-text);
-}
+/* .timeline-action--restart removed — redesign uses .timeline-restart-anchor */
+.timeline-shell--disabled { opacity: 0.7; }
 .timeline-action--destructive {
   border-color: rgba(220, 80, 60, 0.5);
   color: rgba(220, 80, 60, 0.9);
 }
 .timeline-action--destructive:hover { background: rgba(220, 80, 60, 0.1); }
-.timeline-bar--disabled { opacity: 0.7; }
 .timeline-track--disabled { pointer-events: none; cursor: default; }
-.timeline-helper {
-  font-style: italic; font-size: var(--font-xs); opacity: 0.6;
+/* ── Track zone: overlay zone + track ──
+   Overlay zone is absolutely positioned above the track.
+   Track zone is the grid's 1fr primary region. */
+.timeline-track-zone {
+  position: relative;
+  min-width: 0;
 }
-/* Compact: narrower fixed columns on small screens */
-@media (max-width: 599px) {
-  .timeline-bar { --timeline-compact: 1; }
-  .timeline-row1 { grid-template-columns: 64px 50px 1fr; }
-  .timeline-row2 { flex-wrap: wrap; justify-content: center; }
+.timeline-overlay-zone {
+  position: absolute; bottom: 100%; left: 0; right: 0;
+  pointer-events: none;
 }
-/* ── Action hints — shared hover/focus tooltips (used by TimelineBar + CameraControls) ──
-   Class family .timeline-hint-* is retained as shared infrastructure despite the name. */
+.timeline-overlay-zone > * { pointer-events: auto; }
+.timeline-start-overlay {
+  position: absolute; bottom: 0; margin-bottom: 4px;
+  left: 50%; transform: translateX(-50%);
+}
+/* Action zone — grid column handles width (32px); center the icon */
+.timeline-action-zone {
+  display: flex; align-items: center; justify-content: center;
+}
+/* Restart hint-chip — contextual action above the scrub point.
+   Positioned inside the overlay zone. */
+.timeline-restart-anchor {
+  position: absolute; bottom: 0; margin-bottom: 6px;
+  transform: translateX(-50%);
+  padding: 5px 12px; border-radius: var(--radius-sm);
+  background: var(--color-btn); border: none;
+  color: var(--color-accent-text);
+  font-family: var(--font-family); font-size: var(--font-xs); font-weight: 500;
+  white-space: nowrap; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  min-height: 26px; display: flex; align-items: center;
+  box-shadow: none;
+}
+/* Transparent hit-area extension below the chip (covers the gap to the track) */
+.timeline-restart-anchor::before {
+  content: ''; position: absolute;
+  inset: -6px -8px -10px;
+  cursor: pointer;
+}
+/* Subtle pointer arrow */
+.timeline-restart-anchor::after {
+  content: ''; position: absolute; top: 100%; left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: var(--color-btn);
+}
+.timeline-restart-anchor:hover { background: var(--color-accent-soft); }
+/* Old review-return button removed — replaced by timeline mode switch */
+/* .timeline-time--review-left removed — time is in the left cluster */
+/* Review track — thicker and easier to drag. Width fills the track-zone parent. */
+.timeline-track--thick {
+  position: relative;
+  height: 10px; border-radius: 5px;
+  background: var(--color-border); cursor: pointer;
+}
+.timeline-track--thick::before {
+  content: ''; position: absolute; inset: -14px 0; cursor: pointer;
+}
+.timeline-track--thick .timeline-fill { border-radius: 5px; }
+.timeline-track--thick .timeline-thumb {
+  width: 18px; height: 18px;
+}
+.timeline-track--thick:active .timeline-thumb { transform: translate(-50%, -50%) scale(1.15); }
+/* Clear icon — compact destructive trigger */
+.timeline-clear-trigger {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+  background: none; border: 1px solid rgba(220, 80, 60, 0.4);
+  color: rgba(220, 80, 60, 0.8); cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.timeline-clear-trigger:hover {
+  background: rgba(220, 80, 60, 0.1); border-color: rgba(220, 80, 60, 0.8);
+}
+/* Mobile confirmation dialog + backdrop */
+.timeline-clear-backdrop {
+  position: fixed; inset: 0; z-index: 299;
+  background: rgba(0, 0, 0, 0.3);
+}
+.timeline-clear-dialog {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 300; padding: 20px 24px; border-radius: var(--radius-sm);
+  background: var(--panel-bg); border: 1px solid var(--color-border);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  text-align: center; max-width: 280px;
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+}
+.timeline-clear-dialog__title { font-weight: 600; font-size: var(--font-sm); margin: 0 0 8px; color: var(--color-text); }
+.timeline-clear-dialog__body { font-size: var(--font-xs); opacity: 0.7; margin: 0 0 16px; color: var(--color-text); }
+.timeline-clear-dialog__actions { display: flex; gap: 8px; justify-content: center; }
+.timeline-clear-dialog__cancel {
+  padding: 6px 16px; border-radius: var(--radius-sm);
+  background: none; border: 1px solid var(--color-border);
+  color: var(--color-text); font: inherit; cursor: pointer;
+}
+.timeline-clear-dialog__confirm {
+  padding: 6px 16px; border-radius: var(--radius-sm);
+  background: rgba(220, 80, 60, 0.15); border: 1px solid rgba(220, 80, 60, 0.5);
+  color: rgba(220, 80, 60, 0.9); font: inherit; font-weight: 600; cursor: pointer;
+}
+.timeline-clear-dialog__cancel:hover { background: var(--color-surface-hover); }
+.timeline-clear-dialog__confirm:hover { background: rgba(220, 80, 60, 0.25); }
+/* ── Action hints — shared hover/focus tooltip infrastructure ──
+   Used by DockBar, StructureChooser, ReviewLockedControl, Segmented, and other
+   components via ActionHint.tsx. The .timeline-hint-* class prefix is historical;
+   TimelineBar no longer uses this infrastructure after the unified shell redesign. */
 .timeline-hint-anchor { position: relative; display: inline-flex; }
 .timeline-hint {
   position: absolute;

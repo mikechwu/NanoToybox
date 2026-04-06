@@ -231,6 +231,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
       useAppStore.getState().installTimelineUI({
         onScrub: (timePs: number) => coordinator.handleScrub(timePs),
         onReturnToLive: () => coordinator.returnToLive(),
+        onEnterReview: () => coordinator.enterReviewAtCurrentTime(),
         onRestartFromHere: () => { coordinator.restartFromHere(); },
         onStartRecordingNow: () => startRecordingNow(),
         onTurnRecordingOff: () => turnRecordingOff(),

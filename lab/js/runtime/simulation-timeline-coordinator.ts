@@ -45,6 +45,7 @@ export interface TimelineCoordinatorDeps {
 export interface TimelineCoordinator {
   handleScrub(timePs: number): void;
   enterReview(timePs: number): void;
+  enterReviewAtCurrentTime(): void;
   scrubTo(timePs: number): void;
   returnToLive(): void;
   restartFromHere(): Promise<void>;
@@ -170,9 +171,15 @@ export function createTimelineCoordinator(deps: TimelineCoordinatorDeps): Timeli
     }
   }
 
+  function enterReviewAtCurrentTime(): void {
+    const currentTimePs = deps.timeline.getState().currentTimePs;
+    enterReview(currentTimePs);
+  }
+
   return {
     handleScrub,
     enterReview,
+    enterReviewAtCurrentTime,
     scrubTo,
     returnToLive,
     restartFromHere,

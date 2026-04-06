@@ -422,3 +422,18 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Decision:** `computeHexGeometry()` derives ring radius and container size from swatch count, diameter, active scale, and minimum gap. All layout constants (`SWATCH_DIAMETER`, `ACTIVE_SCALE`, `RING_GAP`) live in one place. Adding/removing palette entries auto-adjusts geometry without editing CSS or position constants.
 
 **Rationale:** The previous fixed-size hex container (80px with 36% radius) only worked for exactly 6 presets at 20px. Any change to palette size, swatch size, or scale broke the layout silently. Deriving geometry from a formula guarantees non-overlapping swatches at any scale.
+
+## D54: Timeline Bar — Invariant 2-Column Layout with Vertical Mode Rail
+
+**Decision:** The timeline bar uses an invariant 2-column layout with a vertical mode rail. Track width is geometrically constant across all modes. Mode switching is secondary chrome; scrubbing is the primary interaction.
+
+**Rationale:** Earlier iterations restructured the timeline bar's layout when switching modes, causing visual jank and making the scrub track a moving target. A geometrically stable track — same width, same position in every mode — ensures the user's muscle memory for scrubbing is never disrupted. Mode switching is a less frequent action and belongs in a secondary vertical rail rather than competing for horizontal space with the scrub track.
+
+**Key design choices:**
+
+- **Off/Ready modes** use a simple label (no segmented chrome). The mode rail shows only text status, avoiding unnecessary interactive controls when the timeline is inactive.
+- **Live/Review modes** use a bidirectional vertical switch. The vertical orientation keeps the rail narrow and spatially distinct from the horizontal scrub track.
+- **All layout dimensions centralized as CSS variables.** Track width, rail width, gaps, and padding are defined once and referenced everywhere, eliminating magic numbers and making responsive adjustments a single-variable edit.
+- **Lane skeleton is identical in every mode** (time + overlay-zone + track + action-zone). The four zones always exist in the DOM regardless of mode; their contents change but their geometry does not.
+
+**Module split:** `TimelineBar.tsx` is the composition layer that assembles the bar from three focused helper modules. This keeps the top-level component declarative (layout + mode branching) while isolating scrub logic, mode-rail rendering, and track visualization into independently testable units.

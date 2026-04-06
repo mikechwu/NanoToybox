@@ -72,7 +72,7 @@ NanoToybox/
 │   │   │   ├── bonded-group-display-source.ts   # Display-source resolver: live physics or review historical topology
 │   │   │   ├── bonded-group-appearance-runtime.ts # Group-to-atom color translation + renderer sync (annotation model)
 │   │   │   ├── simulation-timeline.ts        # Ring buffers (review frames, restart frames, checkpoints), RestartState contract, frozen review range, truncation on restart
-│   │   │   ├── simulation-timeline-coordinator.ts # Orchestrates review/restart across physics, renderer, worker, store
+│   │   │   ├── simulation-timeline-coordinator.ts # Orchestrates review/restart across physics, renderer, worker, store; enterReviewAtCurrentTime()
 │   │   │   ├── timeline-context-capture.ts   # Capture/restore interaction and boundary state via public physics API
 │   │   │   ├── timeline-recording-policy.ts  # Arming policy (disarmed until first atom interaction)
 │   │   │   ├── timeline-recording-orchestrator.ts # Owns recording cadence, authority-aware capture from reconciled physics
@@ -108,8 +108,10 @@ NanoToybox/
 │   │   │   ├── ActionHint.tsx     # Shared hover/focus tooltip (supporting component)
 │   │   │   ├── ReviewLockedControl.tsx    # Review-lock wrapper (span-based, for dock/chooser controls)
 │   │   │   ├── ReviewLockedListItem.tsx   # Review-lock list item (li-native, for settings rows)
-│   │   │   ├── TimelineActionHint.tsx # Re-export of ActionHint for backwards compatibility
-│   │   │   └── TimelineBar.tsx       # Bottom timeline UI inside DockLayout with FeatureBoundary
+│   │   │   ├── TimelineBar.tsx       # Composition layer: 2-column shell (mode rail + timeline lane), imports from 3 helper modules
+│   │   │   ├── timeline-format.ts   # formatTime, getTimelineProgress, getRestartAnchorStyle
+│   │   │   ├── timeline-mode-switch.tsx # TimelineModeSwitch: label (off/ready) or bidirectional 2-segment switch (live/review)
+│   │   │   └── timeline-clear-dialog.tsx # TimelineClearDialog, useClearConfirm hook, ClearTrigger icon button
 │   │   ├── store/
 │   │   │   ├── app-store.ts      # Zustand store for UI state
 │   │   │   └── selectors/
@@ -203,7 +205,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 
 **Recording flow:** timeline-recording-policy arms after first atom interaction (drag/move/rotate/flick via interaction-dispatch) → timeline-recording-orchestrator captures from reconciled physics state (single authority) → simulation-timeline stores dense review frames + periodic restart frames / checkpoints.
 
-**Review flow:** simulation-timeline-coordinator enters review mode → renderer.updateReviewFrame (display-only, no physics mutation) → all scene input gated at input-bindings boundary → TimelineBar scrub drives reviewTimePs.
+**Review flow:** simulation-timeline-coordinator enters review mode (via `enterReviewAtCurrentTime()` from the mode switch, or `enterReview(timePs)` from scrub) → renderer.updateReviewFrame (display-only, no physics mutation) → all scene input gated at input-bindings boundary → TimelineBar scrub drives reviewTimePs.
 
 **Restart flow:** simulation-timeline-coordinator reads RestartState from nearest restart frame → restart-state-adapter applies state to physics → timeline-context-capture restores boundary snapshot via physics public API (`getBoundarySnapshot()` / `restoreBoundarySnapshot()`) → worker receives dedicated `restoreState` command (separate from `init`) → simulation-timeline truncates buffer at restart point.
 
@@ -218,6 +220,32 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 - Recording uses reconciled physics state as single authority
 - Timeline recording disarmed until first atom interaction (placement, pause, speed, and settings do not arm)
 - Scheduler timing derived live from engine `dtFs`, not cached constants
+
+### TimelineBar Layout
+
+`TimelineBar.tsx` is a composition layer that imports from three helper modules and renders one of three mode-specific sub-components (`TimelineBarOff`, `TimelineBarReady`, `TimelineBarActive`) based on `timelineRecordingMode`.
+
+**2-column shell** (`TimelineShell`):
+```
+┌──────────────┬──────────────────────────────────────────┐
+│  mode rail   │  time  │      track zone       │ action │
+│  (fixed      │ (fixed │  (1fr, with overlay   │ (fixed │
+│  --tl-rail-  │ --tl-  │   zone above track)   │ --tl-  │
+│  width)      │ time-  │                       │ action-│
+│              │ width) │                       │ width) │
+└──────────────┴──────────────────────────────────────────┘
+```
+CSS variables: `--tl-rail-width` (96px desktop, 84px mobile), `--tl-time-width` (56px desktop, 48px mobile), `--tl-action-width` (32px), `--tl-shell-height` (44px desktop, 38px mobile), `--tl-mode-height` (36px desktop, 32px mobile). Track width is invariant (1fr).
+
+**Helper modules:**
+- `timeline-format.ts` — `formatTime(ps)` (unit-adaptive: fs/ps/ns/us), `getTimelineProgress()` (clamped 0-1 ratio), `getRestartAnchorStyle()` (clamped left %). Width-fit enforced by `--tl-time-width`.
+- `timeline-mode-switch.tsx` — `TimelineModeSwitch` renders a simple label (`ModeLabel`) for off/ready, or a bidirectional 2-segment vertical switch (`ModeSwitch`) for live/review. In active states, both segments are clickable: live→review via `onEnterReview` (gated by `hasRange`), review→live via `onReturnToLive` (gated by `canReturnToLive`). The `onEnterReview` callback wires to `coordinator.enterReviewAtCurrentTime()`.
+- `timeline-clear-dialog.tsx` — `useClearConfirm` hook (open/request/cancel/confirm/reset), `TimelineClearDialog` (alertdialog with focus trap and Escape handling), `ClearTrigger` (close-icon button).
+
+**Mode-specific rendering:**
+- **Off:** "Start Recording" overlay button on the track, no action slot.
+- **Ready:** Empty overlay, `ClearTrigger` in action slot.
+- **Active (live/review):** Scrub-interactive track with fill+thumb, `ClearTrigger` in action slot, "Restart here" overlay anchor in review mode (positioned at restart target progress).
 
 ### Placement Solver
 
@@ -384,7 +412,7 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - **bonded-group-display-source.ts** — resolves bonded-group topology source: live physics components or review historical topology. Pure function, no side effects.
 - **bonded-group-appearance-runtime.ts** — translates group-level color edits into atom-level overrides via renderer `setAtomColorOverrides()`. Annotation model: colors persist across live/review modes. Maintains `groupColorIntents` map for topology-resilient intent propagation; `syncGroupIntents()` fills newly joined atoms without overwriting existing overrides.
 - **simulation-timeline.ts** — ring buffers for dense review frames, restart frames, and checkpoints; RestartState contract; frozen review range; truncation on restart
-- **simulation-timeline-coordinator.ts** — orchestrates review/restart across physics, renderer, worker, store
+- **simulation-timeline-coordinator.ts** — orchestrates review/restart across physics, renderer, worker, store; `enterReviewAtCurrentTime()` enables bidirectional mode switch from live→review
 - **timeline-context-capture.ts** — capture/restore interaction and boundary state via public physics API
 - **timeline-recording-policy.ts** — arming policy (disarmed until first atom interaction; placement, pause, speed, and settings do not arm)
 - **timeline-recording-orchestrator.ts** — owns recording cadence, authority-aware capture from reconciled physics state (single authority)
@@ -398,7 +426,7 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - **placement-camera-framing.ts** — pure camera-basis framing solver for placement preview: camera-space projection, adaptive target-shift search (5×5 grid + refinement), overflow deadband, visible-anchor filtering. No THREE/renderer/store imports.
 - **review-mode-action-hints.ts** — transient status hint for review-locked actions; uses `REVIEW_LOCK_STATUS` (fuller copy) via store `setStatusText` with auto-clear timer from `CONFIG.reviewModeUi.statusHintMs`
 
-**Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons, TimelineActionHint. Imperative controllers remain only for PlacementController and StatusController (hint-only).
+**Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons. **Timeline helper modules** (composed by TimelineBar): timeline-format.ts (time formatting + progress), timeline-mode-switch.tsx (mode rail widget), timeline-clear-dialog.tsx (clear confirmation dialog + trigger). Imperative controllers remain only for PlacementController and StatusController (hint-only).
 
 **Camera callbacks** registered by main.ts via `cameraCallbacks` in the store:
 - `onCenterObject()` — one-shot camera center
@@ -479,7 +507,7 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | Placement framing anchor | app/frame-runtime.ts (frozen at placement start) | Captured from visible scene atoms; cleared on placement exit |
 | Placement drag screen coords | placement.ts (`lastPointerScreen`) | Pointer/touch move events; consumed per-frame by `updateDragFromLatestPointer()` |
 | scheduler / effectsGate | app/frame-runtime.ts (per-frame) | — |
-| Timeline state (`mode`, `currentTimePs`, `reviewTimePs`, `rangePs`, etc.) | simulation-timeline-coordinator.ts (via store) | TimelineBar (scrub, restart), timeline-recording-orchestrator (range updates) |
+| Timeline state (`mode`, `currentTimePs`, `reviewTimePs`, `rangePs`, etc.) | simulation-timeline-coordinator.ts (via store) | TimelineBar (scrub, enterReview, returnToLive, restart), timeline-recording-orchestrator (range updates) |
 | Timeline recording arm state | timeline-recording-policy.ts | interaction-dispatch (first atom interaction: drag/move/rotate/flick) |
 | Review UI lock state | Derived by `selectIsReviewLocked()` from `timelineMode` | Components (visual lock), ui-bindings.ts (runtime guards) |
 | Bonded-group color overrides | app-store (`bondedGroupColorOverrides`) | bonded-group-appearance-runtime (applyGroupColor, clearGroupColor); `groupColorIntents` map propagated by `syncGroupIntents()` |

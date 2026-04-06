@@ -1,28 +1,58 @@
 /**
- * TimelineBar — bottom timeline UI for recording and reviewing simulation history.
+ * TimelineBar — composition layer for the timeline UI.
  *
- * Always renders when the subsystem is installed (timelineInstalled === true).
- * Layout: two rows stacked vertically.
- *   Row 1 (grid): badge | time | track — fixed columns, track width stable
- *   Row 2 (flex): meta + actions — independent of row 1 column sizing
+ * Layout contract (CSS variables defined on .timeline-bar):
+ *   --tl-rail-width   Mode rail width (96px desktop, 84px mobile)
+ *   --tl-time-width   Time column width (56px desktop, 48px mobile)
+ *   --tl-action-width Action column width (32px)
+ *   --tl-shell-height Shell row height (44px desktop, 38px mobile)
+ *   --tl-mode-height  Mode switch height (36px desktop, 32px mobile)
  *
- * This separation guarantees the scrub track width is identical across
- * off/ready/active/review states regardless of how many action buttons
- * are rendered.
+ * The track width is invariant because every grid column is fixed or 1fr.
+ * Overlays (Start Recording, Restart here) float in a reserved zone above
+ * the track. Empty spacers preserve the grid skeleton in modes that don't
+ * use overlays or actions.
+ *
+ * Module split:
+ *   timeline-format.ts        — formatTime, getTimelineProgress, getRestartAnchorStyle
+ *   timeline-mode-switch.tsx  — TimelineModeSwitch, buildModeSlots, ModeSegment
+ *   timeline-clear-dialog.tsx — TimelineClearDialog, useClearConfirm, ClearTrigger
  */
 
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useRef, useEffect } from 'react';
 import { useAppStore } from '../store/app-store';
-import { TimelineActionHint } from './TimelineActionHint';
+import { formatTime, getTimelineProgress, getRestartAnchorStyle } from './timeline-format';
+import { TimelineModeSwitch } from './timeline-mode-switch';
+import { TimelineClearDialog, useClearConfirm, ClearTrigger } from './timeline-clear-dialog';
 
-function formatTime(ps: number): string {
-  if (ps < 0.001) return `${(ps * 1000).toFixed(1)} fs`;
-  if (ps < 1) return `${(ps * 1000).toFixed(0)} fs`;
-  if (ps < 100) return `${ps.toFixed(2)} ps`;
-  if (ps < 10_000) return `${ps.toFixed(1)} ps`;
-  if (ps < 1_000_000) return `${(ps / 1000).toFixed(2)} ns`;
-  return `${(ps / 1_000_000).toFixed(2)} \u00b5s`;
+// ── Shared shell ──
+
+interface TimelineShellProps {
+  modeRail: React.ReactNode;
+  time: string;
+  overlay: React.ReactNode;
+  track: React.ReactNode;
+  action: React.ReactNode;
+  className?: string;
 }
+
+function TimelineShell({ modeRail, time, overlay, track, action, className = '' }: TimelineShellProps) {
+  return (
+    <div className={`timeline-bar timeline-shell ${className}`.trim()} role="region" aria-label="Simulation timeline">
+      <div className="timeline-shell__left">{modeRail}</div>
+      <div className="timeline-shell__center">
+        <span className="timeline-time">{time}</span>
+        <div className="timeline-track-zone">
+          <div className="timeline-overlay-zone">{overlay}</div>
+          {track}
+        </div>
+        <div className="timeline-action-zone">{action}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Top-level ──
 
 export function TimelineBar() {
   const installed = useAppStore((s) => s.timelineInstalled);
@@ -35,55 +65,42 @@ export function TimelineBar() {
   return <TimelineBarActive />;
 }
 
-/** Off state — "Start Recording" button. */
 function TimelineBarOff() {
   const callbacks = useAppStore((s) => s.timelineCallbacks);
   const handleStart = useCallback(() => { callbacks?.onStartRecordingNow(); }, [callbacks]);
 
   return (
-    <div className="timeline-bar timeline-bar--disabled" role="region" aria-label="Simulation timeline">
-      <div className="timeline-row1">
-        <span className="timeline-badge timeline-badge--off">History Off</span>
-        <span className="timeline-time">0.0 fs</span>
-        <div className="timeline-track timeline-track--disabled" />
-      </div>
-      <div className="timeline-row2">
-        <span className="timeline-lane-meta" />
-        <div className="timeline-lane-actions timeline-actions">
-          <TimelineActionHint text="Start saving timeline history now.">
-            <button className="timeline-action" onClick={handleStart}>Start Recording</button>
-          </TimelineActionHint>
-        </div>
-      </div>
-    </div>
+    <TimelineShell
+      className="timeline-shell--disabled"
+      modeRail={<TimelineModeSwitch mode="off" />}
+      time="0.0 fs"
+      overlay={<button className="timeline-action timeline-start-overlay" onClick={handleStart}>Start Recording</button>}
+      track={<div className="timeline-track timeline-track--thick timeline-track--disabled" />}
+      action={<span />}
+    />
   );
 }
 
-/** Ready state — passive startup, waiting for first atom interaction. */
 function TimelineBarReady() {
   const callbacks = useAppStore((s) => s.timelineCallbacks);
   const handleTurnOff = useCallback(() => { callbacks?.onTurnRecordingOff(); }, [callbacks]);
+  const clear = useClearConfirm(handleTurnOff);
 
   return (
-    <div className="timeline-bar timeline-bar--disabled" role="region" aria-label="Simulation timeline">
-      <div className="timeline-row1">
-        <span className="timeline-badge timeline-badge--ready">Ready</span>
-        <span className="timeline-time">0.0 fs</span>
-        <div className="timeline-track timeline-track--disabled" />
-      </div>
-      <div className="timeline-row2">
-        <span className="timeline-lane-meta timeline-helper">Recording starts when you touch an atom</span>
-        <div className="timeline-lane-actions timeline-actions">
-          <TimelineActionHint text="Stop recording and erase all saved history." placement="top-end">
-            <button className="timeline-action timeline-action--destructive" onClick={handleTurnOff}>Stop &amp; Clear</button>
-          </TimelineActionHint>
-        </div>
-      </div>
-    </div>
+    <>
+      <TimelineShell
+        className="timeline-shell--disabled"
+        modeRail={<TimelineModeSwitch mode="ready" />}
+        time="0.0 fs"
+        overlay={<span />}
+        track={<div className="timeline-track timeline-track--thick timeline-track--disabled" />}
+        action={<ClearTrigger onClick={clear.request} />}
+      />
+      <TimelineClearDialog open={clear.open} onCancel={clear.cancel} onConfirm={clear.confirm} />
+    </>
   );
 }
 
-/** Active state — full scrubber with Recording/Review modes and action buttons. */
 function TimelineBarActive() {
   const mode = useAppStore((s) => s.timelineMode);
   const currentTimePs = useAppStore((s) => s.timelineCurrentTimePs);
@@ -96,12 +113,9 @@ function TimelineBarActive() {
   const trackRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
 
-  const rangeDuration = rangePs ? rangePs.end - rangePs.start : 0;
-  const progress = rangePs && rangeDuration > 0
-    ? Math.max(0, Math.min(1, (currentTimePs - rangePs.start) / rangeDuration))
-    : 0;
-
-  const hasRange = rangePs && rangeDuration > 0;
+  const progress = getTimelineProgress(rangePs, currentTimePs);
+  const restartProgress = getTimelineProgress(rangePs, restartTargetPs ?? 0);
+  const hasRange = rangePs != null && (rangePs.end - rangePs.start) > 0;
 
   const scrubFromEvent = useCallback((clientX: number) => {
     const track = trackRef.current;
@@ -124,60 +138,61 @@ function TimelineBarActive() {
     scrubFromEvent(e.clientX);
   }, [scrubFromEvent]);
 
-  const handlePointerUp = useCallback(() => {
-    isDragging.current = false;
-  }, []);
+  const handlePointerUp = useCallback(() => { isDragging.current = false; }, []);
 
   const handleReturnToLive = useCallback(() => { callbacks?.onReturnToLive(); }, [callbacks]);
+  const handleEnterReview = useCallback(() => { callbacks?.onEnterReview(); }, [callbacks]);
   const handleRestart = useCallback(() => { callbacks?.onRestartFromHere(); }, [callbacks]);
   const handleTurnOff = useCallback(() => { callbacks?.onTurnRecordingOff(); }, [callbacks]);
+  const clear = useClearConfirm(handleTurnOff);
 
   const isReview = mode === 'review';
-  const restartHint = canRestart
-    ? 'Restart the simulation from this saved point.'
-    : 'No restart point is available here.';
+
+  useEffect(() => { if (!isReview) clear.reset(); }, [isReview]);
+
+  const overlayContent = isReview && canRestart && restartTargetPs !== null ? (
+    <button
+      className="timeline-restart-anchor"
+      style={getRestartAnchorStyle(restartProgress)}
+      onClick={handleRestart}
+      aria-label={`Restart simulation at ${formatTime(restartTargetPs)}`}
+    >
+      Restart here
+    </button>
+  ) : <span />;
+
+  const trackContent = (
+    <div
+      className={`timeline-track timeline-track--thick${hasRange ? '' : ' timeline-track--disabled'}`}
+      ref={trackRef}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+    >
+      <div className="timeline-fill" style={{ width: `${progress * 100}%` }} />
+      {hasRange && <div className="timeline-thumb" style={{ left: `${progress * 100}%` }} />}
+    </div>
+  );
 
   return (
-    <div className="timeline-bar" role="region" aria-label="Simulation timeline">
-      <div className="timeline-row1">
-        <span className={`timeline-badge ${isReview ? 'timeline-badge--review' : 'timeline-badge--live'}`}>
-          {isReview ? 'Review' : 'Recording'}
-        </span>
-        <span className="timeline-time">{formatTime(currentTimePs)}</span>
-        <div
-          className={`timeline-track${hasRange ? '' : ' timeline-track--disabled'}`}
-          ref={trackRef}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
-        >
-          <div className="timeline-fill" style={{ width: `${progress * 100}%` }} />
-          {hasRange && <div className="timeline-thumb" style={{ left: `${progress * 100}%` }} />}
-        </div>
-      </div>
-      <div className="timeline-row2">
-        <span className="timeline-lane-meta">
-          {isReview && restartTargetPs !== null && (
-            <span className="timeline-restart-target">Restart at {formatTime(restartTargetPs)}</span>
-          )}
-        </span>
-        <div className="timeline-lane-actions timeline-actions">
-          {isReview && (
-            <>
-              <TimelineActionHint text="Jump back to the current simulation." focusableWhenDisabled={!canReturnToLive} focusLabel="Live">
-                <button className="timeline-action" onClick={handleReturnToLive} disabled={!canReturnToLive}>Live</button>
-              </TimelineActionHint>
-              <TimelineActionHint text={restartHint} focusableWhenDisabled={!canRestart} focusLabel="Restart">
-                <button className="timeline-action timeline-action--restart" onClick={handleRestart} disabled={!canRestart}>Restart</button>
-              </TimelineActionHint>
-            </>
-          )}
-          <TimelineActionHint text="Stop recording and erase all saved history." placement="top-end">
-            <button className="timeline-action timeline-action--destructive" onClick={handleTurnOff}>Stop &amp; Clear</button>
-          </TimelineActionHint>
-        </div>
-      </div>
-    </div>
+    <>
+      <TimelineShell
+        modeRail={
+          <TimelineModeSwitch
+            mode={isReview ? 'review' : 'live'}
+            canReturnToLive={canReturnToLive}
+            hasRange={hasRange}
+            onReturnToLive={handleReturnToLive}
+            onEnterReview={handleEnterReview}
+          />
+        }
+        time={formatTime(currentTimePs)}
+        overlay={overlayContent}
+        track={trackContent}
+        action={<ClearTrigger onClick={clear.request} />}
+      />
+      <TimelineClearDialog open={clear.open} onCancel={clear.cancel} onConfirm={clear.confirm} />
+    </>
   );
 }

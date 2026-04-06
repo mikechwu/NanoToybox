@@ -83,7 +83,7 @@ Browser                          Web Worker
 │      (teardown seq.    │
 │       and reset helpers)│
 │                        │
-│  runtime/ (26 modules):│
+│  runtime/ (32 modules):│
 │  ├── SceneRuntime     │
 │  ├── WorkerLifecycle  │
 │  ├── SnapshotReconc.  │
@@ -95,15 +95,18 @@ Browser                          Web Worker
 │  ├── AtomSource       │
 │  ├── FocusRuntime     │
 │  ├── Onboarding       │
-│  ├── BondedGroup×3    │  (portal popover for color editing,
+│  ├── BondedGroup×6    │  (portal popover for color editing,
 │  │                     │   group color intents → atom overrides)
-│  ├── Timeline×5       │
+│  ├── Timeline×6       │
 │  ├── RestartAdapter   │
 │  ├── ReconciledSteps  │
 │  ├── OrbitFollow      │
 │  ├── DragTargetRefr.  │
 │  ├── InteractionHi.   │
-│  └── PlacementSolver  │
+│  ├── ReviewModeHints  │
+│  ├── CameraTargetRt.  │
+│  ├── PlacementSolver  │
+│  └── PlacementFraming │
 └─────────────────────┘
 ```
 

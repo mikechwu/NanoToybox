@@ -37,7 +37,7 @@ npm run dev
 | Bonded clusters | Side panel showing live connected components, fixed at 250 px via `--panel-width` CSS custom property (compact #N labels + action columns; scrollbar space reserved with `scrollbar-gutter: stable`). Expanded by default. Header: "Bonded Clusters: N" label + "Collapse"/"Expand" toggle pill; label truncates with ellipsis on narrow panels. User's expand/collapse preference persists across resets. Hover to preview (pale yellow highlight, desktop only — mouse enter shows, mouse leave clears). Row click selection is feature-gated off; rows are display-only (no `role="button"`, no `tabIndex`). Clear Highlight button is hidden. Two-level expand: large clusters + collapsible small clusters. Per-cluster color chip for authored color overrides (see Color Editing UX below). Center and Follow buttons remain fully interactive. |
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
 | Pause | Primary control — freezes physics, camera/UI remain active |
-| Timeline | TimelineBar with scrub track, review mode (display-only playback of history), and restart from dense frames. Recording arms on first atom interaction (drag/move/rotate/flick) |
+| Timeline | TimelineBar with 2-column layout (mode rail + timeline lane), scrub track, review mode (display-only playback of history), and restart from dense frames. Recording arms on first atom interaction (drag/move/rotate/flick) |
 | Status | Message-only StatusBar: shows statusError or statusText, returns null otherwise |
 | Scene controls | Add (dock) and Add Molecule (settings sheet) both open the chooser; chooser shows a pinned Recent shortcut after first placement. Clear playground, Reset View. |
 
@@ -125,19 +125,54 @@ The TimelineBar component lives inside DockLayout as a normal-flow element above
 
 **Timeline UI**
 
-The bar uses a fixed-lane layout:
+The bar uses a 2-column layout: a vertical **mode rail** on the left and a **timeline lane** on the right. A shared `TimelineShell` component enforces this structure across all recording states.
 
-| Lane | Width | Content |
-|------|-------|---------|
-| Mode badge | 48 px | Shows **Live** or **Review** |
-| Time readout | 76 px | Displays fs / ps / ns with auto-scaling resolution |
-| Scrub track | flex | Draggable scrubber with pointer capture for smooth dragging |
-| Actions | 140 px | **Live** button (returns to live simulation) |
-| Restart target | — | **Restart** button with target time readout |
+All layout dimensions are centralized as CSS variables on `.timeline-bar`:
+
+| CSS variable | Default (desktop / mobile) | Purpose |
+|---|---|---|
+| `--tl-rail-width` | 96 px / 84 px | Mode rail column width |
+| `--tl-time-width` | 56 px / 48 px | Fixed time column in the timeline lane |
+| `--tl-action-width` | 32 px | Action column (close icon) |
+| `--tl-shell-height` | 44 px / 38 px | Shell row height |
+| `--tl-mode-height` | 36 px / 32 px | Mode switch height inside rail |
+
+**Mode rail** (left column — `timeline-shell__left`):
+
+| Recording state | Rail content |
+|---|---|
+| **off** | Simple centered label "History Off" (`ModeLabel`) — no segmented control chrome |
+| **ready** | Simple centered label "Ready" (`ModeLabel`) |
+| **live** | Bidirectional 2-segment vertical switch: **Simulation** (active) / Review. Tapping Review enters review at the current time |
+| **review** | Same vertical switch: Simulation / **Review** (active). Tapping Simulation returns to the live simulation |
+
+The vertical switch (`ModeSwitch` in `timeline-mode-switch.tsx`) uses a sliding indicator controlled by `--tms-active` (0 = Simulation, 1 = Review). Each segment is a `<button>`: the inactive segment is clickable, the active segment is disabled.
+
+**Timeline lane** (right column — `timeline-shell__center`):
+
+The lane has an invariant 3-part grid:
+
+| Zone | Width | Content |
+|---|---|---|
+| Time column | `--tl-time-width` (fixed) | Formatted time readout (fs / ps / ns / us, auto-scaling via `formatTime`) |
+| Track | `1fr` | Draggable scrub track with pointer capture; fill bar + thumb. Disabled (no range) in off/ready states |
+| Action zone | `--tl-action-width` (fixed) | Close/clear icon (`ClearTrigger`) when available |
+
+**Overlays** (`timeline-overlay-zone`) float in a reserved zone above the track:
+
+| State | Overlay |
+|---|---|
+| **off** | "Start Recording" button |
+| **ready** | Empty (spacer preserves grid skeleton) |
+| **review** (with restart target) | "Restart here" button, positioned along the track at the restart-target progress via `getRestartAnchorStyle` |
+
+Empty spacers preserve the grid skeleton in modes that don't use overlays or actions.
+
+**Clear action**: The close icon (`ClearTrigger`) always triggers a confirmation dialog (`TimelineClearDialog`) before clearing. The dialog announces "Stop recording?" and requires an explicit "Continue" or "Cancel" — the icon-only control is too ambiguous for an irreversible erase on any device. Focus is trapped inside the dialog; Escape dismisses.
 
 **Review Mode**
 
-Scrubbing away from the live edge auto-pauses the simulation and enters review mode. Review is display-only: `renderer.updateReviewFrame()` never mutates physics. Live-edit actions (drag, add/remove atoms) are blocked at the input boundary during review. The bonded-groups panel remains visible with historical topology, supporting hover preview, Center/Follow, and color editing. The frozen scrubber range is decoupled from live retention.
+Tapping the Review segment in the mode switch (or scrubbing away from the live edge) enters review mode. Review is display-only: `renderer.updateReviewFrame()` never mutates physics. Live-edit actions (drag, add/remove atoms) are blocked at the input boundary during review. The bonded-groups panel remains visible with historical topology, supporting hover preview, Center/Follow, and color editing. The frozen scrubber range is decoupled from live retention.
 
 **Review Mode UI Lock**
 
@@ -149,7 +184,7 @@ When review mode is active, the following actions are visually disabled and bloc
 
 Desktop users see `ActionHint` tooltips explaining the lock on hover/focus. Mobile users see a transient status hint on tap. Both use centralized copy from `REVIEW_LOCK_TOOLTIP` (short) and `REVIEW_LOCK_STATUS` (fuller, explains exits).
 
-Allowed actions in review: **Live** (return to current simulation), **Restart** (continue from scrub point), **Stop & Clear** (leave review and erase history). These remain fully interactive and visually prominent.
+Allowed actions in review: **Simulation** (tap in mode switch — return to current simulation), **Restart here** (overlay on track — continue from scrub point), **Clear** (close icon with confirmation — leave review and erase history). These remain fully interactive and visually prominent.
 
 **Restart**
 
