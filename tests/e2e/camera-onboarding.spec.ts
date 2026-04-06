@@ -106,7 +106,7 @@ test.describe('Phase 3 — Onboarding Overlay', () => {
     await expect(overlay).toBeAttached({ timeout: 5000 })
 
     // Should contain title text
-    await expect(page.locator('.onboarding-title')).toContainText('NanoToybox')
+    await expect(page.locator('.onboarding-title')).toContainText('Atom Simulation Studio')
 
     // Click to dismiss
     await overlay.click()
