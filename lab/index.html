@@ -923,6 +923,11 @@ fieldset.segmented {
   transition: color var(--duration-fast);
 }
 .timeline-mode-switch__seg--active { color: var(--color-text); font-weight: 600; }
+/* Hint wrapper must carry the same flex contract as a direct segment child */
+.timeline-mode-switch__hint-anchor {
+  flex: 1 1 0%; display: flex; min-width: 0; z-index: 2;
+}
+.timeline-mode-switch__hint-anchor > .timeline-mode-switch__seg { width: 100%; }
 .timeline-mode-switch__seg:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 .timeline-mode-switch__seg:not(:disabled):hover { color: var(--color-text); }
 .timeline-time {
@@ -971,15 +976,8 @@ fieldset.segmented {
   cursor: pointer; white-space: nowrap;
   -webkit-tap-highlight-color: transparent;
 }
-.timeline-action:disabled { opacity: 0.45; cursor: default; pointer-events: none; }
 .timeline-action:hover { background: var(--color-border); }
-/* .timeline-action--restart removed — redesign uses .timeline-restart-anchor */
 .timeline-shell--disabled { opacity: 0.7; }
-.timeline-action--destructive {
-  border-color: rgba(220, 80, 60, 0.5);
-  color: rgba(220, 80, 60, 0.9);
-}
-.timeline-action--destructive:hover { background: rgba(220, 80, 60, 0.1); }
 .timeline-track--disabled { pointer-events: none; cursor: default; }
 /* ── Track zone: overlay zone + track ──
    Overlay zone is absolutely positioned above the track.
@@ -993,7 +991,9 @@ fieldset.segmented {
   pointer-events: none;
 }
 .timeline-overlay-zone > * { pointer-events: auto; }
-.timeline-start-overlay {
+/* Start overlay positioning — applied to the ActionHint wrapper via anchorClassName */
+.timeline-start-anchor {
+  display: block;
   position: absolute; bottom: 0; margin-bottom: 4px;
   left: 50%; transform: translateX(-50%);
 }
@@ -1001,11 +1001,15 @@ fieldset.segmented {
 .timeline-action-zone {
   display: flex; align-items: center; justify-content: center;
 }
-/* Restart hint-chip — contextual action above the scrub point.
-   Positioned inside the overlay zone. */
+/* Restart positioning — applied to the ActionHint wrapper via anchorClassName/anchorStyle */
 .timeline-restart-anchor {
+  display: block;
   position: absolute; bottom: 0; margin-bottom: 6px;
   transform: translateX(-50%);
+}
+/* Restart button visual styling (position:relative for ::before/::after pseudo-elements) */
+.timeline-restart-button {
+  position: relative;
   padding: 5px 12px; border-radius: var(--radius-sm);
   background: var(--color-btn); border: none;
   color: var(--color-accent-text);
@@ -1016,19 +1020,19 @@ fieldset.segmented {
   box-shadow: none;
 }
 /* Transparent hit-area extension below the chip (covers the gap to the track) */
-.timeline-restart-anchor::before {
+.timeline-restart-button::before {
   content: ''; position: absolute;
   inset: -6px -8px -10px;
   cursor: pointer;
 }
 /* Subtle pointer arrow */
-.timeline-restart-anchor::after {
+.timeline-restart-button::after {
   content: ''; position: absolute; top: 100%; left: 50%;
   transform: translateX(-50%);
   border: 4px solid transparent;
   border-top-color: var(--color-btn);
 }
-.timeline-restart-anchor:hover { background: var(--color-accent-soft); }
+.timeline-restart-button:hover { background: var(--color-accent-soft); }
 /* Old review-return button removed — replaced by timeline mode switch */
 /* .timeline-time--review-left removed — time is in the left cluster */
 /* Review track — thicker and easier to drag. Width fills the track-zone parent. */
@@ -1087,9 +1091,11 @@ fieldset.segmented {
 .timeline-clear-dialog__confirm:hover { background: rgba(220, 80, 60, 0.25); }
 /* ── Action hints — shared hover/focus tooltip infrastructure ──
    Used by DockBar, StructureChooser, ReviewLockedControl, Segmented, and other
-   components via ActionHint.tsx. The .timeline-hint-* class prefix is historical;
-   TimelineBar no longer uses this infrastructure after the unified shell redesign. */
-.timeline-hint-anchor { position: relative; display: inline-flex; }
+   components via ActionHint.tsx. Used by DockBar, StructureChooser,
+   ReviewLockedControl, Segmented, TimelineBar, and timeline-mode-switch.
+   The .timeline-hint-* class prefix is historical; the infra is shared. */
+.timeline-hint-anchor { position: relative; display: inline-flex; z-index: 0; }
+.timeline-hint-anchor:hover, .timeline-hint-anchor:focus-within { z-index: 50; }
 .timeline-hint {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -1099,7 +1105,7 @@ fieldset.segmented {
   max-width: 220px;
   padding: 6px 8px;
   border-radius: 8px;
-  background: rgba(20, 20, 24, 0.96);
+  background: rgb(20, 20, 24);
   color: #fff;
   font-size: 11px;
   line-height: 1.35;
@@ -1122,7 +1128,7 @@ fieldset.segmented {
   width: 8px;
   height: 8px;
   transform: translateX(-50%) translateY(-50%) rotate(45deg);
-  background: rgba(20, 20, 24, 0.96);
+  background: rgb(20, 20, 24);
 }
 /* Right-aligned placement for rightmost actions near viewport edge */
 .timeline-hint--top-end {

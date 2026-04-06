@@ -37,15 +37,13 @@ describe('selectReviewUiLockState', () => {
 
   it('A3: tooltip constant contains review-mode explanation', () => {
     expect(REVIEW_LOCK_TOOLTIP).toContain('read-only');
-    expect(REVIEW_LOCK_TOOLTIP).toContain('Live');
+    expect(REVIEW_LOCK_TOOLTIP).toContain('Simulation');
   });
 
   it('A4: tooltip and status copy both explain review exits', () => {
-    expect(REVIEW_LOCK_TOOLTIP).toContain('Live');
-    expect(REVIEW_LOCK_TOOLTIP).toContain('Restart');
-    expect(REVIEW_LOCK_STATUS).toContain('Live');
-    expect(REVIEW_LOCK_STATUS).toContain('Restart');
-    expect(REVIEW_LOCK_STATUS).toContain('Stop & Clear');
+    expect(REVIEW_LOCK_TOOLTIP).toContain('Simulation');
+    expect(REVIEW_LOCK_STATUS).toContain('Simulation');
+    expect(REVIEW_LOCK_STATUS).toContain('Restart here');
     // Status is the fuller variant
     expect(REVIEW_LOCK_STATUS.length).toBeGreaterThan(REVIEW_LOCK_TOOLTIP.length);
   });

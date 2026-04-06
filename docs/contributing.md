@@ -68,7 +68,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - C/Wasm Tersoff kernel — ~11% faster than JS JIT, enabled by default, automatic JS fallback (`sim/wasm/`, `lab/js/tersoff-wasm.ts`)
 - Containment boundary — dynamic soft harmonic wall (`lab/js/physics.ts`), Contain/Remove toggle, live atom count, auto-scaling radius with hysteresis shrinkage
 - Dock + sheet navigation — responsive two-tier UI with React components (`lab/js/components/`)
-- React UI migration — primary surfaces (DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar) are React-authoritative with Zustand store. Supporting subcomponents: Segmented, Icons. TimelineBar is a composition layer with helper modules: timeline-format.ts, timeline-mode-switch.tsx, timeline-clear-dialog.tsx
+- React UI migration — primary surfaces (DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar) are React-authoritative with Zustand store. Supporting subcomponents: Segmented, Icons. TimelineBar is a composition layer with helper modules: timeline-format.ts, timeline-mode-switch.tsx, timeline-clear-dialog.tsx, timeline-hints.ts
 - Web Worker physics — off-thread simulation via `lab/js/simulation-worker.ts` with automatic JS fallback
 - Runtime module extraction — feature modules in `lab/js/runtime/`, orchestration modules in `lab/js/app/` (frame-runtime, app-lifecycle); see `docs/architecture.md` for the full inventory. main.ts is the composition root
 - Object View panel — Center + Follow buttons with inline SVG icons, positioned below status block
@@ -78,7 +78,9 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 
 See `docs/architecture.md` for the full module map and state ownership model.
 
-- **React components are the sole UI authority.** Primary surfaces (DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar) are React-authoritative. Supporting subcomponents (Segmented, Icons) are composed by those surfaces; some are pure prop-driven helpers. TimelineBar is a composition layer delegating to helper modules (timeline-format.ts, timeline-mode-switch.tsx, timeline-clear-dialog.tsx). TimelineCallbacks includes onEnterReview for transitioning from live to review mode.
+- **React components are the sole UI authority.** Primary surfaces (DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar) are React-authoritative. Supporting subcomponents (Segmented, Icons) are composed by those surfaces; some are pure prop-driven helpers. TimelineBar is a composition layer delegating to helper modules (timeline-format.ts, timeline-mode-switch.tsx, timeline-clear-dialog.tsx, timeline-hints.ts). TimelineCallbacks includes onEnterReview for transitioning from live to review mode.
+- **Timeline hint copy lives in `timeline-hints.ts`.** All tooltip text for timeline controls (record, review, restart, clear) is defined as constants in `lab/js/components/timeline-hints.ts`. Do not scatter timeline hint copy inline in components -- import from `TIMELINE_HINTS`.
+- **ActionHint supports layout-aware wrapping.** `anchorClassName` and `anchorStyle` props let the wrapper span participate in parent layout (flex, grid, absolute positioning) without an extra wrapper element.
 - **Imperative controllers** remain only for PlacementController (canvas touch listeners) and StatusController (hint/coachmark surface). Both expose `destroy()`.
 - **Callbacks flow through the store.** React components invoke imperative callbacks (dockCallbacks, settingsCallbacks, chooserCallbacks) registered by main.ts into the Zustand store.
 - **New globals require teardown.** Register via `addGlobalListener()` in main.ts.
@@ -163,7 +165,7 @@ The review-mode UI lock system enforces display-only behavior across all React s
 | Visual lock (buttons) | `components/ReviewLockedControl.tsx` | Span-wrapper for dock/chooser controls. Uses `ActionHint` + `useReviewLockedInteraction` |
 | Visual lock (list rows) | `components/ReviewLockedListItem.tsx` | Li-native for settings rows. Content dimmed via inner wrapper; tooltip at full contrast |
 | Shared behavior | `hooks/useReviewLockedInteraction.ts` | Tooltip timing, click/keyboard activation, status hint dispatch |
-| Hint copy | `selectors/review-ui-lock.ts` | `REVIEW_LOCK_TOOLTIP` (desktop), `REVIEW_LOCK_STATUS` (mobile/status) |
+| Hint copy | `selectors/review-ui-lock.ts` | `REVIEW_LOCK_TOOLTIP` (desktop: "Tap Simulation to return"), `REVIEW_LOCK_STATUS` (mobile/status: references Simulation, Restart here, close icon) |
 | Hint timing | `config.ts` | `CONFIG.reviewModeUi.statusHintMs` |
 
 When changing review-lock behavior:
@@ -383,6 +385,7 @@ E2E tests inject `?e2e=1` via `gotoApp()` from `tests/e2e/helpers.ts`.
 |--------------------------|-----------------|
 | Interactive page | `lab/index.html`, `lab/js/main.ts`, `lab/js/components/*`, `lab/js/store/app-store.ts`, `docs/viewer.md` |
 | React UI components | `lab/js/components/*.tsx`, `lab/js/store/app-store.ts`, `lab/js/hooks/*`, `lab/js/react-root.tsx` |
+| Timeline components & hints | `lab/js/components/TimelineBar.tsx`, `lab/js/components/timeline-hints.ts`, `lab/js/components/timeline-mode-switch.tsx`, `lab/js/components/timeline-clear-dialog.tsx`, `lab/js/components/timeline-format.ts` |
 | Web Worker / bridge | `lab/js/simulation-worker.ts`, `lab/js/worker-bridge.ts`, `src/types/worker-protocol.ts` |
 | Runtime modules (scene, worker, input) | `lab/js/runtime/scene-runtime.ts`, `lab/js/runtime/worker-lifecycle.ts`, `lab/js/runtime/snapshot-reconciler.ts`, `lab/js/runtime/input-bindings.ts`, `lab/js/runtime/interaction-dispatch.ts` |
 | Overlay layout & open/close policy | `lab/js/runtime/overlay-layout.ts`, `lab/js/runtime/overlay-runtime.ts` |

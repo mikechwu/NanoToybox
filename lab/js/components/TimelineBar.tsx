@@ -24,6 +24,8 @@ import { useAppStore } from '../store/app-store';
 import { formatTime, getTimelineProgress, getRestartAnchorStyle } from './timeline-format';
 import { TimelineModeSwitch } from './timeline-mode-switch';
 import { TimelineClearDialog, useClearConfirm, ClearTrigger } from './timeline-clear-dialog';
+import { ActionHint } from './ActionHint';
+import { TIMELINE_HINTS } from './timeline-hints';
 
 // ── Shared shell ──
 
@@ -74,7 +76,11 @@ function TimelineBarOff() {
       className="timeline-shell--disabled"
       modeRail={<TimelineModeSwitch mode="off" />}
       time="0.0 fs"
-      overlay={<button className="timeline-action timeline-start-overlay" onClick={handleStart}>Start Recording</button>}
+      overlay={
+        <ActionHint text={TIMELINE_HINTS.startRecording} anchorClassName="timeline-start-anchor">
+          <button className="timeline-action" onClick={handleStart}>Start Recording</button>
+        </ActionHint>
+      }
       track={<div className="timeline-track timeline-track--thick timeline-track--disabled" />}
       action={<span />}
     />
@@ -148,17 +154,25 @@ function TimelineBarActive() {
 
   const isReview = mode === 'review';
 
+  // clear.reset is stable (useCallback with empty deps); omitted intentionally
+  // to keep this as an isReview-transition guard only.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (!isReview) clear.reset(); }, [isReview]);
 
   const overlayContent = isReview && canRestart && restartTargetPs !== null ? (
-    <button
-      className="timeline-restart-anchor"
-      style={getRestartAnchorStyle(restartProgress)}
-      onClick={handleRestart}
-      aria-label={`Restart simulation at ${formatTime(restartTargetPs)}`}
+    <ActionHint
+      text={TIMELINE_HINTS.restartFromHere}
+      anchorClassName="timeline-restart-anchor"
+      anchorStyle={getRestartAnchorStyle(restartProgress)}
     >
-      Restart here
-    </button>
+      <button
+        className="timeline-restart-button"
+        onClick={handleRestart}
+        aria-label={`Restart simulation at ${formatTime(restartTargetPs)}`}
+      >
+        Restart here
+      </button>
+    </ActionHint>
   ) : <span />;
 
   const trackContent = (

@@ -23,11 +23,11 @@ export interface ReviewUiLockState {
 
 /** Short tooltip for desktop hover/focus. */
 export const REVIEW_LOCK_TOOLTIP =
-  'Review mode is read-only. Use Live, Restart, or Stop & Clear.';
+  'Review mode is read-only. Tap Simulation to return.';
 
 /** Fuller explanation for mobile/status hint. */
 export const REVIEW_LOCK_STATUS =
-  'Review mode is read-only. Choose Live to return to the current simulation, Restart to continue from this point, or Stop & Clear to leave review and erase history.';
+  'Review mode is read-only. Tap Simulation to return, Restart here to continue from this point, or the close icon to clear history.';
 
 /**
  * Primitive selector for individual review-lock flags.

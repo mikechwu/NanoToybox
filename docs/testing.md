@@ -107,12 +107,12 @@ npx vitest run
 npx vitest run tests/unit/simulation-timeline.test.ts
 ```
 
-### Timeline Subsystem (~116 tests across 9 files)
+### Timeline Subsystem (~122 tests across 9 files)
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
 | `simulation-timeline.test.ts` | 28+ | Core SimulationTimeline: recording frames, retention limits, review mode entry/exit, scrub to arbitrary frame, restart from timeline, truncation on re-record, motion preservation across restore, arming lifecycle |
-| `timeline-bar-lifecycle.test.tsx` | 26 | TimelineBar unified shell: invariant lane skeleton across all modes (time + overlay-zone + track + action-zone), off/ready use simple label not segmented switch, active uses two-segment mode switch, bidirectional mode switch (onEnterReview, onReturnToLive), Review segment disabled when no recorded range, restart anchor edge clamping (0% at 5%, 100% at 95%), clear confirmation dialog flow (confirm fires, cancel safe), format correctness across all unit ranges (fs/ps/ns/µs with exact string assertions), mode transitions (off→ready→active store changes, startup null→installed), accessibility labels (return-to-sim, restart-with-time, clear trigger), no old row1/row2 layout remnants, thick track across all states, lane structure identical for short and long time values |
+| `timeline-bar-lifecycle.test.tsx` | 32 | TimelineBar unified shell: invariant lane skeleton across all modes (time + overlay-zone + track + action-zone), off/ready use simple label not segmented switch, active uses two-segment mode switch, bidirectional mode switch (onEnterReview, onReturnToLive), Review segment disabled when no recorded range, restart anchor edge clamping (0% at 5%, 100% at 95%), clear confirmation dialog flow (confirm fires, cancel safe), format correctness across all unit ranges (fs/ps/ns/µs with exact string assertions), mode transitions (off→ready→active store changes, startup null→installed), accessibility labels (return-to-sim, restart-with-time, clear trigger), no old row1/row2 layout remnants, thick track across all states, lane structure identical for short and long time values, hint tooltip visibility (6 tests: start recording hint on hover+delay, simulation segment hint in review, review segment hint with range, disabled review hint via focus when no range, restart anchor hint on hover, clear trigger hint on hover — all use `vi.useFakeTimers()` + `fireEvent.mouseEnter` + `vi.advanceTimersByTime(HINT_DELAY_MS)` and assert `timeline-hint--visible` class) |
 | `timeline-recording-orchestrator.test.ts` | 9 | Orchestrator arming, recording cadence (frame capture rate), review-mode blocking of new recordings, sim-time advancement during recording, reset behavior |
 | `timeline-recording-policy.test.ts` | 5 | Arm/disarm/re-arm lifecycle, policy state transitions |
 | `timeline-subsystem.test.ts` | 11 | Subsystem boundary isolation, clearAndDisarm, teardown cleanup, isInReview predicate, installStoreCallbacks wiring, placement-does-not-arm regression tests |
@@ -262,9 +262,9 @@ The acceptance tests use three intentionally overlapping layers. All three must 
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
-| `review-ui-lock-selector.test.ts` | 4 | Selector: live mode all false, review mode all true, tooltip text content, tooltip vs status copy |
+| `review-ui-lock-selector.test.ts` | 4 | Selector: live mode all false, review mode all true, tooltip text content (asserts `REVIEW_LOCK_TOOLTIP` contains 'read-only' and 'Simulation'), tooltip vs status copy |
 | `review-ui-lock-guards.test.ts` | 7 | Runtime guards: onAdd, onPause, onModeChange, onAddMolecule, onSelectStructure, onClear blocked in review with hint; all work in live |
-| `review-lock-dom-structure.test.tsx` | 9 | DOM contract: li is direct child of ul, no timeline-hint-anchor class, tooltip inside li not wrapping, keyboard-focusable, tooltip not inside dimmed wrapper, bottom-start placement, selector integration |
+| `review-lock-dom-structure.test.tsx` | 9 | DOM contract: li is direct child of ul, no timeline-hint-anchor class, tooltip inside li not wrapping (asserts `REVIEW_LOCK_TOOLTIP` content), keyboard-focusable, tooltip not inside dimmed wrapper, bottom-start placement, selector integration (tooltip wording consistency with updated `REVIEW_LOCK_TOOLTIP`) |
 | `review-locked-interaction-hook.test.tsx` | 4 | Shared hook: click triggers status hint, Enter triggers hint, Space triggers hint, show/hide tooltip timing |
 | `dock-bar-review-lock.test.tsx` | 8 | DockBar: Add review-locked, Pause review-locked, Segmented items disabled, ActionHint tooltips on disabled items, Settings not locked, live mode normal, blocked click, live/review segmented structural parity |
 | `structure-chooser-review-lock.test.tsx` | 4 | StructureChooser: rows wrapped in review lock, tooltips present, click shows hint not callback, live mode normal |

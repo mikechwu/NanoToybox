@@ -170,6 +170,21 @@ Empty spacers preserve the grid skeleton in modes that don't use overlays or act
 
 **Clear action**: The close icon (`ClearTrigger`) always triggers a confirmation dialog (`TimelineClearDialog`) before clearing. The dialog announces "Stop recording?" and requires an explicit "Continue" or "Cancel" — the icon-only control is too ambiguous for an irreversible erase on any device. Focus is trapped inside the dialog; Escape dismisses.
 
+**Timeline Hints**
+
+All 5 timeline interactive controls have `ActionHint` hover/focus tooltips (desktop only). Hint text is centralized in `timeline-hints.ts` via the `TIMELINE_HINTS` constant:
+
+| Control | Hint |
+|---|---|
+| Start Recording | "Start saving timeline history now." |
+| Simulation (return) | "Back to the current simulation." |
+| Review (enter) | "Enter review mode at the current time." |
+| Review (disabled) | "No recorded history to review yet." |
+| Restart here | "Restart the simulation from this point." |
+| Clear (close icon) | "Stop recording and clear timeline history." |
+
+On touch/coarse-pointer devices, `ActionHint` tooltips are CSS-hidden. Touch discoverability relies on visible button labels and `aria-label` attributes instead.
+
 **Review Mode**
 
 Tapping the Review segment in the mode switch (or scrubbing away from the live edge) enters review mode. Review is display-only: `renderer.updateReviewFrame()` never mutates physics. Live-edit actions (drag, add/remove atoms) are blocked at the input boundary during review. The bonded-groups panel remains visible with historical topology, supporting hover preview, Center/Follow, and color editing. The frozen scrubber range is decoupled from live retention.
@@ -182,7 +197,7 @@ When review mode is active, the following actions are visually disabled and bloc
 - Settings: Add Molecule, Clear
 - Chooser: Structure row selection (if chooser is open)
 
-Desktop users see `ActionHint` tooltips explaining the lock on hover/focus. Mobile users see a transient status hint on tap. Both use centralized copy from `REVIEW_LOCK_TOOLTIP` (short) and `REVIEW_LOCK_STATUS` (fuller, explains exits).
+Desktop users see `ActionHint` tooltips explaining the lock on hover/focus. Mobile users see a transient status hint on tap. Both use centralized copy from `REVIEW_LOCK_TOOLTIP` ("Tap Simulation to return") and `REVIEW_LOCK_STATUS` (fuller — references "Simulation", "Restart here", and "close icon" as the three exits).
 
 Allowed actions in review: **Simulation** (tap in mode switch — return to current simulation), **Restart here** (overlay on track — continue from scrub point), **Clear** (close icon with confirmation — leave review and erase history). These remain fully interactive and visually prominent.
 
@@ -351,7 +366,7 @@ The interactive page uses a composition root pattern with React-authoritative UI
 ### Technology
 
 - Vite (v8) build pipeline: TypeScript + React (JSX) compiled and bundled. Dev server via `npm run dev`
-- React 19 (`createRoot`) — primary UI surfaces: DockLayout, DockBar, TimelineBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel. Supporting: Segmented, Icons, TimelineActionHint
+- React 19 (`createRoot`) — primary UI surfaces: DockLayout, DockBar, TimelineBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel. Supporting: Segmented, Icons, ActionHint
 - Zustand (`app-store.ts`) — reactive UI state store; imperative callbacks from `main.ts` registered via store slots
 - Web Worker (`simulation-worker.ts`) + bridge (`worker-bridge.ts`) — physics runs off the main thread
 - Three.js v0.170 (npm, bundled by Vite)

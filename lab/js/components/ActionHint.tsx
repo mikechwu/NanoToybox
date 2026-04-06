@@ -5,7 +5,8 @@
  * Shows after a short delay on mouseenter/focus, hides on mouseleave/blur/click.
  * Handles disabled children by attaching events to the wrapper span.
  *
- * Used by TimelineBar and CameraControls.
+ * Used by TimelineBar, timeline-mode-switch, timeline-clear-dialog,
+ * Segmented, and ReviewLockedControl.
  * CSS class family: .timeline-hint-* is retained as shared hint infrastructure
  * (not timeline-specific despite the name). See lab/index.html.
  */
@@ -23,10 +24,14 @@ export interface ActionHintProps {
   focusLabel?: string;
   /** 'top' (default) centers above. 'top-end' right-aligns above. 'right' places to the right. */
   placement?: 'top' | 'top-end' | 'right';
+  /** Extra class on the wrapper span so it can participate in parent layout (flex, absolute). */
+  anchorClassName?: string;
+  /** Inline style on the wrapper span (e.g. for absolute positioning). */
+  anchorStyle?: React.CSSProperties;
   children: React.ReactElement<React.HTMLAttributes<HTMLElement>>;
 }
 
-export function ActionHint({ text, focusableWhenDisabled, focusLabel, placement = 'top', children }: ActionHintProps) {
+export function ActionHint({ text, focusableWhenDisabled, focusLabel, placement = 'top', anchorClassName, anchorStyle, children }: ActionHintProps) {
   const [visible, setVisible] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tooltipId = useId();
@@ -54,7 +59,8 @@ export function ActionHint({ text, focusableWhenDisabled, focusLabel, placement 
 
   return (
     <span
-      className="timeline-hint-anchor"
+      className={`timeline-hint-anchor${anchorClassName ? ` ${anchorClassName}` : ''}`}
+      style={anchorStyle}
       tabIndex={focusableWhenDisabled ? 0 : undefined}
       aria-label={focusableWhenDisabled ? focusLabel : undefined}
       aria-describedby={focusableWhenDisabled ? tooltipId : undefined}

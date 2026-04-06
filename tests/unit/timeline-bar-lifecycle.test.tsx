@@ -17,6 +17,7 @@ import { render, cleanup, act, fireEvent } from '@testing-library/react';
 import { useAppStore } from '../../lab/js/store/app-store';
 import type { TimelineCallbacks } from '../../lab/js/store/app-store';
 import { TimelineBar } from '../../lab/js/components/TimelineBar';
+import { HINT_DELAY_MS } from '../../lab/js/components/ActionHint';
 
 const noop = () => {};
 
@@ -57,7 +58,7 @@ describe('TimelineBar unified shell', () => {
     expect(container.querySelector('.timeline-mode-label__text')?.textContent).toBe('History Off');
     expect(container.querySelector('.timeline-mode-switch')).toBeNull();
     // Start Recording as center overlay
-    expect(container.querySelector('.timeline-start-overlay')?.textContent).toBe('Start Recording');
+    expect(container.querySelector('.timeline-start-anchor')?.textContent).toContain('Start Recording');
   });
 
   it('ready state renders simple label with clear icon', () => {
@@ -492,7 +493,7 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-restart-anchor')?.getAttribute('aria-label')).toContain('Restart simulation at 500.0 ps');
+    expect(container.querySelector('.timeline-restart-button')?.getAttribute('aria-label')).toContain('Restart simulation at 500.0 ps');
   });
 
   // ── Time formatting contract ──
@@ -521,6 +522,137 @@ describe('TimelineBar unified shell', () => {
       expect(container.querySelector('.timeline-time')?.textContent).toBe(expected);
       cleanup();
     }
+  });
+
+  // ── Hint tooltip visibility (hover + timer) ──
+  // ActionHint shows tooltip after HINT_DELAY_MS on mouseEnter, hides on mouseLeave.
+  // Touch/coarse-pointer devices hide hints via CSS (by design — desktop only).
+
+  it('start recording hint becomes visible on hover after delay', () => {
+    vi.useFakeTimers();
+    act(() => { installSubsystem('off'); });
+    const { container } = render(<TimelineBar />);
+    const anchor = container.querySelector('.timeline-start-anchor')! as HTMLElement;
+    const tooltip = anchor.querySelector('[role="tooltip"]')!;
+    // Initially hidden
+    expect(tooltip.classList.contains('timeline-hint--visible')).toBe(false);
+    // Hover
+    act(() => { fireEvent.mouseEnter(anchor); });
+    act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+    expect(tooltip.classList.contains('timeline-hint--visible')).toBe(true);
+    expect(tooltip.textContent).toContain('Start saving timeline history now.');
+    // Leave hides
+    act(() => { fireEvent.mouseLeave(anchor); });
+    expect(tooltip.classList.contains('timeline-hint--visible')).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it('simulation segment hint visible on hover in review mode', () => {
+    vi.useFakeTimers();
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'review', currentTimePs: 500, reviewTimePs: 500,
+        rangePs: { start: 0, end: 1000 },
+        canReturnToLive: true, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    const anchor = container.querySelectorAll('.timeline-mode-switch__seg')[0]!.closest('.timeline-hint-anchor')! as HTMLElement;
+    const tooltip = anchor.querySelector('[role="tooltip"]')!;
+    act(() => { fireEvent.mouseEnter(anchor); });
+    act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+    expect(tooltip.classList.contains('timeline-hint--visible')).toBe(true);
+    expect(tooltip.textContent).toContain('Back to the current simulation.');
+    vi.useRealTimers();
+  });
+
+  it('review segment hint visible on hover in live mode with range', () => {
+    vi.useFakeTimers();
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 500, reviewTimePs: null,
+        rangePs: { start: 0, end: 1000 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    const anchor = container.querySelectorAll('.timeline-mode-switch__seg')[1]!.closest('.timeline-hint-anchor')! as HTMLElement;
+    const tooltip = anchor.querySelector('[role="tooltip"]')!;
+    act(() => { fireEvent.mouseEnter(anchor); });
+    act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+    expect(tooltip.classList.contains('timeline-hint--visible')).toBe(true);
+    expect(tooltip.textContent).toContain('Enter review mode at the current time.');
+    vi.useRealTimers();
+  });
+
+  it('disabled review segment hint visible on focus when no range', () => {
+    vi.useFakeTimers();
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 0, reviewTimePs: null,
+        rangePs: null,
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    // focusableWhenDisabled wrapper is the timeline-hint-anchor
+    const anchors = container.querySelectorAll('.timeline-hint-anchor');
+    const disabledAnchor = Array.from(anchors).find(a => {
+      const tip = a.querySelector('[role="tooltip"]');
+      return tip?.textContent?.includes('No recorded history');
+    })! as HTMLElement;
+    expect(disabledAnchor).not.toBeUndefined();
+    const tooltip = disabledAnchor.querySelector('[role="tooltip"]')!;
+    // Focus the wrapper (focusableWhenDisabled gives it tabIndex=0)
+    act(() => { fireEvent.focus(disabledAnchor); });
+    act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+    expect(tooltip.classList.contains('timeline-hint--visible')).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('restart anchor hint visible on hover', () => {
+    vi.useFakeTimers();
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'review', currentTimePs: 500, reviewTimePs: 500,
+        rangePs: { start: 0, end: 1000 },
+        canReturnToLive: true, canRestart: true, restartTargetPs: 500,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    const anchor = container.querySelector('.timeline-restart-anchor')! as HTMLElement;
+    const tooltip = anchor.querySelector('[role="tooltip"]')!;
+    act(() => { fireEvent.mouseEnter(anchor); });
+    act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+    expect(tooltip.classList.contains('timeline-hint--visible')).toBe(true);
+    expect(tooltip.textContent).toContain('Restart the simulation from this point.');
+    act(() => { fireEvent.mouseLeave(anchor); });
+    expect(tooltip.classList.contains('timeline-hint--visible')).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it('clear trigger hint visible on hover', () => {
+    vi.useFakeTimers();
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    const anchor = container.querySelector('.timeline-clear-trigger')!.closest('.timeline-hint-anchor')! as HTMLElement;
+    const tooltip = anchor.querySelector('[role="tooltip"]')!;
+    act(() => { fireEvent.mouseEnter(anchor); });
+    act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+    expect(tooltip.classList.contains('timeline-hint--visible')).toBe(true);
+    expect(tooltip.textContent).toContain('Stop recording and clear timeline history.');
+    vi.useRealTimers();
   });
 
   it('clear trigger has accessible label', () => {

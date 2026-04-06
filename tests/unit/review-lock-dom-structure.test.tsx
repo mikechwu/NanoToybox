@@ -152,7 +152,6 @@ describe('Review-lock selector integration', () => {
 
   it('tooltip text is consistent across all review-locked surfaces', () => {
     expect(REVIEW_LOCK_TOOLTIP).toContain('read-only');
-    expect(REVIEW_LOCK_TOOLTIP).toContain('Live');
-    expect(REVIEW_LOCK_TOOLTIP).toContain('Restart');
+    expect(REVIEW_LOCK_TOOLTIP).toContain('Simulation');
   });
 });

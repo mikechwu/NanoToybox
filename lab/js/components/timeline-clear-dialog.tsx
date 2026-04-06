@@ -3,6 +3,8 @@
  *  ambiguous for an irreversible erase action on any device. */
 
 import React, { useCallback, useRef, useState, useEffect } from 'react';
+import { ActionHint } from './ActionHint';
+import { TIMELINE_HINTS } from './timeline-hints';
 
 // ── Hook ──
 
@@ -88,12 +90,14 @@ function TimelineCloseIcon() {
 
 export function ClearTrigger({ onClick }: { onClick: () => void }) {
   return (
-    <button
-      className="timeline-clear-trigger"
-      onClick={onClick}
-      aria-label="Stop recording and clear history"
-    >
-      <TimelineCloseIcon />
-    </button>
+    <ActionHint text={TIMELINE_HINTS.clearHistory}>
+      <button
+        className="timeline-clear-trigger"
+        onClick={onClick}
+        aria-label="Stop recording and clear history"
+      >
+        <TimelineCloseIcon />
+      </button>
+    </ActionHint>
   );
 }

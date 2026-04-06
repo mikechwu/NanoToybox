@@ -437,3 +437,17 @@ This layering ensures that a policy change triggers conformance failures (intent
 - **Lane skeleton is identical in every mode** (time + overlay-zone + track + action-zone). The four zones always exist in the DOM regardless of mode; their contents change but their geometry does not.
 
 **Module split:** `TimelineBar.tsx` is the composition layer that assembles the bar from three focused helper modules. This keeps the top-level component declarative (layout + mode branching) while isolating scrub logic, mode-rail rendering, and track visualization into independently testable units.
+
+## D55: Timeline Hints — Shared ActionHint with anchorClassName for Layout-Aware Wrapping
+
+**Decision:** Timeline hints use the shared `ActionHint` component with `anchorClassName` for layout-aware wrapping.
+
+**Rationale:** `ActionHint` wrappers insert a `<span>` that can break flex/absolute layout. `anchorClassName` lets the wrapper carry the parent's layout contract (flex for mode switch segments, absolute for overlay controls).
+
+**Key choices:**
+
+- **Hint text centralized in `timeline-hints.ts`.** All hint copy lives in one module, making it easy to audit and update without touching component JSX.
+- **Desktop/keyboard only.** Touch devices hide hints via CSS — timeline controls are too compact for tooltip chrome on small viewports.
+- **Restart and start overlay positioning split between anchor (wrapper) and button (visual).** The anchor `<span>` owns absolute positioning so the inner button can remain a simple visual element without layout responsibilities.
+- **Unconditional confirmation for clear icon.** The clear action always confirms — no conditional gating — because timeline data loss is irreversible.
+- **Hint is additive discoverability, not primary guidance.** Hints supplement spatial affordance and direct manipulation; they are not the primary way users learn the timeline controls.

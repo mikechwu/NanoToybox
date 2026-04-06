@@ -105,13 +105,14 @@ NanoToybox/
 │   │   │   ├── OnboardingOverlay.tsx # Page-load welcome card with sink-to-Settings animation
 │   │   │   ├── Icons.tsx         # Shared inline SVG icon utility (supporting component)
 │   │   │   ├── BondedGroupsPanel.tsx # Bonded cluster inspection panel (hover highlight; tracked selection gated by canTrackBondedGroupHighlight)
-│   │   │   ├── ActionHint.tsx     # Shared hover/focus tooltip (supporting component)
+│   │   │   ├── ActionHint.tsx     # Shared hover/focus tooltip (supporting component); anchorClassName/anchorStyle props for layout-aware wrapping
 │   │   │   ├── ReviewLockedControl.tsx    # Review-lock wrapper (span-based, for dock/chooser controls)
 │   │   │   ├── ReviewLockedListItem.tsx   # Review-lock list item (li-native, for settings rows)
 │   │   │   ├── TimelineBar.tsx       # Composition layer: 2-column shell (mode rail + timeline lane), imports from 3 helper modules
 │   │   │   ├── timeline-format.ts   # formatTime, getTimelineProgress, getRestartAnchorStyle
 │   │   │   ├── timeline-mode-switch.tsx # TimelineModeSwitch: label (off/ready) or bidirectional 2-segment switch (live/review)
-│   │   │   └── timeline-clear-dialog.tsx # TimelineClearDialog, useClearConfirm hook, ClearTrigger icon button
+│   │   │   ├── timeline-clear-dialog.tsx # TimelineClearDialog, useClearConfirm hook, ClearTrigger icon button
+│   │   │   └── timeline-hints.ts     # Single source of truth for all timeline tooltip copy (TIMELINE_HINTS constant)
 │   │   ├── store/
 │   │   │   ├── app-store.ts      # Zustand store for UI state
 │   │   │   └── selectors/
@@ -243,9 +244,11 @@ CSS variables: `--tl-rail-width` (96px desktop, 84px mobile), `--tl-time-width` 
 - `timeline-clear-dialog.tsx` — `useClearConfirm` hook (open/request/cancel/confirm/reset), `TimelineClearDialog` (alertdialog with focus trap and Escape handling), `ClearTrigger` (close-icon button).
 
 **Mode-specific rendering:**
-- **Off:** "Start Recording" overlay button on the track, no action slot.
-- **Ready:** Empty overlay, `ClearTrigger` in action slot.
-- **Active (live/review):** Scrub-interactive track with fill+thumb, `ClearTrigger` in action slot, "Restart here" overlay anchor in review mode (positioned at restart target progress).
+- **Off:** "Start Recording" overlay button on the track (ActionHint-wrapped), no action slot.
+- **Ready:** Empty overlay, `ClearTrigger` (ActionHint-wrapped) in action slot.
+- **Active (live/review):** Scrub-interactive track with fill+thumb, `ClearTrigger` (ActionHint-wrapped) in action slot, "Restart here" overlay anchor (ActionHint-wrapped) in review mode (positioned at restart target progress). Mode-switch segments (Simulation, Review) are each ActionHint-wrapped.
+
+All timeline ActionHint text comes from `TIMELINE_HINTS` in `timeline-hints.ts`. Hints are desktop/keyboard only; touch devices rely on visible labels and aria-labels instead (ActionHint tooltips CSS-hidden via `@media (pointer: coarse)`).
 
 ### Placement Solver
 
@@ -426,7 +429,7 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - **placement-camera-framing.ts** — pure camera-basis framing solver for placement preview: camera-space projection, adaptive target-shift search (5×5 grid + refinement), overflow deadband, visible-anchor filtering. No THREE/renderer/store imports.
 - **review-mode-action-hints.ts** — transient status hint for review-locked actions; uses `REVIEW_LOCK_STATUS` (fuller copy) via store `setStatusText` with auto-clear timer from `CONFIG.reviewModeUi.statusHintMs`
 
-**Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons. **Timeline helper modules** (composed by TimelineBar): timeline-format.ts (time formatting + progress), timeline-mode-switch.tsx (mode rail widget), timeline-clear-dialog.tsx (clear confirmation dialog + trigger). Imperative controllers remain only for PlacementController and StatusController (hint-only).
+**Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons, ActionHint. **Hint infrastructure:** ActionHint wraps 5 timeline controls (Start Recording, Restart here, Simulation segment, Review segment, ClearTrigger) plus ReviewLockedControl and Segmented; desktop/keyboard only (touch hidden via CSS media query). timeline-hints.ts is the single source of truth for all timeline tooltip copy (`TIMELINE_HINTS` constant). **Timeline helper modules** (composed by TimelineBar): timeline-format.ts (time formatting + progress), timeline-mode-switch.tsx (mode rail widget), timeline-clear-dialog.tsx (clear confirmation dialog + trigger), timeline-hints.ts (tooltip copy). Imperative controllers remain only for PlacementController and StatusController (hint-only).
 
 **Camera callbacks** registered by main.ts via `cameraCallbacks` in the store:
 - `onCenterObject()` — one-shot camera center
