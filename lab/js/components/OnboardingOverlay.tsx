@@ -117,7 +117,7 @@ export function OnboardingOverlay() {
         className={`onboarding-card${phase === 'exiting' ? ' onboarding-card-exit' : ''}`}
         onAnimationEnd={finalizeDismiss}
       >
-        <div className="onboarding-title">NanoToybox</div>
+        <div className="onboarding-title">Atom Simulation Studio</div>
         <div className="onboarding-body">
           <div>Touch and drag atoms to begin</div>
           <div>Use <b>Add</b> for more structures</div>
