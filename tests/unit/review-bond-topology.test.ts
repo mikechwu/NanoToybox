@@ -30,7 +30,7 @@ describe('getReviewBondTopology', () => {
       positions: new Float64Array(9),
       velocities: new Float64Array(9),
       bonds,
-      config: { damping: 0, kDrag: 2, kRotate: 5 },
+      config: { damping: 0, kDrag: 2, kRotate: 5, dtFs: 0.5, dampingRefDurationFs: 2.0 },
       interaction: null,
       boundary: { mode: 'contain', wallRadius: 100, wallCenter: [0, 0, 0], wallCenterSet: true, removedCount: 0, damping: 0 },
     });
@@ -47,7 +47,7 @@ describe('getReviewBondTopology', () => {
     timeline.recordCheckpoint({
       timePs: 0.5,
       physics: { n: 2, pos: new Float64Array(6), vel: new Float64Array(6), bonds },
-      config: { damping: 0, kDrag: 2, kRotate: 5 },
+      config: { damping: 0, kDrag: 2, kRotate: 5, dtFs: 0.5, dampingRefDurationFs: 2.0 },
       interaction: null,
       boundary: { mode: 'contain', wallRadius: 100, wallCenter: [0, 0, 0], wallCenterSet: true, removedCount: 0, damping: 0 },
     });

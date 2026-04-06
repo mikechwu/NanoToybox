@@ -62,6 +62,7 @@ export type RecoverySnapshot = { positions: Float64Array; velocities?: Float64Ar
 export function createWorkerRuntime(deps: {
   onSchedulerTiming: (physStepMs: number, stepsCompleted: number) => void;
   onFailure: (reason: string, lastSnapshot?: RecoverySnapshot) => void;
+  onWallRemoval?: (info: { newN: number; removedCount: number }) => void;
 }): WorkerRuntime {
   let _bridge: WorkerBridge | null = null;
   let _initialized = false;
@@ -131,6 +132,10 @@ export function createWorkerRuntime(deps: {
         const snap = _teardown();
         deps.onFailure(reason, snap);
       });
+
+      if (deps.onWallRemoval) {
+        bridge.setOnWallRemoval(deps.onWallRemoval);
+      }
 
       if (atoms.length > 0) {
         try {

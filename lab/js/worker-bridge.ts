@@ -101,6 +101,7 @@ export class WorkerBridge {
   private onReady: (() => void) | null = null;
   private onFrameSkipped: ((info: FrameSkipInfo) => void) | null = null;
   private onCrash: ((reason: string) => void) | null = null;
+  private onWallRemoval: ((info: { newN: number; removedCount: number }) => void) | null = null;
 
   // Worker state
   private workerState: WorkerState = 'loading';
@@ -286,6 +287,10 @@ export class WorkerBridge {
 
   setOnFrameSkipped(cb: ((info: FrameSkipInfo) => void) | null): void {
     this.onFrameSkipped = cb;
+  }
+
+  setOnWallRemoval(cb: ((info: { newN: number; removedCount: number }) => void) | null): void {
+    this.onWallRemoval = cb;
   }
 
   setOnCrash(cb: ((reason: string) => void) | null): void {
@@ -511,7 +516,9 @@ export class WorkerBridge {
         // C.2+ — pass through when handler exists
         break;
       case 'wallRemoval':
-        // C.2+ — pass through when handler exists
+        if (this.onWallRemoval) {
+          this.onWallRemoval({ newN: event.newN, removedCount: event.removedCount });
+        }
         break;
     }
   }

@@ -54,7 +54,17 @@ function makeRenderer() {
   } as any;
 }
 
-function createSub(physics = makePhysics(), renderer = makeRenderer()): TimelineSubsystem {
+function makeSceneMolecules(n = 10) {
+  return [{
+    atomOffset: 0,
+    atomCount: n,
+    localAtoms: Array.from({ length: n }, () => ({ element: 'C' })),
+    structureFile: 'c60.xyz',
+    name: 'C60',
+  }];
+}
+
+function createSub(physics = makePhysics(), renderer = makeRenderer(), molecules = makeSceneMolecules(physics.n)): TimelineSubsystem {
   return createTimelineSubsystem({
     getPhysics: () => physics,
     getRenderer: () => renderer,
@@ -67,6 +77,7 @@ function createSub(physics = makePhysics(), renderer = makeRenderer()): Timeline
     clearBondedGroupHighlight: vi.fn(),
     clearRendererFeedback: vi.fn(),
     syncBondedGroupsForDisplayFrame: vi.fn(),
+    getSceneMolecules: () => molecules,
   });
 }
 
@@ -373,5 +384,280 @@ describe('TimelineSubsystem', () => {
     // Subsequent ticks advance time (recording is active)
     sub.recordAfterReconciliation(4);
     expect(sub.getRecordingMode()).toBe('active');
+  });
+
+  // ── Export capability lifecycle ──
+
+  describe('export capability lifecycle', () => {
+    const exportCaps = { replay: false, full: true };
+
+    function createSubWithExport(physics = makePhysics(), renderer = makeRenderer(), molecules = makeSceneMolecules(physics.n)): TimelineSubsystem {
+      return createTimelineSubsystem({
+        getPhysics: () => physics,
+        getRenderer: () => renderer,
+        pause: vi.fn(),
+        resume: vi.fn(),
+        isPaused: () => false,
+        reinitWorker: vi.fn(async () => {}),
+        isWorkerActive: () => false,
+        forceRender: vi.fn(),
+        clearBondedGroupHighlight: vi.fn(),
+        clearRendererFeedback: vi.fn(),
+        syncBondedGroupsForDisplayFrame: vi.fn(),
+        getSceneMolecules: () => molecules,
+        exportHistory: vi.fn(),
+        exportCapabilities: exportCaps,
+      });
+    }
+
+    it('installAndEnable sets export capability in store', () => {
+      const sub = createSubWithExport();
+      sub.installAndEnable();
+      expect(useAppStore.getState().timelineExportCapabilities).toEqual(exportCaps);
+    });
+
+    it('startRecordingNow restores export capability after turnRecordingOff', () => {
+      const sub = createSubWithExport();
+      sub.installAndEnable();
+      expect(useAppStore.getState().timelineExportCapabilities).toEqual(exportCaps);
+
+      // Turn off clears capability
+      sub.turnRecordingOff();
+      expect(useAppStore.getState().timelineExportCapabilities).toBeNull();
+
+      // Start recording again — capability must be restored
+      sub.startRecordingNow();
+      expect(useAppStore.getState().timelineExportCapabilities).toEqual(exportCaps);
+    });
+
+    it('resetToPassiveReady restores export capability', () => {
+      const sub = createSubWithExport();
+      sub.installAndEnable();
+      sub.markAtomInteractionStarted();
+      sub.recordAfterReconciliation(4);
+
+      sub.resetToPassiveReady();
+      expect(useAppStore.getState().timelineRecordingMode).toBe('ready');
+      expect(useAppStore.getState().timelineExportCapabilities).toEqual(exportCaps);
+    });
+
+    it('multiple off/on cycles preserve export capability each time', () => {
+      const sub = createSubWithExport();
+      sub.installAndEnable();
+
+      for (let cycle = 0; cycle < 3; cycle++) {
+        sub.turnRecordingOff();
+        expect(useAppStore.getState().timelineExportCapabilities).toBeNull();
+
+        sub.startRecordingNow();
+        expect(useAppStore.getState().timelineExportCapabilities).toEqual(exportCaps);
+      }
+    });
+
+    it('subsystem without export deps has null capability throughout', () => {
+      const sub = createSub(); // no export deps
+      sub.installAndEnable();
+      expect(useAppStore.getState().timelineExportCapabilities).toBeNull();
+
+      sub.startRecordingNow();
+      expect(useAppStore.getState().timelineExportCapabilities).toBeNull();
+    });
+
+    it('identity staleness clears export capability', () => {
+      const sub = createSubWithExport();
+      sub.installAndEnable();
+      expect(useAppStore.getState().timelineExportCapabilities).toEqual(exportCaps);
+
+      sub.markIdentityStale();
+      expect(useAppStore.getState().timelineExportCapabilities).toBeNull();
+    });
+
+    it('resetToPassiveReady clears staleness and restores capability', () => {
+      const sub = createSubWithExport();
+      sub.installAndEnable();
+      sub.markIdentityStale();
+      expect(useAppStore.getState().timelineExportCapabilities).toBeNull();
+      expect(sub.isIdentityStale()).toBe(true);
+
+      sub.resetToPassiveReady();
+      expect(sub.isIdentityStale()).toBe(false);
+      expect(useAppStore.getState().timelineExportCapabilities).toEqual(exportCaps);
+    });
+
+    it('publishTimelineReadyState does not clear export capability (subsystem owns it)', () => {
+      // Pin the ownership contract: the store's ready-state publisher must not
+      // touch timelineExportCapabilities — the subsystem is the sole owner.
+      useAppStore.getState().setTimelineExportCapabilities(exportCaps);
+      expect(useAppStore.getState().timelineExportCapabilities).toEqual(exportCaps);
+
+      useAppStore.getState().publishTimelineReadyState();
+      expect(useAppStore.getState().timelineExportCapabilities).toEqual(exportCaps);
+    });
+  });
+
+  // ── Export atom state rehydration ──
+
+  describe('export atom state rehydration after restart', () => {
+    it('atom table is non-empty after stop → startRecordingNow', () => {
+      const sub = createSub();
+      sub.startRecordingNow();
+      sub.recordAfterReconciliation(4);
+
+      // Stop recording — clears tracker + registry
+      sub.turnRecordingOff();
+      expect(sub.getAtomMetadataRegistry().getAtomTable()).toHaveLength(0);
+
+      // Start again — should rebuild from scene
+      sub.startRecordingNow();
+      expect(sub.getAtomMetadataRegistry().getAtomTable()).toHaveLength(10);
+    });
+
+    it('atom table is non-empty after resetToPassiveReady → arm via interaction', () => {
+      const sub = createSub();
+      sub.installAndEnable();
+      sub.markAtomInteractionStarted();
+      sub.recordAfterReconciliation(4);
+
+      // Reset to passive — clears tracker + registry
+      sub.resetToPassiveReady();
+      expect(sub.getAtomMetadataRegistry().getAtomTable()).toHaveLength(0);
+
+      // Atom interaction re-arms → should rebuild from scene
+      sub.markAtomInteractionStarted();
+      expect(sub.getAtomMetadataRegistry().getAtomTable()).toHaveLength(10);
+    });
+
+    it('tracker and registry stay in sync after restart', () => {
+      const sub = createSub();
+      sub.startRecordingNow();
+      sub.turnRecordingOff();
+      sub.startRecordingNow();
+
+      const table = sub.getAtomMetadataRegistry().getAtomTable();
+      const tracker = sub.getAtomIdentityTracker();
+      expect(table).toHaveLength(10);
+      expect(tracker.getTotalAssigned()).toBe(10);
+      // Every atom in the table should have a valid id matching the tracker
+      for (const entry of table) {
+        expect(entry.id).toBeGreaterThanOrEqual(0);
+        expect(entry.id).toBeLessThan(10);
+      }
+    });
+
+    it('export snapshot has matching atomIds and atom table after restart', () => {
+      const sub = createSub();
+      sub.startRecordingNow();
+      sub.recordAfterReconciliation(4);
+      sub.turnRecordingOff();
+
+      sub.startRecordingNow();
+      sub.recordAfterReconciliation(4);
+
+      const snapshot = sub.getTimelineExportSnapshot();
+      const table = sub.getAtomMetadataRegistry().getAtomTable();
+      const tableIdSet = new Set(table.map(e => e.id));
+
+      // Every frame's atomIds should be in the atom table
+      for (const frame of snapshot.denseFrames) {
+        for (const id of frame.atomIds) {
+          expect(tableIdSet.has(id)).toBe(true);
+        }
+      }
+    });
+
+    it('rebuildExportAtomState is graceful on bad scene data (disables export, does not crash)', () => {
+      const badMolecules = [{
+        atomOffset: 0, atomCount: 5,
+        localAtoms: [{ element: 'C' }, { element: 'C' }], // mismatch: 2 !== 5
+        structureFile: 'bad.xyz', name: 'Bad',
+      }];
+      const sub = createSub(makePhysics(5), makeRenderer(), badMolecules);
+
+      // Should not throw — error is caught at the recording-entry boundary
+      sub.startRecordingNow();
+      expect(sub.getRecordingMode()).toBe('active');
+      // Export capability should be durably disabled since rebuild failed
+      expect(useAppStore.getState().timelineExportCapabilities).toBeNull();
+      expect(sub.isIdentityStale()).toBe(true);
+    });
+  });
+
+  // ── Worker staleness → export disabled (integration) ──
+
+  describe('worker staleness disables export end-to-end', () => {
+    const exportCaps = { replay: false, full: true };
+
+    it('markIdentityStale disables capability, export callback throws', async () => {
+      let exportError: Error | null = null;
+      const exportHistory = vi.fn(async (_kind: 'replay' | 'full') => {
+        // Simulate the real main.ts export callback pattern
+        if (sub.isIdentityStale()) {
+          throw new Error('Export is unavailable because atom identity is stale after worker compaction.');
+        }
+      });
+
+      const sub = createTimelineSubsystem({
+        getPhysics: () => makePhysics(),
+        getRenderer: () => makeRenderer(),
+        pause: vi.fn(), resume: vi.fn(), isPaused: () => false,
+        reinitWorker: vi.fn(async () => {}), isWorkerActive: () => false,
+        forceRender: vi.fn(),
+        clearBondedGroupHighlight: vi.fn(), clearRendererFeedback: vi.fn(),
+        syncBondedGroupsForDisplayFrame: vi.fn(),
+        getSceneMolecules: () => makeSceneMolecules(),
+        exportHistory,
+        exportCapabilities: exportCaps,
+      });
+
+      sub.installAndEnable();
+      expect(useAppStore.getState().timelineExportCapabilities).toEqual(exportCaps);
+
+      // Start recording so there's something to export
+      sub.startRecordingNow();
+      sub.recordAfterReconciliation(4);
+      expect(useAppStore.getState().timelineExportCapabilities).toEqual(exportCaps);
+
+      // Simulate worker wallRemoval → markIdentityStale
+      sub.markIdentityStale();
+      expect(sub.isIdentityStale()).toBe(true);
+      expect(useAppStore.getState().timelineExportCapabilities).toBeNull();
+
+      // Export callback should throw stale-identity error
+      try {
+        await exportHistory('full');
+      } catch (err) {
+        exportError = err as Error;
+      }
+      expect(exportError).not.toBeNull();
+      expect(exportError!.message).toContain('stale');
+    });
+
+    it('resetToPassiveReady clears staleness and re-enables export after worker staleness', () => {
+      const sub = createTimelineSubsystem({
+        getPhysics: () => makePhysics(),
+        getRenderer: () => makeRenderer(),
+        pause: vi.fn(), resume: vi.fn(), isPaused: () => false,
+        reinitWorker: vi.fn(async () => {}), isWorkerActive: () => false,
+        forceRender: vi.fn(),
+        clearBondedGroupHighlight: vi.fn(), clearRendererFeedback: vi.fn(),
+        syncBondedGroupsForDisplayFrame: vi.fn(),
+        getSceneMolecules: () => makeSceneMolecules(),
+        exportHistory: vi.fn(),
+        exportCapabilities: exportCaps,
+      });
+
+      sub.installAndEnable();
+      sub.markAtomInteractionStarted();
+      sub.recordAfterReconciliation(4);
+
+      // Worker staleness disables export
+      sub.markIdentityStale();
+      expect(useAppStore.getState().timelineExportCapabilities).toBeNull();
+
+      // Scene clear → resetToPassiveReady should recover
+      sub.resetToPassiveReady();
+      expect(sub.isIdentityStale()).toBe(false);
+      expect(useAppStore.getState().timelineExportCapabilities).toEqual(exportCaps);
+    });
   });
 });

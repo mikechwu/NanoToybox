@@ -567,7 +567,8 @@ export const useAppStore = create<AppStore>((set) => ({
     timelineCanReturnToLive: false,
     timelineCanRestart: false,
     timelineRestartTargetPs: null,
-    timelineExportCapabilities: null,
+    // Note: timelineExportCapabilities intentionally NOT cleared here.
+    // The subsystem is the sole owner of export capability in non-off states.
   }),
   setFlightActive: (active) => set({ flightActive: active }),
   setFarDrift: (drift) => set({ farDrift: drift }),

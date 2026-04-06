@@ -46,6 +46,7 @@ These checks require a real browser with WebGL and cannot run in headless CI. Ru
 - [ ] **Viewer:** Open `/viewer/`, drag-drop an `.xyz` file, verify atoms and bonds render
 - [ ] Placement camera framing: preview does not cause camera snap, drag past boundary works
 - [ ] Review mode UI lock: enter review → dock Add/mode/Pause disabled with hints → Settings Add Molecule/Clear disabled → Live/Restart exit re-enables
+- [ ] History export: record a timeline with 2+ molecules → open export dialog → export downloads valid `.atomdojo-history` file → verify file contains stable atom IDs and metadata
 - [ ] Dock stability: Pause ↔ Resume toggle does not shift neighboring controls
 - [ ] Bonded groups: panel expanded by default with Collapse/Expand disclosure hint visible; per-row inline color chip opens preset swatch popover with responsive layout; authored color overrides persist across theme/structure changes; persistent tracked highlight is feature-gated off (hover preview remains active)
 - [ ] Verify bonded-group color persists across topology changes (group merge/split)
@@ -83,7 +84,7 @@ Browser                          Web Worker
 │      (teardown seq.    │
 │       and reset helpers)│
 │                        │
-│  runtime/ (32 modules):│
+│  runtime/ (35 modules):│
 │  ├── SceneRuntime     │
 │  ├── WorkerLifecycle  │
 │  ├── SnapshotReconc.  │
@@ -97,7 +98,10 @@ Browser                          Web Worker
 │  ├── Onboarding       │
 │  ├── BondedGroup×6    │  (portal popover for color editing,
 │  │                     │   group color intents → atom overrides)
-│  ├── Timeline×6       │
+│  ├── Timeline×6       │  (recording, review, scrub, restart,
+│  │                     │   clear, subsystem coordinator)
+│  ├── HistoryExport×3  │  (stable atom identity, metadata registry,
+│  │                     │   v1 file builder + download)
 │  ├── RestartAdapter   │
 │  ├── ReconciledSteps  │
 │  ├── OrbitFollow      │
@@ -129,6 +133,7 @@ Browser                          Web Worker
 - **Containment boundary** — dynamic soft wall with Contain/Remove modes, live atom count, auto-scaling radius
 - **Placement camera framing** — smooth camera assist keeps scene + preview visible during molecule placement; continuous drag with pointer capture and per-frame cursor-lock reprojection
 - **Review mode UI lock** — display-only enforcement across all React surfaces during timeline review; centralized selector, runtime guards, ActionHint tooltips (desktop), transient status hints (mobile)
+- **History export** — export simulation timeline as v1 atomdojo-history files with stable atom identity tracking across topology changes (placement, removal, merge/split); full position + metadata export via download trigger
 - Structure library: 15 canonical relaxed structures (60–720 atoms) with derived honeycomb geometry
 - Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)
 - Three.js trajectory viewer: functional at `viewer/index.html`

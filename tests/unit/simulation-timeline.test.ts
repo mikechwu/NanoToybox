@@ -25,7 +25,11 @@ import {
 
 // ── Helpers ──
 
-function makeConfig() { return { damping: 0, kDrag: 2, kRotate: 5 }; }
+function makeConfig() { return { damping: 0, kDrag: 2, kRotate: 5, dtFs: 0.5, dampingRefDurationFs: 2.0 }; }
+
+function makeFrame(timePs: number, n = 4, seed = 0) {
+  return { timePs, n, atomIds: [] as number[], positions: makePositions(n, seed), interaction: null as any, boundary: makeBoundary() };
+}
 
 function makePositions(n: number, seed = 0): Float64Array {
   const p = new Float64Array(n * 3);
@@ -472,7 +476,7 @@ describe('SimulationTimeline — restart frame preserves motion state', () => {
       positions: makePositions(60, 5),
       velocities: vel,
       bonds: [[0, 1, 1.42], [1, 2, 1.42]],
-      config: { damping: 0.1, kDrag: 3, kRotate: 7 },
+      config: { damping: 0.1, kDrag: 3, kRotate: 7, dtFs: 0.5, dampingRefDurationFs: 2.0 },
       interaction: { kind: 'move_group', atomIndex: 0, componentId: 0, target: [1, 2, 3] },
       boundary: makeBoundary(),
     });

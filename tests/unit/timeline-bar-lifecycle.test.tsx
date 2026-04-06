@@ -903,6 +903,25 @@ describe('TimelineBar unified shell', () => {
     vi.useRealTimers();
   });
 
+  it('export dialog renders via portal to document.body, not inside timeline', () => {
+    act(() => {
+      installWithExport('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    // Dialog should be in document.body, not inside the timeline container
+    expect(document.body.querySelector('.timeline-export-dialog')).not.toBeNull();
+    expect(document.body.querySelector('.timeline-dialog-backdrop')).not.toBeNull();
+    // The timeline container itself should NOT contain the dialog
+    expect(container.querySelector('.timeline-export-dialog')).toBeNull();
+    expect(container.querySelector('.timeline-dialog-backdrop')).toBeNull();
+  });
+
   // ── Export dynamic lifecycle ──
 
   it('export dialog closes when capability is removed', () => {
@@ -976,6 +995,43 @@ describe('TimelineBar unified shell', () => {
     // Confirm should be disabled since callback is missing
     const confirmBtn = document.querySelector('.timeline-export-dialog__confirm') as HTMLButtonElement;
     expect(confirmBtn.disabled).toBe(true);
+  });
+
+  it('export trigger reappears after stop → restart recording cycle', () => {
+    // Regression: user stops recording, starts again — export button must come back
+    const { container, rerender } = render(<TimelineBar />);
+
+    // 1. Install with export capability + create range so export is visible
+    act(() => {
+      installWithExport('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    rerender(<TimelineBar />);
+    expect(container.querySelector('.timeline-export-trigger')).not.toBeNull();
+
+    // 2. Simulate stop/off — publishTimelineOffState clears capability + range
+    act(() => {
+      useAppStore.getState().publishTimelineOffState();
+    });
+    rerender(<TimelineBar />);
+    expect(container.querySelector('.timeline-export-trigger')).toBeNull();
+
+    // 3. Simulate start recording again — restore mode + capability + range
+    act(() => {
+      useAppStore.getState().setTimelineRecordingMode('active');
+      useAppStore.getState().setTimelineExportCapabilities({ replay: true, full: true });
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 50, reviewTimePs: null,
+        rangePs: { start: 0, end: 100 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    rerender(<TimelineBar />);
+    expect(container.querySelector('.timeline-export-trigger')).not.toBeNull();
   });
 
   it('uninstallTimelineUI clears export capability atomically', () => {

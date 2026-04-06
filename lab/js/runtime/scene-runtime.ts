@@ -38,7 +38,7 @@ export interface SceneRuntime {
   updateChooserRecentRow(): void;
   updateSceneStatus(): void;
   updateActiveCountRow(): void;
-  commitMolecule(filename: string, name: string, atoms: any[], bonds: any[], offset: number[]): void | Promise<void>;
+  commitMolecule(filename: string, name: string, atoms: import('../placement').StructureAtom[], bonds: import('../../../src/types/interfaces').BondTuple[], offset: number[]): void | Promise<void>;
   clearPlayground(): void | Promise<void>;
   addMoleculeToScene(filename: string, name: string, offset: number[]): Promise<void>;
   updateStatus(text: string): void;
@@ -69,6 +69,8 @@ export interface SceneRuntimeDeps {
   recoverFromWorkerFailure: (reason: string, lastSnapshot?: import('./worker-lifecycle').RecoverySnapshot) => void;
   getPauseSyncPromise?: () => Promise<void> | null;
   onSceneMutated?: () => void;
+  /** Called after successful molecule commit with append metadata + structure atoms. */
+  onMoleculeCommitted?: (info: { atomOffset: number; atomCount: number; atoms: { element: string }[]; filename: string; name: string }) => void;
 }
 
 export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
@@ -188,12 +190,21 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
         }
       }
 
-      commitMolecule(physics as any, renderer as any, filename, name, atoms, bonds, offset, session.scene, {
+      const commitResult = commitMolecule(physics as any, renderer as any, filename, name, atoms, bonds, offset, session.scene, {
         syncInput: () => { const ib = deps.getInputBindings(); if (ib) ib.sync(); },
         resetProfiler: deps.partialProfilerReset,
         fitCamera: () => renderer.fitCamera(),
         updateSceneStatus: () => this.updateSceneStatus(),
       });
+      // Notify identity tracker/metadata registry of the append
+      if (deps.onMoleculeCommitted) {
+        deps.onMoleculeCommitted({
+          atomOffset: commitResult.atomOffset,
+          atomCount: commitResult.atomCount,
+          atoms: atoms.map(a => ({ element: a.element })),
+          filename, name,
+        });
+      }
       finalizeCommittedScene();
 
       const wr = deps.getWorkerRuntime();

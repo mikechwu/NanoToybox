@@ -338,6 +338,13 @@ export class PhysicsEngine {
   /** Reference batch duration in fs for damping normalization. */
   dampingRefDurationFs!: number;
 
+  // Export/identity plumbing — not part of IPhysicsEngine interface
+  private _onCompaction: ((keep: number[]) => void) | null = null;
+
+  setCompactionListener(listener: ((keep: number[]) => void) | null): void {
+    this._onCompaction = listener;
+  }
+
   // Benchmark timing
   _bench!: Record<string, number> | null;
 
@@ -1529,6 +1536,8 @@ export class PhysicsEngine {
       this._recenterWallAfterRemoval(removed, removed + this.n);
       this.shrinkWallRadiusAfterRemoval();
     }
+    // Notify identity tracker of compaction mapping
+    if (this._onCompaction) this._onCompaction(keep);
   }
 
   // ─── Checkpoint / restore ───

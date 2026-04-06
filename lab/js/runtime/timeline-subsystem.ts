@@ -30,10 +30,21 @@ import { createTimelineRecordingPolicy, type RecordingMode } from './timeline-re
 import { createRecordingOrchestrator } from './timeline-recording-orchestrator';
 import { createTimelineCoordinator, type TimelineCoordinatorDeps } from './simulation-timeline-coordinator';
 import { captureRestartFrameData } from './restart-state-adapter';
+import { createTimelineAtomIdentityTracker } from './timeline-atom-identity';
+import { createAtomMetadataRegistry } from './atom-metadata-registry';
 import { useAppStore } from '../store/app-store';
 import type { PhysicsCheckpoint } from '../../../src/types/interfaces';
 
 export type { RecordingMode } from './timeline-recording-policy';
+
+/** Narrow molecule shape the subsystem needs for export atom-state rehydration. */
+export interface TimelineSceneMolecule {
+  atomOffset: number;
+  atomCount: number;
+  localAtoms: { element: string }[];
+  structureFile: string;
+  name: string;
+}
 
 export interface TimelineSubsystemDeps {
   getPhysics: TimelineCoordinatorDeps['getPhysics'];
@@ -47,6 +58,8 @@ export interface TimelineSubsystemDeps {
   clearBondedGroupHighlight: TimelineCoordinatorDeps['clearBondedGroupHighlight'];
   clearRendererFeedback: TimelineCoordinatorDeps['clearRendererFeedback'];
   syncBondedGroupsForDisplayFrame: TimelineCoordinatorDeps['syncBondedGroupsForDisplayFrame'];
+  /** Current scene molecules — for rebuilding export atom state on recording restart. */
+  getSceneMolecules: () => TimelineSceneMolecule[];
   /** Export dependency — only injected when export is implemented. */
   exportHistory?: (kind: 'replay' | 'full') => Promise<void> | void;
   exportCapabilities?: { replay: boolean; full: boolean };
@@ -88,11 +101,45 @@ export interface TimelineSubsystem {
   /** Get bonded-group components for the current review frame (from internal timeline state, not store).
    *  Returns null when not in review mode. */
   getCurrentReviewBondedGroupComponents(): { atomCount: number; components: { atoms: number[]; size: number }[] } | null;
+  /** Atom identity tracker — for scene-runtime append hooks and export. */
+  getAtomIdentityTracker(): import('./timeline-atom-identity').TimelineAtomIdentityTracker;
+  /** Atom metadata registry — for export. */
+  getAtomMetadataRegistry(): import('./atom-metadata-registry').AtomMetadataRegistry;
+  /** Export snapshot of the timeline — cloned, safe to serialize. */
+  getTimelineExportSnapshot(): ReturnType<import('./simulation-timeline').SimulationTimeline['getExportSnapshot']>;
+  /** Mark atom identity as potentially stale (worker compaction without keep[] mapping).
+   *  Disables export capability until a clean reset. */
+  markIdentityStale(): void;
+  /** Check if atom identity may be stale (worker compaction without keep[] mapping). */
+  isIdentityStale(): boolean;
 }
 
 export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSubsystem {
   const timeline = createSimulationTimeline();
   const policy = createTimelineRecordingPolicy();
+
+  // ── Export capability lifecycle ──
+  // Single source of truth: derived from deps + staleness flag.
+  let _identityMayBeStale = false;
+
+  function currentExportCapability() {
+    const hasExport = !!(deps.exportHistory && deps.exportCapabilities);
+    return hasExport && !_identityMayBeStale ? deps.exportCapabilities! : null;
+  }
+
+  function syncExportCapability() {
+    useAppStore.getState().setTimelineExportCapabilities(currentExportCapability());
+  }
+
+  function setIdentityStale() {
+    _identityMayBeStale = true;
+    syncExportCapability();
+  }
+
+  function clearIdentityStaleness() {
+    _identityMayBeStale = false;
+    // Does NOT call syncExportCapability — caller decides when to restore.
+  }
 
   const syncRecordingMode = () => {
     useAppStore.getState().setTimelineRecordingMode(policy.getMode());
@@ -103,12 +150,25 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
     syncRecordingMode();
   };
 
+  // Atom identity tracking for export
+  const atomIdentityTracker = createTimelineAtomIdentityTracker();
+  const atomMetadataRegistry = createAtomMetadataRegistry();
+
+  // Wire compaction listener from physics to identity tracker
+  const physics = deps.getPhysics();
+  if (typeof (physics as any).setCompactionListener === 'function') {
+    (physics as any).setCompactionListener((keep: number[]) => {
+      atomIdentityTracker.handleCompaction(keep);
+    });
+  }
+
   const orchestrator = createRecordingOrchestrator({
     timeline,
     policy,
     getPhysics: deps.getPhysics,
     syncStoreState,
     getDtFs: () => deps.getPhysics().getDtFs(),
+    captureAtomIds: (n: number) => atomIdentityTracker.captureForCurrentState(n),
   });
 
   const coordinator = createTimelineCoordinator({
@@ -134,6 +194,34 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
   function resetRuntime() {
     timeline.clear();
     orchestrator.reset();
+    atomIdentityTracker.reset();
+    atomMetadataRegistry.reset();
+    clearIdentityStaleness();
+  }
+
+  /** Rebuild identity tracker + metadata registry from current scene molecules.
+   *  Must be called as a pair — never rebuild one without the other.
+   *  Asserts dense-prefix layout: contiguous offsets, atomCount === localAtoms.length. */
+  function rebuildExportAtomState() {
+    atomIdentityTracker.reset();
+    atomMetadataRegistry.reset();
+    const sorted = [...deps.getSceneMolecules()].sort((a, b) => a.atomOffset - b.atomOffset);
+    let expectedOffset = 0;
+    for (const mol of sorted) {
+      if (mol.atomOffset !== expectedOffset) {
+        throw new Error(`rebuildExportAtomState: non-contiguous offset at "${mol.name}" (expected ${expectedOffset}, got ${mol.atomOffset})`);
+      }
+      if (mol.localAtoms.length !== mol.atomCount) {
+        throw new Error(`rebuildExportAtomState: atomCount mismatch for "${mol.name}" (atomCount=${mol.atomCount}, localAtoms.length=${mol.localAtoms.length})`);
+      }
+      const ids = atomIdentityTracker.handleAppend(mol.atomOffset, mol.atomCount);
+      atomMetadataRegistry.registerAppendedAtoms(
+        ids,
+        mol.localAtoms.map(a => ({ element: a.element })),
+        { file: mol.structureFile, label: mol.name },
+      );
+      expectedOffset += mol.atomCount;
+    }
   }
 
   /** Publish the canonical "off / empty" store state.
@@ -153,17 +241,18 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
     orchestrator.setSimTimePs(0);
     const rd = captureRestartFrameData(physics);
     const timePs = 0;
+    const atomIds = atomIdentityTracker.captureForCurrentState(rd.n);
     timeline.recordFrame({
-      timePs, n: rd.n, positions: rd.positions,
+      timePs, n: rd.n, atomIds: atomIds.slice(), positions: rd.positions,
       interaction: rd.interaction, boundary: rd.boundary,
     });
     timeline.recordRestartFrame({
-      timePs, n: rd.n, positions: rd.positions,
+      timePs, n: rd.n, atomIds: atomIds.slice(), positions: rd.positions,
       velocities: rd.velocities, bonds: rd.bonds, config: rd.config,
       interaction: rd.interaction, boundary: rd.boundary,
     });
     timeline.recordCheckpoint({
-      timePs,
+      timePs, atomIds: atomIds.slice(),
       physics: physics.createCheckpoint() as PhysicsCheckpoint,
       config: rd.config,
       interaction: rd.interaction,
@@ -172,16 +261,27 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
     syncStoreState();
   }
 
-  /** Internal: passive enable for app startup. Not exposed as public API. */
-  function enablePassiveRecording() {
-    policy.turnOn();
-    syncRecordingMode();
+  /** Try to rebuild export atom state; on failure, reset to clean empty state
+   *  and mark stale to durably disable export. */
+  function tryRebuildExportAtomState() {
+    try {
+      rebuildExportAtomState();
+    } catch (err) {
+      console.error('[timeline-subsystem] export atom state rebuild failed:', err);
+      // Restore clean state — partial rebuild left tracker/registry inconsistent
+      atomIdentityTracker.reset();
+      atomMetadataRegistry.reset();
+      setIdentityStale();
+      useAppStore.getState().setStatusText('Export disabled: scene atom metadata is inconsistent.');
+    }
   }
 
   function startRecordingNow() {
     if (policy.getMode() !== 'off') return;
+    tryRebuildExportAtomState();
     policy.startNow();
     seedInitialFrame();
+    syncExportCapability();
   }
 
   function turnRecordingOff() {
@@ -198,7 +298,12 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
     markAtomInteractionStarted: () => {
       const wasBefore = policy.getMode();
       policy.markAtomInteractionStarted();
-      if (wasBefore !== policy.getMode()) syncRecordingMode();
+      if (wasBefore !== policy.getMode()) {
+        // ready → active: rebuild export atom state for existing scene atoms
+        if (wasBefore === 'ready') tryRebuildExportAtomState();
+        syncRecordingMode();
+        syncExportCapability();
+      }
     },
     recordAfterReconciliation: (steps) => orchestrator.tick(steps),
     isInReview: () => timeline.getState().mode === 'review',
@@ -215,6 +320,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
       resetRuntime();
       policy.turnOn();
       useAppStore.getState().publishTimelineReadyState();
+      syncExportCapability();
     },
     teardown: () => {
       resetRuntime();
@@ -231,7 +337,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
         onStartRecordingNow: () => startRecordingNow(),
         onTurnRecordingOff: () => turnRecordingOff(),
         ...(hasExport ? { onExportHistory: (kind: 'replay' | 'full') => deps.exportHistory!(kind) } : {}),
-      }, 'ready', hasExport ? deps.exportCapabilities! : null);
+      }, 'ready', currentExportCapability());
     },
     getReviewBondedGroupComponents: (timePs) => timeline.getReviewBondedGroupComponents(timePs),
     getCurrentReviewBondedGroupComponents: () => {
@@ -241,5 +347,10 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
       if (!reviewFrame) return null;
       return timeline.getReviewBondedGroupComponents(reviewFrame.timePs);
     },
+    getAtomIdentityTracker: () => atomIdentityTracker,
+    getAtomMetadataRegistry: () => atomMetadataRegistry,
+    getTimelineExportSnapshot: () => timeline.getExportSnapshot(),
+    markIdentityStale: () => setIdentityStale(),
+    isIdentityStale: () => _identityMayBeStale,
   };
 }

@@ -33,6 +33,8 @@ export interface TimelineFrame {
   frameId: number;
   timePs: number;
   n: number;
+  /** Stable atom IDs for slots 0..n-1. Empty until identity tracker is wired. */
+  atomIds: number[];
   positions: Float64Array;
   interaction: TimelineInteractionState | null;
   boundary: TimelineBoundaryState;
@@ -43,6 +45,8 @@ export interface TimelinePhysicsConfig {
   damping: number;
   kDrag: number;
   kRotate: number;
+  dtFs: number;
+  dampingRefDurationFs: number;
 }
 
 /**
@@ -81,6 +85,7 @@ export interface TimelineRestartFrame {
   frameId: number;
   timePs: number;
   n: number;
+  atomIds: number[];
   positions: Float64Array;
   velocities: Float64Array;
   /** Bond topology snapshot — [i, j, distance] tuples. */
@@ -95,6 +100,7 @@ export interface TimelineRestartFrame {
 export interface TimelineCheckpoint {
   checkpointId: number;
   timePs: number;
+  atomIds: number[];
   physics: PhysicsCheckpoint;
   /** Physics coefficients at recording time. */
   config: TimelinePhysicsConfig;
@@ -145,11 +151,20 @@ export interface TimelineState {
 
 export interface SimulationTimeline {
   // ── Recording ──
-  recordFrame(frame: Omit<TimelineFrame, 'frameId'>): void;
-  recordRestartFrame(frame: Omit<TimelineRestartFrame, 'frameId'>): void;
-  recordCheckpoint(cp: Omit<TimelineCheckpoint, 'checkpointId'>): void;
+  recordFrame(frame: Omit<TimelineFrame, 'frameId' | 'atomIds'> & { atomIds?: number[] }): void;
+  recordRestartFrame(frame: Omit<TimelineRestartFrame, 'frameId' | 'atomIds'> & { atomIds?: number[] }): void;
+  recordCheckpoint(cp: Omit<TimelineCheckpoint, 'checkpointId' | 'atomIds'> & { atomIds?: number[] }): void;
   shouldRecordFrame(): boolean;
   shouldRecordCheckpoint(): boolean;
+
+  // ── Export ──
+  /** Read-only cloned snapshot of all stored frames for export.
+   *  Arrays in chronological order, ids preserved, no normalization. */
+  getExportSnapshot(): {
+    denseFrames: TimelineFrame[];
+    restartFrames: TimelineRestartFrame[];
+    checkpoints: TimelineCheckpoint[];
+  };
 
   // ── Review ──
   enterReview(timePs: number): TimelineFrame | null;
@@ -244,15 +259,16 @@ export function createSimulationTimeline(
     return performance.now() - _lastCheckpointRecordTs >= cfg.checkpointIntervalMs;
   }
 
-  function recordFrame(frame: Omit<TimelineFrame, 'frameId'>): void {
-    _frames.push({ ...frame, frameId: _nextFrameId++, positions: new Float64Array(frame.positions) });
+  function recordFrame(frame: Omit<TimelineFrame, 'frameId' | 'atomIds'> & { atomIds?: number[] }): void {
+    _frames.push({ ...frame, atomIds: frame.atomIds ?? [], frameId: _nextFrameId++, positions: new Float64Array(frame.positions) });
     _lastFrameRecordTs = performance.now();
     while (_frames.length > cfg.maxDenseFrames) _frames.shift();
   }
 
-  function recordRestartFrame(frame: Omit<TimelineRestartFrame, 'frameId'>): void {
+  function recordRestartFrame(frame: Omit<TimelineRestartFrame, 'frameId' | 'atomIds'> & { atomIds?: number[] }): void {
     _restartFrames.push({
       ...frame,
+      atomIds: frame.atomIds ?? [],
       frameId: _nextRestartFrameId++,
       positions: new Float64Array(frame.positions),
       velocities: new Float64Array(frame.velocities),
@@ -261,9 +277,10 @@ export function createSimulationTimeline(
     while (_restartFrames.length > cfg.maxRestartFrames) _restartFrames.shift();
   }
 
-  function recordCheckpoint(cp: Omit<TimelineCheckpoint, 'checkpointId'>): void {
+  function recordCheckpoint(cp: Omit<TimelineCheckpoint, 'checkpointId' | 'atomIds'> & { atomIds?: number[] }): void {
     _checkpoints.push({
       ...cp,
+      atomIds: cp.atomIds ?? [],
       checkpointId: _nextCheckpointId++,
       physics: {
         n: cp.physics.n,
@@ -456,5 +473,29 @@ export function createSimulationTimeline(
     getFrameCount: () => _frames.length,
     getCheckpointCount: () => _checkpoints.length,
     getRestartFrameCount: () => _restartFrames.length,
+    getExportSnapshot: () => ({
+      denseFrames: _frames.map(f => ({
+        ...f,
+        positions: new Float64Array(f.positions),
+        atomIds: [...f.atomIds],
+      })),
+      restartFrames: _restartFrames.map(f => ({
+        ...f,
+        positions: new Float64Array(f.positions),
+        velocities: new Float64Array(f.velocities),
+        bonds: f.bonds.map(b => [...b] as [number, number, number]),
+        atomIds: [...f.atomIds],
+      })),
+      checkpoints: _checkpoints.map(cp => ({
+        ...cp,
+        atomIds: [...cp.atomIds],
+        physics: {
+          n: cp.physics.n,
+          pos: new Float64Array(cp.physics.pos),
+          vel: new Float64Array(cp.physics.vel),
+          bonds: cp.physics.bonds.map(b => [...b] as [number, number, number]),
+        },
+      })),
+    }),
   };
 }

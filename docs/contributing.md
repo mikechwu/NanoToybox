@@ -73,6 +73,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - Runtime module extraction — feature modules in `lab/js/runtime/`, orchestration modules in `lab/js/app/` (frame-runtime, app-lifecycle); see `docs/architecture.md` for the full inventory. main.ts is the composition root
 - Object View panel — Center + Follow buttons with inline SVG icons, positioned below status block
 - Page-load onboarding overlay — welcome card with sink-to-Settings animation, page-lifetime dismissal
+- History file export — v1 `atomdojo-history` format with atom identity tracking (stable IDs across append/compaction), atom metadata registry (element, source provenance), export capability lifecycle (subsystem-owned, staleness-guarded), export validation (monotonic ordering, atom table integrity, per-frame atomId uniqueness), and export UI (capability-gated trigger, portaled dialog, mutual exclusion with clear dialog)
 
 ## Architecture Rules
 
@@ -394,6 +395,7 @@ E2E tests inject `?e2e=1` via `gotoApp()` from `tests/e2e/helpers.ts`.
 | E2E test helpers | `tests/e2e/helpers.ts` (gotoApp), `tests/e2e/camera-onboarding.spec.ts` |
 | Bonded clusters (panel + highlight + color) | `lab/js/runtime/bonded-group-runtime.ts`, `lab/js/runtime/bonded-group-highlight-runtime.ts`, `lab/js/runtime/bonded-group-appearance-runtime.ts`, `lab/js/runtime/bonded-group-coordinator.ts`, `lab/js/components/BondedGroupsPanel.tsx`, `lab/js/runtime/interaction-highlight-runtime.ts` |
 | Highlight tests | `tests/unit/bonded-group-highlight.test.ts`, `tests/unit/renderer-interaction-highlight.test.ts`, `tests/unit/highlight-test-utils.ts` |
+| Timeline / export tests | `tests/unit/timeline-subsystem.test.ts` (37 tests incl. export capability and rehydration), `tests/unit/history-export-pipeline.test.ts` (19 tests incl. end-to-end lifecycle validation), `tests/unit/timeline-bar-lifecycle.test.tsx` (export UI regression) |
 | Store callback wiring | `lab/js/runtime/ui-bindings.ts`, `lab/js/store/app-store.ts` |
 | Scene / placement | `lab/js/scene.ts`, `lab/js/placement.ts`, `lab/js/runtime/placement-solver.ts`, `tests/unit/placement-solver.test.ts` |
 | Browser physics | `lab/js/physics.ts` (JS Tersoff), `sim/wasm/tersoff.c` (Wasm kernel) |

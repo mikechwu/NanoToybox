@@ -34,6 +34,8 @@ export interface RecordingOrchestratorDeps {
   syncStoreState: () => void;
   /** Get authoritative timestep in femtoseconds from the engine. */
   getDtFs: () => number;
+  /** Capture stable atom IDs for the current physics state. Required for export-capable timeline recording. */
+  captureAtomIds?: (n: number) => number[];
 }
 
 export interface TimelineRecordingOrchestrator {
@@ -69,13 +71,15 @@ export function createRecordingOrchestrator(deps: RecordingOrchestratorDeps): Ti
     if (timeline.shouldRecordFrame()) {
       const rd = captureRestartFrameData(physics);
 
+      const atomIds = deps.captureAtomIds ? deps.captureAtomIds(rd.n) : [];
+
       timeline.recordFrame({
-        timePs: _simTimePs, n: rd.n, positions: rd.positions,
+        timePs: _simTimePs, n: rd.n, atomIds, positions: rd.positions,
         interaction: rd.interaction, boundary: rd.boundary,
       });
 
       timeline.recordRestartFrame({
-        timePs: _simTimePs, n: rd.n, positions: rd.positions,
+        timePs: _simTimePs, n: rd.n, atomIds, positions: rd.positions,
         velocities: rd.velocities, bonds: rd.bonds, config: rd.config,
         interaction: rd.interaction, boundary: rd.boundary,
       });
@@ -85,8 +89,10 @@ export function createRecordingOrchestrator(deps: RecordingOrchestratorDeps): Ti
 
     if (timeline.shouldRecordCheckpoint()) {
       const rd = captureRestartFrameData(physics);
+      const cpAtomIds = deps.captureAtomIds ? deps.captureAtomIds(rd.n) : [];
       timeline.recordCheckpoint({
         timePs: _simTimePs,
+        atomIds: cpAtomIds,
         physics: physics.createCheckpoint() as PhysicsCheckpoint,
         config: rd.config,
         interaction: rd.interaction,

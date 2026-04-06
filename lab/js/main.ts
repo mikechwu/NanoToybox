@@ -349,6 +349,13 @@ async function init() {
     recoverFromWorkerFailure: recoverLocalPhysicsAfterWorkerFailure,
     getPauseSyncPromise: () => _pauseSyncPromise,
     onSceneMutated: () => { _bondedGroupCoordinator?.update(); if (physics) _bondedGroupAppearance?.pruneAndSync(physics.n); },
+    onMoleculeCommitted: (info) => {
+      if (!_timelineSub) return;
+      const tracker = _timelineSub.getAtomIdentityTracker();
+      const registry = _timelineSub.getAtomMetadataRegistry();
+      const assignedIds = tracker.handleAppend(info.atomOffset, info.atomCount);
+      registry.registerAppendedAtoms(assignedIds, info.atoms, { file: info.filename, label: info.name });
+    },
   });
 
   // Load manifest
@@ -381,6 +388,7 @@ async function init() {
         scheduler.totalStepsProfiled += stepsCompleted;
       },
       onFailure: (reason, lastSnapshot) => recoverLocalPhysicsAfterWorkerFailure(reason, lastSnapshot),
+      onWallRemoval: () => { _timelineSub?.markIdentityStale(); },
     });
 
     // Debug/test hooks — main.ts owns window globals, worker runtime provides data
@@ -666,6 +674,25 @@ async function init() {
     clearBondedGroupHighlight: () => { _bondedGroupHighlight?.clearHighlight(); },
     clearRendererFeedback: () => { if (renderer) renderer.clearFeedback(); },
     syncBondedGroupsForDisplayFrame: () => { _bondedGroupCoordinator?.update(); },
+    getSceneMolecules: () => session.scene.molecules,
+    exportHistory: async (kind) => {
+      if (kind !== 'full' || !_timelineSub) return;
+      // Defensive runtime gate — identity may be stale after worker compaction
+      if (_timelineSub.isIdentityStale()) {
+        throw new Error('Export is unavailable because atom identity is stale after worker compaction.');
+      }
+      const { buildFullHistoryFile, downloadHistoryFile, validateFullHistoryFile } = await import('./runtime/history-export');
+      const file = buildFullHistoryFile({
+        getTimelineExportData: () => _timelineSub!.getTimelineExportSnapshot(),
+        getAtomTable: () => _timelineSub!.getAtomMetadataRegistry().getAtomTable(),
+        appVersion: '0.1.0',
+      });
+      if (!file) throw new Error('No recorded history to export.');
+      const errors = validateFullHistoryFile(file);
+      if (errors.length > 0) throw new Error(`Export validation failed: ${errors[0]}`);
+      downloadHistoryFile(file);
+    },
+    exportCapabilities: { replay: false, full: true },
   });
   _timelineSub.installAndEnable(); // Atomic: install callbacks + enter ready state (no transient off flash)
 

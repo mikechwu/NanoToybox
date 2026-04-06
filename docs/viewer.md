@@ -37,7 +37,7 @@ npm run dev
 | Bonded clusters | Side panel showing live connected components, fixed at 250 px via `--panel-width` CSS custom property (compact #N labels + action columns; scrollbar space reserved with `scrollbar-gutter: stable`). Expanded by default. Header: "Bonded Clusters: N" label + "Collapse"/"Expand" toggle pill; label truncates with ellipsis on narrow panels. User's expand/collapse preference persists across resets. Hover to preview (pale yellow highlight, desktop only — mouse enter shows, mouse leave clears). Row click selection is feature-gated off; rows are display-only (no `role="button"`, no `tabIndex`). Clear Highlight button is hidden. Two-level expand: large clusters + collapsible small clusters. Per-cluster color chip for authored color overrides (see Color Editing UX below). Center and Follow buttons remain fully interactive. |
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
 | Pause | Primary control — freezes physics, camera/UI remain active |
-| Timeline | TimelineBar with 2-column layout (mode rail + timeline lane), scrub track, review mode (display-only playback of history), and restart from dense frames. Recording arms on first atom interaction (drag/move/rotate/flick) |
+| Timeline | TimelineBar with 2-column layout (mode rail + timeline lane), scrub track, review mode (display-only playback of history), restart from dense frames, and export dialog. 2-slot action zone (export + clear triggers). Recording arms on first atom interaction (drag/move/rotate/flick) |
 | Status | Message-only StatusBar: shows statusError or statusText, returns null otherwise |
 | Scene controls | Add (dock) and Add Molecule (settings sheet) both open the chooser; chooser shows a pinned Recent shortcut after first placement. Clear playground, Reset View. |
 
@@ -156,7 +156,7 @@ The lane has an invariant 3-part grid:
 |---|---|---|
 | Time column | `--tl-time-width` (fixed) | Formatted time readout (fs / ps / ns / us, auto-scaling via `formatTime`) |
 | Track | `1fr` | Draggable scrub track with pointer capture; fill bar + thumb. Disabled (no range) in off/ready states |
-| Action zone | `--tl-action-width` (fixed) | Close/clear icon (`ClearTrigger`) when available |
+| Action zone | `--tl-action-width` (fixed) | 2-slot zone: export trigger (`ExportTrigger`, appears when export capability is present and timeline has a range) + close/clear trigger (`ClearTrigger`) when available |
 
 **Overlays** (`timeline-overlay-zone`) float in a reserved zone above the track:
 
@@ -168,7 +168,11 @@ The lane has an invariant 3-part grid:
 
 Empty spacers preserve the grid skeleton in modes that don't use overlays or actions.
 
-**Clear action**: The close icon (`ClearTrigger`) always triggers a confirmation dialog (`TimelineClearDialog`) before clearing. The dialog announces "Stop recording?" and requires an explicit "Continue" or "Cancel" — the icon-only control is too ambiguous for an irreversible erase on any device. Focus is trapped inside the dialog; Escape dismisses.
+**Clear action**: The close icon (`ClearTrigger`) always triggers a confirmation dialog (`TimelineClearDialog`, portaled to `document.body`) before clearing. The dialog announces "Stop recording?" and requires an explicit "Continue" or "Cancel" — the icon-only control is too ambiguous for an irreversible erase on any device. Focus is trapped inside the dialog; Escape dismisses.
+
+**Export action**: The export icon (`ExportTrigger`) opens an export dialog (`TimelineExportDialog`, portaled to `document.body`) with replay/full kind selection. Export capability is gated by: export dependencies exist AND atom identity is not stale. Export rebuild failures surface via `setStatusText` on the StatusBar.
+
+**Dialog mutual exclusion**: Opening the export dialog closes the clear dialog and vice versa — at most one dialog is visible at a time.
 
 **Timeline Hints**
 
@@ -181,6 +185,7 @@ All 5 timeline interactive controls have `ActionHint` hover/focus tooltips (desk
 | Review (enter) | "Enter review mode at the current time." |
 | Review (disabled) | "No recorded history to review yet." |
 | Restart here | "Restart the simulation from this point." |
+| Export (export icon) | "Export timeline history." |
 | Clear (close icon) | "Stop recording and clear timeline history." |
 
 On touch/coarse-pointer devices, `ActionHint` tooltips are CSS-hidden. Touch discoverability relies on visible button labels and `aria-label` attributes instead.
@@ -211,7 +216,7 @@ Recording is disarmed until the first direct atom interaction (drag, move, rotat
 
 ### StatusBar
 
-StatusBar is now message-only (no persistent scene summary). It shows `statusError` or `statusText` and returns `null` otherwise.
+StatusBar is now message-only (no persistent scene summary). It shows `statusError` or `statusText` and returns `null` otherwise. Export rebuild failures surface here via `setStatusText`.
 
 ### Placement Solver
 

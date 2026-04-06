@@ -91,7 +91,13 @@ export function captureRestartFrameData(physics: PhysicsEngine): RestartFrameDat
     positions: physics.pos.subarray(0, physics.n * 3),
     velocities: physics.vel.subarray(0, physics.n * 3),
     bonds: physics.getBonds().map((b: number[]) => [b[0], b[1], b[2]] as [number, number, number]),
-    config: { damping: physics.getDamping(), kDrag: physics.getDragStrength(), kRotate: physics.getRotateStrength() },
+    config: {
+      damping: physics.getDamping(),
+      kDrag: physics.getDragStrength(),
+      kRotate: physics.getRotateStrength(),
+      dtFs: physics.getDtFs(),
+      dampingRefDurationFs: physics.dampingRefDurationFs,
+    },
     interaction: captureInteractionState(physics),
     boundary: captureBoundaryState(physics),
   };

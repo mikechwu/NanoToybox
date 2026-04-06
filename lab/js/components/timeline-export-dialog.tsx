@@ -3,6 +3,7 @@
  *  Mirrors the clear-dialog accessibility contract (focus trap, Escape, backdrop). */
 
 import React, { useCallback, useRef, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { ActionHint } from './ActionHint';
 import { TIMELINE_HINTS } from './timeline-hints';
 
@@ -109,7 +110,7 @@ export function TimelineExportDialog({
       if (e.key === 'Tab') {
         const dialog = firstEnabledRef.current?.closest('.timeline-export-dialog');
         if (!dialog) return;
-        const focusable = dialog.querySelectorAll<HTMLElement>('input:not(:disabled), button:not(:disabled)');
+        const focusable = dialog.querySelectorAll<HTMLElement>('button:not(:disabled)');
         if (focusable.length === 0) return;
         if (focusable.length === 1) { e.preventDefault(); focusable[0].focus(); return; }
         const first = focusable[0];
@@ -126,22 +127,25 @@ export function TimelineExportDialog({
   }, [open, onCancel]);
 
   if (!open) return null;
-  return (
+  return createPortal(
     <>
       <div className="timeline-dialog-backdrop" onClick={onCancel} />
-      <div className="timeline-export-dialog" role="dialog" aria-modal="true" aria-label="Export History">
+      <div className="timeline-modal-card timeline-export-dialog" role="dialog" aria-modal="true" aria-label="Export History">
         <p className="timeline-export-dialog__title">Export History</p>
         <div className="timeline-export-dialog__options" role="radiogroup" aria-label="Export format">
           <label className={`timeline-export-dialog__option${!availableKinds.replay ? ' timeline-export-dialog__option--disabled' : ''}`}>
             <input
               ref={firstEnabledRef}
+              className="timeline-export-dialog__radio-native"
               type="radio"
               name="export-kind"
               value="replay"
               checked={kind === 'replay'}
               disabled={!availableKinds.replay}
               onChange={() => onSelectKind('replay')}
+              tabIndex={-1}
             />
+            <span className="timeline-export-dialog__radio-ui" aria-hidden="true" />
             <span className="timeline-export-dialog__option-text">
               <strong>Replay</strong>
               <span>Small file, playback only</span>
@@ -151,16 +155,19 @@ export function TimelineExportDialog({
           <label className={`timeline-export-dialog__option${!availableKinds.full ? ' timeline-export-dialog__option--disabled' : ''}`}>
             <input
               ref={secondRef}
+              className="timeline-export-dialog__radio-native"
               type="radio"
               name="export-kind"
               value="full"
               checked={kind === 'full'}
               disabled={!availableKinds.full}
               onChange={() => onSelectKind('full')}
+              tabIndex={-1}
             />
+            <span className="timeline-export-dialog__radio-ui" aria-hidden="true" />
             <span className="timeline-export-dialog__option-text">
               <strong>Full</strong>
-              <span>Review + restart fidelity</span>
+              <span>Review-complete playback</span>
               {fullEstimate ? <span className="timeline-export-dialog__estimate">{fullEstimate}</span> : null}
             </span>
           </label>
@@ -169,10 +176,11 @@ export function TimelineExportDialog({
         <div className="timeline-export-dialog__actions">
           <button className="timeline-export-dialog__cancel" onClick={onCancel}>Cancel</button>
           <button className="timeline-export-dialog__confirm" onClick={onConfirm} disabled={submitting || !confirmEnabled}>
-            {submitting ? 'Exporting…' : 'Download .atomdojo'}
+            {submitting ? 'Exporting…' : 'Download'}
           </button>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }

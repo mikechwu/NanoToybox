@@ -78,6 +78,7 @@ function createTestSubsystem() {
     clearBondedGroupHighlight: vi.fn(),
     clearRendererFeedback: vi.fn(),
     syncBondedGroupsForDisplayFrame: vi.fn(),
+    getSceneMolecules: () => [],
   });
 }
 

@@ -76,7 +76,7 @@ NanoToybox/
 │   │   │   ├── timeline-context-capture.ts   # Capture/restore interaction and boundary state via public physics API
 │   │   │   ├── timeline-recording-policy.ts  # Arming policy (disarmed until first atom interaction)
 │   │   │   ├── timeline-recording-orchestrator.ts # Owns recording cadence, authority-aware capture from reconciled physics
-│   │   │   ├── timeline-subsystem.ts         # Factory that creates the full subsystem, exposes high-level interface to main.ts
+│   │   │   ├── timeline-subsystem.ts         # Factory that creates the full subsystem, exposes high-level interface to main.ts; manages export capability lifecycle and atom identity/metadata rehydration
 │   │   │   ├── restart-state-adapter.ts      # Serialization/application/capture of RestartState
 │   │   │   ├── reconciled-steps.ts           # Deduplication helper for worker snapshot step counting
 │   │   │   ├── review-mode-action-hints.ts  # Transient status hint for review-locked actions (mobile/fallback)
@@ -84,7 +84,10 @@ NanoToybox/
 │   │   │   ├── drag-target-refresh.ts        # Per-frame drag target reprojection during active interactions
 │   │   │   ├── interaction-highlight-runtime.ts # Mode-aware highlight resolver (atom vs bonded group for Move/Rotate)
 │   │   │   ├── placement-solver.ts  # Placement solver: PCA shape analysis, molecule frame, chooseCameraFamily, selectOrientationByGeometry, refineOrientationFromGeometry, projectToScreen/projected2DPCA helpers, translation optimization with no-initial-bond constraint
-│   │   │   └── placement-camera-framing.ts  # Pure camera-basis framing solver for placement preview: overflow measurement, adaptive target-shift search, visible-anchor filtering
+│   │   │   ├── placement-camera-framing.ts  # Pure camera-basis framing solver for placement preview: overflow measurement, adaptive target-shift search, visible-anchor filtering
+│   │   │   ├── timeline-atom-identity.ts    # Stable atom ID tracker for export (append, compaction, capture lifecycle)
+│   │   │   ├── atom-metadata-registry.ts    # Persistent atom metadata keyed by stable atom ID (element, source)
+│   │   │   └── history-export.ts            # V1 history file builder, validator, and download trigger
 │   │   ├── scene.ts              # Scene commit/clear/load (transaction-safe)
 │   │   ├── placement.ts          # Placement lifecycle, pointer-capture drag, per-frame reprojection, canvas listeners
 │   │   │                           #   → delegates rigid-transform to placement-solver.ts, framing to placement-camera-framing.ts
@@ -112,6 +115,7 @@ NanoToybox/
 │   │   │   ├── timeline-format.ts   # formatTime, getTimelineProgress, getRestartAnchorStyle
 │   │   │   ├── timeline-mode-switch.tsx # TimelineModeSwitch: label (off/ready) or bidirectional 2-segment switch (live/review)
 │   │   │   ├── timeline-clear-dialog.tsx # TimelineClearDialog, useClearConfirm hook, ClearTrigger icon button
+│   │   │   ├── timeline-export-dialog.tsx # TimelineExportDialog, export trigger and confirmation UI
 │   │   │   └── timeline-hints.ts     # Single source of truth for all timeline tooltip copy (TIMELINE_HINTS constant)
 │   │   ├── store/
 │   │   │   ├── app-store.ts      # Zustand store for UI state
@@ -186,25 +190,30 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 
 ### Timeline Subsystem
 ```
-                     timeline-subsystem.ts (factory)
+                     timeline-subsystem.ts (factory + export capability)
                               │
-              ┌───────────────┼───────────────────┐
-              ▼               ▼                   ▼
-  timeline-recording-   simulation-timeline-   simulation-timeline.ts
-  orchestrator.ts       coordinator.ts         (ring buffers)
-  (cadence + capture)   (review/restart)             │
-        │                     │               ┌──────┼──────┐
-        ▼                     ▼               ▼      ▼      ▼
-  reconciled-steps.ts   restart-state-     review  restart  check-
-  (dedup helper)        adapter.ts         frames  frames   points
+              ┌───────────────┼───────────────────┬──────────────────┐
+              ▼               ▼                   ▼                  ▼
+  timeline-recording-   simulation-timeline-   simulation-timeline  history-export.ts
+  orchestrator.ts       coordinator.ts         .ts (ring buffers)   (v1 file builder)
+  (cadence + capture)   (review/restart)             │                   ▲
+        │                     │               ┌──────┼──────┐            │
+        │                     ▼               ▼      ▼      ▼   atom-metadata-
+        │               restart-state-     review  restart  check-  registry.ts
+        │               adapter.ts         frames  frames   points
         │               (serialize/apply)
         ▼                     │
-  snapshot-reconciler.ts      ▼
-  (reconciled physics   timeline-context-capture.ts
-   = single authority)  (boundary + interaction state)
+  reconciled-steps.ts         ▼
+  (dedup helper)        timeline-context-capture.ts
+        │               (boundary + interaction state)
+        ▼
+  snapshot-reconciler.ts
+  (reconciled physics         timeline-atom-identity.ts
+   = single authority)        (stable ID assignment;
+                               captureAtomIds wired to orchestrator)
 ```
 
-**Recording flow:** timeline-recording-policy arms after first atom interaction (drag/move/rotate/flick via interaction-dispatch) → timeline-recording-orchestrator captures from reconciled physics state (single authority) → simulation-timeline stores dense review frames + periodic restart frames / checkpoints.
+**Recording flow:** timeline-recording-policy arms after first atom interaction (drag/move/rotate/flick via interaction-dispatch) → timeline-recording-orchestrator captures from reconciled physics state (single authority); the orchestrator's `captureAtomIds` callback is wired to the identity tracker so each frame carries stable atomIds → simulation-timeline stores dense review frames + periodic restart frames / checkpoints. On recording restart, the subsystem calls `rebuildExportAtomState` to rehydrate atom identity and metadata from the current scene.
 
 **Review flow:** simulation-timeline-coordinator enters review mode (via `enterReviewAtCurrentTime()` from the mode switch, or `enterReview(timePs)` from scrub) → renderer.updateReviewFrame (display-only, no physics mutation) → all scene input gated at input-bindings boundary → TimelineBar scrub drives reviewTimePs.
 
@@ -419,7 +428,10 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - **timeline-context-capture.ts** — capture/restore interaction and boundary state via public physics API
 - **timeline-recording-policy.ts** — arming policy (disarmed until first atom interaction; placement, pause, speed, and settings do not arm)
 - **timeline-recording-orchestrator.ts** — owns recording cadence, authority-aware capture from reconciled physics state (single authority)
-- **timeline-subsystem.ts** — factory that creates the full timeline subsystem, exposes high-level interface to main.ts
+- **timeline-subsystem.ts** — factory that creates the full timeline subsystem, exposes high-level interface to main.ts; manages export capability lifecycle (single source of truth via `currentExportCapability`, derived from deps + identity staleness flag); rebuilds atom identity and metadata on recording restart (`rebuildExportAtomState` using `getSceneMolecules` dep for scene-aware rebuild); identity staleness guard disables export during worker compaction until rebuild completes
+- **timeline-atom-identity.ts** — stable atom ID tracker. Auto-assigns on first capture, handles append and compaction. Required for export-capable timeline recording.
+- **atom-metadata-registry.ts** — maps stable atom IDs to element metadata. Validates array length and element presence on registration.
+- **history-export.ts** — builds v1 atomdojo-history files. Validates monotonic ordering, atom table integrity, per-frame atomId uniqueness. Downloads via programmatic anchor.
 - **restart-state-adapter.ts** — serialization, application, and capture of RestartState
 - **reconciled-steps.ts** — deduplication helper for worker snapshot step counting
 - **orbit-follow-update.ts** — per-frame orbit-follow camera tracking from displayed molecule bounds
@@ -518,6 +530,9 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | Panel disclosure (`bondedGroupsExpanded`) | Zustand store (`app-store.ts`) | BondedGroupsPanel header toggle; survives `resetTransientState` |
 | Bonded-group display source | bonded-group-display-source.ts (resolved per projection) | bonded-group-runtime (consumes via getDisplaySource) |
 | Timeline buffers (review frames, restart frames, checkpoints) | simulation-timeline.ts | timeline-recording-orchestrator (writes), simulation-timeline-coordinator (reads) |
+| Timeline export capabilities (`timelineExportCapabilities`) | timeline-subsystem.ts (via `currentExportCapability`) | Store reads only; subsystem owns capability in all non-off states. `publishTimelineReadyState` does NOT clear `timelineExportCapabilities` — the subsystem is the sole writer. |
+| Atom identity (slot→atomId mapping) | timeline-atom-identity.ts | scene-runtime (append), physics compaction listener, recording orchestrator (capture) |
+| Atom metadata (id→element mapping) | atom-metadata-registry.ts | scene-runtime (register after commit), history-export (getAtomTable for export) |
 
 ### Overlay Close Policy
 

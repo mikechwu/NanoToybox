@@ -102,7 +102,7 @@ describe('applyRestartState', () => {
       positions: new Float64Array(30),
       velocities: new Float64Array(30),
       bonds: [[0, 1, 1.5]],
-      config: { damping: 0.1, kDrag: 4, kRotate: 8 },
+      config: { damping: 0.1, kDrag: 4, kRotate: 8, dtFs: 0.5, dampingRefDurationFs: 2.0 },
       interaction: { kind: 'none' },
       boundary: { mode: 'contain', wallRadius: 60, wallCenter: [0, 0, 0], wallCenterSet: true, removedCount: 0, damping: 0.1 },
     };
@@ -120,7 +120,7 @@ describe('applyRestartState', () => {
       positions: new Float64Array(30),
       velocities: new Float64Array(30),
       bonds: [],
-      config: { damping: 0.1, kDrag: 4, kRotate: 8 },
+      config: { damping: 0.1, kDrag: 4, kRotate: 8, dtFs: 0.5, dampingRefDurationFs: 2.0 },
       interaction: { kind: 'none' },
       boundary: { mode: 'remove', wallRadius: 60, wallCenter: [1, 2, 3], wallCenterSet: true, removedCount: 5, damping: 0.1 },
     };
@@ -139,7 +139,7 @@ describe('applyRestartState', () => {
       positions: new Float64Array(30),
       velocities: new Float64Array(30),
       bonds: [],
-      config: { damping: 0, kDrag: 2, kRotate: 5 },
+      config: { damping: 0, kDrag: 2, kRotate: 5, dtFs: 0.5, dampingRefDurationFs: 2.0 },
       interaction: { kind: 'atom_drag', atomIndex: 3, target: [1, 2, 3] },
       boundary: { mode: 'contain', wallRadius: 50, wallCenter: [0, 0, 0], wallCenterSet: true, removedCount: 0, damping: 0 },
     };

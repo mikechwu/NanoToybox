@@ -4,12 +4,13 @@
  * session, physics, or renderer directly.
  */
 import { CONFIG } from './config';
-import type { IPhysicsEngine, IRenderer, AtomXYZ, BondTuple } from '../../src/types/interfaces';
+import type { IPhysicsEngine, IRenderer, BondTuple } from '../../src/types/interfaces';
+import type { StructureAtom } from './placement';
 
 const DEBUG_LOAD = CONFIG.debug.load;
 
 interface SceneState {
-  molecules: { id: number; name: string; structureFile: string; atomCount: number; atomOffset: number; localAtoms: AtomXYZ[]; localBonds: BondTuple[] }[];
+  molecules: { id: number; name: string; structureFile: string; atomCount: number; atomOffset: number; localAtoms: StructureAtom[]; localBonds: BondTuple[] }[];
   totalAtoms: number;
   nextId: number;
 }
@@ -30,18 +31,23 @@ interface ClearCallbacks {
   updateSceneStatus: () => void;
 }
 
+export interface CommitMoleculeResult {
+  atomOffset: number;
+  atomCount: number;
+}
+
 /** Transaction-safe molecule commit to physics + renderer. */
 export function commitMolecule(
   physics: IPhysicsEngine,
   renderer: IRenderer,
   filename: string,
   name: string,
-  atoms: AtomXYZ[],
+  atoms: StructureAtom[],
   bonds: BondTuple[],
   offset: number[],
   sceneState: SceneState,
   callbacks: CommitCallbacks,
-) {
+): CommitMoleculeResult {
   const isFirstMolecule = sceneState.molecules.length === 0;
   const checkpoint = physics.createCheckpoint();
   const result = physics.appendMolecule(atoms, bonds, offset);
@@ -88,6 +94,7 @@ export function commitMolecule(
     callbacks.fitCamera();
   }
   callbacks.updateSceneStatus();
+  return result;
 }
 
 /** Clear all molecules from the scene. */
@@ -114,7 +121,7 @@ export function clearPlayground(
 }
 
 interface AddMoleculeDeps {
-  loadStructure: (filename: string) => Promise<{ atoms: AtomXYZ[]; bonds: BondTuple[] }>;
+  loadStructure: (filename: string) => Promise<{ atoms: StructureAtom[]; bonds: BondTuple[] }>;
   physics: IPhysicsEngine;
   renderer: IRenderer;
   sceneState: SceneState;

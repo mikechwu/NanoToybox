@@ -3,6 +3,7 @@
  *  ambiguous for an irreversible erase action on any device. */
 
 import React, { useCallback, useRef, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { ActionHint } from './ActionHint';
 import { TIMELINE_HINTS } from './timeline-hints';
 
@@ -62,10 +63,10 @@ export function TimelineClearDialog({ open, onCancel, onConfirm }: TimelineClear
   }, [open, onCancel]);
 
   if (!open) return null;
-  return (
+  return createPortal(
     <>
       <div className="timeline-clear-backdrop" onClick={onCancel} />
-      <div className="timeline-clear-dialog" role="alertdialog" aria-modal="true" aria-label="Stop recording?">
+      <div className="timeline-modal-card timeline-clear-dialog" role="alertdialog" aria-modal="true" aria-label="Stop recording?">
         <p className="timeline-clear-dialog__title">Stop recording?</p>
         <p className="timeline-clear-dialog__body">This will stop recording and clear timeline history.</p>
         <div className="timeline-clear-dialog__actions">
@@ -73,7 +74,8 @@ export function TimelineClearDialog({ open, onCancel, onConfirm }: TimelineClear
           <button className="timeline-clear-dialog__confirm" onClick={onConfirm}>Continue</button>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
 
