@@ -1,5 +1,6 @@
 /** Timeline hint text constants — single source of truth for all timeline tooltip copy.
- *  Used by TimelineBar, timeline-mode-switch, and timeline-clear-dialog via ActionHint.
+ *  Used by TimelineBar, timeline-mode-switch, timeline-clear-dialog,
+ *  and timeline-export-dialog via ActionHint.
  *
  *  These hints are desktop/keyboard discoverability only. On touch/coarse-pointer
  *  devices, ActionHint tooltips are CSS-hidden (see lab/index.html media query).
@@ -12,4 +13,5 @@ export const TIMELINE_HINTS = {
   enterReviewDisabled: 'No recorded history to review yet.',
   restartFromHere: 'Restart the simulation from this point.',
   clearHistory: 'Stop recording and clear timeline history.',
+  exportHistory: 'Export timeline history.',
 } as const;

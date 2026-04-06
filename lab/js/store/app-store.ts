@@ -68,7 +68,7 @@ export interface ChooserCallbacks {
   onSelectStructure: (file: string, description: string) => void;
 }
 
-/** Imperative callbacks for the timeline bar, registered by main.ts. */
+/** Imperative callbacks for the timeline bar, installed by the timeline subsystem. */
 export interface TimelineCallbacks {
   onScrub: (timePs: number) => void;
   onReturnToLive: () => void;
@@ -76,6 +76,7 @@ export interface TimelineCallbacks {
   onRestartFromHere: () => void;
   onStartRecordingNow: () => void;
   onTurnRecordingOff: () => void;
+  onExportHistory?: (kind: 'replay' | 'full') => Promise<void> | void;
 }
 
 /** Imperative callbacks for the bonded-group panel, registered by main.ts. */
@@ -245,6 +246,10 @@ export interface AppStore {
   /** The actual checkpoint time restart will use (null if no checkpoint available). */
   timelineRestartTargetPs: number | null;
   timelineCallbacks: TimelineCallbacks | null;
+  /** Export capability gate — null means export unavailable. Set only by timeline subsystem. */
+  timelineExportCapabilities: { replay: boolean; full: boolean } | null;
+  /** Internal — write-authority is timeline subsystem only. Tests may call directly for lifecycle simulation. */
+  setTimelineExportCapabilities: (caps: { replay: boolean; full: boolean } | null) => void;
   setTimelineInstalled: (v: boolean) => void;
   setTimelineRecordingMode: (mode: 'off' | 'ready' | 'active') => void;
   setTimelineMode: (mode: 'live' | 'review') => void;
@@ -264,9 +269,13 @@ export interface AppStore {
     restartTargetPs: number | null;
   }) => void;
   /** Atomic batch: install timeline UI in one store write (no intermediate states). */
-  installTimelineUI: (callbacks: TimelineCallbacks, mode: 'off' | 'ready' | 'active') => void;
+  installTimelineUI: (callbacks: TimelineCallbacks, mode: 'off' | 'ready' | 'active', exportCapabilities?: { replay: boolean; full: boolean } | null) => void;
   /** Atomic batch: uninstall timeline UI in one store write. */
   uninstallTimelineUI: () => void;
+  /** Atomic batch: reset timeline to off state without uninstalling (keeps callbacks). */
+  publishTimelineOffState: () => void;
+  /** Atomic batch: reset timeline to ready state without uninstalling (clears history + capabilities). */
+  publishTimelineReadyState: () => void;
 
   // Reconciliation (debug-visible)
   reconciliationState: 'none' | 'awaiting_positions' | 'awaiting_bonds';
@@ -425,6 +434,7 @@ export const useAppStore = create<AppStore>((set) => ({
   timelineCanRestart: false,
   timelineRestartTargetPs: null,
   timelineCallbacks: null,
+  timelineExportCapabilities: null,
   reconciliationState: 'none',
   paused: false,
   targetSpeed: 1,
@@ -508,6 +518,7 @@ export const useAppStore = create<AppStore>((set) => ({
   setTimelineCanReturnToLive: (v) => set({ timelineCanReturnToLive: v }),
   setTimelineCanRestart: (v) => set({ timelineCanRestart: v }),
   setTimelineCallbacks: (cbs) => set({ timelineCallbacks: cbs }),
+  setTimelineExportCapabilities: (caps) => set({ timelineExportCapabilities: caps }),
   updateTimelineState: (state) => set({
     timelineMode: state.mode,
     timelineCurrentTimePs: state.currentTimePs,
@@ -517,10 +528,11 @@ export const useAppStore = create<AppStore>((set) => ({
     timelineCanRestart: state.canRestart,
     timelineRestartTargetPs: state.restartTargetPs,
   }),
-  installTimelineUI: (callbacks, mode) => set({
+  installTimelineUI: (callbacks, mode, exportCapabilities) => set({
     timelineCallbacks: callbacks,
     timelineRecordingMode: mode,
     timelineInstalled: true,
+    timelineExportCapabilities: exportCapabilities ?? null,
   }),
   uninstallTimelineUI: () => set({
     timelineCallbacks: null,
@@ -533,6 +545,29 @@ export const useAppStore = create<AppStore>((set) => ({
     timelineCanReturnToLive: false,
     timelineCanRestart: false,
     timelineRestartTargetPs: null,
+    timelineExportCapabilities: null,
+  }),
+  publishTimelineOffState: () => set({
+    timelineRecordingMode: 'off' as const,
+    timelineMode: 'live',
+    timelineCurrentTimePs: 0,
+    timelineReviewTimePs: null,
+    timelineRangePs: null,
+    timelineCanReturnToLive: false,
+    timelineCanRestart: false,
+    timelineRestartTargetPs: null,
+    timelineExportCapabilities: null,
+  }),
+  publishTimelineReadyState: () => set({
+    timelineRecordingMode: 'ready' as const,
+    timelineMode: 'live',
+    timelineCurrentTimePs: 0,
+    timelineReviewTimePs: null,
+    timelineRangePs: null,
+    timelineCanReturnToLive: false,
+    timelineCanRestart: false,
+    timelineRestartTargetPs: null,
+    timelineExportCapabilities: null,
   }),
   setFlightActive: (active) => set({ flightActive: active }),
   setFarDrift: (drift) => set({ farDrift: drift }),
@@ -620,6 +655,7 @@ export const useAppStore = create<AppStore>((set) => ({
     timelineCanRestart: false,
     timelineRestartTargetPs: null,
     timelineCallbacks: null,
+    timelineExportCapabilities: null,
     // Debug
     reconciliationState: 'none',
     // Status channels

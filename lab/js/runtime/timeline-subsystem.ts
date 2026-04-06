@@ -47,6 +47,9 @@ export interface TimelineSubsystemDeps {
   clearBondedGroupHighlight: TimelineCoordinatorDeps['clearBondedGroupHighlight'];
   clearRendererFeedback: TimelineCoordinatorDeps['clearRendererFeedback'];
   syncBondedGroupsForDisplayFrame: TimelineCoordinatorDeps['syncBondedGroupsForDisplayFrame'];
+  /** Export dependency — only injected when export is implemented. */
+  exportHistory?: (kind: 'replay' | 'full') => Promise<void> | void;
+  exportCapabilities?: { replay: boolean; full: boolean };
 }
 
 /** High-level subsystem handle — main.ts should only use these methods. */
@@ -139,11 +142,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
     if (opts.uninstall) {
       useAppStore.getState().uninstallTimelineUI();
     } else {
-      useAppStore.getState().setTimelineRecordingMode('off');
-      useAppStore.getState().updateTimelineState({
-        mode: 'live', currentTimePs: 0, reviewTimePs: null,
-        rangePs: null, canReturnToLive: false, canRestart: false, restartTargetPs: null,
-      });
+      useAppStore.getState().publishTimelineOffState();
     }
   }
 
@@ -215,12 +214,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
       if (timeline.getState().mode === 'review') coordinator.returnToLive();
       resetRuntime();
       policy.turnOn();
-      const store = useAppStore.getState();
-      store.setTimelineRecordingMode('ready');
-      store.updateTimelineState({
-        mode: 'live', currentTimePs: 0, reviewTimePs: null,
-        rangePs: null, canReturnToLive: false, canRestart: false, restartTargetPs: null,
-      });
+      useAppStore.getState().publishTimelineReadyState();
     },
     teardown: () => {
       resetRuntime();
@@ -228,6 +222,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
     },
     installAndEnable: () => {
       policy.turnOn();
+      const hasExport = !!(deps.exportHistory && deps.exportCapabilities);
       useAppStore.getState().installTimelineUI({
         onScrub: (timePs: number) => coordinator.handleScrub(timePs),
         onReturnToLive: () => coordinator.returnToLive(),
@@ -235,7 +230,8 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
         onRestartFromHere: () => { coordinator.restartFromHere(); },
         onStartRecordingNow: () => startRecordingNow(),
         onTurnRecordingOff: () => turnRecordingOff(),
-      }, 'ready');
+        ...(hasExport ? { onExportHistory: (kind: 'replay' | 'full') => deps.exportHistory!(kind) } : {}),
+      }, 'ready', hasExport ? deps.exportCapabilities! : null);
     },
     getReviewBondedGroupComponents: (timePs) => timeline.getReviewBondedGroupComponents(timePs),
     getCurrentReviewBondedGroupComponents: () => {

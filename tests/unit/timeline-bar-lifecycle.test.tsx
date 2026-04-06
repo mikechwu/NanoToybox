@@ -667,4 +667,329 @@ describe('TimelineBar unified shell', () => {
     const { container } = render(<TimelineBar />);
     expect(container.querySelector('.timeline-clear-trigger')?.getAttribute('aria-label')).toBe('Stop recording and clear history');
   });
+
+  // ── Export UI ──
+
+  function installWithExport(mode: 'off' | 'ready' | 'active' = 'active', caps: { replay: boolean; full: boolean } = { replay: true, full: true }) {
+    useAppStore.getState().installTimelineUI(
+      { ...defaultCallbacks, onExportHistory: vi.fn() },
+      mode,
+      caps,
+    );
+  }
+
+  it('export trigger renders when showExport is true', () => {
+    act(() => {
+      installWithExport('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-export-trigger')).not.toBeNull();
+  });
+
+  it('export trigger hidden when capability is null', () => {
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-export-trigger')).toBeNull();
+  });
+
+  it('export trigger hidden when callback exists but capability is null', () => {
+    act(() => {
+      installSubsystemWithCallbacks('active', { onExportHistory: vi.fn() });
+      // Do NOT set capabilities
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-export-trigger')).toBeNull();
+  });
+
+  it('export trigger hidden in off state', () => {
+    act(() => { installWithExport('off'); });
+    const { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-export-trigger')).toBeNull();
+  });
+
+  it('export trigger hidden in ready state', () => {
+    act(() => { installWithExport('ready'); });
+    const { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-export-trigger')).toBeNull();
+  });
+
+  it('clear trigger present alongside export trigger', () => {
+    act(() => {
+      installWithExport('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-export-trigger')).not.toBeNull();
+    expect(container.querySelector('.timeline-clear-trigger')).not.toBeNull();
+  });
+
+  it('action zone has export and clear slots in all states', () => {
+    for (const mode of ['off', 'ready', 'active'] as const) {
+      act(() => { installWithExport(mode); });
+      if (mode === 'active') {
+        act(() => {
+          useAppStore.getState().updateTimelineState({
+            mode: 'live', currentTimePs: 100, reviewTimePs: null,
+            rangePs: { start: 0, end: 200 },
+            canReturnToLive: false, canRestart: false, restartTargetPs: null,
+          });
+        });
+      }
+      const { container } = render(<TimelineBar />);
+      expect(container.querySelector('.timeline-action-slot--export')).not.toBeNull();
+      expect(container.querySelector('.timeline-action-slot--clear')).not.toBeNull();
+      cleanup();
+    }
+  });
+
+  it('export trigger opens export dialog', () => {
+    act(() => {
+      installWithExport('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
+  });
+
+  it('export dialog defaults to replay when both available', () => {
+    act(() => {
+      installWithExport('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    const replayRadio = document.querySelector('input[value="replay"]') as HTMLInputElement;
+    expect(replayRadio.checked).toBe(true);
+  });
+
+  it('export dialog disables unavailable kinds', () => {
+    act(() => {
+      installWithExport('active', { replay: true, full: false });
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    const fullRadio = document.querySelector('input[value="full"]') as HTMLInputElement;
+    expect(fullRadio.disabled).toBe(true);
+  });
+
+  it('confirm export calls onExportHistory with selected kind', () => {
+    const onExport = vi.fn();
+    act(() => {
+      useAppStore.getState().installTimelineUI(
+        { ...defaultCallbacks, onExportHistory: onExport },
+        'active',
+        { replay: true, full: true },
+      );
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    const confirmBtn = document.querySelector('.timeline-export-dialog__confirm') as HTMLButtonElement;
+    act(() => { confirmBtn.click(); });
+    expect(onExport).toHaveBeenCalledWith('replay');
+  });
+
+  it('opening export closes clear dialog', () => {
+    act(() => {
+      installWithExport('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    // Open clear dialog first
+    act(() => { (container.querySelector('.timeline-clear-trigger') as HTMLButtonElement).click(); });
+    expect(document.querySelector('.timeline-clear-dialog')).not.toBeNull();
+    // Now open export — clear should close
+    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    expect(document.querySelector('.timeline-clear-dialog')).toBeNull();
+    expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
+  });
+
+  it('opening clear closes export dialog', () => {
+    act(() => {
+      installWithExport('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    // Open export dialog first
+    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
+    // Now open clear — export should close
+    act(() => { (container.querySelector('.timeline-clear-trigger') as HTMLButtonElement).click(); });
+    expect(document.querySelector('.timeline-export-dialog')).toBeNull();
+    expect(document.querySelector('.timeline-clear-dialog')).not.toBeNull();
+  });
+
+  it('hidden export spacer is aria-hidden and not focusable', () => {
+    act(() => {
+      installSubsystem('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    const exportSlot = container.querySelector('.timeline-action-slot--export');
+    const spacer = exportSlot?.querySelector('.timeline-action-spacer');
+    expect(spacer).not.toBeNull();
+    expect(spacer!.getAttribute('aria-hidden')).toBe('true');
+    expect(spacer!.getAttribute('tabindex')).toBeNull();
+  });
+
+  it('export trigger tooltip visible on hover after delay', () => {
+    vi.useFakeTimers();
+    act(() => {
+      installWithExport('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    const anchor = container.querySelector('.timeline-export-trigger')!.closest('.timeline-hint-anchor')! as HTMLElement;
+    const tooltip = anchor.querySelector('[role="tooltip"]')!;
+    act(() => { fireEvent.mouseEnter(anchor); });
+    act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
+    expect(tooltip.classList.contains('timeline-hint--visible')).toBe(true);
+    expect(tooltip.textContent).toContain('Export timeline history.');
+    vi.useRealTimers();
+  });
+
+  // ── Export dynamic lifecycle ──
+
+  it('export dialog closes when capability is removed', () => {
+    act(() => {
+      installWithExport('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    // Open export dialog
+    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
+    // Remove capability
+    act(() => { useAppStore.getState().setTimelineExportCapabilities(null); });
+    expect(document.querySelector('.timeline-export-dialog')).toBeNull();
+  });
+
+  it('selected full falls back to replay when full becomes unavailable', () => {
+    act(() => {
+      installWithExport('active', { replay: true, full: true });
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    // Select full
+    const fullRadio = document.querySelector('input[value="full"]') as HTMLInputElement;
+    act(() => { fireEvent.click(fullRadio); });
+    expect(fullRadio.checked).toBe(true);
+    // Remove full capability
+    act(() => { useAppStore.getState().setTimelineExportCapabilities({ replay: true, full: false }); });
+    // Should fall back to replay
+    const replayRadio = document.querySelector('input[value="replay"]') as HTMLInputElement;
+    expect(replayRadio.checked).toBe(true);
+  });
+
+  it('publishTimelineOffState clears capability atomically', () => {
+    act(() => {
+      installWithExport('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    expect(useAppStore.getState().timelineExportCapabilities).not.toBeNull();
+    act(() => { useAppStore.getState().publishTimelineOffState(); });
+    expect(useAppStore.getState().timelineExportCapabilities).toBeNull();
+    expect(useAppStore.getState().timelineRecordingMode).toBe('off');
+  });
+
+  it('export confirm disabled when callback is missing but capability exists', () => {
+    act(() => {
+      // Install with capability but WITHOUT onExportHistory callback
+      useAppStore.getState().installTimelineUI(defaultCallbacks, 'active', { replay: true, full: true });
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    const { container } = render(<TimelineBar />);
+    // Export trigger should be visible (capability exists)
+    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    // Confirm should be disabled since callback is missing
+    const confirmBtn = document.querySelector('.timeline-export-dialog__confirm') as HTMLButtonElement;
+    expect(confirmBtn.disabled).toBe(true);
+  });
+
+  it('uninstallTimelineUI clears export capability atomically', () => {
+    act(() => {
+      installWithExport('active');
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+    });
+    expect(useAppStore.getState().timelineExportCapabilities).not.toBeNull();
+    act(() => { useAppStore.getState().uninstallTimelineUI(); });
+    expect(useAppStore.getState().timelineExportCapabilities).toBeNull();
+    expect(useAppStore.getState().timelineInstalled).toBe(false);
+  });
 });

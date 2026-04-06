@@ -4,7 +4,7 @@
  * Layout contract (CSS variables defined on .timeline-bar):
  *   --tl-rail-width   Mode rail width (96px desktop, 84px mobile)
  *   --tl-time-width   Time column width (56px desktop, 48px mobile)
- *   --tl-action-width Action column width (32px)
+ *   --tl-action-width Action column width (64px, two-slot: export + clear)
  *   --tl-shell-height Shell row height (44px desktop, 38px mobile)
  *   --tl-mode-height  Mode switch height (36px desktop, 32px mobile)
  *
@@ -17,13 +17,15 @@
  *   timeline-format.ts        — formatTime, getTimelineProgress, getRestartAnchorStyle
  *   timeline-mode-switch.tsx  — TimelineModeSwitch, buildModeSlots, ModeSegment
  *   timeline-clear-dialog.tsx — TimelineClearDialog, useClearConfirm, ClearTrigger
+ *   timeline-export-dialog.tsx — TimelineExportDialog, useExportDialog, ExportTrigger
  */
 
-import React, { useCallback, useRef, useEffect } from 'react';
+import React, { useCallback, useRef, useState, useEffect } from 'react';
 import { useAppStore } from '../store/app-store';
 import { formatTime, getTimelineProgress, getRestartAnchorStyle } from './timeline-format';
 import { TimelineModeSwitch } from './timeline-mode-switch';
 import { TimelineClearDialog, useClearConfirm, ClearTrigger } from './timeline-clear-dialog';
+import { TimelineExportDialog, useExportDialog, ExportTrigger } from './timeline-export-dialog';
 import { ActionHint } from './ActionHint';
 import { TIMELINE_HINTS } from './timeline-hints';
 
@@ -51,6 +53,37 @@ function TimelineShell({ modeRail, time, overlay, track, action, className = '' 
         <div className="timeline-action-zone">{action}</div>
       </div>
     </div>
+  );
+}
+
+// ── Action zone (two-slot: export + clear) ──
+
+/** Renders triggers only. Dialogs are siblings rendered by the parent.
+ *  Always produces two slot wrappers for invariant 64px layout.
+ *  Callers must pair showExport/showClear=true with their corresponding handler. */
+function TimelineActionZone({ showExport, onExport, showClear, onClear }: {
+  showExport: boolean;
+  onExport?: () => void;
+  showClear: boolean;
+  onClear?: () => void;
+}) {
+  return (
+    <>
+      <span className="timeline-action-slot timeline-action-slot--export">
+        {showExport && onExport ? (
+          <ExportTrigger onClick={onExport} />
+        ) : (
+          <span className="timeline-action-spacer" aria-hidden="true" />
+        )}
+      </span>
+      <span className="timeline-action-slot timeline-action-slot--clear">
+        {showClear && onClear ? (
+          <ClearTrigger onClick={onClear} />
+        ) : (
+          <span className="timeline-action-spacer" aria-hidden="true" />
+        )}
+      </span>
+    </>
   );
 }
 
@@ -82,7 +115,7 @@ function TimelineBarOff() {
         </ActionHint>
       }
       track={<div className="timeline-track timeline-track--thick timeline-track--disabled" />}
-      action={<span />}
+      action={<TimelineActionZone showExport={false} showClear={false} />}
     />
   );
 }
@@ -100,7 +133,7 @@ function TimelineBarReady() {
         time="0.0 fs"
         overlay={<span />}
         track={<div className="timeline-track timeline-track--thick timeline-track--disabled" />}
-        action={<ClearTrigger onClick={clear.request} />}
+        action={<TimelineActionZone showExport={false} showClear onClear={clear.request} />}
       />
       <TimelineClearDialog open={clear.open} onCancel={clear.cancel} onConfirm={clear.confirm} />
     </>
@@ -115,6 +148,7 @@ function TimelineBarActive() {
   const canRestart = useAppStore((s) => s.timelineCanRestart);
   const restartTargetPs = useAppStore((s) => s.timelineRestartTargetPs);
   const callbacks = useAppStore((s) => s.timelineCallbacks);
+  const exportCaps = useAppStore((s) => s.timelineExportCapabilities);
 
   const trackRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
@@ -122,6 +156,10 @@ function TimelineBarActive() {
   const progress = getTimelineProgress(rangePs, currentTimePs);
   const restartProgress = getTimelineProgress(rangePs, restartTargetPs ?? 0);
   const hasRange = rangePs != null && (rangePs.end - rangePs.start) > 0;
+
+  // Export visibility — sole render gate (store capability, not callback presence)
+  const exportAvailable = !!(exportCaps?.replay || exportCaps?.full);
+  const showExport = hasRange && exportAvailable;
 
   const scrubFromEvent = useCallback((clientX: number) => {
     const track = trackRef.current;
@@ -150,14 +188,83 @@ function TimelineBarActive() {
   const handleEnterReview = useCallback(() => { callbacks?.onEnterReview(); }, [callbacks]);
   const handleRestart = useCallback(() => { callbacks?.onRestartFromHere(); }, [callbacks]);
   const handleTurnOff = useCallback(() => { callbacks?.onTurnRecordingOff(); }, [callbacks]);
+
+  // Clear confirmation
   const clear = useClearConfirm(handleTurnOff);
+
+  // Export dialog
+  const exportDialog = useExportDialog();
+  const [exportSubmitting, setExportSubmitting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  // Preferred default kind — computed at open time, not hook init
+  const preferredKind = exportCaps?.replay ? 'replay' as const : 'full' as const;
+
+  // Dialog mutual exclusion
+  const openExport = useCallback(() => {
+    clear.reset();
+    setExportSubmitting(false);
+    setExportError(null);
+    exportDialog.setKind(preferredKind);
+    exportDialog.request();
+  }, [clear, exportDialog, preferredKind]);
+
+  const openClear = useCallback(() => {
+    exportDialog.reset();
+    setExportSubmitting(false);
+    setExportError(null);
+    clear.request();
+  }, [clear, exportDialog]);
+
+  // Export action guard — defend against impossible state
+  const exportActionAvailable = !!callbacks?.onExportHistory && exportAvailable;
+
+  // Mounted ref for safe async state updates after dialog close or unmount
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
+  const handleExportConfirm = useCallback(async () => {
+    if (!callbacks?.onExportHistory) {
+      setExportError('Export is not available right now.');
+      return;
+    }
+    setExportSubmitting(true);
+    setExportError(null);
+    try {
+      await callbacks.onExportHistory(exportDialog.kind);
+      if (mountedRef.current) exportDialog.reset();
+    } catch (e) {
+      if (mountedRef.current) {
+        setExportError(e instanceof Error ? e.message : 'Export failed.');
+      }
+    } finally {
+      if (mountedRef.current) setExportSubmitting(false);
+    }
+  }, [callbacks, exportDialog]);
 
   const isReview = mode === 'review';
 
-  // clear.reset is stable (useCallback with empty deps); omitted intentionally
-  // to keep this as an isReview-transition guard only.
+  // Guard: close clear dialog on mode transition
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (!isReview) clear.reset(); }, [isReview]);
+
+  // Guard: close export dialog when showExport becomes false
+  useEffect(() => {
+    if (!showExport) {
+      exportDialog.reset();
+      setExportSubmitting(false);
+      setExportError(null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showExport]);
+
+  // Guard: revalidate selected kind if capability changes while dialog is open
+  useEffect(() => {
+    if (!exportDialog.open) return;
+    if (exportDialog.kind === 'full' && !exportCaps?.full && exportCaps?.replay) exportDialog.setKind('replay');
+    if (exportDialog.kind === 'replay' && !exportCaps?.replay && exportCaps?.full) exportDialog.setKind('full');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exportDialog.open, exportDialog.kind, exportCaps]);
 
   const overlayContent = isReview && canRestart && restartTargetPs !== null ? (
     <ActionHint
@@ -204,9 +311,20 @@ function TimelineBarActive() {
         time={formatTime(currentTimePs)}
         overlay={overlayContent}
         track={trackContent}
-        action={<ClearTrigger onClick={clear.request} />}
+        action={<TimelineActionZone showExport={showExport} onExport={openExport} showClear onClear={openClear} />}
       />
       <TimelineClearDialog open={clear.open} onCancel={clear.cancel} onConfirm={clear.confirm} />
+      <TimelineExportDialog
+        open={exportDialog.open}
+        availableKinds={exportCaps ?? { replay: false, full: false }}
+        kind={exportDialog.kind}
+        submitting={exportSubmitting}
+        confirmEnabled={exportActionAvailable && !exportSubmitting}
+        error={exportError}
+        onSelectKind={exportDialog.setKind}
+        onCancel={exportDialog.cancel}
+        onConfirm={handleExportConfirm}
+      />
     </>
   );
 }
