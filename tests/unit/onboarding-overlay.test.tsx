@@ -114,7 +114,7 @@ describe('OnboardingOverlay rendering', () => {
     useAppStore.getState().setOnboardingPhase('visible');
     const { container } = render(<OnboardingOverlay />);
     expect(container.querySelector('[data-onboarding]')).not.toBeNull();
-    expect(container.textContent).toContain('NanoToybox');
+    expect(container.textContent).toContain('Atom Simulation Studio');
   });
 
   it('dismiss on backdrop click transitions to exiting phase', () => {
