@@ -52,7 +52,7 @@ These checks require a real browser with WebGL and cannot run in headless CI. Ru
 - [ ] Verify bonded-group color persists across topology changes (group merge/split)
 - [ ] Verify multi-color chip shows conic gradient when group has mixed colors
 - [ ] Verify color popover accessible via Escape key
-- [ ] **Watch app:** Open `watch/`, load an exported `.atomdojo` file, verify playback and bonded-group analysis match lab review mode
+- [ ] **Watch app:** Open `watch/`, load an exported `.atomdojo` file, verify React shell renders, playback at x1 rate matches lab review mode, bonded-group analysis correct; load a second file then cancel — verify first document preserved (transactional open)
 
 Automated checks (typecheck, build, unit tests, Playwright E2E, deploy smoke) run in CI on every push/PR.
 
@@ -114,14 +114,18 @@ Browser                          Web Worker
 │  └── PlacementFraming │
 └─────────────────────┘
 
-src/history/ (3 modules):       watch/js/ (7 modules):
-├── v1 schema types             ├── file-type detection
-├── connected-component         ├── history loader
-│   computation                 ├── playback controller
-└── bonded-group projection     ├── bonded-group analysis
-    (shared by lab/ & watch/)   ├── timeline scrub UI
-                                ├── renderer
-                                └── app bootstrap
+src/history/ (4 modules):       watch/js/ (~15 modules):
+├── v1 schema types             ├── 7 runtime modules
+├── connected-component         │   (file-type, history loader,
+│   computation                 │    playback, bonded-group,
+├── bonded-group projection     │    scrub, renderer, bootstrap)
+│   (shared by lab/ & watch/)   ├── 6 React components
+└── bonded-group-utils          │   (shell, panels, controls)
+                                ├── react-root
+src/ui/ (1 file):               └── controller
+└── review-parity.css
+    (shared review-mode styles) watch/css/ (1 file):
+                                └── shared CSS imports
 ```
 
 ### Key Architectural Decisions
@@ -149,8 +153,8 @@ src/history/ (3 modules):       watch/js/ (7 modules):
 - Three.js trajectory viewer: functional at `viewer/index.html`
 - Performance benchmarks in `lab/bench/`
 - **Bonded group architecture** — display-source-aware projection, capability policy, annotation-model atom color overrides; inline color editing via per-row color chip with portal popover (preset swatches, responsive layout, disclosure-pattern panel expanded by default), conic-gradient multi-color chips, group color intents persist across topology changes; persistent tracked highlight feature-gated off (hover preview remains active); review-mode inspection deferred until historical topology exists
-- **Watch app** — standalone app at `watch/` for importing and playing back exported `.atomdojo` history files with full-fidelity review playback, bonded-group analysis, and automatic file-type detection
-- **Shared history modules** — `src/history/` provides v1 schema types, connected-component computation, and bonded-group projection logic shared between `lab/` and `watch/`
+- **Watch app** — standalone app at `watch/` with React shell and review-parity UI for importing and playing back exported `.atomdojo` history files; shared CSS, shared data logic, canonical x1 playback rate; transactional file open preserves current document on failure; bonded-group analysis and automatic file-type detection
+- **Shared history modules** — `src/history/` provides v1 schema types, connected-component computation, bonded-group projection, and bonded-group utilities shared between `lab/` and `watch/`; `src/ui/` provides shared review-parity CSS
 
 ## Project Goal
 

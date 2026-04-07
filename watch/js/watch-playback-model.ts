@@ -48,7 +48,7 @@ export function createWatchPlaybackModel(): WatchPlaybackModel {
   return {
     load(file) {
       _history = file;
-      _currentTimePs = 0;
+      _currentTimePs = file.denseFrames[0]?.timePs ?? 0;
       _playing = false;
     },
 

@@ -1,0 +1,141 @@
+/**
+ * Shared review-parity CSS — neutral class names for review-like viewer surfaces.
+ *
+ * Owns:       playback-bar chrome, compact panel chrome, status/message tone,
+ *             list row rhythm for bonded groups.
+ * Does NOT own: page layout, dock layout, lab-only modals, broad site-wide CSS.
+ *
+ * Used by:    watch/ components (directly), lab/ (optional future adoption).
+ * Naming:     .review-* prefix — decoupled from both lab (.timeline-*) and watch (.watch-*).
+ */
+
+/* ── Playback bar ── */
+.review-playback-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--panel-bg, rgba(20,20,28,0.92));
+  border-top: 1px solid var(--color-border, rgba(255,255,255,0.12));
+  font-family: var(--font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+}
+.review-playback-bar button {
+  background: none; border: none; color: inherit;
+  font-size: 1.2rem; cursor: pointer;
+  padding: 4px 8px; border-radius: 6px;
+}
+.review-playback-bar button:hover { background: var(--color-surface-hover, rgba(255,255,255,0.06)); }
+.review-playback-bar button:disabled { opacity: 0.4; cursor: default; }
+.review-playback-bar__scrubber {
+  flex: 1; height: 4px;
+  accent-color: var(--color-accent, #6dc);
+}
+.review-playback-bar__time {
+  font-size: 0.8rem; font-variant-numeric: tabular-nums;
+  opacity: 0.7; min-width: 56px;
+}
+.review-playback-bar__action {
+  margin-left: auto;
+  background: none; border: 1px solid var(--color-border, rgba(255,255,255,0.12));
+  color: var(--color-text, #ccc); font-size: 0.75rem;
+  padding: 4px 10px; border-radius: 6px; cursor: pointer;
+}
+.review-playback-bar__action:hover { background: var(--color-surface-hover, rgba(255,255,255,0.06)); }
+
+/* ── Compact panel chrome ── */
+.review-panel {
+  background: var(--panel-bg, rgba(20,20,28,0.92));
+  border: 1px solid var(--color-border, rgba(255,255,255,0.12));
+  border-radius: 6px;
+  font-family: var(--font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 0.8rem;
+  color: var(--color-text, #ccc);
+}
+button.review-panel__header {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 12px;
+  background: none; border: none; color: inherit; font: inherit;
+  cursor: pointer; user-select: none; text-align: left;
+}
+.review-panel__header:hover { background: var(--color-surface-hover, rgba(255,255,255,0.06)); }
+.review-panel__title {
+  font-size: 0.75rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  opacity: 0.6; flex: 1;
+}
+.review-panel__toggle {
+  font-size: 0.7rem; opacity: 0.5;
+  border: 1px solid var(--color-border, rgba(255,255,255,0.12));
+  border-radius: 4px; padding: 1px 6px;
+}
+.review-panel__body { padding: 0 12px 8px; }
+.review-panel__stats {
+  display: grid; grid-template-columns: auto 1fr;
+  gap: 2px 8px; margin-bottom: 8px;
+}
+.review-panel__stats dt { opacity: 0.6; }
+.review-panel__stats dd { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ── List row rhythm (bonded groups) ── */
+.review-panel__list { list-style: none; padding: 0; margin: 0; }
+.review-panel-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 0;
+  font-variant-numeric: tabular-nums;
+}
+.review-panel-row__index { opacity: 0.5; min-width: 24px; }
+.review-panel-row__atoms { flex: 1; }
+button.review-panel__small-toggle {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 6px 0 2px;
+  background: none; border: none; color: inherit; font: inherit;
+  cursor: pointer; user-select: none;
+  font-size: 0.75rem; opacity: 0.5; text-align: left;
+}
+.review-panel__small-toggle:hover { opacity: 0.8; }
+
+/* ── Status/message tone ── */
+.review-status-msg {
+  font-family: var(--font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 0.85rem;
+  padding: 10px 16px;
+  border-radius: 6px;
+}
+.review-status-msg--info {
+  background: var(--color-surface, rgba(255,255,255,0.04));
+  color: var(--color-text, #ccc);
+}
+.review-status-msg--error {
+  background: rgba(220,60,60,0.15);
+  border: 1px solid rgba(220,60,60,0.3);
+  color: #e88;
+}
+
+/* ── Top bar ── */
+.review-topbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px;
+  background: var(--panel-bg, rgba(20,20,28,0.92));
+  border-bottom: 1px solid var(--color-border, rgba(255,255,255,0.12));
+}
+.review-topbar__badge {
+  background: var(--color-accent-soft, rgba(100,180,140,0.15));
+  color: var(--color-accent-text, #6dc);
+  padding: 2px 10px; border-radius: 4px;
+  font-size: 0.75rem; font-weight: 600;
+}
+.review-topbar__filename {
+  font-size: 0.8rem; opacity: 0.5;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 200px;
+}
+.review-topbar__title {
+  opacity: 0.5; font-size: 0.85rem;
+}
+.review-topbar__action {
+  margin-left: auto;
+  background: none; border: 1px solid var(--color-border, rgba(255,255,255,0.12));
+  color: var(--color-text, #ccc); font-size: 0.75rem;
+  padding: 4px 10px; border-radius: 6px; cursor: pointer;
+}
+.review-topbar__action:hover { background: var(--color-surface-hover, rgba(255,255,255,0.06)); }

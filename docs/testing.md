@@ -329,7 +329,44 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **End-to-end pipeline:** load → import → playback → groups.
 
-*All 1106+ existing lab tests pass after the shared module extraction refactoring (bonded-group-runtime, simulation-timeline, history-export).*
+*All 1202 tests pass including existing lab tests.*
+
+### Watch Controller & Parity (~40+ tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-parity.test.ts` | ~35 | Watch controller lifecycle, lab/watch parity, playback speed (see breakdown below) |
+| `watch-react-integration.test.tsx` | ~7 | React component integration: landing/workspace transition, error banners, playback bar, bonded-groups panel, top bar badge, WatchCanvas mock |
+
+#### watch-parity.test.ts Breakdown
+
+**partitionBondedGroups shared extraction:** default threshold, custom threshold, empty groups.
+
+**BondedGroupSummary consolidation:** lab selector re-exports same function reference.
+
+**Controller lifecycle:** initial snapshot, subscribe/unsubscribe, error on invalid file, referential snapshot stability.
+
+**Controller with valid file:** load, togglePlay, scrub, transactional second-file open.
+
+**File load initial time:** currentTimePs at first frame, not 0; file replacement resets correctly.
+
+**Lab/watch parity on same file:** topology at sampled timestamps, bonded-group counts, metadata match.
+
+**Playback speed x1 canonical rate:** rate independent of file length, short file takes real seconds.
+
+#### watch-react-integration.test.tsx Breakdown
+
+**Landing vs workspace transition:** component renders landing or workspace based on controller state.
+
+**Error banner:** shown on landing and during workspace (transactional failure).
+
+**Playback bar:** reflects playing state.
+
+**Bonded-groups panel:** expand/collapse.
+
+**Top bar file-kind badge:** displays correct file kind.
+
+**WatchCanvas mocked:** Three.js incompatible with jsdom.
 
 ## Frontend Smoke Test
 

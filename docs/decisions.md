@@ -471,3 +471,21 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Decision:** v1 watch playback uses exact recorded frames with 4 independent sampling methods on `WatchPlaybackModel` instead of one monolithic `getDisplayFrameAtTime`.
 
 **Rationale:** v1 does not implement interpolation, but the architecture must leave room for it. Position sampling may later become interpolated while topology/config/boundary remain stepwise. Separating the channels now avoids a breaking refactor when interpolation is added — each channel can independently switch from stepwise to interpolated without affecting the others.
+
+## D58: Watch Controller Owns RAF Clock and Renderer Frame Application
+
+**Decision:** The watch-controller.ts owns both the playback timing (RAF loop) and pushes frames into the renderer. WatchCanvas.tsx owns only renderer create/destroy lifecycle.
+
+**Rationale:** Splitting frame application between controller and canvas would create two owners of render timing, recreating the orchestration ambiguity from the old imperative main.ts. Keeping both in the controller keeps the RAF callback self-contained.
+
+## D59: Transactional File Open with Rollback
+
+**Decision:** openFile() prepares new file data non-destructively (Phase 1), then commits atomically (Phase 2) with rollback on failure. Bad replacement files keep the current document visible.
+
+**Rationale:** Document-viewer UX expects that opening a bad file does not destroy the current view. The prepare/commit/rollback pattern matches this expectation.
+
+## D60: Canonical x1 Playback Rate from Shared CONFIG, Not Normalized to File Duration
+
+**Decision:** Watch playback advances at CONFIG.playback.baseSimRatePsPerSecond (0.12 ps/s), the same rate as lab review mode. Not normalized to file length.
+
+**Rationale:** Normalized playback (fit any file into 10 seconds) makes long files play faster and short files play slower — the opposite of expected behavior. Canonical rate makes playback speed independent of file length.

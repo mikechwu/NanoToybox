@@ -1,0 +1,68 @@
+/**
+ * Watch app-shell CSS — layout and structure specific to watch/.
+ * Review-like surface styling lives in src/ui/review-parity.css.
+ */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+:root {
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+body {
+  font-family: var(--font-family);
+  background: var(--page-bg, #181820);
+  color: var(--color-text, #ccc);
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Landing ── */
+.watch-landing {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 100vh; text-align: center; padding: 24px;
+}
+.watch-landing h1 { font-size: 1.5rem; margin-bottom: 8px; }
+.watch-landing p { opacity: 0.6; margin-bottom: 24px; font-size: 0.9rem; }
+.watch-drop-zone {
+  border: 2px dashed var(--color-border, rgba(255,255,255,0.12));
+  border-radius: 10px; padding: 48px 32px;
+  margin-bottom: 16px; cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  min-width: 280px;
+}
+.watch-drop-zone:hover, .watch-drop-zone--active {
+  border-color: var(--color-accent, #6dc); background: rgba(100,180,140,0.06);
+}
+.watch-drop-zone p { opacity: 0.5; font-size: 0.85rem; margin-top: 8px; }
+.watch-btn {
+  background: var(--color-accent, #6dc); color: #111; border: none; border-radius: 6px;
+  padding: 10px 24px; font-size: 0.95rem; font-weight: 600; cursor: pointer;
+}
+.watch-btn:hover { filter: brightness(1.1); }
+.watch-support-note { font-size: 0.8rem; opacity: 0.4; margin-top: 16px; }
+
+/* ── Global error banner ── */
+.watch-error-banner {
+  position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 100;
+  max-width: 500px; width: calc(100vw - 32px);
+}
+
+/* ── Workspace ── */
+.watch-workspace {
+  display: grid; grid-template-rows: auto 1fr auto;
+  height: 100vh; width: 100vw;
+}
+.watch-canvas-area {
+  position: relative; overflow: hidden;
+}
+.watch-canvas-area canvas {
+  width: 100% !important; height: 100% !important; display: block;
+}
+
+/* ── Analysis panel (overlaid on canvas) ── */
+.watch-analysis {
+  position: absolute; top: 12px; right: 12px;
+  min-width: 160px; max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+/* Stats dl/dt/dd styling provided by .review-panel__stats in review-parity.css */

@@ -118,11 +118,11 @@ NanoToybox/
 │   │   │   ├── timeline-export-dialog.tsx # TimelineExportDialog, export trigger and confirmation UI
 │   │   │   └── timeline-hints.ts     # Single source of truth for all timeline tooltip copy (TIMELINE_HINTS constant)
 │   │   ├── store/
-│   │   │   ├── app-store.ts      # Zustand store for UI state
+│   │   │   ├── app-store.ts      # Zustand store for UI state; BondedGroupSummary re-exported from src/history/bonded-group-projection
 │   │   │   └── selectors/
 │   │   │       ├── dock.ts       # selectDockSurface derived selector
 │   │   │       ├── camera.ts    # selectCameraMode selector + CameraMode type
-│   │   │       ├── bonded-groups.ts # partitionBondedGroups (large/small bucket selector)
+│   │   │       ├── bonded-groups.ts # Re-exports partitionBondedGroups from shared module
 │   │   │       ├── review-ui-lock.ts # Review UI lock selector (selectIsReviewLocked, REVIEW_LOCK_TOOLTIP/STATUS)
 │   │   │       └── bonded-group-capabilities.ts # Bonded-group capability policy (inspect/target/edit/mutate/canTrackBondedGroupHighlight per mode)
 │   │   ├── hooks/
@@ -143,19 +143,33 @@ NanoToybox/
 │   │   ├── themes.ts             # Theme definitions + CSS token bridge
 │   │   └── tersoff-wasm.ts       # Wasm kernel bridge
 ├── src/                          # Shared modules consumed by both lab/ and watch/
-│   └── history/
-│       ├── history-file-v1.ts        # Shared v1 file types, detection (detectHistoryFile), shape-safe validation (validateFullHistoryFile)
-│       ├── connected-components.ts   # Union-find connected-component computation (extracted from simulation-timeline.ts)
-│       └── bonded-group-projection.ts # Pure overlap reconciliation, stable group IDs, display ordering (extracted from bonded-group-runtime.ts)
+│   ├── history/
+│   │   ├── history-file-v1.ts        # Shared v1 file types, detection (detectHistoryFile), shape-safe validation (validateFullHistoryFile)
+│   │   ├── connected-components.ts   # Union-find connected-component computation (extracted from simulation-timeline.ts)
+│   │   ├── bonded-group-projection.ts # Pure overlap reconciliation, stable group IDs, display ordering (extracted from bonded-group-runtime.ts)
+│   │   └── bonded-group-utils.ts     # Shared bonded-group partitioning (partitionBondedGroups, SMALL_CLUSTER_THRESHOLD). Extracted from lab/js/store/selectors/bonded-groups.ts
+│   └── ui/                       # Shared UI assets consumed by both lab/ and watch/
+│       └── review-parity.css         # Shared neutral-class CSS for review-like viewer surfaces (playback bar, panel chrome, status tones, row rhythm)
 ├── watch/                        # Read-only history playback app
-│   ├── index.html                # Watch app shell: file open landing, playback workspace, analysis panel
+│   ├── index.html                # Minimal shell with single #watch-root mount node
+│   ├── css/
+│   │   └── watch.css                 # Watch app-shell layout CSS
 │   └── js/
-│       ├── main.ts                   # Watch app entrypoint: file open, playback loop, workspace management
+│       ├── main.ts                   # Thin bootstrap: theme init, controller creation, React mount
+│       ├── watch-controller.ts       # Non-React controller: owns RAF clock, playback state, useSyncExternalStore-compatible snapshot/subscribe, transactional file open with rollback
+│       ├── react-root.tsx            # React mount/unmount entry point
 │       ├── history-file-loader.ts    # Two-step file detection + support decision (delegates to shared schema module)
 │       ├── full-history-import.ts    # Normalizes v1 file data (number[] → Float64Array, {a,b,distance} → tuples)
 │       ├── watch-playback-model.ts   # Separated sampling channels (positions, topology, config, boundary) with time clamping
 │       ├── watch-renderer.ts         # Thin adapter over lab Renderer (initForPlayback, updateReviewFrame, applyTheme)
-│       └── watch-bonded-groups.ts    # Memoized bonded-group tracking via shared projection (no Zustand)
+│       ├── watch-bonded-groups.ts    # Memoized bonded-group tracking via shared projection (no Zustand)
+│       └── components/
+│           ├── WatchApp.tsx              # Top-level shell: landing vs workspace switching
+│           ├── WatchCanvas.tsx           # Renderer lifecycle via useEffect + ref (create/destroy only)
+│           ├── WatchLanding.tsx          # File-open landing with drag/drop
+│           ├── WatchTopBar.tsx           # File badge + file name + open-file action
+│           ├── WatchPlaybackBar.tsx      # Review-parity playback controls using shared formatTime + Icons
+│           └── WatchBondedGroupsPanel.tsx # Two-tier bonded-groups display using shared partitionBondedGroups
 ├── viewer/
 │   └── index.html                # Three.js pre-computed trajectory viewer
 ├── data/                         # ML training/test datasets (NPY + metadata)
@@ -184,7 +198,15 @@ Pure, framework-free modules consumed by both `lab/` and `watch/`. No Zustand, n
 
 - **`src/history/connected-components.ts`** — pure union-find algorithm for computing connected components from bond topology. Returns `BondedComponent[]` (atom indices + size). Used by `lab/js/runtime/simulation-timeline.ts` (review topology) and `watch/js/watch-bonded-groups.ts` (imported topology).
 
-- **`src/history/bonded-group-projection.ts`** — pure overlap reconciliation, stable ID assignment, display ordering, and summary construction. Provides `createBondedGroupProjection()` factory that returns a stateful projector tracking previous-frame IDs for stability across topology changes. Used by `lab/js/runtime/bonded-group-runtime.ts` (lab/store adapter) and `watch/js/watch-bonded-groups.ts` (local adapter without Zustand).
+- **`src/history/bonded-group-projection.ts`** — pure overlap reconciliation, stable ID assignment, display ordering, and summary construction. Canonical definition of `BondedGroupSummary` (re-exported by `app-store.ts` for lab consumers). Provides `createBondedGroupProjection()` factory that returns a stateful projector tracking previous-frame IDs for stability across topology changes. Used by `lab/js/runtime/bonded-group-runtime.ts` (lab/store adapter) and `watch/js/watch-bonded-groups.ts` (local adapter without Zustand).
+
+- **`src/history/bonded-group-utils.ts`** — pure partitioning function (`partitionBondedGroups`) that splits `BondedGroupSummary[]` into large and small buckets by atom count (threshold: `SMALL_CLUSTER_THRESHOLD`). Shared between `lab/js/store/selectors/bonded-groups.ts` (re-exports for lab consumers) and `watch/js/components/WatchBondedGroupsPanel.tsx`. No framework dependencies.
+
+### Shared UI Assets (`src/ui/`)
+
+Framework-free CSS consumed by both `lab/` and `watch/`. No component logic, no JS.
+
+- **`src/ui/review-parity.css`** — shared neutral-class CSS layer for review-like viewer surfaces. Uses `.review-*` prefix. Owns: playback-bar chrome (`.review-playback-bar`), compact panel chrome (`.review-panel`), status/message tones (`.review-status-msg`), list row rhythm (`.review-panel-row`), top bar chrome (`.review-topbar`). Does NOT own page layout, dock layout, or lab-specific rules. All values reference CSS custom properties (`--panel-bg`, `--color-border`, `--color-accent`, etc.) for theming. Used by `watch/` components directly; lab may adopt optionally.
 
 ## Data Flow
 
@@ -442,7 +464,7 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - **atom-source.ts** — shared renderer-to-input atom-picking adapter
 - **focus-runtime.ts** — focus resolution: molecule lookup, centroid computation, camera pivot update; `ensureFollowTarget()` for follow-mode validation. Placement commit does NOT change focus metadata or retarget camera (Policy A).
 - **onboarding.ts** — coachmark scheduling + page-load onboarding overlay gate (`isOnboardingEligible`, `subscribeOnboardingReadiness`)
-- **bonded-group-runtime.ts** — thin lab/store adapter that delegates projection logic to the shared module (`src/history/bonded-group-projection.ts`). Consumes `getDisplaySource()` (not physics directly) and writes results to Zustand store. `getDisplaySourceKind()` reports live vs review source.
+- **bonded-group-runtime.ts** — thin lab/store adapter that delegates projection logic to the shared module (`src/history/bonded-group-projection.ts`). Consumes `getDisplaySource()` (not physics directly) and writes results to Zustand store. `getDisplaySourceKind()` reports live vs review source. Does NOT re-export `BondedGroupSummary` — the canonical definition lives in `src/history/bonded-group-projection.ts` and is re-exported by `app-store.ts` for lab consumers.
 - **bonded-group-highlight-runtime.ts** — persistent atom tracking, hover preview, panel highlight resolution (warm palette via `setHighlightedAtoms`). Self-healing: `clearTrackedIfFeatureDisabled()` clears stale tracked state (`_trackedAtoms`, `selectedBondedGroupId`, `hasTrackedBondedHighlight`) when `canTrackBondedGroupHighlight` is off; called at the top of `syncToRenderer()` and `syncAfterTopologyChange()`. Runtime structure preserved (no store fields or methods deleted — hide pass only).
 - **bonded-group-coordinator.ts** — coordinated projection + highlight lifecycle (update + teardown)
 - **bonded-group-display-source.ts** — resolves bonded-group topology source: live physics components or review historical topology. Pure function, no side effects.
@@ -558,7 +580,9 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | Atom identity (slot→atomId mapping) | timeline-atom-identity.ts | scene-runtime (append), physics compaction listener, recording orchestrator (capture) |
 | Atom metadata (id→element mapping) | atom-metadata-registry.ts | scene-runtime (register after commit), history-export (getAtomTable for export) |
 
-**Note:** The table above covers `lab/` state only. `watch/` has no Zustand store -- all state is plain local variables and DOM elements managed by `watch/js/main.ts`. See the [Watch App](#watch-app-watch) section for details.
+**Note:** The table above covers `lab/` state only. `watch/` has no Zustand store -- all state lives in the `WatchController` closure (plain local variables) and React `useState` for local UI concerns. React subscribes via `useSyncExternalStore`. See the [Watch App](#watch-app-watch) section for details.
+
+**Type ownership:** `BondedGroupSummary` is canonically defined in `src/history/bonded-group-projection.ts`. `app-store.ts` re-exports it for lab consumers. `bonded-group-runtime.ts` imports but does NOT re-export it.
 
 ### Overlay Close Policy
 
@@ -622,10 +646,13 @@ bonded-group-highlight-runtime.ts          interaction-highlight-runtime.ts
 
 ### Watch App (`watch/`)
 
-`watch/` is a read-only history file viewer — it imports `.atomdojo` files exported by the lab and plays them back. No simulation, no editing, no Zustand store. Plain TypeScript + DOM for all state; reuses the lab renderer via a narrow adapter.
+`watch/` is a read-only history file viewer — it imports `.atomdojo` files exported by the lab and plays them back. No simulation, no editing, no Zustand store. React UI with a controller bridge: `main.ts` creates the controller and mounts React; the controller owns the RAF clock, playback timing, snapshot publication, and renderer frame application; React components subscribe via `useSyncExternalStore`. Reuses the lab renderer via a narrow adapter.
 
 ```
-watch/js/main.ts (composition root + DOM wiring + playback loop)
+main.ts (bootstrap: theme, controller creation, React mount)
+       │
+       ▼
+watch-controller.ts (RAF clock, playback timing, snapshot/subscribe, renderer frame push)
        │
        ├── history-file-loader.ts       ← file I/O, delegates detection + validation
        │       │                           to src/history/history-file-v1.ts
@@ -646,17 +673,47 @@ watch/js/main.ts (composition root + DOM wiring + playback loop)
                ▼
            src/history/connected-components.ts   (union-find)
            src/history/bonded-group-projection.ts (stable IDs + overlap reconciliation)
+           src/history/bonded-group-utils.ts      (partitioning for two-level display)
+```
+
+**React component tree:**
+```
+react-root.tsx (mountWatchUI → createRoot)
+       │
+       ▼
+WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
+       │
+       ├── WatchLanding              ← file open / drag-drop landing (shown when !loaded)
+       │
+       └── [workspace]               ← shown when loaded:
+           ├── WatchTopBar           ← file kind badge, filename, open-another action
+           ├── WatchCanvas           ← owns renderer create/destroy lifecycle only
+           │                            (controller's RAF loop pushes frames to renderer)
+           ├── WatchBondedGroupsPanel ← collapsible bonded-group inspector (uses partitionBondedGroups from shared utils)
+           └── WatchPlaybackBar      ← play/pause, scrubber, time display, open action
 ```
 
 **Module descriptions:**
-- **main.ts** — composition root: file open dialog, playback loop (RAF-driven), scrub bar, time display, workspace management. All state is local variables and DOM elements.
+- **main.ts** — thin bootstrap: applies theme tokens, creates the `WatchController`, mounts the React UI via `mountWatchUI()`. Does NOT own DOM manipulation, playback logic, or renderer lifecycle.
+- **watch-controller.ts** — non-React bridge between runtime modules and React UI. Owns: RAF clock (playback timing + renderer frame application in the same `tick()`), loaded file state, `WatchControllerSnapshot` publication via `getSnapshot()`/`subscribe()`. React components consume snapshots via `useSyncExternalStore`. The controller also owns transactional file open (prepare/commit with rollback on failure).
+- **react-root.tsx** — React mount/unmount entry point. Mounts `WatchApp` under `React.StrictMode` into `#watch-root`.
 - **history-file-loader.ts** — two-step file load: `detectHistoryFile()` (envelope) then `validateFullHistoryFile()` (semantic), both delegated to the shared schema module. Owns only `File` I/O and the user-facing load flow.
 - **full-history-import.ts** — normalizes validated v1 file data into `LoadedFullHistory`: converts `number[]` to `Float64Array` for positions/velocities, `{ a, b, distance }` to `[a, b, distance]` tuples for bonds, and precomputes `restartAlignedToDense` flag.
 - **watch-playback-model.ts** — separated sampling channels for positions, topology, config, and boundary state. v1: all channels return exact recorded data (stepwise from nearest frame at or before `timePs`). v2 path: only position sampling may become interpolated; topology/config/boundary remain stepwise.
 - **watch-renderer.ts** — narrow adapter over the lab `Renderer`, exposing only `initForPlayback()`, `updateReviewFrame()`, `applyTheme()`, and canvas access. Shields watch code from the 2500+ line lab renderer surface.
 - **watch-bonded-groups.ts** — local adapter that computes bonded groups from imported topology using the shared `connected-components` and `bonded-group-projection` modules. Memoized by topology `frameId` — skips recomputation when the frame has not changed. No Zustand dependency.
 
-**State model:** watch/ has no Zustand store. All state lives in plain local variables (`const playback = createWatchPlaybackModel()`, etc.) and DOM elements. The main.ts composition root wires everything together with direct function calls and event listeners.
+**React components:**
+- **WatchApp** — top-level shell. Subscribes to controller via `useSyncExternalStore(controller.subscribe, controller.getSnapshot)`. Routes between `WatchLanding` (no file loaded) and the workspace layout (file loaded). Owns local panel expand/collapse state.
+- **WatchCanvas** — owns Three.js renderer create/destroy lifecycle only. Creates the renderer via `controller.createRenderer()` on mount, destroys and detaches on unmount. Does NOT own the playback clock or frame updates — the controller's RAF loop pushes frames into the renderer directly.
+- **WatchPlaybackBar** — play/pause toggle, range scrubber, formatted time display, open-file action. Pure presentation driven by snapshot props.
+- **WatchBondedGroupsPanel** — collapsible bonded-group inspector with two-level display (large/small clusters via `partitionBondedGroups` from `src/history/bonded-group-utils.ts`). Uses `.review-panel` class names from shared `review-parity.css`.
+- **WatchTopBar** — file kind badge, filename, open-another action. Uses `.review-topbar` class names from shared `review-parity.css`.
+- **WatchLanding** — drag-drop zone and open-file button for initial file selection.
+
+**State model:** watch/ has no Zustand store. The `WatchController` holds all mutable state (playback model, bonded groups, renderer ref, RAF handle) as plain local variables in a closure. React components subscribe via `useSyncExternalStore` — the controller publishes immutable `WatchControllerSnapshot` objects and notifies listeners on change. Local UI state (panel expanded, small clusters expanded) lives in React `useState`.
+
+**Build:** `tsconfig.json` includes `watch/js/**/*.ts` and `watch/js/**/*.tsx` so watch app sources participate in the project-wide type check alongside lab and shared modules.
 
 ### Deferred Phases
 

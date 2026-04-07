@@ -19,9 +19,6 @@ import { useAppStore } from '../store/app-store';
 import type { BondedGroupDisplaySource } from './bonded-group-display-source';
 import { createBondedGroupProjection, type BondedGroupSummary } from '../../../src/history/bonded-group-projection';
 
-// Re-export BondedGroupSummary so existing consumers keep working
-export type { BondedGroupSummary } from '../../../src/history/bonded-group-projection';
-
 export interface BondedGroupRuntime {
   projectNow(): void;
   reset(): void;

@@ -426,7 +426,7 @@ For trajectory playback of large structures, use high stride values (20–100).
 
 ## Watch (`watch/`)
 
-The watch app imports and plays back `.atomdojo` history files exported from the lab timeline.
+The watch app imports and plays back `.atomdojo` history files exported from the lab timeline. It is a React application with a `useSyncExternalStore`-compatible controller that owns the RAF clock and renderer frame application. `WatchCanvas` owns only renderer lifecycle (init/dispose). `watch/index.html` is minimal (`#watch-root` only, no inline CSS or DOM).
 
 ### Usage
 
@@ -457,17 +457,19 @@ Once a valid file loads, the app presents:
 | Element | Details |
 |---------|---------|
 | Canvas | Three.js scene (same renderer as lab, via thin adapter: `initForPlayback` + `updateReviewFrame`) |
-| File badge | Fixed top badge showing "Full History" |
-| Playback controls | Play/pause, scrubber, time labels |
-| Analysis panel | Atom count, frame count, group count, group list |
+| Top bar | File-kind badge + file name + "Open File" action |
+| Bonded-groups panel | Uses shared `partitionBondedGroups` with two-tier expand (large/small clusters) |
+| Playback bar | Uses shared `formatTime` + `Icons` from lab |
+
+All review-like surfaces use shared `src/ui/review-parity.css` neutral classes.
 
 ### Playback
 
-Exact recorded-frame playback from `denseFrames`. Topology is reconstructed from `restartFrames`. Bonded-group analysis is memoized to avoid redundant recomputation during scrubbing.
+Exact recorded-frame playback from `denseFrames` at canonical x1 rate from `CONFIG.playback.baseSimRatePsPerSecond` (0.12 ps/s). Rate is file-length-independent — not normalized to file duration. Topology is reconstructed from `restartFrames`. Bonded-group analysis is memoized to avoid redundant recomputation during scrubbing.
 
 ### Error Handling
 
-A global fixed-position error banner is visible in both the landing and workspace states.
+Transactional file open: a bad replacement file keeps the current document intact and shows an error overlay. Commit-phase rollback restores the previous document on failure. The error overlay is visible in both the landing and workspace states.
 
 ### Theme & Renderer
 

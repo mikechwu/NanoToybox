@@ -127,13 +127,10 @@ export interface BondedGroupColorAssignment {
  *  minAtomIndex: lowest atom index (deterministic fallback sort key)
  *  orderKey: internal reconciliation key (not user-facing — use displayIndex for UI)
  */
-export interface BondedGroupSummary {
-  id: string;
-  displayIndex: number;
-  atomCount: number;
-  minAtomIndex: number;
-  orderKey: number;
-}
+// Canonical type lives in src/history/bonded-group-projection.ts.
+// Imported and re-exported here so existing lab consumers keep their import paths.
+import type { BondedGroupSummary as _BondedGroupSummary } from '../../../src/history/bonded-group-projection';
+export type BondedGroupSummary = _BondedGroupSummary;
 
 export interface AppStore {
   // UI chrome state
