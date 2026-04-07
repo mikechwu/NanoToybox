@@ -13,6 +13,7 @@ import { mountWatchUI } from './react-root';
 // CSS imports
 import '../css/watch.css';
 import '../../src/ui/review-parity.css';
+import '../../src/ui/bonded-groups-parity.css';
 
 // Theme
 applyThemeTokens(VIEWER_DEFAULTS.defaultTheme);

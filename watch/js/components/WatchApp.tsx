@@ -73,8 +73,12 @@ export function WatchApp({ controller }: WatchAppProps) {
               smallExpanded={smallExpanded}
               onToggleExpanded={() => setPanelExpanded(e => !e)}
               onToggleSmallExpanded={() => setSmallExpanded(e => !e)}
-              atomCount={snapshot.atomCount}
-              frameCount={snapshot.frameCount}
+              following={snapshot.following}
+              followedGroupId={snapshot.followedGroupId}
+              onHover={(id) => controller.hoverGroup(id)}
+              onCenter={(id) => controller.centerOnGroup(id)}
+              onFollow={(id) => controller.followGroup(id)}
+              onUnfollow={() => controller.unfollowGroup()}
             />
           </div>
         </div>

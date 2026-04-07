@@ -131,7 +131,7 @@ export const CONFIG = {
     animationDurationMs: 500,       // [300–800] ms for focus/snap transitions
     nearPlaneMargin: 0.5,           // [0.1–2.0] Ang beyond camera.near for framing safety
     verticalFallbackDot: 0.985,     // [0.95–0.999] |dot(forward, Y)| threshold (~10°)
-    atomVisualRadius: 0.4,          // [0.2–0.8] Ang — added to bounding sphere for rendered mesh
+    atomVisualRadius: VIEWER_DEFAULTS.atomVisualRadius,  // [0.2–0.8] Ang — added to bounding sphere for rendered mesh
     defaultOrbitDistance: 15,        // [8–30] Ang — fallback pivot distance for Esc-to-Orbit
     followLongPressMs: 500,         // [300–800] ms — long-press threshold for ⊕ follow mode
   },

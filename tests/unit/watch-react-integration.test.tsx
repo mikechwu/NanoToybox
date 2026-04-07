@@ -34,6 +34,9 @@ function makeSnapshot(overrides: Partial<WatchControllerSnapshot> = {}): WatchCo
     fileKind: null,
     fileName: null,
     error: null,
+    hoveredGroupId: null,
+    following: false,
+    followedGroupId: null,
     ...overrides,
   };
 }
@@ -48,6 +51,10 @@ function createMockController(initialSnapshot?: Partial<WatchControllerSnapshot>
     openFile: vi.fn(async () => {}),
     togglePlay: vi.fn(),
     scrub: vi.fn(),
+    hoverGroup: vi.fn(),
+    centerOnGroup: vi.fn(),
+    followGroup: vi.fn(),
+    unfollowGroup: vi.fn(),
     createRenderer: vi.fn(() => ({
       getCanvas: () => document.createElement('canvas'),
       applyTheme: vi.fn(),
@@ -129,7 +136,7 @@ describe('WatchApp React integration', () => {
       ],
     });
     const { container } = render(<WatchApp controller={ctrl} />);
-    const toggle = container.querySelector('.review-panel__toggle');
+    const toggle = container.querySelector('.bg-panel__header-toggle');
     expect(toggle).not.toBeNull();
     expect(toggle!.textContent).toBe('Collapse'); // expanded by default
   });
@@ -141,11 +148,168 @@ describe('WatchApp React integration', () => {
     });
     const { container } = render(<WatchApp controller={ctrl} />);
     // Click header to collapse
-    const header = container.querySelector('.review-panel__header');
+    const header = container.querySelector('.bg-panel__header');
     expect(header).not.toBeNull();
     act(() => { fireEvent.click(header!); });
-    // Panel body should be gone
-    expect(container.querySelector('.review-panel__body')).toBeNull();
+    // Panel body should be gone (no #watch-bonded-groups-body when collapsed)
+    expect(container.querySelector('#watch-bonded-groups-body')).toBeNull();
+  });
+
+  it('follow toggle: any row follow click while active turns follow off', () => {
+    const ctrl = createMockController({
+      loaded: true, endTimePs: 100, fileKind: 'full',
+      following: true, followedGroupId: 'g1',
+      groups: [
+        { id: 'g1', displayIndex: 1, atomCount: 50, minAtomIndex: 0, orderKey: 0 },
+        { id: 'g2', displayIndex: 2, atomCount: 10, minAtomIndex: 50, orderKey: 1 },
+      ],
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    // Follow On strip should be visible
+    const followOnBtn = container.querySelector('.bg-panel__follow-active');
+    expect(followOnBtn).not.toBeNull();
+    // Row follow buttons should NOT be disabled (lab parity: any click is toggle off)
+    const followBtns = container.querySelectorAll('.bg-panel__row-action');
+    for (const btn of Array.from(followBtns)) {
+      expect((btn as HTMLButtonElement).disabled).toBe(false);
+    }
+  });
+
+  it('follow buttons use row-specific follow semantics', () => {
+    const ctrl = createMockController({
+      loaded: true, endTimePs: 100, fileKind: 'full',
+      following: true, followedGroupId: 'g1',
+      groups: [
+        { id: 'g1', displayIndex: 1, atomCount: 50, minAtomIndex: 0, orderKey: 0 },
+        { id: 'g2', displayIndex: 2, atomCount: 10, minAtomIndex: 50, orderKey: 1 },
+      ],
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const followBtns = Array.from(container.querySelectorAll('.bg-panel__row-action')).filter((btn) => {
+      const label = btn.getAttribute('aria-label') ?? '';
+      return label.startsWith('Follow group') || label.startsWith('Stop following group');
+    }) as HTMLButtonElement[];
+    expect(followBtns).toHaveLength(2);
+    expect(followBtns[0].getAttribute('aria-label')).toBe('Stop following group 1');
+    expect(followBtns[0].getAttribute('aria-pressed')).toBe('true');
+    expect(followBtns[1].getAttribute('aria-label')).toBe('Follow group 2');
+    expect(followBtns[1].hasAttribute('aria-pressed')).toBe(false);
+  });
+
+  it('stateful follow toggle: clicking different row while active re-renders to off state', () => {
+    const ctrl = createMockController({
+      loaded: true, endTimePs: 100, fileKind: 'full',
+      following: true, followedGroupId: 'g1',
+      groups: [
+        { id: 'g1', displayIndex: 1, atomCount: 50, minAtomIndex: 0, orderKey: 0 },
+        { id: 'g2', displayIndex: 2, atomCount: 10, minAtomIndex: 50, orderKey: 1 },
+      ],
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+
+    // Pre-condition: Follow On strip visible, g1 row active
+    expect(container.querySelector('.bg-panel__follow-active')).not.toBeNull();
+    expect(container.querySelector('.bg-panel__row-action--active')).not.toBeNull();
+
+    // Click g2's follow button (global toggle: any click while active = off)
+    const followBtns = Array.from(container.querySelectorAll('.bg-panel__row-action')).filter((btn) => {
+      const label = btn.getAttribute('aria-label') ?? '';
+      return label.startsWith('Follow group') || label.startsWith('Stop following group');
+    }) as HTMLButtonElement[];
+    act(() => { fireEvent.click(followBtns[1]); }); // g2's follow button
+
+    // Controller should have been called with g2's id
+    expect(ctrl.followGroup).toHaveBeenCalledWith('g2');
+
+    // Simulate controller updating snapshot to follow-off state
+    act(() => { ctrl.setSnapshot({
+      loaded: true, endTimePs: 100, fileKind: 'full',
+      following: false, followedGroupId: null,
+      groups: [
+        { id: 'g1', displayIndex: 1, atomCount: 50, minAtomIndex: 0, orderKey: 0 },
+        { id: 'g2', displayIndex: 2, atomCount: 10, minAtomIndex: 50, orderKey: 1 },
+      ],
+    }); });
+
+    // Post-condition: Follow On strip gone, no active follow row
+    expect(container.querySelector('.bg-panel__follow-active')).toBeNull();
+    expect(container.querySelector('.bg-panel__row-action--active')).toBeNull();
+    // All follow buttons should say "Follow" (not "Stop following")
+    const updatedFollowBtns = Array.from(container.querySelectorAll('.bg-panel__row-action')).filter((btn) => {
+      const label = btn.getAttribute('aria-label') ?? '';
+      return label.startsWith('Follow group') || label.startsWith('Stop following group');
+    });
+    for (const btn of updatedFollowBtns) {
+      expect(btn.getAttribute('aria-label')).toMatch(/^Follow group/);
+      expect(btn.hasAttribute('aria-pressed')).toBe(false);
+    }
+  });
+
+  it('column header shows Cluster / Atoms / Center / Follow', () => {
+    const ctrl = createMockController({
+      loaded: true, endTimePs: 100, fileKind: 'full',
+      groups: [{ id: 'g1', displayIndex: 1, atomCount: 50, minAtomIndex: 0, orderKey: 0 }],
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const header = container.querySelector('.bg-panel__col-header');
+    expect(header).not.toBeNull();
+    expect(header!.textContent).toContain('Cluster');
+    expect(header!.textContent).toContain('Atoms');
+    expect(header!.textContent).toContain('Center');
+    expect(header!.textContent).toContain('Follow');
+  });
+
+  it('rows have chip placeholder for lab geometry parity', () => {
+    const ctrl = createMockController({
+      loaded: true, endTimePs: 100, fileKind: 'full',
+      groups: [{ id: 'g1', displayIndex: 1, atomCount: 50, minAtomIndex: 0, orderKey: 0 }],
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    expect(container.querySelector('.bg-panel__row-chip')).not.toBeNull();
+  });
+
+  it('small clusters section uses lab-style disclosure label', () => {
+    const ctrl = createMockController({
+      loaded: true, endTimePs: 100, fileKind: 'full',
+      groups: [
+        { id: 'g1', displayIndex: 1, atomCount: 50, minAtomIndex: 0, orderKey: 0 },
+        { id: 'g2', displayIndex: 2, atomCount: 2, minAtomIndex: 50, orderKey: 1 },
+      ],
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const smallToggle = container.querySelector('.bg-panel__small-toggle');
+    expect(smallToggle).not.toBeNull();
+    expect(smallToggle!.textContent).toContain('Small Clusters: 1');
+  });
+
+  it('no stats block inside bonded-groups panel (parity: lab panel has no file stats)', () => {
+    const ctrl = createMockController({
+      loaded: true, endTimePs: 100, fileKind: 'full',
+      groups: [{ id: 'g1', displayIndex: 1, atomCount: 50, minAtomIndex: 0, orderKey: 0 }],
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    expect(container.querySelector('.bg-panel__stats')).toBeNull();
+  });
+
+  it('active follow row has aria-pressed, inactive rows do not', () => {
+    const ctrl = createMockController({
+      loaded: true, endTimePs: 100, fileKind: 'full',
+      following: true, followedGroupId: 'g1',
+      groups: [
+        { id: 'g1', displayIndex: 1, atomCount: 50, minAtomIndex: 0, orderKey: 0 },
+        { id: 'g2', displayIndex: 2, atomCount: 10, minAtomIndex: 50, orderKey: 1 },
+      ],
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const rows = container.querySelectorAll('.bg-panel__row');
+    // First row (g1) is followed — its follow button should have aria-pressed
+    const g1FollowBtn = rows[0]?.querySelectorAll('.bg-panel__row-action')[1] as HTMLButtonElement;
+    expect(g1FollowBtn?.getAttribute('aria-pressed')).toBe('true');
+    // Second row (g2) is not followed — no aria-pressed
+    const g2FollowBtn = rows[1]?.querySelectorAll('.bg-panel__row-action')[1] as HTMLButtonElement;
+    expect(g2FollowBtn?.getAttribute('aria-pressed')).toBeNull();
+    // Inactive row still says "Follow", not "Stop following"
+    expect(g2FollowBtn?.getAttribute('title')).toBe('Follow');
   });
 
   it('top bar shows file kind badge', () => {

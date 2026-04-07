@@ -1,11 +1,17 @@
 /**
  * Watch renderer adapter — narrow API surface over the lab Renderer.
  *
+ * Round 2 additions: highlight methods + camera target methods.
  * Shields watch/ code from the 2500+ line lab renderer surface.
- * Only exposes the methods watch/ needs for review-frame display.
  */
 
 import { Renderer } from '../../lab/js/renderer';
+import * as THREE from 'three';
+
+export interface FramedTarget {
+  center: [number, number, number];
+  radius: number;
+}
 
 export interface WatchRenderer {
   getCanvas(): HTMLCanvasElement;
@@ -16,7 +22,18 @@ export interface WatchRenderer {
   fitCamera(): void;
   render(): void;
   destroy(): void;
-  // Note: resize is handled automatically by the Renderer's internal window.resize listener.
+
+  // ── Round 2: highlight ──
+  setGroupHighlight(atomIndices: number[] | null, intensity: 'selected' | 'hover'): void;
+  clearGroupHighlight(): void;
+
+  // ── Round 2: target resolution ──
+  getDisplayedAtomWorldPosition(index: number): [number, number, number] | null;
+  getSceneRadius(): number;
+
+  // ── Round 2: camera actions ──
+  animateToFramedTarget(target: FramedTarget): void;
+  updateOrbitFollow(dtMs: number, target: FramedTarget): void;
 }
 
 export function createWatchRenderer(container: HTMLElement): WatchRenderer {
@@ -26,8 +43,6 @@ export function createWatchRenderer(container: HTMLElement): WatchRenderer {
     getCanvas: () => renderer.getCanvas(),
     applyTheme: (name: string) => renderer.applyTheme(name),
     initForPlayback(maxAtomCount: number) {
-      // Reset mesh state from any prior file, then create capacity for the new file.
-      // clearAllMeshes resets _atomCount to 0 so ensureCapacityForAppend computes correctly.
       renderer.clearAllMeshes();
       renderer.ensureCapacityForAppend(maxAtomCount);
     },
@@ -35,5 +50,34 @@ export function createWatchRenderer(container: HTMLElement): WatchRenderer {
     fitCamera: () => renderer.fitCamera(),
     render: () => renderer.render(),
     destroy: () => renderer.destroy(),
+
+    // Highlight
+    setGroupHighlight(atomIndices, intensity) {
+      renderer.setHighlightedAtoms(atomIndices, intensity);
+    },
+    clearGroupHighlight() {
+      renderer.setHighlightedAtoms(null);
+    },
+
+    // Target resolution
+    getDisplayedAtomWorldPosition(index: number): [number, number, number] | null {
+      const v = renderer.getDisplayedAtomWorldPosition(index);
+      return v ? [v.x, v.y, v.z] : null;
+    },
+    getSceneRadius: () => renderer.getSceneRadius(),
+
+    // Camera actions
+    animateToFramedTarget(target: FramedTarget) {
+      renderer.animateToFramedTarget({
+        center: new THREE.Vector3(...target.center),
+        radius: target.radius,
+      });
+    },
+    updateOrbitFollow(dtMs: number, target: FramedTarget) {
+      renderer.updateOrbitFollow(dtMs, {
+        center: new THREE.Vector3(...target.center),
+        radius: target.radius,
+      });
+    },
   };
 }

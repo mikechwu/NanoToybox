@@ -12,4 +12,6 @@ export const VIEWER_DEFAULTS = {
   baseSimRatePsPerSecond: 0.12,
   /** Default theme for both lab and watch. */
   defaultTheme: 'light' as const,
+  /** Atom visual radius added to bounding sphere for camera framing (Angstrom). */
+  atomVisualRadius: 0.4,
 } as const;
