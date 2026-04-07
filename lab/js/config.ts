@@ -77,10 +77,15 @@ export const CONFIG = {
     stepsPerFrame: 4,       // substeps per rendered frame
     kDragDefault: 2.0,      // eV/Å² — drag spring constant
     kRotateDefault: 5.0,    // eV/Å² — rotation spring constant
-    vHardMax: 0.15,         // Å/fs — per-atom velocity cap
-    keCapMult: 500.0,       // KE cap multiplier
+    vHardMax: 0.15,         // Å/fs — per-atom velocity cap. Transitional: elevated KE cap also active (Phase 3/4).
     dampingDefault: 0.0,     // velocity reduction factor per legacy batch (4 steps). Applied per-step internally as (1-d)^(1/4).
-    fMax: 50.0,             // eV/Å — max force per atom
+    // ── Force saturation caps (initial Phase 3 estimates — revise after real-workload telemetry) ──
+    // fMaxInteraction: Δv_interaction_max ≈ 0.048 Å/fs per substep → F ≈ 120 eV/Å (Phase 3 estimate)
+    // fRepulsionStart: above stable-sim high tail; old global clamp was 50, atoms typically < 30 (Phase 3 estimate)
+    // fMaxInternal: Δv_stable_limit ≈ 0.032 Å/fs → F ≈ 80 eV/Å (Phase 3 estimate)
+    fMaxInteraction: 120.0, // eV/Å — interaction-force asymptotic cap (Phase 3 estimate)
+    fRepulsionStart: 40.0,  // eV/Å — internal-force activation threshold (Phase 3 estimate)
+    fMaxInternal: 80.0,     // eV/Å — internal-force asymptotic cap (Phase 3 estimate)
     iRef: 750.0,            // Å² — reference inertia (C60)
     useWasm: true,          // Wasm Tersoff kernel (C + Emscripten, -O3 -ffast-math). ~11% faster than JS JIT. Override via ?kernel=js|wasm.
   },

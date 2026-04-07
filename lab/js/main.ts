@@ -200,6 +200,8 @@ function _teardownRuntime() {
     },
     cleanupDebugHooks: () => {
       delete window._setUiEffectsMode;
+      delete window._getForceSafetyDebugState;
+      delete window._resetForceSafetyDebugState;
       delete (window as unknown as Record<string, unknown>)._getWorkerDebugState;
       delete (window as unknown as Record<string, unknown>)._simulateWorkerStall;
       delete (window as unknown as Record<string, unknown>)._setTestStalledThreshold;
@@ -305,6 +307,25 @@ async function init() {
       effectsGate.mode = 'auto';
       // Let the auto gate take over on next frame
     }
+  };
+  // Temporary DevTools hooks for validating whether the transitional force
+  // safety guards are still needed. Use:
+  //   window._getForceSafetyDebugState()
+  //   window._resetForceSafetyDebugState()
+  window._getForceSafetyDebugState = () => (
+    physics ? physics.getForceSafetyDebugState() : {
+      transitionalClampHitCount: 0,
+      transitionalKeCapHitCount: 0,
+      keBaseline: 0,
+      transitional: {
+        keCapMultiplier: 0,
+        keCapFloorPerAtom: 0,
+        clampThreshold: 0,
+      },
+    }
+  );
+  window._resetForceSafetyDebugState = () => {
+    if (physics) physics.resetForceSafetyDebugState();
   };
 
   // Mount React UI early so StatusBar is available for error display
