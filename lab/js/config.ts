@@ -4,6 +4,7 @@
  */
 
 import { VIEWER_DEFAULTS } from '../../src/config/viewer-defaults';
+import { isTouchInteraction as _sharedIsTouchInteraction } from '../../src/ui/device-mode';
 
 /** Default theme — canonical source is VIEWER_DEFAULTS. Re-exported for lab consumers. */
 export const DEFAULT_THEME: 'dark' | 'light' = VIEWER_DEFAULTS.defaultTheme;
@@ -186,14 +187,9 @@ export const CONFIG = {
    * Use this for interaction-capability decisions (input binding, coachmark gating).
    * Use isTouchDevice() for responsive layout decisions only.
    *
-   * Stable across resize — does not change with viewport width.
+   * Delegates to shared src/ui/device-mode.ts. Stable across resize.
    */
-  isTouchInteraction(): boolean {
-    return (
-      window.matchMedia('(pointer: coarse)').matches &&
-      !window.matchMedia('(hover: hover)').matches
-    );
-  },
+  isTouchInteraction: _sharedIsTouchInteraction,
 
   // Camera lighting rig — ownership boundary:
   //   Rig geometry (offsets, target): CONFIG.cameraLighting below

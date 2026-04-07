@@ -20,6 +20,8 @@ import { createWatchPlaybackModel, type WatchPlaybackModel } from './watch-playb
 import { createWatchBondedGroups, type WatchBondedGroups } from './watch-bonded-groups';
 import { createWatchViewService, type WatchViewService } from './watch-view-service';
 import { createWatchRenderer, type WatchRenderer } from './watch-renderer';
+import { createWatchCameraInput, type WatchCameraInput } from './watch-camera-input';
+import { createWatchOverlayLayout, type WatchOverlayLayout } from './watch-overlay-layout';
 import type { BondedGroupSummary } from './watch-bonded-groups';
 
 export interface WatchControllerSnapshot {
@@ -74,6 +76,8 @@ export function createWatchController(): WatchController {
   const bondedGroups = createWatchBondedGroups();
   const viewService = createWatchViewService();
   let renderer: WatchRenderer | null = null;
+  let cameraInput: WatchCameraInput | null = null;
+  let overlayLayout: WatchOverlayLayout | null = null;
 
   let _snapshot: WatchControllerSnapshot = { ...EMPTY_SNAPSHOT };
   const _listeners = new Set<() => void>();
@@ -213,6 +217,8 @@ export function createWatchController(): WatchController {
   }
 
   function detachRenderer() {
+    if (overlayLayout) { overlayLayout.destroy(); overlayLayout = null; }
+    if (cameraInput) { cameraInput.destroy(); cameraInput = null; }
     if (renderer) { renderer.destroy(); renderer = null; }
   }
 
@@ -340,7 +346,11 @@ export function createWatchController(): WatchController {
     getBondedGroups: () => bondedGroups,
 
     createRenderer(container) {
+      // Guard: tear down any prior renderer subsystems to prevent listener/RAF leaks
+      detachRenderer();
       renderer = createWatchRenderer(container);
+      cameraInput = createWatchCameraInput(renderer);
+      overlayLayout = createWatchOverlayLayout(renderer);
       if (playback.isLoaded()) {
         const meta = documentService.getMetadata();
         if (meta.maxAtomCount > 0) renderer.initForPlayback(meta.maxAtomCount);

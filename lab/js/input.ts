@@ -10,6 +10,12 @@
  */
 import * as THREE from 'three';
 import { CONFIG } from './config';
+import {
+  TRIAD_DRAG_COMMIT_PX,
+  TAP_INTENT_PREVIEW_MS,
+  TAP_MAX_DURATION_MS,
+  DOUBLE_TAP_WINDOW_MS,
+} from '../../src/input/camera-gesture-constants';
 
 const DEBUG_INPUT = CONFIG.debug.input;
 
@@ -596,13 +602,13 @@ export class InputManager {
         // Only show if finger stayed close to start (tap intent, not drag)
         const dx = this._triadLastX - this._triadTouchStartX;
         const dy = this._triadLastY - this._triadTouchStartY;
-        if (Math.sqrt(dx * dx + dy * dy) < 5) {
+        if (Math.sqrt(dx * dx + dy * dy) < TRIAD_DRAG_COMMIT_PX) {
           const nearest = this._triadSource?.getNearestAxisEndpoint?.(
             this._triadLastX, this._triadLastY
           );
           this._triadSource?.showAxisHighlight?.(nearest ?? null);
         }
-      }, 150);
+      }, TAP_INTENT_PREVIEW_MS);
 
       return;
     }
@@ -660,7 +666,7 @@ export class InputManager {
       // Check if movement exceeds 5px from start → commit to drag
       const totalDx = touch.clientX - this._triadTouchStartX;
       const totalDy = touch.clientY - this._triadTouchStartY;
-      if (!this._triadDragCommitted && Math.sqrt(totalDx * totalDx + totalDy * totalDy) > 5) {
+      if (!this._triadDragCommitted && Math.sqrt(totalDx * totalDx + totalDy * totalDy) > TRIAD_DRAG_COMMIT_PX) {
         this._triadDragCommitted = true;
         // Clear tap-intent highlight — this is a drag, not a tap
         if (this._triadTapIntentTimer) {
@@ -723,7 +729,7 @@ export class InputManager {
     // Finger-count decrease ends current gesture (no inheritance)
     if (this.isTriadDragging) {
       // Tap = drag threshold never exceeded (no orbit delta was applied)
-      const isTap = !this._triadDragCommitted && (performance.now() - this._triadTouchStartTime) < 300;
+      const isTap = !this._triadDragCommitted && (performance.now() - this._triadTouchStartTime) < TAP_MAX_DURATION_MS;
 
       if (this._triadTapIntentTimer) {
         clearTimeout(this._triadTapIntentTimer);
@@ -739,7 +745,7 @@ export class InputManager {
         const isInCenter = nearest === null;
 
         const now = performance.now();
-        const isDoubleTap = (now - this._triadLastTapTime) < 400
+        const isDoubleTap = (now - this._triadLastTapTime) < DOUBLE_TAP_WINDOW_MS
           && isInCenter && this._triadLastTapWasCenter;
         this._triadLastTapTime = now;
         this._triadLastTapWasCenter = isInCenter;

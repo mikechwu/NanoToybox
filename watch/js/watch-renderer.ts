@@ -34,6 +34,30 @@ export interface WatchRenderer {
   // ── Round 2: camera actions ──
   animateToFramedTarget(target: FramedTarget): void;
   updateOrbitFollow(dtMs: number, target: FramedTarget): void;
+
+  // ── Round 3: triad interaction + orbit ──
+  /** Check if a screen point is inside the triad hit rect (touch tolerance included). */
+  isInsideTriad(clientX: number, clientY: number): boolean;
+  /** Apply an orbit rotation delta (uses shared orbit-math.ts internally). */
+  applyOrbitDelta(dx: number, dy: number): void;
+  /** Find the nearest triad axis endpoint for snap target. Null = center zone. */
+  getNearestAxisEndpoint(clientX: number, clientY: number): [number, number, number] | null;
+  /** Animate camera to look along a specific axis direction. */
+  snapToAxis(axisDir: [number, number, number]): void;
+  /** Animate camera to default front view (+Z). */
+  animatedResetView(): void;
+  /** Show/hide semi-transparent highlight sphere at a triad axis endpoint. */
+  showAxisHighlight(axisDir: [number, number, number] | null): void;
+  /** Brighten triad during active background orbit. */
+  startBackgroundOrbitCue(): void;
+  /** Restore triad brightness when background orbit ends. */
+  endBackgroundOrbitCue(): void;
+  /** Cancel any active camera animation (snap, center, follow-start). */
+  cancelCameraAnimation(): void;
+
+  // ── Round 3: triad layout ──
+  /** Set triad size and position to match lab overlay layout formulas. */
+  setOverlayLayout(layout: { triadSize: number; triadLeft: number; triadBottom: number }): void;
 }
 
 export function createWatchRenderer(container: HTMLElement): WatchRenderer {
@@ -65,6 +89,27 @@ export function createWatchRenderer(container: HTMLElement): WatchRenderer {
       return v ? [v.x, v.y, v.z] : null;
     },
     getSceneRadius: () => renderer.getSceneRadius(),
+
+    // Round 3: triad interaction + orbit
+    isInsideTriad: (clientX, clientY) => renderer.isInsideTriad(clientX, clientY),
+    applyOrbitDelta: (dx, dy) => renderer.applyOrbitDelta(dx, dy),
+    getNearestAxisEndpoint(clientX: number, clientY: number): [number, number, number] | null {
+      const v = renderer.getNearestAxisEndpoint(clientX, clientY);
+      return v ? [v.x, v.y, v.z] : null;
+    },
+    snapToAxis(axisDir: [number, number, number]) {
+      renderer.snapToAxis(new THREE.Vector3(...axisDir));
+    },
+    animatedResetView: () => renderer.animatedResetView(),
+    showAxisHighlight(axisDir: [number, number, number] | null) {
+      renderer.showAxisHighlight(axisDir ? new THREE.Vector3(...axisDir) : null);
+    },
+    startBackgroundOrbitCue: () => renderer.startBackgroundOrbitCue(),
+    endBackgroundOrbitCue: () => renderer.endBackgroundOrbitCue(),
+    cancelCameraAnimation: () => renderer.cancelCameraAnimation(),
+
+    // Triad layout
+    setOverlayLayout: (layout) => renderer.setOverlayLayout(layout),
 
     // Camera actions
     animateToFramedTarget(target: FramedTarget) {

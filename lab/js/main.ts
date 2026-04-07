@@ -16,6 +16,7 @@ import { PlacementController } from './placement';
 import { mountReactUI, unmountReactUI } from './react-root';
 import { useAppStore } from './store/app-store';
 import { createOverlayLayout, type OverlayLayout } from './runtime/overlay-layout';
+import { getDeviceMode } from '../../src/ui/device-mode';
 import { createInteractionDispatch } from './runtime/interaction-dispatch';
 import { createOverlayRuntime, type OverlayRuntime } from './runtime/overlay-runtime';
 import { createInputBindings, type InputBindings } from './runtime/input-bindings';
@@ -272,13 +273,7 @@ async function init() {
 
   // Device mode detection — sets data-device-mode on <html> for CSS
   function updateDeviceMode() {
-    const w = window.innerWidth;
-    const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
-    const canHover = window.matchMedia('(hover: hover)').matches;
-    let mode;
-    if (w < 768) mode = 'phone';
-    else if (w < 1024 || (coarsePointer && !canHover)) mode = 'tablet';
-    else mode = 'desktop';
+    const mode = getDeviceMode();
     const prev = document.documentElement.dataset.deviceMode;
     if (prev && prev !== mode && useAppStore.getState().activeSheet !== null) { _overlay!.close(); }
     document.documentElement.dataset.deviceMode = mode;

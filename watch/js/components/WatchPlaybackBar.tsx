@@ -26,7 +26,7 @@ export function WatchPlaybackBar({
   const step = duration > 0 ? duration / 100 : 1;
 
   return (
-    <div className="review-playback-bar">
+    <div className="review-playback-bar" data-watch-playback-bar>
       <button
         onClick={onTogglePlay}
         disabled={!canPlay}
