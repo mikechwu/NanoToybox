@@ -1,21 +1,20 @@
 /**
- * Tests for the force-cap redesign: source-level force saturation.
+ * Tests for the final force-safety architecture: source-level force saturation.
  *
- * Current state: Phase 3/4 transitional — both old and new guards active.
- *   - saturateInternalForces() + clampForces() comparison seam (Phase 3)
- *   - Transitional elevated KE cap at 5000× (will be removed in Phase 4)
- *   - vHardMax per-atom velocity cap unchanged
+ * Safety model:
+ *   - saturateInternalForces(): per-atom thresholded smooth saturation
+ *   - Interaction saturation: drag, translate, rotate (pre-torque)
+ *   - vHardMax: per-atom velocity cap (sole post-integration guard)
  *
  * Covers:
  *   - Smooth saturation formula correctness
  *   - Internal force saturation (per-atom thresholded)
  *   - Interaction force saturation (drag, translate, rotate pre-torque)
- *   - Transitional elevated KE cap (Phase 3/4 safety net)
+ *   - vHardMax-only applySafetyControls (no global KE cap)
  *   - Force-magnitude telemetry (stable and overlap scenarios)
  *   - Conservation validation (ΣF measurement, COM drift)
- *   - Pre-saturation instrumentation (isolated saturateInternalForces impact)
+ *   - Isolated saturateInternalForces ΣF measurement
  *   - Translate size-independence contract
- *   - Comparison seam validation
  *   - Config migration (old fields removed, new fields present)
  */
 import { describe, it, expect } from 'vitest';
@@ -252,9 +251,9 @@ describe('Interaction force saturation', () => {
   });
 });
 
-// ── KE cap removal ──
+// ── applySafetyControls: vHardMax only ──
 
-describe('applySafetyControls — elevated transitional KE cap', () => {
+describe('applySafetyControls — vHardMax only', () => {
   it('per-atom vHardMax still caps velocity', () => {
     const engine = makeEngine();
     // Set one atom to very high velocity
@@ -373,8 +372,8 @@ describe('Force-magnitude telemetry: overlap scenario', () => {
       );
       if (mag > maxForce) maxForce = mag;
     }
-    // Post-saturation forces must be bounded
-    expect(maxForce).toBeLessThan(CONFIG.physics.fMaxInternal * 1.5); // within transitional clamp
+    // Post-saturation forces must be bounded by the saturator's asymptote
+    expect(maxForce).toBeLessThan(CONFIG.physics.fMaxInternal);
     expect(isFinite(maxForce)).toBe(true);
   });
 });
@@ -484,7 +483,7 @@ describe('Conservation validation in overlap recovery', () => {
     engine.force.fill(0);
     engine.computeForces();
 
-    // After computeForces(), both saturateInternalForces() and clampForces() have run.
+    // After computeForces(), saturateInternalForces() has run.
     // Measure ΣF (net force on entire system) — perfect Newton's 3rd law gives ΣF=0.
     let sumFx = 0, sumFy = 0, sumFz = 0;
     for (let i = 0; i < engine.n; i++) {
@@ -560,7 +559,7 @@ describe('Isolated saturateInternalForces: ΣF before and after', () => {
     for (let i = 0; i < engine.n * 3; i++) sumBefore += engine.force[i];
     expect(sumBefore).toBe(0);
 
-    // Apply ONLY saturateInternalForces — no clampForces, no interaction
+    // Apply ONLY saturateInternalForces — no interaction forces
     engine.saturateInternalForces();
 
     // ΣF after saturation — per-atom scaling preserves direction but applies
@@ -683,61 +682,3 @@ describe('Translate force: total force is size-independent', () => {
   });
 });
 
-// ── Comparison seam: clampForces() safety net ──
-
-describe('Phase 3 comparison seam: clampForces as safety net', () => {
-  it('clampForces uses a strictly higher threshold than saturateInternalForces asymptote', () => {
-    const engine = makeEngine();
-    // Set a force just above F_MAX_INTERNAL but below the transitional clamp (1.5×)
-    const forceAboveInternal = CONFIG.physics.fMaxInternal * 1.2;
-    engine.force[0] = forceAboveInternal;
-    engine.force[3] = 0;
-
-    const f0Before = engine.force[0];
-    engine.clampForces();
-
-    // Should NOT clamp — it's below the transitional threshold (1.5× F_MAX_INTERNAL)
-    expect(engine.force[0]).toBe(f0Before);
-  });
-
-  it('clampForces fires when force exceeds transitional threshold and increments counter', () => {
-    const engine = makeEngine();
-    expect(engine.transitionalClampHitCount).toBe(0);
-
-    // Set a force above the transitional clamp threshold
-    const forceAboveClamp = CONFIG.physics.fMaxInternal * 2.0;
-    engine.force[0] = forceAboveClamp;
-
-    engine.clampForces();
-
-    // Should have been clamped down and counter incremented
-    expect(engine.force[0]).toBeLessThan(forceAboveClamp);
-    expect(engine.force[0]).toBeCloseTo(CONFIG.physics.fMaxInternal * 1.5, 5);
-    expect(engine.transitionalClampHitCount).toBe(1);
-  });
-
-  it('transitional KE cap is present but at elevated multiplier', () => {
-    const engine = makeEngine();
-    // Set moderate velocities that would trigger old 500× cap but not 5000×
-    const v = 0.10;
-    engine.vel[0] = v;
-    engine.vel[3] = v;
-
-    engine.applySafetyControls();
-
-    // With 5000× multiplier, moderate velocities should not be scaled
-    expect(engine.vel[0]).toBe(v);
-    expect(engine.vel[3]).toBe(v);
-    expect(engine.transitionalKeCapHitCount).toBe(0);
-  });
-
-  it('both counters stay zero in stable simulation', () => {
-    const engine = makeEngine();
-    for (let i = 0; i < 100; i++) {
-      engine.stepOnce();
-    }
-    engine.applySafetyControls();
-    expect(engine.transitionalClampHitCount).toBe(0);
-    expect(engine.transitionalKeCapHitCount).toBe(0);
-  });
-});

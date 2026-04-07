@@ -48,32 +48,6 @@ const F_REPULSION_START = CONFIG.physics.fRepulsionStart;
 const F_MAX_INTERNAL = CONFIG.physics.fMaxInternal;
 const V_HARD_MAX = CONFIG.physics.vHardMax;
 
-/**
- * Transitional safety policy (Phase 3/4) — all temporary scaffolding in one place.
- *
- * REMOVAL CONDITION: Remove this object, clampForces(), keBaseline field, and
- * the KE cap block in applySafetyControls() once BOTH of these are true:
- *   1. transitionalClampHitCount stays zero across the full validation suite
- *      (.atomdojo replay, C60 rotate, placement overlap, 2000-step stable run)
- *   2. transitionalKeCapHitCount stays zero across the same suite
- * See .reports/force-cap-telemetry-phase1.md for the validation checklist.
- */
-const TRANSITIONAL = {
-  /** Elevated KE cap multiplier (was 500, now 5000 — loose safety net). */
-  keCapMult: 5000.0,
-  /** KE cap floor per atom in eV (was n×5, now n×50 — loose safety net). */
-  keCapFloorPerAtom: 50.0,
-  /** Global clamp threshold: 1.5× F_MAX_INTERNAL. Only fires if saturation misses. */
-  clampThreshold: F_MAX_INTERNAL * 1.5,
-  /**
-   * keBaseline seed value in eV for newly initialized engines.
-   * 0.1 eV is a small positive floor so the KE cap formula (mult × keBaseline)
-   * produces a non-zero cap even before atoms gain kinetic energy from integration.
-   * Only used by the transitional KE cap — will be removed with it.
-   */
-  keBaselineSeed: 0.1,
-};
-
 // ─── Integration defaults (instance-level; see PhysicsEngine.dtFs / .dampingRefSteps) ───
 
 // ─── Unit conversion ───
@@ -357,10 +331,6 @@ export class PhysicsEngine {
   isTranslateMode!: boolean;
   activeComponent!: number;
   dragTarget!: number[];
-  // Transitional fields (Phase 3/4) — remove with TRANSITIONAL object
-  keBaseline!: number;
-  transitionalClampHitCount!: number;
-  transitionalKeCapHitCount!: number;
 
   // Neighbor lists and bonds
   neighborList!: Int32Array[] | null;
@@ -437,9 +407,6 @@ export class PhysicsEngine {
     this.isTranslateMode = false;
     this.activeComponent = -1;
     this.dragTarget = [0, 0, 0];
-    this.keBaseline = 0;
-    this.transitionalClampHitCount = 0;
-    this.transitionalKeCapHitCount = 0;
     this.neighborList = null;
     this.bonds = [];
     this.componentId = null;   // Int32Array[n] — component index per atom
@@ -508,7 +475,6 @@ export class PhysicsEngine {
     this.isTranslateMode = false;
     this.activeComponent = -1;
     this.bonds = bonds.map(b => [...b]);
-    this.keBaseline = TRANSITIONAL.keBaselineSeed;
     this.stepCount = 0;
     this.neighborList = null;
 
@@ -854,12 +820,10 @@ export class PhysicsEngine {
     }
 
     // ── Saturate internal forces (Tersoff + wall) before adding interaction forces ──
-    // Phase 3 comparison seam: saturateInternalForces() runs first (per-atom
-    // thresholded), then clampForces() as a safety net catches anything the
-    // new saturation misses. clampForces() will be removed in Phase 4 after
-    // validation confirms the new saturation is strictly tighter.
+    // Per-atom thresholded smooth saturation: exact below F_REPULSION_START,
+    // compressed above. Runs BEFORE interaction forces so user-driven forces
+    // are not affected by internal-force limiting.
     this.saturateInternalForces();
-    this.clampForces();
 
     // ── Interaction forces: UX layer ──
     // Drag spring, rotation torque — user-driven forces.
@@ -980,8 +944,7 @@ export class PhysicsEngine {
 
   /**
    * Per-atom thresholded smooth saturation for internal forces (Tersoff + wall).
-   * Supersedes the old global-scaling clampForces(), which remains as a
-   * transitional safety net during Phase 3/4 validation.
+   * Replaces the old global-scaling clampForces().
    *
    * Below F_REPULSION_START: exact physics (zero cost — early continue).
    * Above F_REPULSION_START: smooth compression toward F_MAX_INTERNAL.
@@ -1002,29 +965,6 @@ export class PhysicsEngine {
       this.force[ix + 1] *= s;
       this.force[ix + 2] *= s;
     }
-  }
-
-  /**
-   * Legacy global force clamp — transitional safety net (Phase 3).
-   * Uses TRANSITIONAL.clampThreshold (1.5× F_MAX_INTERNAL) so it only fires
-   * if the new per-atom saturation fails to contain a spike.
-   * Increments transitionalClampHitCount when it fires.
-   *
-   * REMOVAL: delete this method once transitionalClampHitCount stays zero
-   * across the full validation suite (see TRANSITIONAL comment at module top).
-   */
-  clampForces() {
-    let maxMag = 0;
-    for (let i = 0; i < this.n; i++) {
-      const ix = i * 3;
-      const fx = this.force[ix], fy = this.force[ix + 1], fz = this.force[ix + 2];
-      const mag = Math.sqrt(fx * fx + fy * fy + fz * fz);
-      if (mag > maxMag) maxMag = mag;
-    }
-    if (maxMag <= TRANSITIONAL.clampThreshold) return;
-    const s = TRANSITIONAL.clampThreshold / maxMag;
-    for (let i = 0; i < this.n * 3; i++) this.force[i] *= s;
-    this.transitionalClampHitCount++;
   }
 
   integrate(dt) {
@@ -1183,12 +1123,8 @@ export class PhysicsEngine {
   }
 
   /**
-   * Per-batch safety controls: per-atom velocity cap + transitional elevated KE cap.
+   * Per-batch safety controls: per-atom velocity hard cap only.
    * Called once per RAF tick after all substeps complete.
-   *
-   * Phase 3/4 transitional: KE cap elevated to 5000× (was 500×) as a safety net
-   * while source-level force saturation is validated. Will be removed in Phase 4
-   * once saturation thresholds are confirmed sufficient.
    */
   applySafetyControls() {
     for (let i = 0; i < this.n; i++) {
@@ -1198,14 +1134,6 @@ export class PhysicsEngine {
         const s = V_HARD_MAX / vMag;
         this.vel[ix] *= s; this.vel[ix+1] *= s; this.vel[ix+2] *= s;
       }
-    }
-    // Transitional elevated KE cap — safety net during saturation validation.
-    const ke = this.getKineticEnergy();
-    const keCap = Math.max(TRANSITIONAL.keCapMult * this.keBaseline, this.n * TRANSITIONAL.keCapFloorPerAtom);
-    if (ke > keCap) {
-      const s = Math.sqrt(keCap / ke);
-      for (let i = 0; i < this.n * 3; i++) this.vel[i] *= s;
-      this.transitionalKeCapHitCount++;
     }
   }
 
@@ -1289,26 +1217,6 @@ export class PhysicsEngine {
     return 0.5 * this.mass * ke * 1e10 / 1.602176634e-19;
   }
 
-  /** Narrow debug surface for temporary force-safety validation. */
-  getForceSafetyDebugState() {
-    return {
-      transitionalClampHitCount: this.transitionalClampHitCount,
-      transitionalKeCapHitCount: this.transitionalKeCapHitCount,
-      keBaseline: this.keBaseline,
-      transitional: {
-        keCapMultiplier: TRANSITIONAL.keCapMult,
-        keCapFloorPerAtom: TRANSITIONAL.keCapFloorPerAtom,
-        clampThreshold: TRANSITIONAL.clampThreshold,
-      },
-    };
-  }
-
-  /** Reset transitional counters between manual validation cases. */
-  resetForceSafetyDebugState() {
-    this.transitionalClampHitCount = 0;
-    this.transitionalKeCapHitCount = 0;
-  }
-
   getPosition(i) {
     return [this.pos[i*3], this.pos[i*3+1], this.pos[i*3+2]];
   }
@@ -1326,7 +1234,6 @@ export class PhysicsEngine {
     this.isRotateMode = false;
     this.isTranslateMode = false;
     this.activeComponent = -1;
-    this.keBaseline = TRANSITIONAL.keBaselineSeed;
     this.stepCount = 0;
     this.computeForces();
     this.updateBondList();
@@ -1409,7 +1316,6 @@ export class PhysicsEngine {
     this.isRotateMode = false;
     this.isTranslateMode = false;
     this.activeComponent = -1;
-    this.keBaseline = 0;
     this.neighborList = null;
     this.stepCount = 0;
     this._maxN = 0;

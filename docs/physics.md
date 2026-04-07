@@ -191,7 +191,7 @@ The browser implementation (`lab/js/physics.ts`) includes several optimizations 
 
 **Interaction force saturation:** User interaction forces (drag, translate, rotate) are smoothly saturated at the spring level using `F_MAX_INTERACTION` (`CONFIG.physics.fMaxInteraction`, default 120 eV/Å) with the formula `f_sat = f / (1 + |f| / F_MAX)`. For rotation, saturation is applied to the spring force vector before torque conversion, preserving the rigid-body torque model. This is a high-ceiling UX safety guard, not a motion governor.
 
-**Velocity safety (`applySafetyControls`):** Called once per simulation tick after the scheduler-requested substep batch (both worker and sync paths). Per-atom velocity cap at `V_HARD_MAX` (0.15 Å/fs) plus a transitional elevated KE cap (5000× `keBaseline`, seeded at 0.1 eV) as a safety net during force-saturation validation. The KE cap will be removed once saturation thresholds are confirmed sufficient. Typical thermal velocities are 10–30x below either cap.
+**Velocity safety (`applySafetyControls`):** Called once per simulation tick after the scheduler-requested substep batch (both worker and sync paths). Per-atom velocity cap at `V_HARD_MAX` (0.15 Å/fs) — the sole post-integration emergency guard. Typical thermal velocities are 10–30x below the cap.
 
 **Wasm compilation:** `sim/wasm/tersoff.c` compiled with `-O3 -fno-math-errno -ffinite-math-only` (not `-ffast-math`). This preserves IEEE 754 associativity rules to maintain force cancellation accuracy.
 
