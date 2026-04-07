@@ -25,6 +25,7 @@ import type {
   TimelineInteractionState,
   TimelineBoundaryState,
 } from './timeline-context-capture';
+import { computeConnectedComponents } from '../../../src/history/connected-components';
 
 // ── Data model ──
 
@@ -368,30 +369,7 @@ export function createSimulationTimeline(
     if (!source) return null;
     const n = source.kind === 'restartFrame' ? source.frame.n : source.checkpoint.physics.n;
     const bonds = getReviewBondTopology(timePs);
-    // Zero bonds → every atom is its own singleton component (not one giant group)
-    if (!bonds || bonds.length === 0) {
-      return { atomCount: n, components: Array.from({ length: n }, (_, i) => ({ atoms: [i], size: 1 })) };
-    }
-    // Build connected components from bond topology using union-find
-    const parent = new Int32Array(n);
-    const rank = new Int32Array(n);
-    for (let i = 0; i < n; i++) parent[i] = i;
-    function find(x: number): number { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
-    function union(a: number, b: number): void {
-      const ra = find(a), rb = find(b);
-      if (ra === rb) return;
-      if (rank[ra] < rank[rb]) parent[ra] = rb;
-      else if (rank[ra] > rank[rb]) parent[rb] = ra;
-      else { parent[rb] = ra; rank[ra]++; }
-    }
-    for (const [i, j] of bonds) { if (i < n && j < n) union(i, j); }
-    const groups = new Map<number, number[]>();
-    for (let i = 0; i < n; i++) {
-      const root = find(i);
-      if (!groups.has(root)) groups.set(root, []);
-      groups.get(root)!.push(i);
-    }
-    const components = Array.from(groups.values()).map(atoms => ({ atoms, size: atoms.length }));
+    const components = computeConnectedComponents(n, bonds ?? []);
     return { atomCount: n, components };
   }
 

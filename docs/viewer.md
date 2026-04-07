@@ -2,12 +2,13 @@
 
 ## Overview
 
-NanoToybox has two browser interfaces:
+NanoToybox has three browser interfaces:
 
 | Interface | Path | Purpose |
 |-----------|------|---------|
 | **Interactive Page** | `lab/index.html` | Real-time Tersoff simulation with drag/rotate interaction |
 | **Trajectory Viewer** | `viewer/index.html` | Pre-computed trajectory playback with stride control |
+| **Watch** | `watch/index.html` | Import and play back `.atomdojo` history files exported from lab |
 
 ## Interactive Page (`lab/`)
 
@@ -420,6 +421,57 @@ npm run dev
 | 1,000 | 2 |
 
 For trajectory playback of large structures, use high stride values (20–100).
+
+---
+
+## Watch (`watch/`)
+
+The watch app imports and plays back `.atomdojo` history files exported from the lab timeline.
+
+### Usage
+
+```bash
+# Open directly, then drag-drop or browse for an .atomdojo file
+open watch/index.html
+
+# Or serve via Vite
+npm run dev
+# Open http://localhost:5173/watch/
+```
+
+### Landing State
+
+"Watch History" title, an "Open File" button, and a drag-and-drop zone. A support note describes accepted formats. File detection is automatic (format, version, and kind inspection) — there is no user type picker.
+
+### Supported Formats
+
+| Kind | Version | Status |
+|------|---------|--------|
+| `"full"` | v1 | Supported — loads into workspace |
+| `"replay"` | — | Politely rejected with an explanatory message |
+
+### Workspace
+
+Once a valid file loads, the app presents:
+
+| Element | Details |
+|---------|---------|
+| Canvas | Three.js scene (same renderer as lab, via thin adapter: `initForPlayback` + `updateReviewFrame`) |
+| File badge | Fixed top badge showing "Full History" |
+| Playback controls | Play/pause, scrubber, time labels |
+| Analysis panel | Atom count, frame count, group count, group list |
+
+### Playback
+
+Exact recorded-frame playback from `denseFrames`. Topology is reconstructed from `restartFrames`. Bonded-group analysis is memoized to avoid redundant recomputation during scrubbing.
+
+### Error Handling
+
+A global fixed-position error banner is visible in both the landing and workspace states.
+
+### Theme & Renderer
+
+Uses the same `DEFAULT_THEME` as lab, applied via `applyThemeTokens`. The renderer is a thin adapter over the lab `Renderer` — it calls `initForPlayback` for setup and `updateReviewFrame` for each displayed frame, never mutating physics state.
 
 ---
 

@@ -74,6 +74,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - Object View panel — Center + Follow buttons with inline SVG icons, positioned below status block
 - Page-load onboarding overlay — welcome card with sink-to-Settings animation, page-lifetime dismissal
 - History file export — v1 `atomdojo-history` format with atom identity tracking (stable IDs across append/compaction), atom metadata registry (element, source provenance), export capability lifecycle (subsystem-owned, staleness-guarded), export validation (monotonic ordering, atom table integrity, per-frame atomId uniqueness), and export UI (capability-gated trigger, portaled dialog, mutual exclusion with clear dialog)
+- Watch v1 — History File Import & Playback: shared schema module extraction (`src/history/history-file-v1.ts`: types, detection, shape-safe validation), connected-components extraction (`src/history/connected-components.ts`), bonded-group projection extraction (`src/history/bonded-group-projection.ts`), lab refactoring (bonded-group-runtime → thin store adapter, history-export → imports shared types, simulation-timeline → uses shared connected-components), watch app shell with file-open landing and playback workspace, two-step file detection (detect kind → apply support policy), full-history import with normalization (Float64Array, tuple bonds), playback model with 4 separated sampling channels and time clamping, renderer adapter over lab Renderer, memoized bonded-group analysis via shared projection
 
 ## Architecture Rules
 
@@ -396,6 +397,7 @@ E2E tests inject `?e2e=1` via `gotoApp()` from `tests/e2e/helpers.ts`.
 | Bonded clusters (panel + highlight + color) | `lab/js/runtime/bonded-group-runtime.ts`, `lab/js/runtime/bonded-group-highlight-runtime.ts`, `lab/js/runtime/bonded-group-appearance-runtime.ts`, `lab/js/runtime/bonded-group-coordinator.ts`, `lab/js/components/BondedGroupsPanel.tsx`, `lab/js/runtime/interaction-highlight-runtime.ts` |
 | Highlight tests | `tests/unit/bonded-group-highlight.test.ts`, `tests/unit/renderer-interaction-highlight.test.ts`, `tests/unit/highlight-test-utils.ts` |
 | Timeline / export tests | `tests/unit/timeline-subsystem.test.ts` (37 tests incl. export capability and rehydration), `tests/unit/history-export-pipeline.test.ts` (19 tests incl. end-to-end lifecycle validation), `tests/unit/timeline-bar-lifecycle.test.tsx` (export UI regression) |
+| Watch / shared history tests | `tests/unit/shared-history-modules.test.ts` (52+ tests covering shared modules, watch loader, importer, playback model, bonded groups, validation edge cases, end-to-end pipeline) |
 | Store callback wiring | `lab/js/runtime/ui-bindings.ts`, `lab/js/store/app-store.ts` |
 | Scene / placement | `lab/js/scene.ts`, `lab/js/placement.ts`, `lab/js/runtime/placement-solver.ts`, `tests/unit/placement-solver.test.ts` |
 | Browser physics | `lab/js/physics.ts` (JS Tersoff), `sim/wasm/tersoff.c` (Wasm kernel) |

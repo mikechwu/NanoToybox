@@ -451,3 +451,23 @@ This layering ensures that a policy change triggers conformance failures (intent
 - **Restart and start overlay positioning split between anchor (wrapper) and button (visual).** The anchor `<span>` owns absolute positioning so the inner button can remain a simple visual element without layout responsibilities.
 - **Unconditional confirmation for clear icon.** The clear action always confirms — no conditional gating — because timeline data loss is irreversible.
 - **Hint is additive discoverability, not primary guidance.** Hints supplement spatial affordance and direct manipulation; they are not the primary way users learn the timeline controls.
+
+## D56: Shared History Modules Extracted Before watch/ Implementation
+
+**Decision:** Extract shared pure modules to `src/history/` before building the `watch/` app, rather than duplicating or creating import coupling between apps.
+
+**Rationale:** The `watch/` app needs v1 file types, validation, connected-component computation, and bonded-group projection that were previously private to `lab/` modules. Duplication would create divergent logic; direct cross-app imports would create coupling problems.
+
+**Key choices:**
+
+- **Types + validation + detection in `src/history/history-file-v1.ts`** — single source of truth for the wire format.
+- **Connected-components in `src/history/connected-components.ts`** — used by both lab simulation-timeline and watch bonded-groups.
+- **Bonded-group projection in `src/history/bonded-group-projection.ts`** — pure logic; lab and watch each have thin adapters.
+- **Validator is fully shape-safe:** structural guards before semantic checks, safe prev-tracking for monotonicity, bond endpoint validation.
+- **Watch uses plain TS + DOM (no React/Zustand for v1)**, separated playback sampling channels for future interpolation.
+
+## D57: Watch v1 Uses Exact Recorded Frames with Separated Sampling Channels
+
+**Decision:** v1 watch playback uses exact recorded frames with 4 independent sampling methods on `WatchPlaybackModel` instead of one monolithic `getDisplayFrameAtTime`.
+
+**Rationale:** v1 does not implement interpolation, but the architecture must leave room for it. Position sampling may later become interpolated while topology/config/boundary remain stepwise. Separating the channels now avoids a breaking refactor when interpolation is added — each channel can independently switch from stepwise to interpolated without affecting the others.

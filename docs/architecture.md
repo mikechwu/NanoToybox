@@ -66,12 +66,12 @@ NanoToybox/
 │   │   │   ├── atom-source.ts        # Renderer-to-input atom-picking adapter
 │   │   │   ├── focus-runtime.ts     # Focus resolution: molecule lookup, centroid, pivot update; ensureFollowTarget for follow-mode validation
 │   │   │   ├── onboarding.ts        # Coachmark scheduling + page-load onboarding overlay gate (isOnboardingEligible, subscribeOnboardingReadiness)
-│   │   │   ├── bonded-group-runtime.ts     # Display-source-aware connected-component projection + stable ID reconciliation (consumes getDisplaySource(), not getPhysics())
+│   │   │   ├── bonded-group-runtime.ts     # Thin lab/store adapter over shared bonded-group-projection
 │   │   │   ├── bonded-group-highlight-runtime.ts # Persistent atom tracking + hover preview resolution; self-healing clearTrackedIfFeatureDisabled()
 │   │   │   ├── bonded-group-coordinator.ts # Coordinated projection + highlight lifecycle
 │   │   │   ├── bonded-group-display-source.ts   # Display-source resolver: live physics or review historical topology
 │   │   │   ├── bonded-group-appearance-runtime.ts # Group-to-atom color translation + renderer sync (annotation model)
-│   │   │   ├── simulation-timeline.ts        # Ring buffers (review frames, restart frames, checkpoints), RestartState contract, frozen review range, truncation on restart
+│   │   │   ├── simulation-timeline.ts        # Ring buffers (review frames, restart frames, checkpoints), RestartState contract, frozen review range, truncation on restart; uses shared computeConnectedComponents
 │   │   │   ├── simulation-timeline-coordinator.ts # Orchestrates review/restart across physics, renderer, worker, store; enterReviewAtCurrentTime()
 │   │   │   ├── timeline-context-capture.ts   # Capture/restore interaction and boundary state via public physics API
 │   │   │   ├── timeline-recording-policy.ts  # Arming policy (disarmed until first atom interaction)
@@ -87,7 +87,7 @@ NanoToybox/
 │   │   │   ├── placement-camera-framing.ts  # Pure camera-basis framing solver for placement preview: overflow measurement, adaptive target-shift search, visible-anchor filtering
 │   │   │   ├── timeline-atom-identity.ts    # Stable atom ID tracker for export (append, compaction, capture lifecycle)
 │   │   │   ├── atom-metadata-registry.ts    # Persistent atom metadata keyed by stable atom ID (element, source)
-│   │   │   └── history-export.ts            # V1 history file builder, validator, and download trigger
+│   │   │   └── history-export.ts            # V1 history file builder, download trigger; imports types from shared history module, re-exports validator
 │   │   ├── scene.ts              # Scene commit/clear/load (transaction-safe)
 │   │   ├── placement.ts          # Placement lifecycle, pointer-capture drag, per-frame reprojection, canvas listeners
 │   │   │                           #   → delegates rigid-transform to placement-solver.ts, framing to placement-camera-framing.ts
@@ -142,6 +142,20 @@ NanoToybox/
 │   │   ├── worker-bridge.ts      # Main↔Worker bridge protocol
 │   │   ├── themes.ts             # Theme definitions + CSS token bridge
 │   │   └── tersoff-wasm.ts       # Wasm kernel bridge
+├── src/                          # Shared modules consumed by both lab/ and watch/
+│   └── history/
+│       ├── history-file-v1.ts        # Shared v1 file types, detection (detectHistoryFile), shape-safe validation (validateFullHistoryFile)
+│       ├── connected-components.ts   # Union-find connected-component computation (extracted from simulation-timeline.ts)
+│       └── bonded-group-projection.ts # Pure overlap reconciliation, stable group IDs, display ordering (extracted from bonded-group-runtime.ts)
+├── watch/                        # Read-only history playback app
+│   ├── index.html                # Watch app shell: file open landing, playback workspace, analysis panel
+│   └── js/
+│       ├── main.ts                   # Watch app entrypoint: file open, playback loop, workspace management
+│       ├── history-file-loader.ts    # Two-step file detection + support decision (delegates to shared schema module)
+│       ├── full-history-import.ts    # Normalizes v1 file data (number[] → Float64Array, {a,b,distance} → tuples)
+│       ├── watch-playback-model.ts   # Separated sampling channels (positions, topology, config, boundary) with time clamping
+│       ├── watch-renderer.ts         # Thin adapter over lab Renderer (initForPlayback, updateReviewFrame, applyTheme)
+│       └── watch-bonded-groups.ts    # Memoized bonded-group tracking via shared projection (no Zustand)
 ├── viewer/
 │   └── index.html                # Three.js pre-computed trajectory viewer
 ├── data/                         # ML training/test datasets (NPY + metadata)
@@ -161,6 +175,16 @@ sim/minimizer.py                  ← sim.atoms
 sim/structures/generate.py        ← sim.atoms
 sim/io/output.py                  ← numpy, pathlib
 ```
+
+### Shared Modules (`src/history/`)
+
+Pure, framework-free modules consumed by both `lab/` and `watch/`. No Zustand, no DOM, no Three.js.
+
+- **`src/history/history-file-v1.ts`** — single source of truth for the v1 atomdojo-history wire format. Owns: envelope types (`AtomDojoHistoryFileV1`, `SimulationMetaV1`, frame/checkpoint types), `detectHistoryFile()` (envelope inspection -- format + version + kind without deep validation), `validateFullHistoryFile()` (shape-safe parse then semantic checks: monotonic ordering, atom table integrity, per-frame atomId uniqueness). Used by `lab/js/runtime/history-export.ts` (build + validate before download) and `watch/js/history-file-loader.ts` (detect + validate on import).
+
+- **`src/history/connected-components.ts`** — pure union-find algorithm for computing connected components from bond topology. Returns `BondedComponent[]` (atom indices + size). Used by `lab/js/runtime/simulation-timeline.ts` (review topology) and `watch/js/watch-bonded-groups.ts` (imported topology).
+
+- **`src/history/bonded-group-projection.ts`** — pure overlap reconciliation, stable ID assignment, display ordering, and summary construction. Provides `createBondedGroupProjection()` factory that returns a stateful projector tracking previous-frame IDs for stability across topology changes. Used by `lab/js/runtime/bonded-group-runtime.ts` (lab/store adapter) and `watch/js/watch-bonded-groups.ts` (local adapter without Zustand).
 
 ## Data Flow
 
@@ -418,12 +442,12 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - **atom-source.ts** — shared renderer-to-input atom-picking adapter
 - **focus-runtime.ts** — focus resolution: molecule lookup, centroid computation, camera pivot update; `ensureFollowTarget()` for follow-mode validation. Placement commit does NOT change focus metadata or retarget camera (Policy A).
 - **onboarding.ts** — coachmark scheduling + page-load onboarding overlay gate (`isOnboardingEligible`, `subscribeOnboardingReadiness`)
-- **bonded-group-runtime.ts** — display-source-aware bonded-group projection with overlap-reconciled stable IDs. Consumes `getDisplaySource()` (not physics directly). `getDisplaySourceKind()` reports live vs review source.
+- **bonded-group-runtime.ts** — thin lab/store adapter that delegates projection logic to the shared module (`src/history/bonded-group-projection.ts`). Consumes `getDisplaySource()` (not physics directly) and writes results to Zustand store. `getDisplaySourceKind()` reports live vs review source.
 - **bonded-group-highlight-runtime.ts** — persistent atom tracking, hover preview, panel highlight resolution (warm palette via `setHighlightedAtoms`). Self-healing: `clearTrackedIfFeatureDisabled()` clears stale tracked state (`_trackedAtoms`, `selectedBondedGroupId`, `hasTrackedBondedHighlight`) when `canTrackBondedGroupHighlight` is off; called at the top of `syncToRenderer()` and `syncAfterTopologyChange()`. Runtime structure preserved (no store fields or methods deleted — hide pass only).
 - **bonded-group-coordinator.ts** — coordinated projection + highlight lifecycle (update + teardown)
 - **bonded-group-display-source.ts** — resolves bonded-group topology source: live physics components or review historical topology. Pure function, no side effects.
 - **bonded-group-appearance-runtime.ts** — translates group-level color edits into atom-level overrides via renderer `setAtomColorOverrides()`. Annotation model: colors persist across live/review modes. Maintains `groupColorIntents` map for topology-resilient intent propagation; `syncGroupIntents()` fills newly joined atoms without overwriting existing overrides.
-- **simulation-timeline.ts** — ring buffers for dense review frames, restart frames, and checkpoints; RestartState contract; frozen review range; truncation on restart
+- **simulation-timeline.ts** — ring buffers for dense review frames, restart frames, and checkpoints; RestartState contract; frozen review range; truncation on restart. Imports `computeConnectedComponents` from shared module (`src/history/connected-components.ts`) for review topology.
 - **simulation-timeline-coordinator.ts** — orchestrates review/restart across physics, renderer, worker, store; `enterReviewAtCurrentTime()` enables bidirectional mode switch from live→review
 - **timeline-context-capture.ts** — capture/restore interaction and boundary state via public physics API
 - **timeline-recording-policy.ts** — arming policy (disarmed until first atom interaction; placement, pause, speed, and settings do not arm)
@@ -431,7 +455,7 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - **timeline-subsystem.ts** — factory that creates the full timeline subsystem, exposes high-level interface to main.ts; manages export capability lifecycle (single source of truth via `currentExportCapability`, derived from deps + identity staleness flag); rebuilds atom identity and metadata on recording restart (`rebuildExportAtomState` using `getSceneMolecules` dep for scene-aware rebuild); identity staleness guard disables export during worker compaction until rebuild completes
 - **timeline-atom-identity.ts** — stable atom ID tracker. Auto-assigns on first capture, handles append and compaction. Required for export-capable timeline recording.
 - **atom-metadata-registry.ts** — maps stable atom IDs to element metadata. Validates array length and element presence on registration.
-- **history-export.ts** — builds v1 atomdojo-history files. Validates monotonic ordering, atom table integrity, per-frame atomId uniqueness. Downloads via programmatic anchor.
+- **history-export.ts** — builds and downloads v1 atomdojo-history files. Types and validation moved to shared module (`src/history/history-file-v1.ts`); this file retains `buildFullHistoryFile()` (envelope construction) and `downloadHistoryFile()` (programmatic anchor download). Re-exports shared types and `validateFullHistoryFile` for existing consumers.
 - **restart-state-adapter.ts** — serialization, application, and capture of RestartState
 - **reconciled-steps.ts** — deduplication helper for worker snapshot step counting
 - **orbit-follow-update.ts** — per-frame orbit-follow camera tracking from displayed molecule bounds
@@ -534,6 +558,8 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | Atom identity (slot→atomId mapping) | timeline-atom-identity.ts | scene-runtime (append), physics compaction listener, recording orchestrator (capture) |
 | Atom metadata (id→element mapping) | atom-metadata-registry.ts | scene-runtime (register after commit), history-export (getAtomTable for export) |
 
+**Note:** The table above covers `lab/` state only. `watch/` has no Zustand store -- all state is plain local variables and DOM elements managed by `watch/js/main.ts`. See the [Watch App](#watch-app-watch) section for details.
+
 ### Overlay Close Policy
 
 Unified outside-click dismiss rule (all devices): a capture-phase `pointerdown` handler on `document` closes the open sheet when the primary pointer hits the backdrop or renderer canvas. Clicks inside either sheet, the dock, or HUD chrome (`#info`, `#fps`, `#hint`) do not dismiss. The event is consumed (`stopPropagation` + `preventDefault`) to prevent canvas interaction from the same gesture. The dock sits above the backdrop in z-order (z-index 205 vs 200) so dock buttons remain interactive while sheets are open.
@@ -593,6 +619,44 @@ bonded-group-highlight-runtime.ts          interaction-highlight-runtime.ts
 **Lifecycle cleanup:** `_disposeHighlightLayers()` disposes both InstancedMesh layers and resets all associated state. It is called from `loadStructure()` and `resetToEmpty()` to prevent stale highlight geometry from surviving across structure transitions. The old save/restore pattern (`_restorePanelHighlight`) has been removed entirely.
 
 **Atom color overrides (third visual layer):** `renderer.setAtomColorOverrides()` applies authored per-atom colors to the base InstancedMesh, independent of both highlight layers. The highlight overlays render on top of colored atoms. `_applyAtomColorOverrides()` uses the material white trick (material set to `0xffffff` when overrides are active, because `setColorAt()` multiplies with material color) and applies a perceptual HSL lift (`CONFIG.atomColorOverride.minSaturation` / `minLightness` floors) so colors remain readable under the lighting stack. Re-applied after `populateAppendedAtoms()` and `applyTheme()` for lifecycle resilience. The appearance runtime (`bonded-group-appearance-runtime.ts`) translates group-level color intent into atom-level overrides.
+
+### Watch App (`watch/`)
+
+`watch/` is a read-only history file viewer — it imports `.atomdojo` files exported by the lab and plays them back. No simulation, no editing, no Zustand store. Plain TypeScript + DOM for all state; reuses the lab renderer via a narrow adapter.
+
+```
+watch/js/main.ts (composition root + DOM wiring + playback loop)
+       │
+       ├── history-file-loader.ts       ← file I/O, delegates detection + validation
+       │       │                           to src/history/history-file-v1.ts
+       │       ▼
+       ├── full-history-import.ts       ← normalizes v1 data into playback-ready model
+       │       │                           (number[] → Float64Array, bonds → tuples)
+       │       ▼
+       ├── watch-playback-model.ts      ← separated sampling channels (positions,
+       │       │                           topology, config, boundary) with time clamping
+       │       ▼
+       ├── watch-renderer.ts            ← thin adapter over lab Renderer
+       │       │                           (initForPlayback, updateReviewFrame, applyTheme)
+       │       ▼
+       │   lab/js/renderer.ts           (reused — review-frame display only)
+       │
+       └── watch-bonded-groups.ts       ← parallel analysis path: memoized bonded-group
+               │                           tracking from imported topology
+               ▼
+           src/history/connected-components.ts   (union-find)
+           src/history/bonded-group-projection.ts (stable IDs + overlap reconciliation)
+```
+
+**Module descriptions:**
+- **main.ts** — composition root: file open dialog, playback loop (RAF-driven), scrub bar, time display, workspace management. All state is local variables and DOM elements.
+- **history-file-loader.ts** — two-step file load: `detectHistoryFile()` (envelope) then `validateFullHistoryFile()` (semantic), both delegated to the shared schema module. Owns only `File` I/O and the user-facing load flow.
+- **full-history-import.ts** — normalizes validated v1 file data into `LoadedFullHistory`: converts `number[]` to `Float64Array` for positions/velocities, `{ a, b, distance }` to `[a, b, distance]` tuples for bonds, and precomputes `restartAlignedToDense` flag.
+- **watch-playback-model.ts** — separated sampling channels for positions, topology, config, and boundary state. v1: all channels return exact recorded data (stepwise from nearest frame at or before `timePs`). v2 path: only position sampling may become interpolated; topology/config/boundary remain stepwise.
+- **watch-renderer.ts** — narrow adapter over the lab `Renderer`, exposing only `initForPlayback()`, `updateReviewFrame()`, `applyTheme()`, and canvas access. Shields watch code from the 2500+ line lab renderer surface.
+- **watch-bonded-groups.ts** — local adapter that computes bonded groups from imported topology using the shared `connected-components` and `bonded-group-projection` modules. Memoized by topology `frameId` — skips recomputation when the frame has not changed. No Zustand dependency.
+
+**State model:** watch/ has no Zustand store. All state lives in plain local variables (`const playback = createWatchPlaybackModel()`, etc.) and DOM elements. The main.ts composition root wires everything together with direct function calls and event listeners.
 
 ### Deferred Phases
 

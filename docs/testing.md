@@ -305,6 +305,32 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 |------|------:|-------------------|
 | `bonded-group-prefeature.test.ts` | 17 | Display source: live resolution, review resolution, null case, strict review (no live fallback). Capabilities: live allows all, review blocks mutation but allows inspect/target/edit, live mode `canTrackBondedGroupHighlight` false, review mode `canTrackBondedGroupHighlight` false. Appearance: group color writes atom overrides, clear removes overrides, syncToRenderer drives renderer, syncGroupIntents propagates to uncolored atoms, syncGroupIntents does NOT overwrite existing overrides from merged groups, pruning (group disappears then intent pruned), clearGroupColor removes intent so syncGroupIntents won't re-apply. Wiring: initial sync with preloaded store, applyGroupColor drives renderer. Persistence: colors survive timeline mode transitions, annotation-global semantics. |
 
+### Shared History Modules & Watch App
+
+| File | What it validates |
+|------|-------------------|
+| `shared-history-modules.test.ts` | Shared history modules and watch app components (see breakdown below) |
+
+**detectHistoryFile:** valid files, non-objects, wrong format, missing fields.
+
+**validateFullHistoryFile:** structural guards (malformed envelopes, null internals, per-frame shape), simulation/atom field guards, semantic checks (maxAtomCount, frameCount, durationPs, positions length, monotonic ordering, atomId uniqueness, bond validation with endpoint range checks).
+
+**computeConnectedComponents:** zero atoms, zero bonds, single component, multiple components, out-of-range bond indices.
+
+**createBondedGroupProjection:** projection, reconciliation, reset.
+
+**loadHistoryFile:** all LoadDecision branches (supported, unsupported replay/version, invalid JSON/format/validation).
+
+**importFullHistory:** Float64Array conversion, bond tuple conversion, restartAlignedToDense flag, checkpoint normalization.
+
+**createWatchPlaybackModel:** load/unload, 4 sampling channels, binary search edge cases, time clamping (NaN, out-of-range).
+
+**createWatchBondedGroups:** group computation, memoization by frameId, reset.
+
+**End-to-end pipeline:** load → import → playback → groups.
+
+*All 1106+ existing lab tests pass after the shared module extraction refactoring (bonded-group-runtime, simulation-timeline, history-export).*
+
 ## Frontend Smoke Test
 
 Manual verification checklist for the interactive page (`lab/index.html`). Run after any changes to `lab/` code.
