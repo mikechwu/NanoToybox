@@ -5,7 +5,7 @@
  */
 
 import React, { useRef, useEffect } from 'react';
-import { DEFAULT_THEME } from '../../../lab/js/config';
+import { VIEWER_DEFAULTS } from '../../../src/config/viewer-defaults';
 import type { WatchController } from '../watch-controller';
 
 interface WatchCanvasProps {
@@ -18,11 +18,11 @@ export function WatchCanvas({ controller }: WatchCanvasProps) {
   useEffect(() => {
     if (!containerRef.current) return;
     const renderer = controller.createRenderer(containerRef.current);
-    renderer.applyTheme(DEFAULT_THEME);
+    renderer.applyTheme(VIEWER_DEFAULTS.defaultTheme);
     renderer.fitCamera();
 
     return () => {
-      renderer.destroy();
+      // Single destruction path — detachRenderer() handles destroy + null
       controller.detachRenderer();
     };
   }, [controller]);

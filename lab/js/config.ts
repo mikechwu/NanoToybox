@@ -3,8 +3,10 @@
  * tuning values, thresholds, and defaults used across page modules.
  */
 
-/** Default theme — single source of truth. Used by main.ts, renderer, and store. */
-export const DEFAULT_THEME: 'dark' | 'light' = 'light';
+import { VIEWER_DEFAULTS } from '../../src/config/viewer-defaults';
+
+/** Default theme — canonical source is VIEWER_DEFAULTS. Re-exported for lab consumers. */
+export const DEFAULT_THEME: 'dark' | 'light' = VIEWER_DEFAULTS.defaultTheme;
 
 export const CONFIG = {
   libraryPath: '../structures/library',
@@ -95,7 +97,7 @@ export const CONFIG = {
   playback: {
     /** Canonical 1x physical simulation rate in ps/s.
      *  Step rate is derived via getPhysicsTiming(): baseSimRatePsPerSecond / (dt / 1000). */
-    baseSimRatePsPerSecond: 0.12,
+    baseSimRatePsPerSecond: VIEWER_DEFAULTS.baseSimRatePsPerSecond,
     minSpeed: 0.5,
     defaultSpeed: 1.0,
     maxSpeedCap: 16.0,

@@ -6,6 +6,10 @@
  */
 
 import type { LoadedFullHistory, NormalizedDenseFrame, NormalizedRestartFrame } from './full-history-import';
+import { VIEWER_DEFAULTS } from '../../src/config/viewer-defaults';
+
+/** Canonical x1 playback rate: ps advanced per real ms. */
+const PS_PER_MS_AT_1X = VIEWER_DEFAULTS.baseSimRatePsPerSecond / 1000;
 
 export interface WatchPlaybackModel {
   load(file: LoadedFullHistory): void;
@@ -19,6 +23,16 @@ export interface WatchPlaybackModel {
   getDurationPs(): number;
   getStartTimePs(): number;
   getEndTimePs(): number;
+
+  // ── Playback policy commands (consolidated from controller) ──
+  /** Advance playback by dtMs real milliseconds at canonical x1 rate. Auto-pauses at end. */
+  advance(dtMs: number): void;
+  /** Start playback. If at end, resets to start first. */
+  startPlayback(): void;
+  /** Pause playback. */
+  pausePlayback(): void;
+  /** Seek to a specific time (pauses playback). */
+  seekTo(timePs: number): void;
 
   // Separated sampling channels
   getDisplayPositionsAtTime(timePs: number): { n: number; atomIds: number[]; positions: Float64Array } | null;
@@ -75,6 +89,44 @@ export function createWatchPlaybackModel(): WatchPlaybackModel {
       if (!_history || _history.denseFrames.length === 0) return 0;
       return _history.denseFrames[_history.denseFrames.length - 1].timePs;
     },
+
+    // ── Playback policy commands ──
+
+    advance(dtMs: number) {
+      if (!_playing || !_history) return;
+      if (!Number.isFinite(dtMs) || dtMs <= 0) return;
+      const dtPs = dtMs * PS_PER_MS_AT_1X;
+      let newTime = _currentTimePs + dtPs;
+      const end = _history.denseFrames[_history.denseFrames.length - 1]?.timePs ?? 0;
+      if (newTime >= end) {
+        newTime = end;
+        _playing = false;
+      }
+      _currentTimePs = newTime;
+    },
+
+    startPlayback() {
+      if (!_history || _history.denseFrames.length === 0) return;
+      const end = _history.denseFrames[_history.denseFrames.length - 1]?.timePs ?? 0;
+      if (_currentTimePs >= end) {
+        _currentTimePs = _history.denseFrames[0]?.timePs ?? 0;
+      }
+      _playing = true;
+    },
+
+    pausePlayback() {
+      _playing = false;
+    },
+
+    seekTo(timePs: number) {
+      if (!_history || _history.denseFrames.length === 0) return;
+      const start = _history.denseFrames[0].timePs;
+      const end = _history.denseFrames[_history.denseFrames.length - 1].timePs;
+      _currentTimePs = Math.max(start, Math.min(end, Number.isFinite(timePs) ? timePs : start));
+      _playing = false;
+    },
+
+    // ── Sampling channels ──
 
     getDisplayPositionsAtTime(timePs: number) {
       if (!_history) return null;

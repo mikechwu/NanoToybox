@@ -6,7 +6,7 @@
 
 import React from 'react';
 import { partitionBondedGroups } from '../../../src/history/bonded-group-utils';
-import type { BondedGroupSummary } from '../../../src/history/bonded-group-projection';
+import type { BondedGroupSummary } from '../watch-bonded-groups';
 
 interface WatchBondedGroupsPanelProps {
   groups: BondedGroupSummary[];
@@ -41,7 +41,7 @@ export function WatchBondedGroupsPanel({
         onClick={onToggleExpanded}
         type="button"
         aria-expanded={expanded}
-        aria-controls="watch-bonded-groups-body"
+        {...(expanded ? { 'aria-controls': 'watch-bonded-groups-body' } : {})}
       >
         <span className="review-panel__title">Analysis</span>
         <span className="review-panel__toggle">{expanded ? 'Collapse' : 'Expand'}</span>

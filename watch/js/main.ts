@@ -6,7 +6,7 @@
  */
 
 import { applyThemeTokens } from '../../lab/js/themes';
-import { DEFAULT_THEME } from '../../lab/js/config';
+import { VIEWER_DEFAULTS } from '../../src/config/viewer-defaults';
 import { createWatchController } from './watch-controller';
 import { mountWatchUI } from './react-root';
 
@@ -15,7 +15,7 @@ import '../css/watch.css';
 import '../../src/ui/review-parity.css';
 
 // Theme
-applyThemeTokens(DEFAULT_THEME);
+applyThemeTokens(VIEWER_DEFAULTS.defaultTheme);
 
 // Controller (owns runtime + playback clock)
 const controller = createWatchController();

@@ -1,5 +1,13 @@
 /**
- * Watch bonded-groups adapter — computes and tracks bonded groups from imported topology.
+ * Watch analysis domain boundary — bonded-group computation and tracking.
+ *
+ * This is the dedicated runtime boundary for watch/ analysis state.
+ * The facade (watch-controller.ts) coordinates its lifecycle but does not
+ * own its internal state. Future hover/selection/focus state belongs here.
+ *
+ * Rollback policy (Round 1): no save/restore. The facade restores prior
+ * document/playback state, then analysis recomputes from restored time/topology
+ * on the next tick or explicit updateForTime call.
  *
  * Uses the shared projection logic (no Zustand dependency).
  * Consumes topology from the playback model's getTopologyAtTime channel.
