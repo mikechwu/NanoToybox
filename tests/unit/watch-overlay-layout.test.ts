@@ -7,7 +7,7 @@
  * Validates:
  *   - Phone sizing formula
  *   - Desktop/tablet sizing formula
- *   - Bottom clearance uses playback bar measurement ([data-watch-playback-bar])
+ *   - Bottom clearance uses playback bar measurement ([data-watch-bottom-chrome])
  *   - Playback bar selector contract
  *   - Left inset uses --safe-left
  *   - Destroy removes listeners/observers
@@ -76,16 +76,16 @@ function setViewport(width: number, height = 800) {
 // ── Playback bar selector contract ──
 
 describe('Playback bar selector contract', () => {
-  it('WatchPlaybackBar.tsx has data-watch-playback-bar attribute', async () => {
+  it('WatchApp.tsx has data-watch-bottom-chrome attribute on bottom chrome wrapper', async () => {
     const fs = await import('fs');
-    const source = fs.readFileSync('watch/js/components/WatchPlaybackBar.tsx', 'utf-8');
-    expect(source).toContain('data-watch-playback-bar');
+    const source = fs.readFileSync('watch/js/components/WatchApp.tsx', 'utf-8');
+    expect(source).toContain('data-watch-bottom-chrome');
   });
 
-  it('watch-overlay-layout.ts queries [data-watch-playback-bar]', async () => {
+  it('watch-overlay-layout.ts queries [data-watch-bottom-chrome]', async () => {
     const fs = await import('fs');
     const source = fs.readFileSync('watch/js/watch-overlay-layout.ts', 'utf-8');
-    expect(source).toContain('[data-watch-playback-bar]');
+    expect(source).toContain('[data-watch-bottom-chrome]');
     expect(source).not.toContain('.watch-playback-bar');
   });
 });
@@ -183,11 +183,11 @@ describe('Triad bottom positioning', () => {
     layout.destroy();
   });
 
-  it('phone: clears playback bar when [data-watch-playback-bar] is in DOM', () => {
+  it('phone: clears playback bar when [data-watch-bottom-chrome] is in DOM', () => {
     setViewport(400, 800);
     // Add a mock playback bar
     const bar = document.createElement('div');
-    bar.setAttribute('data-watch-playback-bar', '');
+    bar.setAttribute('data-watch-bottom-chrome', '');
     // Position it at bottom of viewport (top = 740, so topFromBottom = 60)
     Object.defineProperty(bar, 'getBoundingClientRect', {
       value: () => ({ top: 740, bottom: 800, left: 0, right: 400, width: 400, height: 60 }),
@@ -316,7 +316,7 @@ describe('scheduleFirstLayout retry loop', () => {
     // Insert the playback bar with geometry that produces a DIFFERENT bottom
     // than the fallback (68). Bar top at 700 in 800px viewport → measured = 108.
     const bar = document.createElement('div');
-    bar.setAttribute('data-watch-playback-bar', '');
+    bar.setAttribute('data-watch-bottom-chrome', '');
     Object.defineProperty(bar, 'getBoundingClientRect', {
       value: () => ({ top: 700, bottom: 800, left: 0, right: 400, width: 400, height: 100 }),
     });
@@ -369,7 +369,7 @@ describe('ResizeObserver on playback bar', () => {
       value: vi.fn(() => ({ matches: false })),
     });
     bar = document.createElement('div');
-    bar.setAttribute('data-watch-playback-bar', '');
+    bar.setAttribute('data-watch-bottom-chrome', '');
     Object.defineProperty(bar, 'getBoundingClientRect', {
       value: () => ({ top: 740, bottom: 800, left: 0, right: 400, width: 400, height: 60 }),
     });

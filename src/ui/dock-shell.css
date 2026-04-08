@@ -1,0 +1,56 @@
+/**
+ * Shared dock shell — structural CSS for the dock design system.
+ *
+ * Used by both lab and watch. Each app provides its own grid-template-columns
+ * (lab: 4-slot simulation, watch: 6-slot playback).
+ *
+ * Extracted from lab/index.html to enable dock parity.
+ */
+
+.dock-bar {
+  display: grid;
+  align-items: center;
+  justify-items: center;
+  height: calc(var(--tap-target, 44px) + var(--space-lg, 16px) + env(safe-area-inset-bottom, 0px));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: var(--panel-bg);
+  backdrop-filter: blur(var(--glass-blur, 8px)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 8px)) saturate(180%);
+  border-top: 1px solid var(--color-border);
+}
+.dock-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dock-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: var(--tap-target, 44px);
+  min-height: var(--tap-target, 44px);
+  padding: var(--space-xs, 4px) var(--space-sm, 8px);
+  background: none;
+  border: none;
+  color: var(--color-text-secondary, #888);
+  font-size: var(--font-xs, 12px);
+  font-family: var(--font-family, inherit);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color var(--duration-fast, 0.15s);
+}
+.dock-item.active { color: var(--color-accent-text); }
+.dock-item:disabled { opacity: 0.3; cursor: default; }
+.dock-icon { font-size: 18px; line-height: 1; }
+.dock-label { font-size: var(--font-xs, 12px); }
+
+/* Tablet/desktop: centered pill */
+@media (min-width: 768px) {
+  .dock-bar {
+    border-radius: var(--radius-lg, 16px);
+    border: 1px solid var(--color-border);
+    height: calc(var(--tap-target, 44px) + var(--space-lg, 16px));
+    padding-bottom: 0;
+  }
+}

@@ -1,0 +1,16 @@
+/**
+ * Shared text-size CSS tokens — used by both lab and watch.
+ *
+ * Normal defaults in :root. Large overrides via [data-text-size="large"].
+ * The data attribute is set by applyTextSizeTokens() from lab/js/themes.ts.
+ */
+:root {
+  --font-xs: 12px;
+  --font-sm: 14px;
+  --font-base: 16px;
+}
+[data-text-size="large"] {
+  --font-xs: 14px;
+  --font-sm: 16px;
+  --font-base: 18px;
+}

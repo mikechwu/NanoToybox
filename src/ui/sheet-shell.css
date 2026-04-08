@@ -1,0 +1,109 @@
+/**
+ * Shared sheet shell — structural CSS for the settings sheet design system.
+ *
+ * Used by both lab and watch. Mobile: bottom sheet. Tablet/desktop: side sheet.
+ * Extracted from lab/index.html to enable settings parity.
+ */
+
+.sheet {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  max-height: 85vh;
+  background: var(--panel-bg);
+  backdrop-filter: blur(var(--glass-blur, 8px)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 8px)) saturate(180%);
+  border-top-left-radius: var(--radius-lg, 16px);
+  border-top-right-radius: var(--radius-lg, 16px);
+  border: 1px solid var(--color-border);
+  border-bottom: none;
+  transform: translateY(100%);
+  transition: transform var(--duration-sheet, 0.45s) var(--ease-spring, ease);
+  z-index: 210;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  color: var(--color-text);
+  font-family: var(--font-family, inherit);
+}
+.sheet.open { transform: translateY(0); }
+
+.sheet-handle {
+  width: 36px; height: 5px;
+  background: var(--color-surface-hover);
+  border-radius: 3px;
+  margin: var(--space-sm, 8px) auto;
+}
+.sheet-header {
+  padding: var(--space-sm, 8px) var(--space-lg, 16px);
+  font-size: var(--font-base, 16px);
+  font-weight: 600;
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* Tablet/desktop: side sheet */
+@media (min-width: 768px) {
+  .sheet {
+    top: 0; bottom: 0; left: auto; right: 0;
+    width: var(--sheet-width, 340px); max-height: none;
+    border-radius: 0;
+    border-left: 1px solid var(--color-border);
+    border-top: none;
+    transform: translateX(100%);
+  }
+  .sheet.open { transform: translateX(0); }
+  .sheet-handle { display: none; }
+}
+
+/* Sheet backdrop */
+.sheet-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 200;
+}
+
+/* Grouped list — settings sections */
+.group { margin-bottom: var(--space-xl, 24px); }
+.group-header {
+  padding: var(--space-xs, 4px) var(--space-lg, 16px);
+  font-size: var(--font-xs, 12px);
+  color: var(--color-text-secondary, #888);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.group-list {
+  list-style: none; margin: 0; padding: 0;
+  background: var(--color-surface);
+  border-radius: var(--radius-md, 8px);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+}
+.group-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--tap-target, 44px);
+  padding: var(--space-sm, 8px) var(--space-lg, 16px);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-sm, 14px);
+  color: var(--color-text);
+}
+.group-item:last-child { border-bottom: none; }
+/* Action row (button styled as a group-item) */
+button.group-item--action {
+  width: 100%;
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+button.group-item--action:last-child { border-bottom: none; }
+button.group-item--action:hover { background: var(--color-surface-hover); }
+.group-value {
+  color: var(--color-text-secondary, #888);
+  display: flex; align-items: center; gap: var(--space-xs, 4px);
+  font-variant-numeric: tabular-nums;
+}

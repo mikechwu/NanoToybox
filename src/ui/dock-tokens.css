@@ -1,0 +1,15 @@
+/**
+ * Shared dock design tokens — visual consistency between lab and watch docks.
+ *
+ * Contains button sizing, rhythm, typography, and interaction state tokens.
+ * Each app owns its own slot layout CSS (different control sets).
+ */
+:root {
+  --dock-btn-size: 36px;
+  --dock-icon-size: 18px;
+  --dock-slot-gap: 8px;
+  --dock-label-size: var(--font-xs, 12px);
+  --dock-radius: 8px;
+  --dock-shadow: 0 -1px 8px rgba(0,0,0,0.08);
+  --dock-transition: 0.15s ease;
+}

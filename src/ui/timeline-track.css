@@ -1,0 +1,61 @@
+/**
+ * Shared timeline track primitives — track rail, fill, thumb, time display.
+ * Extracted from lab/index.html for use by both lab and watch.
+ * Each app owns its own shell layout (lab: mode rail + actions; watch: full-width).
+ */
+
+.timeline-time {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--font-xs, 12px);
+  color: var(--color-text-secondary, #888);
+  /* No padding — matches lab. Watch timeline lane grid handles spacing. */
+  text-align: right;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.timeline-track {
+  position: relative;
+  height: 6px; border-radius: 3px;
+  background: var(--color-border);
+  cursor: pointer;
+}
+/* Expanded hit area for easier scrubbing */
+.timeline-track::before {
+  content: ''; position: absolute;
+  inset: -18px 0;
+  cursor: pointer;
+}
+.timeline-fill {
+  position: absolute; top: 0; left: 0; bottom: 0;
+  border-radius: 3px;
+  background: var(--color-accent-text);
+  pointer-events: none;
+}
+.timeline-thumb {
+  position: absolute; top: 50%;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--color-accent-text);
+  border: 2px solid var(--panel-bg);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  transition: transform 0.1s ease;
+}
+.timeline-track:active .timeline-thumb {
+  transform: translate(-50%, -50%) scale(1.2);
+}
+
+/* Review/playback variant — thicker rail and larger thumb for easier drag */
+.timeline-track--thick {
+  height: 10px; border-radius: 5px;
+}
+.timeline-track--thick::before {
+  inset: -14px 0;
+}
+.timeline-track--thick .timeline-fill { border-radius: 5px; }
+.timeline-track--thick .timeline-thumb {
+  width: 18px; height: 18px;
+}
+.timeline-track--thick:active .timeline-thumb {
+  transform: translate(-50%, -50%) scale(1.15);
+}

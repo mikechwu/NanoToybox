@@ -132,7 +132,12 @@ describe('WatchPlaybackModel policy commands', () => {
   it('advance() auto-pauses at end', () => {
     const model = loadModel();
     model.startPlayback();
-    model.advance(1e12); // huge dt to overshoot
+    model.setSpeed(20); // high speed to reach end fast
+    // Advance in capped steps (gap clamp = 250ms) until end
+    for (let i = 0; i < 100000; i++) {
+      model.advance(250);
+      if (!model.isPlaying()) break;
+    }
     expect(model.isPlaying()).toBe(false);
     expect(model.getCurrentTimePs()).toBe(model.getEndTimePs());
   });

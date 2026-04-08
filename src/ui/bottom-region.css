@@ -1,0 +1,31 @@
+/**
+ * Shared bottom-region — positioning shell only (matches lab's .dock-region).
+ *
+ * This is a measurement/positioning root, NOT a painted UI surface.
+ * The actual visual shell (background, border, blur, shadow) belongs to
+ * the inner content surface (dock, timeline, or a combined shell).
+ *
+ * Lab's .dock-region: position, width, centering, bottom offset — no paint.
+ * Watch's .bottom-region: same contract — positioning only.
+ */
+
+.bottom-region {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 205;
+  display: flex;
+  flex-direction: column;
+  /* No background, no blur, no border, no shadow — inner surfaces own those. */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Desktop/tablet: centered, width-constrained */
+@media (min-width: 768px) {
+  .bottom-region {
+    left: 50%; transform: translateX(-50%);
+    width: min(var(--bottom-region-width, 480px), calc(100vw - 2 * var(--space-lg, 16px)));
+    bottom: calc(var(--space-lg, 16px) + env(safe-area-inset-bottom, 0px));
+    padding-bottom: 0;
+    /* No border, no radius, no shadow — positioning only. */
+  }
+}

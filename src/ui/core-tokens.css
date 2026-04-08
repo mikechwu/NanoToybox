@@ -1,0 +1,19 @@
+/**
+ * Shared core design tokens — single source of truth for both lab and watch.
+ * Font family, tap targets, and layout geometry.
+ */
+:root {
+  --font-family: -apple-system, 'SF Pro Text', 'Segoe UI', Helvetica, Arial, sans-serif;
+  --tap-target: 44px;
+  --dock-slot-action: 56px;
+  --bottom-region-width: 480px;
+  --sheet-width: 340px;
+  --tl-shell-height: 44px;
+  --tl-time-width: 56px;
+}
+@media (max-width: 767px) {
+  :root {
+    --tl-shell-height: 38px;
+    --tl-time-width: 48px;
+  }
+}

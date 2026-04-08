@@ -3,7 +3,7 @@
  *
  * Lab drives triad layout through lab/js/runtime/overlay-layout.ts which measures
  * [data-dock-root] and device mode. Watch uses the same sizing formulas but
- * measures [data-watch-playback-bar] instead of the dock.
+ * measures [data-watch-bottom-chrome] (the combined dock+timeline wrapper).
  *
  * Triad sizing replicates lab/js/runtime/overlay-layout.ts:75-80:
  *   - phone:   min(140, max(96,  floor(viewportW * 0.15)))
@@ -14,7 +14,7 @@
  *   - default: bottom = 12
  *   - left    = safeLeft + 6
  *
- * Layout hook: [data-watch-playback-bar] on WatchPlaybackBar.tsx.
+ * Layout hook: [data-watch-bottom-chrome] on the bottom chrome wrapper in WatchApp.tsx.
  * Stable data attribute — does not depend on styling class names.
  *
  * RAF coalescing: uses a single _layoutPending boolean (matching lab's pattern
@@ -25,11 +25,11 @@
 import type { WatchRenderer } from './watch-renderer';
 import { getDeviceMode } from '../../src/ui/device-mode';
 
-/** Selector for the playback bar layout hook. */
-const PLAYBACK_BAR_SELECTOR = '[data-watch-playback-bar]';
+/** Selector for the bottom chrome layout hook (Round 5: combined dock+timeline wrapper). */
+const PLAYBACK_BAR_SELECTOR = '[data-watch-bottom-chrome]';
 
 /**
- * Startup fallback triad bottom position (px) when [data-watch-playback-bar]
+ * Startup fallback triad bottom position (px) when [data-watch-bottom-chrome]
  * is not yet in DOM during initial mount. Temporary — replaced by measured
  * position once the retry loop finds the bar. Derived from minimum expected
  * playback bar height (~60px) + 8px gap.
@@ -39,8 +39,6 @@ const PHONE_TRIAD_BOTTOM_FALLBACK = 68;
 export interface WatchOverlayLayout {
   /** Run layout computation. */
   doLayout(): void;
-  /** Callback for resize events. */
-  onResize(): void;
   /** Disconnect and clean up. */
   destroy(): void;
 }
@@ -147,7 +145,6 @@ export function createWatchOverlayLayout(renderer: WatchRenderer): WatchOverlayL
 
   return {
     doLayout,
-    onResize: requestLayout,
     destroy() {
       _destroyed = true;
       window.removeEventListener('resize', requestLayout);

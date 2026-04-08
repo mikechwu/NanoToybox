@@ -62,7 +62,6 @@ function createMockDeps() {
       load: () => {},
       unload: () => {},
       setCurrentTimePs: (t: number) => { currentTimePs = t; },
-      setPlaying: () => {},
       getLoadedHistory: () => null,
       getTopologyAtTime: () => null,
       getConfigAtTime: () => null,

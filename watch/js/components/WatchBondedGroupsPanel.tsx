@@ -154,10 +154,12 @@ function ColorPopover({
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  // Watch panel is on the right side — popover opens to the LEFT of the chip (matches lab right-panel behavior)
   const style: React.CSSProperties = {
     position: 'fixed',
-    left: anchorRect.right + 8,
-    top: anchorRect.top - HEX_GEO.containerSize / 2 + anchorRect.height / 2,
+    right: window.innerWidth - anchorRect.left + 12,
+    top: anchorRect.top + anchorRect.height / 2,
+    transform: 'translateY(-50%)',
   };
 
   return createPortal(

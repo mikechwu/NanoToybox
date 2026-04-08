@@ -23,6 +23,8 @@ import { createWatchRenderer, type WatchRenderer } from './watch-renderer';
 import { createWatchCameraInput, type WatchCameraInput } from './watch-camera-input';
 import { createWatchOverlayLayout, type WatchOverlayLayout } from './watch-overlay-layout';
 import { createWatchBondedGroupAppearance, type WatchBondedGroupAppearance } from './watch-bonded-group-appearance';
+import { createWatchSettings, type WatchSettings } from './watch-settings';
+import { VIEWER_DEFAULTS } from '../../src/config/viewer-defaults';
 import type { BondedGroupSummary } from './watch-bonded-groups';
 
 export interface WatchControllerSnapshot {
@@ -42,6 +44,12 @@ export interface WatchControllerSnapshot {
   hoveredGroupId: string | null;
   following: boolean;
   followedGroupId: string | null;
+  // ── Round 5: transport + settings ──
+  speed: number;
+  repeat: boolean;
+  playDirection: 1 | -1 | 0;
+  theme: 'dark' | 'light';
+  textSize: 'normal' | 'large';
 }
 
 export interface WatchController {
@@ -59,6 +67,15 @@ export interface WatchController {
   applyGroupColor(groupId: string, colorHex: string): void;
   clearGroupColor(groupId: string): void;
   getGroupColorState(groupId: string): import('../../src/appearance/bonded-group-color-assignments').GroupColorState;
+  // ── Round 5: transport + settings commands ──
+  setSpeed(speed: number): void;
+  toggleRepeat(): void;
+  stepForward(): void;
+  stepBackward(): void;
+  startDirectionalPlayback(direction: 1 | -1): void;
+  stopDirectionalPlayback(): void;
+  setTheme(theme: 'dark' | 'light'): void;
+  setTextSize(size: 'normal' | 'large'): void;
   // ── Runtime access ──
   getPlaybackModel(): WatchPlaybackModel;
   getBondedGroups(): WatchBondedGroups;
@@ -73,6 +90,7 @@ const EMPTY_SNAPSHOT: WatchControllerSnapshot = {
   groups: [], atomCount: 0, frameCount: 0, maxAtomCount: 0,
   fileKind: null, fileName: null, error: null,
   hoveredGroupId: null, following: false, followedGroupId: null,
+  speed: 1, repeat: false, playDirection: 0, theme: VIEWER_DEFAULTS.defaultTheme, textSize: 'normal',
 };
 
 export function createWatchController(): WatchController {
@@ -80,6 +98,7 @@ export function createWatchController(): WatchController {
   const playback = createWatchPlaybackModel();
   const bondedGroups = createWatchBondedGroups();
   const viewService = createWatchViewService();
+  const settings = createWatchSettings(VIEWER_DEFAULTS.defaultTheme);
   const appearance = createWatchBondedGroupAppearance({
     getBondedGroups: () => bondedGroups,
     getPlaybackModel: () => playback,
@@ -105,6 +124,24 @@ export function createWatchController(): WatchController {
     const timePs = playback.getCurrentTimePs();
     const topology = playback.getTopologyAtTime(timePs);
     bondedGroups.updateForTime(timePs, topology);
+  }
+
+  /** Immediate render-sync at current playback time. Used by scrub, step, rollback. */
+  function renderAtCurrentTime() {
+    const timePs = playback.getCurrentTimePs();
+    if (renderer) {
+      const posData = playback.getDisplayPositionsAtTime(timePs);
+      const topology = playback.getTopologyAtTime(timePs);
+      if (posData) renderer.updateReviewFrame(posData.positions, posData.n, topology?.bonds ?? []);
+      appearance.projectAndSync(timePs);
+      updateAnalysis();
+      applyHighlight();
+      renderer.render();
+    } else {
+      appearance.projectAndSync(timePs);
+      updateAnalysis();
+      applyHighlight();
+    }
   }
 
   /** Apply current highlight to renderer based on analysis domain priority. */
@@ -141,6 +178,11 @@ export function createWatchController(): WatchController {
       followedGroupId: viewService.isFollowing()
         ? (viewService.getTargetRef()?.groupId ?? null)
         : null,
+      speed: playback.getSpeed(),
+      repeat: playback.getRepeat(),
+      playDirection: playback.getPlaybackDirection(),
+      theme: settings.getTheme(),
+      textSize: settings.getTextSize(),
     };
   }
 
@@ -152,7 +194,9 @@ export function createWatchController(): WatchController {
       || a.fileName !== b.fileName || a.error !== b.error
       || a.groups !== b.groups || a.atomCount !== b.atomCount
       || a.hoveredGroupId !== b.hoveredGroupId
-      || a.following !== b.following || a.followedGroupId !== b.followedGroupId;
+      || a.following !== b.following || a.followedGroupId !== b.followedGroupId
+      || a.speed !== b.speed || a.repeat !== b.repeat || a.playDirection !== b.playDirection
+      || a.theme !== b.theme || a.textSize !== b.textSize;
   }
 
   function setErrorKeepingCurrentState(error: string) {
@@ -261,8 +305,10 @@ export function createWatchController(): WatchController {
       const prevDocMeta = documentService.saveForRollback();
       const prevHistory = playback.getLoadedHistory();
       const prevTimePs = playback.getCurrentTimePs();
-      const prevPlaying = playback.isPlaying();
+      const prevDirection = playback.getPlaybackDirection();
       const prevAppearance = [...appearance.getAssignments()];
+      const prevSpeed = playback.getSpeed();
+      const prevRepeat = playback.getRepeat();
       const wasRunning = _rafId !== 0;
 
       try {
@@ -298,23 +344,15 @@ export function createWatchController(): WatchController {
         if (prevHistory) {
           try {
             playback.load(prevHistory);
+            playback.setSpeed(prevSpeed);
+            playback.setRepeat(prevRepeat);
             playback.setCurrentTimePs(prevTimePs);
-            playback.setPlaying(prevPlaying);
+            if (prevDirection !== 0) playback.startDirectionalPlayback(prevDirection);
             // Restore prior authored colors (cleared by appearance.reset() above)
             appearance.restoreAssignments(prevAppearance);
-            updateAnalysis();
-            // Fully restore the visual scene — mirror success-path rendering
-            if (renderer) {
-              renderer.initForPlayback(prevHistory.simulation.maxAtomCount);
-              const posData = playback.getDisplayPositionsAtTime(prevTimePs);
-              const topology = playback.getTopologyAtTime(prevTimePs);
-              if (posData) {
-                renderer.updateReviewFrame(posData.positions, posData.n, topology?.bonds ?? []);
-              }
-              appearance.projectAndSync(prevTimePs);
-              applyHighlight();
-              renderer.render();
-            }
+            // Fully restore the visual scene
+            if (renderer) renderer.initForPlayback(prevHistory.simulation.maxAtomCount);
+            renderAtCurrentTime();
             if (wasRunning) startRAF();
           } catch (rollbackErr) {
             console.error('[watch] rollback also failed:', rollbackErr);
@@ -340,9 +378,7 @@ export function createWatchController(): WatchController {
     scrub(timePs) {
       if (!playback.isLoaded()) return;
       playback.seekTo(timePs);
-      appearance.projectAndSync(timePs);
-      updateAnalysis();
-      applyHighlight();
+      renderAtCurrentTime();
       publishSnapshot();
     },
 
@@ -397,6 +433,56 @@ export function createWatchController(): WatchController {
       return appearance.getGroupColorState(groupId);
     },
 
+    // ── Round 5: transport + settings commands ──
+
+    setSpeed(speed) {
+      playback.setSpeed(speed);
+      publishSnapshot();
+    },
+
+    toggleRepeat() {
+      playback.setRepeat(!playback.getRepeat());
+      publishSnapshot();
+    },
+
+    stepForward() {
+      if (!playback.isLoaded()) return;
+      playback.stepForward();
+      renderAtCurrentTime();
+      publishSnapshot();
+    },
+
+    stepBackward() {
+      if (!playback.isLoaded()) return;
+      playback.stepBackward();
+      renderAtCurrentTime();
+      publishSnapshot();
+    },
+
+    startDirectionalPlayback(direction: 1 | -1) {
+      if (!playback.isLoaded()) return;
+      playback.startDirectionalPlayback(direction);
+      _lastTimestamp = 0;
+      if (!_rafId) startRAF();
+      publishSnapshot();
+    },
+
+    stopDirectionalPlayback() {
+      playback.stopDirectionalPlayback();
+      publishSnapshot();
+    },
+
+    setTheme(theme) {
+      settings.setTheme(theme);
+      if (renderer) renderer.applyTheme(theme);
+      publishSnapshot();
+    },
+
+    setTextSize(size) {
+      settings.setTextSize(size);
+      publishSnapshot();
+    },
+
     getPlaybackModel: () => playback,
     getBondedGroups: () => bondedGroups,
 
@@ -404,6 +490,8 @@ export function createWatchController(): WatchController {
       // Guard: tear down any prior renderer subsystems to prevent listener/RAF leaks
       detachRenderer();
       renderer = createWatchRenderer(container);
+      // Sync current theme into the new renderer (CSS tokens already set by settings)
+      renderer.applyTheme(settings.getTheme());
       cameraInput = createWatchCameraInput(renderer);
       overlayLayout = createWatchOverlayLayout(renderer);
       if (playback.isLoaded()) {

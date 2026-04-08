@@ -70,6 +70,20 @@ export function IconReturn({ className, size = 16, strokeWidth, title }: IconPro
   return <svg {...iconBase(size, strokeWidth ?? 1.8, title)} className={className}><polyline points="4,8 10,4 10,12"/><path d="M10 8 Q16 8 16 14"/></svg>;
 }
 
+// ── Transport icons (watch dock) ──
+
+export function IconStepBack({ className, size = 16, strokeWidth, title }: IconProps = {}) {
+  return <svg {...iconBase(size, strokeWidth ?? 1.8, title)} className={className} fill="currentColor" stroke="none"><rect x="4" y="5" width="2" height="10"/><polygon points="16,4 8,10 16,16"/></svg>;
+}
+
+export function IconStepForward({ className, size = 16, strokeWidth, title }: IconProps = {}) {
+  return <svg {...iconBase(size, strokeWidth ?? 1.8, title)} className={className} fill="currentColor" stroke="none"><polygon points="4,4 12,10 4,16"/><rect x="14" y="5" width="2" height="10"/></svg>;
+}
+
+export function IconRepeat({ className, size = 16, strokeWidth, title }: IconProps = {}) {
+  return <svg {...iconBase(size, strokeWidth ?? 1.8, title)} className={className}><path d="M14 6H6a3 3 0 0 0-3 3v2a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3V9a3 3 0 0 0-3-3z"/><polyline points="12,3 15,6 12,9"/></svg>;
+}
+
 export function IconFreeze({ className, size = 16, strokeWidth, title }: IconProps = {}) {
   return <svg {...iconBase(size, strokeWidth ?? 1.8, title)} className={className}><line x1="5" y1="5" x2="15" y2="15"/><line x1="15" y1="5" x2="5" y2="15"/></svg>;
 }

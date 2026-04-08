@@ -17,11 +17,9 @@
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
-  --font-family: -apple-system, 'SF Pro Text', 'Segoe UI', Helvetica, Arial, sans-serif;
-  --font-xs: 12px;
-  --font-sm: 14px;
-  --font-base: 16px;
-  --tap-target: 44px;
+  /* --font-family now in shared src/ui/core-tokens.css */
+  /* --font-xs, --font-sm, --font-base: now in shared src/ui/text-size-tokens.css */
+  /* --tap-target: now in shared src/ui/core-tokens.css */
   --glass-blur: 8px;
   --ease-spring: cubic-bezier(0.2, 0.9, 0.3, 1.0);
   --duration-fast: 0.15s;
@@ -30,13 +28,11 @@
   /* Safe-area insets as readable CSS vars (for JS layout computation) */
   --safe-left: env(safe-area-inset-left, 0px);
   --dock-mode-max-width: 180px;
-  --dock-slot-action: 56px;
+  /* --dock-slot-action: now in shared src/ui/core-tokens.css */
 }
-/* Text size: :root defines Normal defaults; Large overrides via data attribute */
+/* Text size: Normal defaults + Large overrides in shared src/ui/text-size-tokens.css.
+   Lab-specific override below (dock mode width). */
 [data-text-size="large"] {
-  --font-xs: 14px;
-  --font-sm: 16px;
-  --font-base: 18px;
   --dock-mode-max-width: 200px;
 }
 
@@ -179,41 +175,11 @@ canvas { display: block; touch-action: none; }
   bottom: 0; left: 0; right: 0;
   z-index: 205; /* Above backdrop (200) so dock stays interactive while sheets are open */
 }
-/* ── Dock bar (visual toolbar) ──
-   Uses CSS grid with stable slot widths so Pause↔Resume label changes
-   do not rebalance the layout. Mode slot is wider for the segmented control. */
+/* Dock shell (.dock-bar, .dock-slot, .dock-item, .dock-icon, .dock-label) now in shared src/ui/dock-shell.css.
+   Lab-specific override: 4-column grid for simulation controls. */
 .dock-bar {
-  display: grid;
   grid-template-columns: var(--dock-slot-action) 1fr var(--dock-slot-action) var(--dock-slot-action);
-  align-items: center;
-  justify-items: center;
-  height: calc(var(--tap-target) + var(--space-lg) + env(safe-area-inset-bottom, 0px));
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-  background: var(--panel-bg);
-  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
-  border-top: 1px solid var(--color-border);
 }
-.dock-slot { display: flex; align-items: center; justify-content: center; }
-.dock-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  min-width: var(--tap-target);
-  min-height: var(--tap-target);
-  padding: var(--space-xs) var(--space-sm);
-  background: none;
-  border: none;
-  color: var(--color-text-secondary);
-  font-size: var(--font-xs);
-  font-family: var(--font-family);
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  transition: color var(--duration-fast);
-}
-.dock-item.active { color: var(--color-accent-text); }
-.dock-item:disabled { opacity: 0.3; cursor: default; }
 .review-locked { opacity: 0.35; cursor: not-allowed; }
 /* review-locked-trigger uses display:contents so the wrapper does not disrupt
    dock/chooser flex layout. The trigger itself is the interactive hit target for
@@ -236,7 +202,7 @@ canvas { display: block; touch-action: none; }
     left: 50%; transform: translateX(-50%);
     /* Fixed-width pill: stable across all timeline states (no shrink-wrap).
        Uses min() so the region never exceeds the viewport on narrow tablets. */
-    width: min(480px, calc(100vw - 2 * var(--space-lg)));
+    width: min(var(--bottom-region-width), calc(100vw - 2 * var(--space-lg)));
     bottom: calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));
   }
   .dock-bar {
@@ -263,174 +229,31 @@ canvas { display: block; touch-action: none; }
 /* Desktop: no backdrop (non-modal side panel) */
 [data-device-mode="desktop"] .sheet-backdrop { display: none; }
 
-/* ── Sheet ── */
-.sheet {
-  position: fixed;
-  bottom: 0; left: 0; right: 0;
-  max-height: 85vh;
-  background: var(--panel-bg);
-  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
-  border-top-left-radius: var(--radius-lg);
-  border-top-right-radius: var(--radius-lg);
-  border: 1px solid var(--color-border);
-  border-bottom: none;
-  transform: translateY(100%);
-  transition: transform var(--duration-sheet) var(--ease-spring);
-  z-index: 210;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-  color: var(--color-text);
-  font-family: var(--font-family);
-}
-.sheet.open { transform: translateY(0); }
-
-.sheet-handle {
-  width: 36px; height: 5px;
-  background: var(--color-surface-hover);
-  border-radius: 3px;
-  margin: var(--space-sm) auto;
-}
-.sheet-header {
-  padding: var(--space-sm) var(--space-lg);
-  font-size: var(--font-base);
-  font-weight: 600;
-  color: var(--color-text);
-  border-bottom: 1px solid var(--color-border);
-}
-
-/* Tablet + desktop: side sheet */
-@media (min-width: 768px) {
-  .sheet {
-    top: 0; bottom: 0; left: auto; right: 0;
-    width: 340px; max-height: none;
-    border-radius: 0;
-    border-left: 1px solid var(--color-border);
-    border-top: none;
-    transform: translateX(100%);
-  }
-  .sheet.open { transform: translateX(0); }
-  .sheet-handle { display: none; }
-}
-
-/* ── Grouped list ── */
-.group { margin-bottom: var(--space-xl); }
-.group-header {
-  padding: var(--space-xs) var(--space-lg);
-  font-size: var(--font-xs);
-  color: var(--color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.group-list {
-  list-style: none; margin: 0; padding: 0;
-  background: var(--color-surface);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  border: 1px solid var(--color-border);
-}
-.group-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: var(--tap-target);
-  padding: var(--space-sm) var(--space-lg);
-  border-bottom: 1px solid var(--color-border);
-  font-size: var(--font-sm);
-  color: var(--color-text);
-}
-.group-item:last-child { border-bottom: none; }
+/* Sheet shell (.sheet, .sheet-handle, .sheet-header, .group, .group-list, .group-item, .group-value)
+   now in shared src/ui/sheet-shell.css.
+   Lab-specific additions below. */
 .group-item:active { background: var(--color-surface-hover); }
 .group-action { color: var(--color-danger); cursor: pointer; }
-.group-value {
-  color: var(--color-text-secondary);
-  display: flex; align-items: center; gap: var(--space-xs);
-  font-variant-numeric: tabular-nums;
-}
 .group-footer {
   padding: var(--space-xs) var(--space-lg);
   font-size: var(--font-xs);
   color: var(--color-text-secondary);
 }
 
-/* ── Segmented control ── */
-/* Segmented control — uses CSS custom properties for positioning.
-   Set --seg-count (number of segments) and --seg-active (0-indexed active segment)
-   on the .segmented element. No child indicator div needed. */
-fieldset.segmented {
-  border: none;
-  margin: 0;
-}
-.segmented {
-  display: flex;
-  position: relative;
-  background: var(--color-btn);
-  border-radius: var(--radius-sm);
-  padding: 2px;
-  align-self: center;
-  --seg-count: 3;
-  --seg-active: 0;
-}
-.sr-only {
-  position: absolute; width: 1px; height: 1px; padding: 0;
-  margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;
-}
-/* Indicator via ::before — no extra DOM element, no grid interference */
-.segmented::before {
-  content: '';
-  position: absolute;
-  top: 2px; bottom: 2px; left: 2px;
-  width: calc((100% - 4px) / var(--seg-count));
-  background: var(--color-surface-active);
-  border-radius: calc(var(--radius-sm) - 2px);
-  transform: translateX(calc(var(--seg-active) * 100%));
-  transition: transform var(--duration-normal) var(--ease-spring);
-  pointer-events: none;
-  z-index: 1;
-}
-.segmented input[type="radio"] {
-  /* Absolute-fill inside label: invisible but actionable for accessibility/testing */
-  position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%;
-  margin: 0; cursor: pointer;
-}
-/* .seg-item is the stable flex child — identical in live and review modes.
-   Layout contract lives here, not on the label, so ActionHint wrappers
-   inside disabled items do not change the flex child structure. */
-.seg-item {
-  flex: 1 1 0%;
-  min-width: 0;
-  display: flex;
-  z-index: 2;
-}
-/* seg-item__content fills the slot; display:contents flattens it so the
-   label (or ActionHint > label) participates directly in seg-item's flex. */
-.seg-item__content { display: contents; }
+/* Segmented control CSS now in shared src/ui/segmented.css.
+   Lab-specific overrides below. */
 .segmented .seg-label {
-  position: relative; /* anchor for absolute-fill radio */
-  text-align: center;
-  padding: var(--space-sm) var(--space-sm);
-  font-size: var(--font-sm);
-  font-family: var(--font-family);
-  color: var(--color-text-secondary);
-  cursor: pointer; z-index: 2;
-  min-height: 28px;
-  display: flex; align-items: center; justify-content: center;
-  transition: color var(--duration-fast);
   -webkit-tap-highlight-color: transparent;
   user-select: none;
   white-space: nowrap;
-  flex: 1;
 }
-.segmented .seg-label.active { color: var(--color-text); }
+.segmented .seg-label.active { font-weight: 500; }
 .segmented .seg-label:has(input:focus-visible) {
   outline: 2px solid var(--color-accent-text);
   outline-offset: -2px;
 }
 
-/* ── Dock extras ── */
-.dock-icon { font-size: 18px; line-height: 1; }
-.dock-label { font-size: var(--font-xs); }
+/* ── Dock extras (lab-specific; dock shell in shared src/ui/dock-shell.css) ── */
 .dock-mode { max-width: var(--dock-mode-max-width); }
 /* Placement surface styling — structure handled by JSX conditional rendering */
 .dock-add-btn.dock-placement-accent { color: var(--color-accent-text); }
@@ -797,11 +620,11 @@ fieldset.segmented {
    All timeline dimensions are centralized here. The track width is invariant
    because every column is fixed or 1fr — no auto-sizing anywhere.
    Rail = mode switch. Lane = time + track + action. */
+/* --tl-time-width, --tl-shell-height: shared in src/ui/core-tokens.css.
+   Lab-specific timeline tokens below. */
 .timeline-bar {
   --tl-rail-width: 96px;
-  --tl-time-width: 56px;
   --tl-action-width: 64px;
-  --tl-shell-height: 44px;
   --tl-mode-height: 36px;
   min-height: 64px;
   position: relative;
@@ -833,8 +656,7 @@ fieldset.segmented {
 @media (max-width: 599px) {
   .timeline-bar {
     --tl-rail-width: 84px;
-    --tl-time-width: 48px;
-    --tl-shell-height: 38px;
+    /* --tl-time-width, --tl-shell-height: mobile overrides in shared core-tokens.css */
     --tl-mode-height: 32px;
     min-height: 56px;
   }

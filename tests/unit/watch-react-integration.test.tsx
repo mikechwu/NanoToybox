@@ -37,6 +37,11 @@ function makeSnapshot(overrides: Partial<WatchControllerSnapshot> = {}): WatchCo
     hoveredGroupId: null,
     following: false,
     followedGroupId: null,
+    speed: 1,
+    repeat: false,
+    playDirection: 0 as 1 | -1 | 0,
+    theme: 'light',
+    textSize: 'normal',
     ...overrides,
   };
 }
@@ -58,6 +63,14 @@ function createMockController(initialSnapshot?: Partial<WatchControllerSnapshot>
     applyGroupColor: vi.fn(),
     clearGroupColor: vi.fn(),
     getGroupColorState: vi.fn(() => ({ kind: 'default' })),
+    setSpeed: vi.fn(),
+    toggleRepeat: vi.fn(),
+    stepForward: vi.fn(),
+    stepBackward: vi.fn(),
+    startDirectionalPlayback: vi.fn(),
+    stopDirectionalPlayback: vi.fn(),
+    setTheme: vi.fn(),
+    setTextSize: vi.fn(),
     createRenderer: vi.fn(() => ({
       getCanvas: () => document.createElement('canvas'),
       applyTheme: vi.fn(),
@@ -125,9 +138,9 @@ describe('WatchApp React integration', () => {
   it('playback bar reflects playing state', () => {
     const ctrl = createMockController({ loaded: true, playing: true, endTimePs: 100, fileKind: 'full' });
     const { container } = render(<WatchApp controller={ctrl} />);
-    // Should have a pause icon (playing=true)
-    const playBtn = container.querySelector('.review-playback-bar button');
-    expect(playBtn).not.toBeNull();
+    // Should have dock controls (playing=true → dock with dock-item buttons)
+    const dockBtns = container.querySelectorAll('.dock-item');
+    expect(dockBtns.length).toBeGreaterThan(0);
   });
 
   it('bonded-groups panel shows expand/collapse toggle', () => {

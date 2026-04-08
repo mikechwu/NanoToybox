@@ -1,0 +1,58 @@
+/**
+ * Shared segmented control CSS.
+ * Extracted from lab/index.html for use by both lab and watch.
+ */
+
+fieldset.segmented { border: none; margin: 0; }
+.segmented {
+  display: flex;
+  position: relative;
+  background: var(--color-btn);
+  border-radius: var(--radius-sm, 6px);
+  padding: 2px;
+  align-self: center;
+  --seg-count: 3;
+  --seg-active: 0;
+}
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0;
+  margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;
+}
+/* Indicator via ::before — animated sliding highlight */
+.segmented::before {
+  content: '';
+  position: absolute;
+  top: 2px; bottom: 2px; left: 2px;
+  width: calc((100% - 4px) / var(--seg-count));
+  background: var(--color-surface-active);
+  border-radius: calc(var(--radius-sm, 6px) - 2px);
+  transform: translateX(calc(var(--seg-active) * 100%));
+  transition: transform var(--duration-normal, 0.3s) var(--ease-spring, ease);
+  pointer-events: none;
+  z-index: 1;
+}
+.segmented input[type="radio"] {
+  position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%;
+  margin: 0; cursor: pointer;
+}
+.seg-item {
+  flex: 1 1 0%;
+  min-width: 0;
+  display: flex;
+  z-index: 2;
+}
+.seg-item__content { display: contents; }
+.segmented .seg-label {
+  position: relative;
+  text-align: center;
+  padding: var(--space-sm, 8px) var(--space-sm, 8px);
+  font-size: var(--font-sm, 14px);
+  font-family: var(--font-family, inherit);
+  color: var(--color-text-secondary, #888);
+  cursor: pointer; z-index: 2;
+  min-height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  transition: color var(--duration-fast, 0.15s);
+  flex: 1;
+}
+.segmented .seg-label.active { color: var(--color-text); font-weight: 500; }

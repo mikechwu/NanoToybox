@@ -1,0 +1,113 @@
+/*
+ * Watch-specific dock, timeline, and layout overrides.
+ *
+ * Shared CSS imported by main.ts:
+ *   dock-shell.css     — .dock-bar, .dock-slot, .dock-item, .dock-icon, .dock-label
+ *   sheet-shell.css    — .sheet, .sheet-handle, .sheet-header, .group, .group-list, .group-item
+ *   segmented.css      — .segmented, .seg-item, .seg-label
+ *   timeline-track.css — .timeline-time, .timeline-track, .timeline-fill, .timeline-thumb
+ *   bottom-region.css  — .bottom-region (centered pill on desktop)
+ *
+ * This file only contains watch-specific overrides.
+ */
+
+/* .bottom-region (outer) is positioning only — no paint.
+   Timeline and dock are sibling shells, each owning their own surface.
+   Dock is the primary painted pill (from shared dock-shell.css).
+   Timeline is a lightweight row sitting above it. */
+
+/* ── Timeline lane — lab-identical shell metrics ──
+   Lab: --tl-shell-height: 44px (38px mobile), --tl-time-width: 56px (48px mobile).
+   Watch omits mode rail and action zone; track gets full remaining width.
+   No extra padding — the outer .bottom-region shell owns background. */
+.watch-timeline-lane {
+  display: grid;
+  grid-template-columns: var(--tl-time-width, 56px) minmax(0, 1fr) var(--tl-time-width, 56px);
+  align-items: center;
+  height: var(--tl-shell-height, 44px);
+  padding: 0 12px;
+  column-gap: 10px;
+}
+/* Thumb clearance — thick-track thumb is 18px, needs half (9px) at each end.
+   This is derived from the shared track primitive, not an arbitrary value. */
+.watch-timeline-lane .timeline-track {
+  margin: 0 9px;
+}
+
+/* ── Watch dock: 3-zone hierarchical grid ──
+   Zone 1 (transport): centered back/play/fwd cluster
+   Zone 2 (utility): repeat toggle + compact speed — subordinate
+   Zone 3 (settings): right-edge anchor */
+/* Watch dock: 3-zone grid. Dock IS the primary painted pill (from dock-shell.css).
+   Only override grid columns for watch's playback layout. */
+.watch-dock-bar {
+  grid-template-columns: 1fr auto var(--dock-slot-action, 56px);
+}
+
+/* Transport cluster: fixed-width 3-column grid — no layout shift on Play↔Pause label swap */
+.watch-dock__transport {
+  display: grid;
+  grid-template-columns: repeat(3, var(--dock-slot-action, 56px));
+  justify-content: center;
+  align-items: center;
+  column-gap: 2px;
+}
+.watch-dock__transport .dock-item {
+  width: var(--dock-slot-action, 56px);
+}
+/* All icons use shared default size (16px from Icons.tsx) — no watch overrides. */
+
+/* Utility cluster: compact, subordinate */
+.watch-dock__utility {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+}
+/* Small utility toggle (repeat) — icon only, no label.
+   32px is compact variant of --tap-target (44px), acceptable for secondary controls. */
+.watch-dock__small {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 4px;
+}
+
+/* ── Speed control ── */
+.watch-dock__speed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Speed slider: 80px is tuned for the utility cluster — wide enough for log-mapped
+   control, narrow enough to stay subordinate to the transport cluster. */
+.watch-dock__speed-slider {
+  width: 80px;
+  accent-color: var(--color-accent);
+}
+.watch-dock__speed-label {
+  font-size: var(--font-xs, 12px);
+  font-variant-numeric: tabular-nums;
+  min-width: 36px;
+  text-align: center;
+  cursor: pointer;
+  color: var(--color-text);
+  user-select: none;
+  background: none; border: none; padding: 0;
+  font-family: inherit;
+}
+.watch-dock__speed-label:hover { color: var(--color-accent); }
+
+/* Segmented controls use shared src/ui/segmented.css + lab's Segmented component. */
+
+/* ── Help page back button (inside sheet) ── */
+.watch-help-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--color-accent-text);
+  cursor: pointer;
+  font-size: var(--font-sm, 14px);
+  padding: 0;
+}

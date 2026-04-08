@@ -4,8 +4,16 @@
  * Multi-molecule playground with placement mode.
  * Wires together: loader, physics, state machine, input, renderer, React UI.
  */
-// Shared CSS — color popover styles (extracted from index.html in Round 4)
+// Shared CSS (core tokens first, then component CSS)
+import '../../src/ui/core-tokens.css';
 import '../../src/ui/bonded-groups-parity.css';
+import '../../src/ui/text-size-tokens.css';
+import '../../src/ui/dock-tokens.css';
+import '../../src/ui/dock-shell.css';
+import '../../src/ui/sheet-shell.css';
+import '../../src/ui/segmented.css';
+import '../../src/ui/timeline-track.css';
+import '../../src/ui/bottom-region.css';
 import * as THREE from 'three';
 import { loadManifest, loadStructure } from './loader';
 import { PhysicsEngine } from './physics';
