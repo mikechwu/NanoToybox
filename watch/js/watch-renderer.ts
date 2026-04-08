@@ -58,6 +58,10 @@ export interface WatchRenderer {
   // ── Round 3: triad layout ──
   /** Set triad size and position to match lab overlay layout formulas. */
   setOverlayLayout(layout: { triadSize: number; triadLeft: number; triadBottom: number }): void;
+
+  // ── Round 4: authored atom color ──
+  /** Apply per-atom color overrides or null to clear. Keys are dense slot indices. */
+  setAtomColorOverrides(overrides: Record<number, { hex: string }> | null): void;
 }
 
 export function createWatchRenderer(container: HTMLElement): WatchRenderer {
@@ -110,6 +114,9 @@ export function createWatchRenderer(container: HTMLElement): WatchRenderer {
 
     // Triad layout
     setOverlayLayout: (layout) => renderer.setOverlayLayout(layout),
+
+    // Authored atom color
+    setAtomColorOverrides: (overrides) => renderer.setAtomColorOverrides(overrides),
 
     // Camera actions
     animateToFramedTarget(target: FramedTarget) {

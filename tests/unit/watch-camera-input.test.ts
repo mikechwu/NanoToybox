@@ -81,6 +81,7 @@ function createMockRenderer(): WatchRenderer & { _canvas: HTMLCanvasElement } {
     endBackgroundOrbitCue: vi.fn(),
     cancelCameraAnimation: vi.fn(),
     setOverlayLayout: vi.fn(),
+    setAtomColorOverrides: vi.fn(),
   };
 }
 

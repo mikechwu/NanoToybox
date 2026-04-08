@@ -14,7 +14,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import React from 'react';
 import { render, fireEvent } from '@testing-library/react';
-import { BondedGroupsPanel, buildGroupColorLayout, computeHexGeometry, SWATCH_DIAMETER, ACTIVE_SCALE, RING_GAP } from '../../lab/js/components/BondedGroupsPanel';
+import { BondedGroupsPanel } from '../../lab/js/components/BondedGroupsPanel';
+import { buildGroupColorLayout, computeHexGeometry, SWATCH_DIAMETER, ACTIVE_SCALE, RING_GAP } from '../../src/appearance/bonded-group-color-assignments';
 import { useAppStore, type BondedGroupSummary, type BondedGroupColorAssignment } from '../../lab/js/store/app-store';
 import { createBondedGroupHighlightRuntime } from '../../lab/js/runtime/bonded-group-highlight-runtime';
 import { rebuildOverridesFromAssignments } from '../../lab/js/runtime/bonded-group-appearance-runtime';

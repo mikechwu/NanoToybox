@@ -55,6 +55,9 @@ function createMockController(initialSnapshot?: Partial<WatchControllerSnapshot>
     centerOnGroup: vi.fn(),
     followGroup: vi.fn(),
     unfollowGroup: vi.fn(),
+    applyGroupColor: vi.fn(),
+    clearGroupColor: vi.fn(),
+    getGroupColorState: vi.fn(() => ({ kind: 'default' })),
     createRenderer: vi.fn(() => ({
       getCanvas: () => document.createElement('canvas'),
       applyTheme: vi.fn(),

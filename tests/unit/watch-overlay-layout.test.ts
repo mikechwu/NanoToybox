@@ -40,6 +40,7 @@ function resetROInstances() { _roInstances = []; }
 function createMockRenderer() {
   return {
     setOverlayLayout: vi.fn(),
+    setAtomColorOverrides: vi.fn(),
     // Remaining interface stubs (not used by overlay layout)
     getCanvas: vi.fn(() => document.createElement('canvas')),
     applyTheme: vi.fn(),

@@ -15,7 +15,8 @@
  * Only atom removal can shrink the visible colored set.
  */
 
-import { useAppStore, type AtomColorOverrideMap, type BondedGroupColorAssignment } from '../store/app-store';
+import { useAppStore, type BondedGroupColorAssignment } from '../store/app-store';
+import { type AtomColorOverrideMap, rebuildOverridesFromDenseIndices } from '../../../src/appearance/bonded-group-color-assignments';
 
 export interface BondedGroupAppearanceRenderer {
   setAtomColorOverrides(overrides: Record<number, { hex: string }> | null): void;
@@ -37,19 +38,8 @@ export interface BondedGroupAppearanceRuntime {
   pruneAndSync(atomCount: number): void;
 }
 
-/** Deterministic projection: assignments → atom-level override map.
- *  Later assignments win for overlapping atom indices. */
-export function rebuildOverridesFromAssignments(
-  assignments: BondedGroupColorAssignment[],
-): AtomColorOverrideMap {
-  const overrides: AtomColorOverrideMap = {};
-  for (const a of assignments) {
-    for (const idx of a.atomIndices) {
-      overrides[idx] = { hex: a.colorHex };
-    }
-  }
-  return overrides;
-}
+/** Re-export shared projection under the old name for existing lab consumers. */
+export const rebuildOverridesFromAssignments = rebuildOverridesFromDenseIndices;
 
 export function createBondedGroupAppearanceRuntime(deps: {
   getBondedGroupRuntime: () => { getAtomIndicesForGroup(id: string): number[] | null } | null;

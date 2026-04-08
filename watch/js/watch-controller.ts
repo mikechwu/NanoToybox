@@ -22,6 +22,7 @@ import { createWatchViewService, type WatchViewService } from './watch-view-serv
 import { createWatchRenderer, type WatchRenderer } from './watch-renderer';
 import { createWatchCameraInput, type WatchCameraInput } from './watch-camera-input';
 import { createWatchOverlayLayout, type WatchOverlayLayout } from './watch-overlay-layout';
+import { createWatchBondedGroupAppearance, type WatchBondedGroupAppearance } from './watch-bonded-group-appearance';
 import type { BondedGroupSummary } from './watch-bonded-groups';
 
 export interface WatchControllerSnapshot {
@@ -54,6 +55,10 @@ export interface WatchController {
   centerOnGroup(id: string): void;
   followGroup(id: string): void;
   unfollowGroup(): void;
+  // ── Round 4: color commands ──
+  applyGroupColor(groupId: string, colorHex: string): void;
+  clearGroupColor(groupId: string): void;
+  getGroupColorState(groupId: string): import('../../src/appearance/bonded-group-color-assignments').GroupColorState;
   // ── Runtime access ──
   getPlaybackModel(): WatchPlaybackModel;
   getBondedGroups(): WatchBondedGroups;
@@ -75,6 +80,11 @@ export function createWatchController(): WatchController {
   const playback = createWatchPlaybackModel();
   const bondedGroups = createWatchBondedGroups();
   const viewService = createWatchViewService();
+  const appearance = createWatchBondedGroupAppearance({
+    getBondedGroups: () => bondedGroups,
+    getPlaybackModel: () => playback,
+    getRenderer: () => renderer,
+  });
   let renderer: WatchRenderer | null = null;
   let cameraInput: WatchCameraInput | null = null;
   let overlayLayout: WatchOverlayLayout | null = null;
@@ -177,15 +187,19 @@ export function createWatchController(): WatchController {
       return;
     }
 
-    // Renderer frame application (isolated — non-fatal)
+    // ── Round 4 tick order: colors + follow projected before render ──
+    // 1. advance (above) → 2. sample → 3. updateReviewFrame → 4. project colors
+    // → 5. setAtomColorOverrides → 6. analysis → 7. follow → 8. highlight → 9. render → 10. snapshot
     if (renderer && playback.isLoaded()) {
       try {
         const timePs = playback.getCurrentTimePs();
         const posData = playback.getDisplayPositionsAtTime(timePs);
         const topology = playback.getTopologyAtTime(timePs);
         if (posData) {
+          // 3. Apply frame geometry
           renderer.updateReviewFrame(posData.positions, posData.n, topology?.bonds ?? []);
-          renderer.render();
+          // 4-5. Project authored colors for this frame's atomId ordering
+          appearance.projectAndSync(timePs);
         }
       } catch (e) {
         console.error('[watch] render error (non-fatal):', e);
@@ -193,13 +207,17 @@ export function createWatchController(): WatchController {
     }
 
     try {
+      // 6. Bonded-group topology projection
       updateAnalysis();
-      // Follow update uses frozen atom set (not live group-id), so topology changes
-      // don't retarget. Runs after analysis for consistent snapshot timing.
+      // 7. Camera follow — tracks target before render
       if (renderer && viewService.isFollowing()) {
         viewService.updateFollow(dtMs, renderer);
       }
+      // 8. Highlight on top of authored colors
       applyHighlight();
+      // 9. Final composited render
+      if (renderer) renderer.render();
+      // 10. Publish snapshot
       publishSnapshot();
     } catch (e) {
       console.error('[watch] snapshot error:', e);
@@ -244,12 +262,18 @@ export function createWatchController(): WatchController {
       const prevHistory = playback.getLoadedHistory();
       const prevTimePs = playback.getCurrentTimePs();
       const prevPlaying = playback.isPlaying();
+      const prevAppearance = [...appearance.getAssignments()];
       const wasRunning = _rafId !== 0;
 
       try {
         stopRAF();
         documentService.commit(history, fileName);
         playback.load(history);
+        // Appearance reset before first render — prevents stale color flash from prior file.
+        // bondedGroups/viewService reset AFTER render — they don't affect visual state,
+        // and deferring them preserves rollback safety (if renderer init fails, follow/hover
+        // state is never cleared, so rollback doesn't need to restore them).
+        appearance.reset();
         if (renderer) {
           renderer.initForPlayback(history.simulation.maxAtomCount);
           const timePs = playback.getCurrentTimePs();
@@ -260,7 +284,7 @@ export function createWatchController(): WatchController {
           }
           renderer.render();
         }
-        // Reset interaction/view state only after all risky init succeeded.
+        // Reset interaction/view state after all risky init succeeded.
         // This ensures rollback preserves prior follow/hover state naturally.
         bondedGroups.reset();
         viewService.reset();
@@ -276,9 +300,21 @@ export function createWatchController(): WatchController {
             playback.load(prevHistory);
             playback.setCurrentTimePs(prevTimePs);
             playback.setPlaying(prevPlaying);
-            // Analysis re-derived from restored playback; view state was never cleared.
+            // Restore prior authored colors (cleared by appearance.reset() above)
+            appearance.restoreAssignments(prevAppearance);
             updateAnalysis();
-            if (renderer) renderer.initForPlayback(prevHistory.simulation.maxAtomCount);
+            // Fully restore the visual scene — mirror success-path rendering
+            if (renderer) {
+              renderer.initForPlayback(prevHistory.simulation.maxAtomCount);
+              const posData = playback.getDisplayPositionsAtTime(prevTimePs);
+              const topology = playback.getTopologyAtTime(prevTimePs);
+              if (posData) {
+                renderer.updateReviewFrame(posData.positions, posData.n, topology?.bonds ?? []);
+              }
+              appearance.projectAndSync(prevTimePs);
+              applyHighlight();
+              renderer.render();
+            }
             if (wasRunning) startRAF();
           } catch (rollbackErr) {
             console.error('[watch] rollback also failed:', rollbackErr);
@@ -304,6 +340,7 @@ export function createWatchController(): WatchController {
     scrub(timePs) {
       if (!playback.isLoaded()) return;
       playback.seekTo(timePs);
+      appearance.projectAndSync(timePs);
       updateAnalysis();
       applyHighlight();
       publishSnapshot();
@@ -342,6 +379,24 @@ export function createWatchController(): WatchController {
       publishSnapshot();
     },
 
+    // ── Round 4: color commands ──
+
+    applyGroupColor(groupId, colorHex) {
+      if (!playback.isLoaded()) return;
+      appearance.applyGroupColor(groupId, colorHex);
+      publishSnapshot();
+    },
+
+    clearGroupColor(groupId) {
+      if (!playback.isLoaded()) return;
+      appearance.clearGroupColor(groupId);
+      publishSnapshot();
+    },
+
+    getGroupColorState(groupId) {
+      return appearance.getGroupColorState(groupId);
+    },
+
     getPlaybackModel: () => playback,
     getBondedGroups: () => bondedGroups,
 
@@ -354,6 +409,8 @@ export function createWatchController(): WatchController {
       if (playback.isLoaded()) {
         const meta = documentService.getMetadata();
         if (meta.maxAtomCount > 0) renderer.initForPlayback(meta.maxAtomCount);
+        // Resync authored colors into the new renderer
+        appearance.projectAndSync(playback.getCurrentTimePs());
       }
       return renderer;
     },
@@ -366,6 +423,7 @@ export function createWatchController(): WatchController {
       playback.unload();
       bondedGroups.reset();
       viewService.reset();
+      appearance.reset();
       documentService.clear();
       detachRenderer();
     },

@@ -24,64 +24,16 @@ import { selectCanInspectBondedGroups, selectCanTargetBondedGroups, selectCanEdi
 import { useAppStore } from '../store/app-store';
 import { partitionBondedGroups } from '../store/selectors/bonded-groups';
 import { IconCenter, IconFollow } from './Icons';
+import {
+  type GroupColorOption, GROUP_COLOR_OPTIONS, buildGroupColorLayout,
+  type GroupColorState, computeGroupColorState,
+  SWATCH_DIAMETER, ACTIVE_SCALE, RING_GAP, computeHexGeometry,
+} from '../../../src/appearance/bonded-group-color-assignments';
+import { chipBackgroundValue } from '../../../src/ui/bonded-group-chip-style';
 
-/** Color option model — one unified type for default + preset colors. */
-type GroupColorOption =
-  | { kind: 'default' }
-  | { kind: 'preset'; hex: string };
-
-/** Full palette (default + presets) — presets tuned for luminance separation under 3D atom lighting. */
-const GROUP_COLOR_OPTIONS: GroupColorOption[] = [
-  { kind: 'default' },
-  { kind: 'preset', hex: '#ff5555' },
-  { kind: 'preset', hex: '#ffbb33' },
-  { kind: 'preset', hex: '#33dd66' },
-  { kind: 'preset', hex: '#55aaff' },
-  { kind: 'preset', hex: '#aa77ff' },
-  { kind: 'preset', hex: '#ff66aa' },
-];
-
-/** Layout split: primary (default) in hex center, secondary (presets) in hex ring. */
-interface GroupColorLayout {
-  primary: GroupColorOption | null;
-  secondary: GroupColorOption[];
-}
-
-/** Split options into primary (hex center) and secondary (hex ring). */
-export function buildGroupColorLayout(options: GroupColorOption[]): GroupColorLayout {
-  const primary = options.find(o => o.kind === 'default') ?? null;
-  const secondary = options.filter(o => o.kind !== 'default');
-  return { primary, secondary };
-}
+// Color option model, geometry, and constants imported from shared module above.
 
 const COLOR_LAYOUT = buildGroupColorLayout(GROUP_COLOR_OPTIONS);
-
-/**
- * Honeycomb geometry — single source of truth for popover sizing.
- *
- * All dimensions are derived from SWATCH_DIAMETER, ACTIVE_SCALE, RING_GAP,
- * and the ring item count.
- * Adding/removing palette entries or changing swatch size automatically
- * adjusts the ring radius, container size, and slot positions.
- *
- * The minimum center-to-center distance between adjacent ring items must
- * exceed SWATCH_DIAMETER × ACTIVE_SCALE to prevent overlap at max scale.
- */
-export const SWATCH_DIAMETER = 20;   // px — must match .bonded-groups-swatch width/height
-export const ACTIVE_SCALE = 1.3;     // must match .bonded-groups-swatch.active transform scale
-export const RING_GAP = 4;           // px — minimum gap between adjacent swatches at active scale
-
-/** Derive ring radius and container size so adjacent swatches don't overlap even at active scale. */
-export function computeHexGeometry(n: number, swatchDiam: number, activeScale: number, gap: number) {
-  if (n <= 1) return { radius: 0, containerSize: swatchDiam * activeScale + gap * 2 };
-  // Minimum center-to-center = swatchDiam × activeScale + gap
-  const minSpacing = swatchDiam * activeScale + gap;
-  // For n items on a circle: chord = 2R sin(π/n) ≥ minSpacing
-  const radius = minSpacing / (2 * Math.sin(Math.PI / n));
-  // Container must fit: center swatch + ring + scaled swatch edges + padding
-  const containerSize = Math.ceil(2 * radius + swatchDiam * activeScale + gap * 2);
-  return { radius, containerSize };
-}
 
 const HEX_GEO = computeHexGeometry(COLOR_LAYOUT.secondary.length, SWATCH_DIAMETER, ACTIVE_SCALE, RING_GAP);
 const HEX_CONTAINER_STYLE: React.CSSProperties = {
@@ -118,65 +70,25 @@ function ColorSwatch({ option, active, onSelect }: {
   );
 }
 
-/**
- * Derived color state for a group's chip.
- *
- * The chip reflects the **current effective colors** of the row's displayed
- * atoms, NOT the historical authored assignment. Under frozen-atom ownership,
- * a once-colored row may later appear mixed or partial if topology moves
- * some originally colored atoms to a different group. This is intentional —
- * the chip shows what the user sees in the 3D scene right now.
- *
- * Design simplifications:
- * - Capped to the first 4 unique override colors for readability.
- * - Conic-gradient slices are equal-angle (not proportional to atom count).
- * - When a group has mixed colors, no single preset swatch is marked active.
- */
-type GroupColorState =
-  | { kind: 'default' }
-  | { kind: 'single'; hex: string }
-  | { kind: 'multi'; hexes: string[]; hasDefault: boolean };
+// GroupColorState type imported from shared module above.
 
+/** Lab-specific hook: derives group color state from Zustand store.
+ *  Wraps shared computeGroupColorState() with store subscriptions. */
 function useGroupColorState(groupId: string): GroupColorState {
   const colorOverrides = useAppStore((s) => s.bondedGroupColorOverrides);
   const callbacks = useAppStore((s) => s.bondedGroupCallbacks);
-  // bondedGroups reference changes on every topology projection (projectNow → setBondedGroups).
-  // This invalidates the cache when the runtime's groupAtomMap changes — without it,
-  // getGroupAtoms() returns new atoms but the useMemo returns stale results because
-  // colorOverrides and callbacks are unchanged.
   const groups = useAppStore((s) => s.bondedGroups);
   return useMemo(() => {
     const atomIndices = callbacks?.getGroupAtoms?.(groupId);
     if (!atomIndices || atomIndices.length === 0) return { kind: 'default' };
-    const unique = new Set<string>();
-    let hasDefault = false;
-    for (const idx of atomIndices) {
-      if (colorOverrides[idx]) {
-        unique.add(colorOverrides[idx].hex);
-      } else {
-        hasDefault = true;
-      }
-    }
-    if (unique.size === 0) return { kind: 'default' };
-    const hexes = [...unique].slice(0, 4);
-    if (hexes.length === 1 && !hasDefault) return { kind: 'single', hex: hexes[0] };
-    return { kind: 'multi', hexes, hasDefault };
+    return computeGroupColorState(atomIndices, colorOverrides);
   }, [groupId, colorOverrides, callbacks, groups]);
 }
 
-/** Build chip background style from group color state. */
+/** Lab wrapper: shared chipBackgroundValue → React.CSSProperties. */
 function chipBackground(state: GroupColorState): React.CSSProperties | undefined {
-  if (state.kind === 'single') return { background: state.hex };
-  if (state.kind === 'multi') {
-    const colors = [...state.hexes];
-    if (state.hasDefault) colors.push('var(--atom-base-color, #444)');
-    const n = colors.length;
-    const stops = colors.map((c, i) =>
-      `${c} ${(i / n) * 360}deg ${((i + 1) / n) * 360}deg`
-    ).join(', ');
-    return { background: `conic-gradient(${stops})` };
-  }
-  return undefined; // CSS fallback: var(--atom-base-color)
+  const bg = chipBackgroundValue(state);
+  return bg ? { background: bg } : undefined;
 }
 
 function ClusterRow({ id, displayIndex, atomCount, isSmall, canTarget, canEditColor, canTrackHighlight, colorEditorOpen, onToggleColorEditor, panelSide }: {

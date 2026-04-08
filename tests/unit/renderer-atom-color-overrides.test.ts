@@ -26,7 +26,10 @@ async function makeColorCtx(atomCount = 5, theme: 'dark' | 'light' = 'dark') {
     _atomCount: atomCount,
     _atomColorOverrides: null,
     currentTheme: theme,
+    _displaySource: 'live',
+    _reviewAtomCount: 0,
   };
+  ctx._getDisplayedAtomCount = (proto as any)._getDisplayedAtomCount.bind(ctx);
   ctx._applyAtomColorOverrides = (proto as any)._applyAtomColorOverrides.bind(ctx);
   ctx.applyTheme = proto.applyTheme.bind(ctx);
   // Stubs for applyTheme's other paths

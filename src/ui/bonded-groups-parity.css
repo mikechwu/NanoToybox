@@ -95,6 +95,8 @@
   width: 16px; height: 16px;
   border-radius: 50%;
   justify-self: center;
+  cursor: pointer;
+  border: none; padding: 0;  /* reset button defaults */
   background: var(--atom-base-color, #444);
 }
 .bg-panel__row-label { opacity: 0.7; }
@@ -153,3 +155,41 @@
 
 /* ── Small cluster rows (dimmed, matching lab) ── */
 .bg-panel__row--small { opacity: 0.7; }
+
+/* ── Color editor popover (shared between lab and watch) ── */
+/* Honeycomb popover container — portalled over the panel.
+   Ring positions are derived from palette size — no per-slot CSS needed. */
+.bonded-groups-color-popover {
+  z-index: 200;
+  padding: 8px;
+  background: var(--panel-bg); backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+}
+/* Hex container — width/height set by inline style derived from computeHexGeometry(). */
+.bonded-groups-color-hex { position: relative; }
+.bonded-groups-hex-slot {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+.bonded-groups-swatch {
+  width: 20px; height: 20px; border-radius: 50%; border: 2px solid transparent;
+  cursor: pointer; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  padding: 0;
+}
+.bonded-groups-swatch:hover { transform: scale(1.15); }
+/* Active swatch — scale 1.3× with no contrasting ring or border */
+.bonded-groups-swatch.active {
+  transform: scale(1.3);
+  border-color: transparent;
+  box-shadow: none;
+}
+/* Original-color swatch — uses base atom color, visually consistent with presets */
+.bonded-groups-swatch-original {
+  background: var(--atom-base-color, #444);
+}
+/* Popover backdrop — click to close */
+.bonded-groups-color-backdrop {
+  position: fixed; inset: 0; z-index: 199;
+}

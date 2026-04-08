@@ -79,6 +79,9 @@ export function WatchApp({ controller }: WatchAppProps) {
               onCenter={(id) => controller.centerOnGroup(id)}
               onFollow={(id) => controller.followGroup(id)}
               onUnfollow={() => controller.unfollowGroup()}
+              onApplyGroupColor={(id, hex) => controller.applyGroupColor(id, hex)}
+              onClearGroupColor={(id) => controller.clearGroupColor(id)}
+              getGroupColorState={(id) => controller.getGroupColorState(id)}
             />
           </div>
         </div>

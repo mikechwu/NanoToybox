@@ -24,6 +24,18 @@ export function getDeviceMode(): DeviceMode {
 }
 
 /**
+ * True when the primary pointer is coarse — any device with an imprecise
+ * primary pointer (phone, tablet, touch-only Chromebook). Includes touch-capable
+ * laptops with coarse primary pointer. Does NOT check hover capability.
+ *
+ * Use for sizing decisions where coarse pointer = larger touch targets.
+ * Stable across resize.
+ */
+export function isCoarsePointer(): boolean {
+  return window.matchMedia('(pointer: coarse)').matches;
+}
+
+/**
  * True when the primary pointer is coarse and cannot hover — genuine touch
  * interaction context (phone/tablet), not a narrow desktop window or a
  * touch-capable laptop with a precise trackpad.
@@ -32,8 +44,5 @@ export function getDeviceMode(): DeviceMode {
  * Stable across resize — does not change with viewport width.
  */
 export function isTouchInteraction(): boolean {
-  return (
-    window.matchMedia('(pointer: coarse)').matches &&
-    !window.matchMedia('(hover: hover)').matches
-  );
+  return isCoarsePointer() && !window.matchMedia('(hover: hover)').matches;
 }

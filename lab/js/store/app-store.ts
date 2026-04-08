@@ -103,13 +103,9 @@ export interface BondedGroupCallbacks {
   onClearHighlight?: () => void;
 }
 
-/** Atom color value for authored appearance overrides. */
-export interface AtomColorValue {
-  hex: string;
-}
-
-/** Map of atom index → color override. Derived from assignments for rendering. */
-export type AtomColorOverrideMap = Record<number, AtomColorValue>;
+// Shared base type — canonical definition in src/appearance/bonded-group-color-assignments.ts
+import type { AtomColorOverrideMap as _AtomColorOverrideMap } from '../../../src/appearance/bonded-group-color-assignments';
+export type AtomColorOverrideMap = _AtomColorOverrideMap;
 
 /** Frozen color assignment — captures the exact atom set at the time of coloring.
  *  Topology changes never expand atomIndices. Only atom removal can shrink the visible set. */

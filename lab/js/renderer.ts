@@ -10,6 +10,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { THEMES } from './themes';
 import { CONFIG, DEFAULT_THEME } from './config';
 import { computeOrbitDelta, applyOrbitRotation, TRIAD_CAMERA_DISTANCE } from './orbit-math';
+import { isCoarsePointer } from '../../src/ui/device-mode';
 
 export class Renderer {
   // Container
@@ -698,6 +699,13 @@ export class Renderer {
     if (this._highlightMesh) this._highlightMesh.visible = false;
     // Panel highlight (bonded-group selection/hover) preserved in review
     if (this._interactionHighlightMesh) this._interactionHighlightMesh.visible = false;
+
+    // Re-apply authored color overrides for the updated review frame.
+    // Must run after count + matrices are updated so per-instance colors
+    // are written for the correct number of visible review atoms.
+    if (this._atomColorOverrides) {
+      this._applyAtomColorOverrides();
+    }
   }
 
   /**
@@ -859,11 +867,16 @@ export class Renderer {
    *  The clear path guards against instanceColor being null (lazy-initialized by
    *  Three.js on the first setColorAt call), so this is safe to call before any
    *  overrides have ever been applied. */
+  /** Displayed atom count — uses review count in review mode, live count otherwise. */
+  _getDisplayedAtomCount(): number {
+    return this._displaySource === 'review' ? this._reviewAtomCount : this._atomCount;
+  }
+
   private _applyAtomColorOverrides(): void {
     if (!this._instancedAtoms || !this._atomMat) return;
     const theme = THEMES[this.currentTheme];
     const overrides = this._atomColorOverrides;
-    const n = this._atomCount;
+    const n = this._getDisplayedAtomCount();
 
     if (overrides) {
       // Material → white so instance colors are the exact final albedo
@@ -2484,10 +2497,8 @@ export class Renderer {
     this._axisCamera = new THREE.OrthographicCamera(-1.8, 1.8, 1.8, -1.8, 0.1, 10);
     this._axisCamera.position.set(0, 0, TRIAD_CAMERA_DISTANCE);
 
-    // Coarse-pointer check for triad sizing — available immediately (no device-mode needed).
-    // Matches phone/tablet with imprecise primary pointer; desktop touchscreens with
-    // precise pointer stay on the desktop path.
-    const isCoarse = window.matchMedia('(pointer: coarse)').matches;
+    // Coarse-pointer check for triad sizing — larger arrow heads for imprecise pointers.
+    const isCoarse = isCoarsePointer();
     const len = 1.0;
     const headLen = isCoarse ? 0.28 : 0.22;  // larger arrow heads for coarse pointers
     const headW = isCoarse ? 0.13 : 0.10;
