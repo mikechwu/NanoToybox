@@ -329,7 +329,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **End-to-end pipeline:** load → import → playback → groups.
 
-*All 1202 tests pass including existing lab tests.*
+*All 1449 tests pass across 87 test files, including existing lab tests.*
 
 ### Watch Controller & Parity (~40+ tests)
 
@@ -367,6 +367,144 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 **Top bar file-kind badge:** displays correct file kind.
 
 **WatchCanvas mocked:** Three.js incompatible with jsdom.
+
+### Watch Camera Input (22 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-camera-input.test.ts` | 22 | Camera orbit, triad interaction, pointer capture, contextmenu, blur/touchcancel (see breakdown below) |
+
+**Shared gesture constants:** exports expected constant values (TRIAD_DRAG_COMMIT_PX, TAP_INTENT_PREVIEW_MS, TAP_MAX_DURATION_MS, DOUBLE_TAP_WINDOW_MS), all positive numbers.
+
+**Camera-input lifecycle:** create/destroy without errors, contextmenu listener removed on destroy.
+
+**Desktop orbit:** left-drag on background starts orbit and calls applyOrbitDelta, right-drag starts orbit, pointer capture acquired on orbit start, middle-click does not start orbit (OrbitControls owns dolly).
+
+**Desktop triad click parity:** left-click on triad does NOT call snapToAxis (lab has no desktop triad click), left-click on triad starts orbit instead (everything = orbit on desktop).
+
+**Contextmenu suppression:** prevents default on contextmenu events.
+
+**Blur handler:** window blur resets gesture state (subsequent move does not orbit).
+
+**Mobile 1-finger orbit:** 1-finger drag on background starts orbit, 2-finger transition cancels active orbit.
+
+**Mobile triad interaction:** triad drag below commit threshold does NOT orbit, drag above threshold orbits, tap on axis endpoint calls snapToAxis, tap on center zone does NOT snap (waits for double-tap), double-tap on center calls animatedResetView.
+
+**Mobile touchcancel:** resets all gesture state on touchcancel.
+
+**Controller lifecycle wiring:** watch-controller imports and uses createWatchCameraInput and createWatchOverlayLayout, detachRenderer tears down overlayLayout then cameraInput then renderer (ordering verification).
+
+**WatchRenderer Round 3 adapter interface:** interface has all 10 Round 3 methods (9 interaction + setOverlayLayout).
+
+**No duplicate orbit-math:** watch-camera-input does not import from orbit-math.ts (uses renderer adapter).
+
+### Watch Overlay Layout (18 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-overlay-layout.test.ts` | 18 | Triad sizing formulas, ResizeObserver, retry loop, device mode (see breakdown below) |
+
+**Playback bar selector contract:** WatchApp.tsx has `data-watch-bottom-chrome` attribute on bottom chrome wrapper, watch-overlay-layout queries `[data-watch-bottom-chrome]`.
+
+**Triad sizing formulas:** desktop formula `min(200, max(120, floor(W * 0.10)))` with clamp to min 120 and max 200, phone formula `min(140, max(96, floor(W * 0.15)))` with clamp to max 140.
+
+**Triad bottom positioning:** desktop fixed bottom = 12, phone clears playback bar when `[data-watch-bottom-chrome]` is in DOM, phone uses PHONE_TRIAD_BOTTOM_FALLBACK when playback bar is not in DOM.
+
+**Triad left inset:** uses `--safe-left` CSS variable + 6, defaults to 6 when variable not set.
+
+**scheduleFirstLayout retry loop:** phone: scheduled RAF retry finds bar after insertion and attaches observer, desktop: initial layout completes without retry.
+
+**ResizeObserver on playback bar:** attaches observer in phone mode when bar exists, does NOT attach in desktop mode, disconnects observer when switching out of phone mode, observer callback triggers re-layout, disconnect on destroy.
+
+**Overlay layout lifecycle:** destroy removes resize and orientationchange listeners.
+
+### Bonded Group Color Assignments (17 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `bonded-group-color-assignments.test.ts` | 17 | Shared pure color module: override projection, chip state, hex geometry (see breakdown below) |
+
+**rebuildOverridesFromDenseIndices:** empty map from empty assignments, maps atom indices to colors, later assignments win for overlapping indices.
+
+**computeGroupColorState:** returns default for empty atom list, returns default when no overrides match, returns single when all atoms have same color, returns multi when atoms have different colors, returns multi with hasDefault when some atoms are uncolored, caps to 4 unique colors.
+
+**chipBackgroundValue:** returns undefined for default state, returns hex for single color, returns conic-gradient for multi color, includes atom-base-color fallback when hasDefault is true, returns string not React.CSSProperties.
+
+**computeHexGeometry:** returns non-zero radius for 6 items, returns zero radius for 0 or 1 items.
+
+**GROUP_COLOR_OPTIONS + buildGroupColorLayout:** 7 options (1 default + 6 presets), splits default into primary and presets into secondary.
+
+**Shared module purity:** shared module does not import React or Zustand, chip-style helper does not import React.
+
+### Watch Bonded Group Appearance (14 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-bonded-group-appearance.test.ts` | 14 | Stable atomId assignments, per-frame projection, controller lifecycle (see breakdown below) |
+
+**WatchBondedGroupAppearance:** initial state (no assignments, default color state), applyGroupColor freezes stable atomIds not dense slots, per-frame projection maps atomIds to current dense slots across reordered frames, silently skips atomIds not present in current frame, clearGroupColor removes assignments for that group, clearAllColors resets everything and passes null to renderer, reset clears assignments on file load, getGroupColorState reflects current overrides, replacing color for same group replaces prior assignment.
+
+**Renderer _getDisplayedAtomCount regression:** renderer.ts uses `_reviewAtomCount` in review mode, `_applyAtomColorOverrides` uses `_getDisplayedAtomCount` not `_atomCount` directly, updateReviewFrame re-applies authored overrides at end.
+
+**Controller lifecycle wiring:** controller imports and creates appearance domain, `appearance.reset()` is called in openFile not detachRenderer.
+
+### Watch Playback Speed (27 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-playback-speed.test.ts` | 27 | Speed math, log mapping, repeat modulo, step semantics, directional playback (see breakdown below) |
+
+**Shared constants:** SPEED_MIN < SPEED_DEFAULT < SPEED_MAX, SPEED_PRESETS contains min/default/max.
+
+**Logarithmic slider mapping:** sliderToSpeed(0) = SPEED_MIN, sliderToSpeed(1) = SPEED_MAX, roundtrip speedToSlider(sliderToSpeed(t)) identity, roundtrip sliderToSpeed(speedToSlider(s)) identity, 1x is at ~19% of slider travel, clamps input outside [0,1].
+
+**formatSpeed:** sub-10 shows one decimal (e.g., "1.0x"), 10+ shows integer (e.g., "16x").
+
+**WatchPlaybackModel speed:** default speed is 1x, setSpeed clamps to [SPEED_MIN, SPEED_MAX], advance uses speed multiplier, advance clamps dtMs to GAP_CLAMP_MS, load resets speed to default.
+
+**WatchPlaybackModel repeat:** default repeat is false, repeat wraps time at end using modulo, without repeat pauses at end, load resets repeat to false.
+
+**WatchPlaybackModel step:** stepForward advances to next dense frame, stepForward at last frame is no-op, stepBackward moves to previous dense frame, stepBackward at first frame is no-op, step pauses playback, step from mid-frame goes to adjacent frame.
+
+**Directional playback:** startDirectionalPlayback(1) sets direction and playing, startDirectionalPlayback(-1) enables backward advance, stopDirectionalPlayback pauses and resets direction, backward playback clamps to start when not repeating, backward playback wraps when repeating, seekTo resets direction, stepForward resets direction.
+
+### Watch Round 5 UI (30 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-round5-ui.test.tsx` | 30 | Dock hold-to-play, settings sheet, timeline scrub, rerender-during-hold regression (see breakdown below) |
+
+**Hold threshold constant:** HOLD_PLAY_THRESHOLD_MS is a positive number under 300ms.
+
+**WatchDock structure:** source has transport cluster, utility cluster, and settings zones. Dock CSS uses fixed-width grid for transport cluster (no layout shift).
+
+**WatchSettingsSheet structure:** uses shared sheet lifecycle hook (not local mount/animate state), imports help content from settings-content.ts, uses shared Segmented component for theme and text-size, help action uses a real button not div role="button".
+
+**Watch settings content:** WATCH_HELP_SECTIONS has expected sections (Playback, Camera, File).
+
+**WatchTimeline structure:** uses thick review track variant, uses pointer events for scrubbing (not native range).
+
+**Shared CSS token contracts:** core-tokens.css defines layout geometry tokens, bottom-region.css uses shared width token, sheet-shell.css uses shared sheet width token.
+
+**Playback direction model:** playback model has no setPlaying method (unified direction model), isPlaying is derived from playDirection.
+
+**WatchDock behavioral:** renders transport controls (Back, Play, Fwd), Play button calls onTogglePlay, Settings button calls onOpenSettings, Repeat button calls onToggleRepeat and reflects active state, disabled when canPlay is false.
+
+**WatchSettingsSheet behavioral:** renders when open, does not render when closed, Escape calls onClose, backdrop click calls onClose, shows file info from props, Help button opens help content and Back returns.
+
+**WatchDock hold-to-play:** short tap Back calls onStepBackward (not directional play), short tap Fwd calls onStepForward, hold Back past threshold calls onStepBackward (nudge) + onStartDirectionalPlayback(-1), hold Fwd past threshold calls onStepForward (nudge) + onStartDirectionalPlayback(1), release after hold calls onStopDirectionalPlayback, rerender during active hold does NOT cancel the gesture (regression: React re-render with new callback identities no longer kills the hold via effect cleanup).
+
+**WatchTimeline behavioral:** renders time labels and track, uses thick review track variant, pointerDown on track calls onScrub, fill width reflects progress, thumb position reflects progress, pointerMove while captured calls onScrub with updated position, setPointerCapture failure: initial scrub + drag continuation both work via dragActive fallback.
+
+### Shared Sheet Lifecycle Hook (7 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `use-sheet-lifecycle.test.tsx` | 7 | Mount/animate/escape/transition lifecycle shared across lab and watch (see breakdown below) |
+
+Tests use a `SheetHarness` component that exposes hook state via data attributes.
+
+**useSheetLifecycle:** starts unmounted when closed, mounts when opened, sets animating after reflow, unmounts after transitionend on close, calls onClose on Escape when provided, does not call onClose on Escape when not provided, lab-style usage without onClose works.
 
 ## Frontend Smoke Test
 

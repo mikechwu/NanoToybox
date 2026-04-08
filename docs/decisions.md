@@ -489,3 +489,45 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Decision:** Watch playback advances at CONFIG.playback.baseSimRatePsPerSecond (0.12 ps/s), the same rate as lab review mode. Not normalized to file length.
 
 **Rationale:** Normalized playback (fit any file into 10 seconds) makes long files play faster and short files play slower — the opposite of expected behavior. Canonical rate makes playback speed independent of file length.
+
+## D61: Stable atomIds for Color Assignment (Not Dense Slot Indices)
+
+**Decision:** Watch uses stable `atomId` identifiers for color assignments because history file frames can reorder atoms. Per-frame projection maps atomIds to current dense slots before passing to the renderer.
+
+**Rationale:** Dense slot indices are ephemeral — they depend on the atom ordering within a single frame, which is not guaranteed to be stable across frames in history files. If color assignments were keyed to slot indices, an atom could silently change color when its slot position shifted between frames. Stable atomIds provide identity continuity across the full trajectory. The per-frame projection step translates from the identity domain (atomIds) to the rendering domain (dense slots) so the renderer can continue to use compact typed arrays without caring about identity semantics.
+
+## D62: Shared Design System in src/ui/
+
+**Decision:** Shared design system extracted to `src/ui/` — both lab and watch import the same dock-shell, sheet-shell, segmented, and timeline-track CSS. Apps keep only app-specific overrides (e.g., grid column counts).
+
+**Rationale:** Before extraction, lab and watch had duplicated or divergent copies of the same UI primitives. Centralizing in `src/ui/` ensures visual consistency between apps and eliminates the maintenance burden of keeping two copies in sync. App-specific overrides are scoped to each app's own stylesheet, keeping the shared layer generic and the app layer minimal.
+
+## D63: Unified Playback Direction Model (_playDirection as Sole Source of Truth)
+
+**Decision:** `_playDirection` (0 | 1 | -1) is the sole source of truth for playback state. There is no separate `_playing` boolean. Forward = 1, reverse = -1, paused = 0.
+
+**Rationale:** A two-variable model (`_playing` + `_direction`) creates an entire class of invalid states: `_playing = true` with `_direction = 0`, `_playing = false` with `_direction = 1`, and so on. Each combination must be handled or guarded against. A single three-valued enum eliminates these invalid states by construction. Every consumer checks one variable, and the meaning is unambiguous.
+
+## D64: Hold-to-Play Uses Ref-Based Callbacks to Prevent Gesture Death on Re-Render
+
+**Decision:** Hold-to-play uses ref-based callbacks (`useRef` + `useCallback`) to prevent React re-render from killing active gestures. Global fallback listeners (`pointerup`, `blur`, `visibilitychange`) ensure release is always detected.
+
+**Rationale:** React re-renders during a pointer-down gesture can unmount or replace the element the gesture started on, silently dropping the `pointerup` event. Ref-based callbacks keep the handler identity stable across re-renders, so the gesture survives any state-driven re-render that occurs while the user is holding. The global fallback listeners cover edge cases where the pointer leaves the browser window, the tab loses focus, or the page is backgrounded — all of which would otherwise leave playback stuck in the "playing" state with no way to stop.
+
+## D65: Pointer Capture Is Optional (try/catch) in Dock and Timeline
+
+**Decision:** Pointer capture is wrapped in try/catch in both the dock and timeline interaction handlers. When capture is unavailable, interaction continues via local state fallback.
+
+**Rationale:** `setPointerCapture()` can throw in several real-world situations: the pointer ID may be stale, the element may have been removed from the DOM, or the browser may not support capture on touch events. Treating capture as a hard requirement would break interaction entirely in these cases. The try/catch pattern degrades gracefully — capture provides smoother drag tracking when available, but local `pointermove`/`pointerup` listeners still work without it.
+
+## D66: _applyAtomColorOverrides Uses _getDisplayedAtomCount() (Review-Aware)
+
+**Decision:** Renderer `_applyAtomColorOverrides` uses `_getDisplayedAtomCount()` instead of `_atomCount` to determine how many atoms to apply color overrides to.
+
+**Rationale:** `_atomCount` reflects the live simulation atom count, which can differ from the number of atoms currently displayed during review mode (where a historical frame is shown). Using `_getDisplayedAtomCount()` ensures color overrides are applied to exactly the atoms visible on screen, fixing incorrect or missing color rendering when watching historical frames with different atom counts than the current live state.
+
+## D67: Bottom-Region Shell Is Positioning-Only (No Paint)
+
+**Decision:** The bottom-region shell (`.dock-region` / `.bottom-region`) is a positioning-only container with no background, border, or shadow. The dock itself is the painted pill surface.
+
+**Rationale:** This matches lab's `.dock-region` architecture, where the region element exists solely to position its child within the viewport layout (e.g., fixed bottom, centered, safe-area insets). Painting belongs to the dock pill — it owns its own background, border-radius, and shadow. Splitting positioning from painting means the region can be reused for different dock styles or swapped between apps without carrying visual baggage. It also avoids double-painting artifacts (region background showing through dock border-radius corners).

@@ -458,22 +458,139 @@ Once a valid file loads, the app presents:
 |---------|---------|
 | Canvas | Three.js scene (same renderer as lab, via thin adapter: `initForPlayback` + `updateReviewFrame`) |
 | Top bar | File-kind badge + file name + "Open File" action |
-| Bonded-groups panel | Uses shared `partitionBondedGroups` with two-tier expand (large/small clusters) |
-| Playback bar | Uses shared `formatTime` + `Icons` from lab |
+| Bonded-groups panel | Two-tier expand (large/small clusters) with hover preview, Center/Follow buttons, and authored color editing (see Color Editing below) |
+| Timeline | Custom scrub track (thick variant from shared `timeline-track.css`) with pointer-event scrubbing and time readouts at both ends |
+| Playback dock | Transport cluster + utility cluster + settings button (see Playback Dock below) |
+| Settings sheet | Appearance, File Info, Help sections (see Settings below) |
 
-All review-like surfaces use shared `src/ui/review-parity.css` neutral classes.
+The workspace grid (`watch-workspace`) uses `grid-template-rows: auto 1fr auto` — top bar, canvas area (with overlaid bonded-groups panel), and bottom chrome region.
 
-### Playback
+### Camera & Interaction
 
-Exact recorded-frame playback from `denseFrames` at canonical x1 rate from `CONFIG.playback.baseSimRatePsPerSecond` (0.12 ps/s). Rate is file-length-independent — not normalized to file duration. Topology is reconstructed from `restartFrames`. Bonded-group analysis is memoized to avoid redundant recomputation during scrubbing.
+Watch has full camera orbit and axis triad interaction, matching lab review-mode behavior.
+
+| Gesture (Desktop) | Action |
+|--------------------|--------|
+| Left-drag on background | Orbit camera |
+| Right-drag on background | Orbit camera |
+| Scroll wheel | Zoom |
+| Middle-click | Dolly (via OrbitControls) |
+
+| Gesture (Mobile) | Action |
+|-------------------|--------|
+| 1-finger drag on background | Orbit camera |
+| Drag triad | Orbit camera (drag commits after `TRIAD_DRAG_COMMIT_PX` threshold) |
+| Tap axis end on triad | Snap to canonical view (nearest axis endpoint) |
+| Double-tap triad center | Animated reset to default front view |
+| 2-finger pinch | Zoom (via OrbitControls) |
+| 2-finger drag | Pan camera (via OrbitControls) |
+
+Event ownership is split: `watch-camera-input.ts` owns orbit rotation and triad gestures, OrbitControls (inside Renderer) owns scroll zoom and 2-finger pinch/pan. Desktop uses pointer events with capture; mobile uses touch events with passive: false. Shared gesture constants from `src/input/camera-gesture-constants.ts`.
+
+**Triad tap-intent highlight:** On mobile, after `TAP_INTENT_PREVIEW_MS`, if the finger has not committed to a drag, the nearest axis endpoint is highlighted. Highlight clears on drag commit, release, or cancel.
+
+**Overlay layout:** Triad sizing and positioning is driven by `watch-overlay-layout.ts`, which replicates lab's formulas. On phone, triad bottom position clears `[data-watch-bottom-chrome]` (the combined dock + timeline wrapper) with an 8 px gap, measured via ResizeObserver. On desktop, triad bottom is a fixed 12 px offset.
+
+### Playback Dock
+
+The dock (`WatchDock`) is a 3-zone hierarchical toolbar using shared `dock-shell.css`:
+
+| Zone | Content |
+|------|---------|
+| **Transport** (Zone 1) | Step Back, Play/Pause, Step Forward — fixed-width 3-column grid, no layout shift on label swap |
+| **Utility** (Zone 2) | Repeat toggle (icon-only 32 px button) + continuous speed control |
+| **Settings** (Zone 3) | Settings button (opens settings sheet) |
+
+**Transport buttons (Step Back / Step Forward):** Dual-mode gesture — tap triggers a single dense-frame step; hold (past `HOLD_PLAY_THRESHOLD_MS` = 160 ms) initiates continuous directional playback with an immediate nudge frame. Release stops directional playback. The `useTransportButton` hook stores callbacks in refs so React re-renders do not kill active hold gestures. Pointer capture is attempted but optional; global fallback listeners (pointerup, pointercancel, blur, visibilitychange) ensure release is always detected.
+
+**Speed control:** `PlaybackSpeedControl` — a continuous logarithmic slider (0.5x to 20x) plus a speed readout button. The slider maps `[0,1]` to `[SPEED_MIN, SPEED_MAX]` via `sliderToSpeed()`/`speedToSlider()` (shared from `src/config/playback-speed-constants.ts`). Logarithmic mapping gives ~37% of slider travel to the 0.5x-2x range where fine control matters most. Clicking the speed readout resets to 1x.
+
+**Repeat:** Toggle button — when active, playback wraps around (modulo) at file boundaries in both forward and backward directions.
+
+### Timeline
+
+`WatchTimeline` provides a full-width scrub track (no mode rail — watch advantage over lab). Layout is a 3-column grid: start time readout, scrub track (`1fr`), end time readout.
+
+The track uses the shared `timeline-track.css` thick variant (`.timeline-track--thick`) with fill bar and thumb. Pointer-event scrubbing with capture (attempted, optional) and a `dragActive` ref fallback for browsers that do not support capture. Time readouts use shared `formatTime` (auto-scaling units: fs/ps/ns/us).
+
+The timeline and dock are sibling shells inside `.bottom-region` (shared `bottom-region.css`), with `[data-watch-bottom-chrome]` as the layout hook for phone triad clearance.
+
+### Bonded-Groups Panel
+
+The panel (`WatchBondedGroupsPanel`) provides lab-parity bonded-group inspection:
+
+- **Two-tier expand:** Large clusters shown by default, collapsible small-clusters section
+- **Hover preview:** Mouse enter/leave highlights the group on the 3D canvas (desktop only)
+- **Center button:** Frame camera on the group
+- **Follow button:** Continuously track the group during playback; "Follow On" banner with unfollow action when active
+- **Header:** "Bonded Clusters: N" label + Expand/Collapse toggle
+
+**Color Editing**
+
+Each cluster row has a circular color chip. Clicking the chip opens a portalled honeycomb popover:
+
+- **Center swatch:** Default (restore original) color
+- **Ring swatches:** 6 preset colors arranged in a computed hexagonal ring via `computeHexGeometry()` — ring radius and container size are derived from palette size and swatch diameter so adjacent swatches never overlap even at active scale (1.3x)
+- **Preset palette:** `#ff5555, #ffbb33, #33dd66, #55aaff, #aa77ff, #ff66aa`
+- **Popover positioning:** Left of chip (panel is on the right side of the viewport)
+- **Popover dismissal:** Chip toggle (re-click), backdrop click, or Escape key
+
+**Stable-atomId color model:** Watch stores color assignments keyed by stable `atomId` values from history file frames, not dense slot indices. Each frame, stable atomIds are projected to current dense slot indices before passing to the renderer via `renderer.setAtomColorOverrides()`. This ensures colors survive scrubbing across frames where dense slot ordering may differ. Assignments are scoped per source group and replaced on re-assignment.
+
+The color editor open/close state is local React state — auto-cleared when the open group disappears from the topology.
+
+### Settings Sheet
+
+`WatchSettingsSheet` uses shared design system components: `useSheetLifecycle` (mount/animate/escape/transition), `sheet-shell.css`, and shared `Segmented` component from lab.
+
+| Section | Content |
+|---------|---------|
+| **Appearance** | Theme: Dark / Light (shared Segmented control). Text Size: Normal / Large (shared Segmented control, CSS-only via `[data-text-size]`) |
+| **File Info** | Kind, Atoms, Frames, Duration (formatted via shared `formatTime`) |
+| **Help** | Navigates to a viewer-specific help page with sections: Playback, Timeline, Bonded Groups, Camera, File. Back button returns to main settings |
+
+Speed and repeat controls live in the dock only — they are not duplicated in settings.
+
+### Playback Model
+
+`WatchPlaybackModel` provides exact recorded-frame playback from `denseFrames` at canonical x1 rate from `VIEWER_DEFAULTS.baseSimRatePsPerSecond` (0.12 ps/s). Rate is file-length-independent — not normalized to file duration.
+
+- **Speed:** Continuous 0.5x to 20x multiplier applied to the advance delta
+- **Direction:** Single `playDirection` field (1 = forward, -1 = backward, 0 = paused) — `isPlaying()` is derived, no separate boolean
+- **Repeat:** Modulo wrap at file boundaries in both directions
+- **Step:** Dense-frame-boundary stepping via binary search index
+- **Gap clamp:** Wall-clock delta capped at `PLAYBACK_GAP_CLAMP_MS` (250 ms) to prevent large jumps after tab-background return
+- **Topology:** Reconstructed from `restartFrames` via binary search at-or-before
+- **Bonded-group analysis:** Memoized to avoid redundant recomputation during scrubbing
+
+### Shared Design System
+
+Watch imports shared CSS and components from `src/ui/`:
+
+| Module | Watch usage |
+|--------|-------------|
+| `core-tokens.css` | Font family, color tokens |
+| `dock-tokens.css` + `dock-shell.css` | `.dock-bar`, `.dock-slot`, `.dock-item`, `.dock-icon`, `.dock-label` |
+| `sheet-shell.css` | `.sheet`, `.sheet-handle`, `.sheet-header`, `.group`, `.group-list`, `.group-item` |
+| `segmented.css` | `.segmented`, `.seg-item`, `.seg-label` — used by Segmented component |
+| `timeline-track.css` | `.timeline-time`, `.timeline-track`, `.timeline-fill`, `.timeline-thumb`, thick variant |
+| `bottom-region.css` | `.bottom-region` — centered pill on desktop |
+| `review-parity.css` | Neutral review-surface classes |
+| `bonded-groups-parity.css` | Panel row and chip styles |
+| `text-size-tokens.css` | Text size token overrides |
+| `useSheetLifecycle.ts` | Settings sheet mount/animate/escape/transition hook |
+| `device-mode.ts` | `isTouchInteraction()` for camera input, `getDeviceMode()` for overlay layout |
+| `bonded-group-chip-style.ts` | `chipBackgroundValue()` for color chip rendering |
+
+Watch-specific overrides live in `watch/css/watch-dock.css` (dock grid, transport cluster, speed slider, timeline lane metrics, help back button).
 
 ### Error Handling
 
-Transactional file open: a bad replacement file keeps the current document intact and shows an error overlay. Commit-phase rollback restores the previous document on failure. The error overlay is visible in both the landing and workspace states.
+Transactional file open: a bad replacement file keeps the current document intact and shows an error overlay. Commit-phase rollback restores the previous document on failure (including color assignment rollback). The error overlay is visible in both the landing and workspace states.
 
 ### Theme & Renderer
 
-Uses the same `DEFAULT_THEME` as lab, applied via `applyThemeTokens`. The renderer is a thin adapter over the lab `Renderer` — it calls `initForPlayback` for setup and `updateReviewFrame` for each displayed frame, never mutating physics state.
+Uses the same `DEFAULT_THEME` as lab, applied via `applyThemeTokens`. Text size applied via `applyTextSizeTokens`. The renderer is a thin adapter over the lab `Renderer` — it calls `initForPlayback` for setup and `updateReviewFrame` for each displayed frame, never mutating physics state.
 
 ---
 

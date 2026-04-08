@@ -28,7 +28,7 @@ The long-term vision:
 Measured limits (see [scaling-research.md](scaling-research.md)):
 - Numba Tersoff: 30 FPS up to ~2,100 atoms; C/Wasm (browser): ~3,000–5,000 atoms (measured ~11% faster than JS JIT)
 - Interactive page (InstancedMesh + spatial hash + Wasm): ~2,400 atoms at 30 FPS
-- Trajectory viewer (`viewer/`): ~250 atoms at 30 FPS (still O(N²) individual meshes)
+- Legacy trajectory viewer (`viewer/`): ~250 atoms at 30 FPS (still O(N²) individual meshes); superseded by `watch/` for history playback
 - Optimized viewer (InstancedMesh + neighbor list): ~5,000–10,000 atoms
 
 ## Rules to Obey
@@ -76,10 +76,38 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - History file export — v1 `atomdojo-history` format with atom identity tracking (stable IDs across append/compaction), atom metadata registry (element, source provenance), export capability lifecycle (subsystem-owned, staleness-guarded), export validation (monotonic ordering, atom table integrity, per-frame atomId uniqueness), and export UI (capability-gated trigger, portaled dialog, mutual exclusion with clear dialog)
 - Watch v1 — History File Import & Playback: shared schema module extraction (`src/history/history-file-v1.ts`: types, detection, shape-safe validation), connected-components extraction (`src/history/connected-components.ts`), bonded-group projection extraction (`src/history/bonded-group-projection.ts`), lab refactoring (bonded-group-runtime → thin store adapter, history-export → imports shared types, simulation-timeline → uses shared connected-components), watch app shell with file-open landing and playback workspace, two-step file detection (detect kind → apply support policy), full-history import with normalization (Float64Array, tuple bonds), playback model with 4 separated sampling channels and time clamping, renderer adapter over lab Renderer, memoized bonded-group analysis via shared projection
 - Watch Review-Parity — React Shell + Shared CSS + Type Consolidation: React shell for watch (controller + 6 components + react-root), watch-controller.ts with RAF clock / useSyncExternalStore snapshots / transactional file open with rollback, shared review-parity CSS (`src/ui/review-parity.css`) with neutral `.review-*` class names, `partitionBondedGroups` extracted to `src/history/bonded-group-utils.ts`, `BondedGroupSummary` consolidated to single source (app-store re-exports from shared), `watch/index.html` reduced to minimal `#watch-root` mount node, `watch/js/main.ts` reduced to thin bootstrap, canonical x1 playback rate from `CONFIG.playback.baseSimRatePsPerSecond`, `tsconfig.json` updated to include `watch/js/`
+- Watch Rounds 3-5 — Interaction parity, appearance domain, transport & settings: hover/follow/center commands, bonded-groups panel with color editing, overlay layout, camera input (orbit/pan/zoom), appearance domain (`watch-bonded-group-appearance.ts`), settings surface (theme + text size), playback speed control (0.5x–20x), repeat mode, step forward/backward, directional playback via unified `_playDirection` (0|1|-1), shared CSS modules extracted to `src/ui/` (design tokens, dock, sheet, segmented, timeline, layout), shared TS modules extracted to `src/input/`, `src/appearance/`, `src/config/`
 
 ## Architecture Rules
 
 See `docs/architecture.md` for the full module map and state ownership model.
+
+### Shared Modules (`src/`)
+
+Shared TypeScript and CSS modules live in `src/` and are imported by both `lab/` and `watch/`. When adding new cross-app primitives, put them in the appropriate `src/` subdirectory rather than in `lab/` or `watch/`.
+
+| Directory | Contents |
+|-----------|----------|
+| `src/ui/` | Design tokens and structural CSS (core-tokens, dock-shell, sheet-shell, segmented, timeline-track, bottom-region, text-size-tokens, bonded-groups-parity, device-mode helper), shared React hooks (`useSheetLifecycle`) |
+| `src/input/` | Camera gesture constants shared across both apps |
+| `src/appearance/` | Bonded-group color assignment logic (shared between lab appearance runtime and watch appearance domain) |
+| `src/config/` | Playback speed constants, viewer defaults (base sim rate, etc.) |
+| `src/history/` | History file v1 types/validation, connected components, bonded-group projection/utils |
+| `src/types/` | Worker protocol types |
+
+### CSS Architecture
+
+Design tokens and structural CSS are shared via `src/ui/`. Both apps import these shared stylesheets. App-specific overrides stay in their own locations:
+- **Lab**: `lab/index.html` (inline styles and app-specific CSS)
+- **Watch**: `watch/css/` (`watch.css`, `watch-dock.css`)
+
+Do not duplicate shared CSS in app-local files. When adding a new shared CSS primitive (e.g., a new component class or design token), add it to the appropriate file in `src/ui/`.
+
+### Icons
+
+Shared icons live in `lab/js/components/Icons.tsx`. Both lab and watch import from there. (This will move to `src/ui/` in a future round.)
+
+### Lab Architecture
 
 - **React components are the sole UI authority.** Primary surfaces (DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar) are React-authoritative. Supporting subcomponents (Segmented, Icons) are composed by those surfaces; some are pure prop-driven helpers. TimelineBar is a composition layer delegating to helper modules (timeline-format.ts, timeline-mode-switch.tsx, timeline-clear-dialog.tsx, timeline-hints.ts). TimelineCallbacks includes onEnterReview for transitioning from live to review mode.
 - **Timeline hint copy lives in `timeline-hints.ts`.** All tooltip text for timeline controls (record, review, restart, clear) is defined as constants in `lab/js/components/timeline-hints.ts`. Do not scatter timeline hint copy inline in components -- import from `TIMELINE_HINTS`.
@@ -324,6 +352,42 @@ Future style changes (colors, opacity, scale) go in `config.ts` config tokens, n
 
 Both are shared across `bonded-group-highlight.test.ts` and `renderer-interaction-highlight.test.ts`. New highlight tests should import from this shared module rather than duplicating setup.
 
+### Watch Architecture (Controller Pattern)
+
+Watch (`watch/`) does **not** use Zustand. It uses a controller pattern where `watch-controller.ts` is the orchestration facade over domain services. React components consume state via `useSyncExternalStore`.
+
+**Domain services orchestrated by the controller:**
+
+| Service | Module | Role |
+|---------|--------|------|
+| Document | `watch-document-service.ts` | Stateful file open (transactional with rollback), file metadata |
+| Playback | `watch-playback-model.ts` | Time tracking, advance, seek, speed, repeat, step, 4 separated sampling channels |
+| Bonded groups | `watch-bonded-groups.ts` | Interaction state (hover/select), highlight priority resolution |
+| View | `watch-view-service.ts` | Camera target, follow state, center/follow commands |
+| Appearance | `watch-bonded-group-appearance.ts` | Group-to-atom color mapping, color intents |
+| Camera input | `watch-camera-input.ts` | Orbit/pan/zoom gesture handling |
+| Overlay layout | `watch-overlay-layout.ts` | Panel positioning and overlay geometry |
+| Settings | `watch-settings.ts` | Theme and text size |
+| Renderer | `watch-renderer.ts` | Adapter over lab Renderer |
+
+**React components** (`watch/js/components/`): WatchApp, WatchCanvas, WatchDock, WatchTimeline, WatchTopBar, WatchBondedGroupsPanel, WatchLanding, WatchSettingsSheet, PlaybackSpeedControl.
+
+**Key rules:**
+- All state mutations go through the controller facade. Components call controller commands (e.g., `controller.togglePlay()`, `controller.hoverGroup(id)`).
+- Components read state from the controller snapshot via `useSyncExternalStore(controller.subscribe, controller.getSnapshot)`.
+- Do not add a Zustand store to watch. The controller + useSyncExternalStore pattern is intentional.
+
+### Watch Playback Model
+
+The playback model uses a unified `_playDirection` field (`0 | 1 | -1`) as the **sole source of truth** for play state. There is no separate `_playing` boolean.
+
+- `_playDirection === 0` means paused
+- `_playDirection === 1` means playing forward
+- `_playDirection === -1` means playing backward
+- `isPlaying()` is derived: `_playDirection !== 0`
+
+Control commands (`startPlayback`, `pausePlayback`, `startDirectionalPlayback`, `stopDirectionalPlayback`, `stepForward`, `stepBackward`) all manipulate `_playDirection`. Do not add a separate `_playing` flag.
+
 ## Next Steps (Priority Order)
 
 ### 1. Expand Structure Library
@@ -400,6 +464,10 @@ E2E tests inject `?e2e=1` via `gotoApp()` from `tests/e2e/helpers.ts`.
 | Timeline / export tests | `tests/unit/timeline-subsystem.test.ts` (37 tests incl. export capability and rehydration), `tests/unit/history-export-pipeline.test.ts` (19 tests incl. end-to-end lifecycle validation), `tests/unit/timeline-bar-lifecycle.test.tsx` (export UI regression) |
 | Watch / shared history tests | `tests/unit/shared-history-modules.test.ts` (52+ tests covering shared modules, watch loader, importer, playback model, bonded groups, validation edge cases, end-to-end pipeline) |
 | Watch parity tests | `tests/unit/watch-parity.test.ts` (controller lifecycle, transactional file open, parity validation, x1 playback rate), `tests/unit/watch-react-integration.test.tsx` (React component state transitions, error banner visibility, panel expand/collapse) |
+| Watch controller & domains | `watch/js/watch-controller.ts`, `watch/js/watch-playback-model.ts`, `watch/js/watch-bonded-groups.ts`, `watch/js/watch-view-service.ts`, `watch/js/watch-bonded-group-appearance.ts`, `watch/js/watch-camera-input.ts`, `watch/js/watch-overlay-layout.ts`, `watch/js/watch-settings.ts` |
+| Watch React components | `watch/js/components/WatchApp.tsx`, `watch/js/components/WatchDock.tsx`, `watch/js/components/WatchTimeline.tsx`, `watch/js/components/WatchBondedGroupsPanel.tsx`, `watch/js/components/WatchSettingsSheet.tsx`, `watch/js/components/PlaybackSpeedControl.tsx` |
+| Shared modules (cross-app) | `src/ui/` (CSS tokens + structural styles), `src/input/` (camera gesture constants), `src/appearance/` (bonded-group color assignments), `src/config/` (playback speed constants, viewer defaults), `src/history/` (history file types, connected components, bonded-group projection) |
+| Shared icons | `lab/js/components/Icons.tsx` (both lab and watch import from here) |
 | Store callback wiring | `lab/js/runtime/ui-bindings.ts`, `lab/js/store/app-store.ts` |
 | Scene / placement | `lab/js/scene.ts`, `lab/js/placement.ts`, `lab/js/runtime/placement-solver.ts`, `tests/unit/placement-solver.test.ts` |
 | Browser physics | `lab/js/physics.ts` (JS Tersoff), `sim/wasm/tersoff.c` (Wasm kernel) |
