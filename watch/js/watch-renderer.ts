@@ -18,6 +18,15 @@ export interface WatchRenderer {
   applyTheme(name: string): void;
   /** Initialize atom/bond mesh capacity for playback. Must be called before updateReviewFrame. */
   initForPlayback(maxAtomCount: number): void;
+  /**
+   * Update displayed atom positions and bond topology for the current review frame.
+   *
+   * **Buffer ownership contract:** the underlying renderer retains the `positions`
+   * buffer by reference for display-aware queries (getDisplayedAtomWorldPosition,
+   * centroid/bounds calculations used by follow and highlight). The caller must NOT
+   * mutate the buffer after this call — its contents must remain valid until the
+   * next updateReviewFrame() call replaces the reference.
+   */
   updateReviewFrame(positions: Float64Array, n: number, bonds: [number, number, number][]): void;
   fitCamera(): void;
   render(): void;

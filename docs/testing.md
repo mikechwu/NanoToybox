@@ -329,7 +329,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **End-to-end pipeline:** load → import → playback → groups.
 
-*All 1449 tests pass across 87 test files, including existing lab tests.*
+*All 1521 tests pass across 88 test files, including existing lab tests.*
 
 ### Watch Controller & Parity (~40+ tests)
 
@@ -468,11 +468,11 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **Directional playback:** startDirectionalPlayback(1) sets direction and playing, startDirectionalPlayback(-1) enables backward advance, stopDirectionalPlayback pauses and resets direction, backward playback clamps to start when not repeating, backward playback wraps when repeating, seekTo resets direction, stepForward resets direction.
 
-### Watch Round 5 UI (30 tests)
+### Watch Round 5 UI (48 tests)
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
-| `watch-round5-ui.test.tsx` | 30 | Dock hold-to-play, settings sheet, timeline scrub, rerender-during-hold regression (see breakdown below) |
+| `watch-round5-ui.test.tsx` | 48 | Dock hold-to-play, settings sheet, timeline scrub, rerender-during-hold regression, Round 6 Smooth toggle behavioral tests, fallback/disabled-note conditional rendering (see breakdown below) |
 
 **Hold threshold constant:** HOLD_PLAY_THRESHOLD_MS is a positive number under 300ms.
 
@@ -488,9 +488,9 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **Playback direction model:** playback model has no setPlaying method (unified direction model), isPlaying is derived from playDirection.
 
-**WatchDock behavioral:** renders transport controls (Back, Play, Fwd), Play button calls onTogglePlay, Settings button calls onOpenSettings, Repeat button calls onToggleRepeat and reflects active state, disabled when canPlay is false.
+**WatchDock behavioral:** renders transport controls (Back, Play, Fwd), Play button calls onTogglePlay, Settings button calls onOpenSettings, Repeat button calls onToggleRepeat and reflects active state, disabled when canPlay is false. Round 6 additions: Smooth toggle calls onToggleSmoothPlayback when clicked, Smooth toggle shows visible "Smooth" text label, Smooth toggle uses `watch-dock__smooth` class (not icon-only `watch-dock__small`), Smooth toggle reflects active state via `aria-pressed` + `.active` class.
 
-**WatchSettingsSheet behavioral:** renders when open, does not render when closed, Escape calls onClose, backdrop click calls onClose, shows file info from props, Help button opens help content and Back returns.
+**WatchSettingsSheet behavioral:** renders when open, does not render when closed, Escape calls onClose, backdrop click calls onClose, shows file info from props, Help button opens help content and Back returns. Round 6 additions: Smooth Playback group is rendered with experimental note, diagnostic fallback note is hidden when selectedMode is linear, diagnostic fallback note is hidden when experimental method runs cleanly (active == selected), diagnostic fallback note shows when experimental method falls back AND smooth is on, diagnostic fallback note hidden when smooth is OFF (neutral disabled-note appears instead).
 
 **WatchDock hold-to-play:** short tap Back calls onStepBackward (not directional play), short tap Fwd calls onStepForward, hold Back past threshold calls onStepBackward (nudge) + onStartDirectionalPlayback(-1), hold Fwd past threshold calls onStepForward (nudge) + onStartDirectionalPlayback(1), release after hold calls onStopDirectionalPlayback, rerender during active hold does NOT cancel the gesture (regression: React re-render with new callback identities no longer kills the hold via effect cleanup).
 
@@ -505,6 +505,76 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 Tests use a `SheetHarness` component that exposes hook state via data attributes.
 
 **useSheetLifecycle:** starts unmounted when closed, mounts when opened, sets animating after reflow, unmounts after transitionend on close, calls onClose on Escape when provided, does not call onClose on Escape when not provided, lab-style usage without onClose works.
+
+### Watch Round 6 Trajectory Interpolation (63 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-round6-interpolation.test.ts` | 63 | Interpolation strategy math, capability layer, fallback policy, cursor cache, output buffer, registry extensibility, partial-write tolerance, controller pipeline, lifecycle (see breakdown below) |
+
+**InterpolationCapability:** bracketSafe is 1 for interpolatable brackets and 0 for last frame, bracketSafe is 0 on variable-n bracket with bracket-n-mismatch reason, hermiteSafe derived correctly from bracketSafe + velocityReason, velocityReason is restart-misaligned when count/time do not match, emits restart-count-mismatch diagnostic when counts differ, velocities-implausible sanity check flags affected frames and emits diagnostic, window4Safe is 0 at timeline edges, denseToRestartIndex valid where alignment holds and -1 otherwise.
+
+**LinearStrategy math:** passes through start knot (alpha = 0), midpoint is the average of endpoint positions, reproduces a knot exactly when timePs lands on an interior frame.
+
+**HermiteStrategy math:** passes through knots exactly (alpha = 0 for an interior knot), uses FS_PER_PS to scale velocities (single source of truth from shared units module), declines with velocities-unavailable when hermiteSafe is 0.
+
+**CatmullRomStrategy math:** passes through interior knots exactly, declines with insufficient-frames at timeline edge, declines with window-mismatch when n differs inside the 4-frame window.
+
+**Conservative fallback policy (at-or-before):** returns importer first-frame reference at timeline start, returns importer last-frame reference at timeline end, returns bracket.prev (never bracket.next) on variable-n, smoothPlayback disabled returns at-or-before reference with fallback=disabled, scrub through variable-n region never surfaces future coordinates.
+
+**Strategy registry extensibility:** registers a synthetic experimental strategy and produces capability-declined fallback, partial-write tolerance (garbage writer declines, linear full-overwrite produces correct result), unregistered mode falls back to linear with capability-declined, registry metadata is readable and includes availability field, getRegisteredMethods returns a stable frozen reference (no churn), getRegisteredMethods reference changes only after registerStrategy, dev-only strategies are in registry but UI can filter them by availability.
+
+**Cursor cache policy:** forward same-bracket reuses the cursor (single binary search), forward bracket-cross advances cursor by one without new binary search, backward delta triggers a full binary search, reset() clears cursor so first resolve after reset triggers binary search.
+
+**Output buffer lifecycle:** consecutive interpolated calls return the same Float64Array reference, boundary fallback returns the importer reference (different object), no new Float64Array allocation on consecutive interpolated frames.
+
+**Method-specific gating:** linear never declines over an interpolatable bracket, when selected method runs cleanly activeMethod === selectedMode and fallbackReason === "none", Hermite declines on variable-n bracket.
+
+**Controller unified render pipeline (grep meta-tests):** watch-controller source has exactly one direct call to interpolation.resolve(), exactly one direct call to renderer.updateReviewFrame(), exactly four physical applyReviewFrameAtTime call sites (tick, renderAtCurrentTime, openFile, createRenderer), RAF tick uses render=false followed by updateFollow + renderer.render.
+
+**Controller smooth-playback lifecycle:** setSmoothPlayback flips settings and publishes a new snapshot, setInterpolationMode updates snapshot, default snapshot has smoothPlayback=true, interpolationMode=linear, activeMethod=linear, fallback=none.
+
+**LoadedFullHistory Round 6 fields:** includes velocityUnit, interpolationCapability, and importDiagnostics.
+
+**Single-frame history fallback:** returns the only frame as importer reference.
+
+**Capability layer -- atomId mismatch cases:** bracketReason is bracket-atomids-mismatch when adjacent atomIds differ, runtime returns bracket.prev with atomids-mismatch when bracket has atomId divergence, velocityReason is atomids-mismatch when dense/restart atomIds diverge at a frame, window4Reason is window-atomids-mismatch when atomIds diverge inside the 4-frame window, velocityReason is restart-n-mismatch when dense.n !== restart.n at a frame.
+
+**Cursor cache -- additional invalidation cases:** large forward jump triggers a fresh binary search, repeat-wrap (end to start) triggers a fresh binary search.
+
+**Runtime lifecycle -- reset / dispose:** reset() clears cursor cache counter, reset() does not affect output buffer identity, two runtimes are independent (no shared state), dispose() clears registry so subsequent resolve routes to linear fallback.
+
+**Controller -- diagnostic reset + boundary:** default snapshot importDiagnostics is an empty readonly array, lastFallbackReason starts as "none" and active method as "linear".
+
+**Snapshot change detection (Round 6 fields):** smoothPlayback toggle fires a subscriber notification, setInterpolationMode fires a subscriber notification.
+
+### Watch Architecture Ownership Boundaries (28 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-architecture.test.ts` | 28 | Shared viewer defaults, document service, playback model policy, controller facade delegation, ownership boundaries, decoupling guards (see Round 1 architecture section above) |
+
+Round 6 update: the ownership boundary test for controller file-parsing imports now enforces that type-only imports from `full-history-import` are allowed (for capability-layer fields and import diagnostics in the snapshot interface), while runtime imports remain forbidden. The test uses a regex that matches `import { ... } from './full-history-import'` but not `import type { ... } from './full-history-import'`.
+
+### Watch Round 6 E2E (14 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-round6.spec.ts` | 14 | Landing, file load, dock Smooth toggle, settings sheet, Hermite scrub-to-interior-bracket, fallback note visibility, phone layout geometry (see breakdown below) |
+
+Uses a 5-frame two-atom fixture (`tests/e2e/fixtures/watch-two-atom.json`) and `?e2e=1` test hooks (`_getWatchState`, `_watchOpenFile`, `_watchToggleSmooth`, `_watchSetInterpolationMode`, `_watchScrub`).
+
+**Landing + boot:** watch page boots without errors, landing page shows Open File button.
+
+**File load + initial state:** file loads via test hook and transitions to playback view (atomCount=2, frameCount=5, fileKind=full), after file load defaults are smooth=on, method=linear, activeMethod=linear.
+
+**Dock Smooth toggle:** smooth toggle button exists in the dock with correct default state (on), clicking smooth toggle flips state and updates aria-pressed.
+
+**Settings sheet:** opens and contains Smooth Playback group and experimental note, interpolation method picker changes mode via test hook, Hermite on a Hermite-safe file scrub to interior bracket confirms activeMethod=hermite, fallback note is hidden when linear selected, settings sheet closes via Escape.
+
+**Dock layout:** utility zone contains repeat (icon) + smooth (text label) + speed, smooth toggle shows visible "Smooth" text.
+
+**Responsive dock (phone emulation at 375x812):** dock fits cleanly at phone width with no child overflow, no clipping, utility cluster has no internal scrollable overflow, every utility child stays within dock right edge, utility cluster does not overlap into transport cluster, Smooth text label and repeat icon are both visible.
 
 ## Frontend Smoke Test
 

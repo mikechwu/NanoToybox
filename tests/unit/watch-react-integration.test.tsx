@@ -42,6 +42,12 @@ function makeSnapshot(overrides: Partial<WatchControllerSnapshot> = {}): WatchCo
     playDirection: 0 as 1 | -1 | 0,
     theme: 'light',
     textSize: 'normal',
+    // Round 6 defaults
+    smoothPlayback: true,
+    interpolationMode: 'linear',
+    activeInterpolationMethod: 'linear',
+    lastFallbackReason: 'none',
+    importDiagnostics: [],
     ...overrides,
   };
 }
@@ -84,6 +90,10 @@ function createMockController(initialSnapshot?: Partial<WatchControllerSnapshot>
     detachRenderer: vi.fn(),
     getPlaybackModel: vi.fn(),
     getBondedGroups: vi.fn(),
+    setSmoothPlayback: vi.fn(),
+    setInterpolationMode: vi.fn(),
+    getRegisteredInterpolationMethods: vi.fn(() => []),
+    getInterpolationRuntime: vi.fn(() => null),
     dispose: vi.fn(),
     // Test helper
     setSnapshot(overrides: Partial<WatchControllerSnapshot>) {

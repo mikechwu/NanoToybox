@@ -19,6 +19,8 @@ interface WatchDockProps {
   speed: number;
   repeat: boolean;
   playDirection: 1 | -1 | 0;
+  /** Round 6: smooth playback toggle state. */
+  smoothPlayback: boolean;
   onTogglePlay: () => void;
   onStepForward: () => void;
   onStepBackward: () => void;
@@ -27,6 +29,8 @@ interface WatchDockProps {
   onOpenSettings: () => void;
   onStartDirectionalPlayback: (direction: 1 | -1) => void;
   onStopDirectionalPlayback: () => void;
+  /** Round 6: called when the Smooth toggle is clicked. */
+  onToggleSmoothPlayback: () => void;
 }
 
 /**
@@ -130,10 +134,11 @@ function useTransportButton(
 }
 
 export function WatchDock({
-  playing, canPlay, speed, repeat, playDirection,
+  playing, canPlay, speed, repeat, playDirection, smoothPlayback,
   onTogglePlay, onStepForward, onStepBackward,
   onSpeedChange, onToggleRepeat, onOpenSettings,
   onStartDirectionalPlayback, onStopDirectionalPlayback,
+  onToggleSmoothPlayback,
 }: WatchDockProps) {
   const backHandlers = useTransportButton(-1, canPlay, onStepBackward, onStartDirectionalPlayback, onStopDirectionalPlayback);
   const fwdHandlers = useTransportButton(1, canPlay, onStepForward, onStartDirectionalPlayback, onStopDirectionalPlayback);
@@ -166,16 +171,32 @@ export function WatchDock({
         </button>
       </div>
 
-      {/* Zone 2: Utility cluster */}
+      {/* Zone 2: Utility cluster — two subgroups for stable alignment.
+          Left subgroup (repeat + smooth): anchored nearest the transport cluster.
+          Right subgroup (speed): flex-end, fills remaining space.
+          Repeat is icon-only; Smooth is a text-label button. */}
       <div className="dock-slot watch-dock__utility">
-        <button
-          className={`dock-item watch-dock__small${repeat ? ' active' : ''}`}
-          onClick={onToggleRepeat}
-          aria-pressed={repeat}
-          type="button"
-        >
-          <span className="dock-icon"><IconRepeat /></span>
-        </button>
+        <div className="watch-dock__utility-left">
+          <button
+            className={`dock-item watch-dock__small${repeat ? ' active' : ''}`}
+            onClick={onToggleRepeat}
+            aria-pressed={repeat}
+            aria-label="Repeat"
+            type="button"
+          >
+            <span className="dock-icon"><IconRepeat /></span>
+          </button>
+          <button
+            className={`dock-item watch-dock__smooth${smoothPlayback ? ' active' : ''}`}
+            onClick={onToggleSmoothPlayback}
+            aria-pressed={smoothPlayback}
+            aria-label="Smooth playback"
+            type="button"
+            data-testid="watch-smooth-toggle"
+          >
+            Smooth
+          </button>
+        </div>
         <PlaybackSpeedControl speed={speed} onSpeedChange={onSpeedChange} />
       </div>
 

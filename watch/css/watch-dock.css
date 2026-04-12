@@ -11,6 +11,24 @@
  * This file only contains watch-specific overrides.
  */
 
+/* ── Watch dock layout tokens ──
+   Scoped to .watch-workspace (the watch-owned root rendered by WatchApp when
+   a file is loaded) — not global :root. Keeps watch-specific layout policy
+   local to the watch UI and avoids polluting global CSS namespace.
+   The responsive breakpoint (768px) mirrors dock-shell.css. */
+.watch-workspace {
+  --watch-dock-utility-gap: 2px;
+  --watch-dock-smooth-min-w: 58px;
+  --watch-dock-speed-slider-w: 60px;
+}
+@media (min-width: 768px) {
+  .watch-workspace {
+    --watch-dock-utility-gap: 4px;
+    --watch-dock-smooth-min-w: 64px;
+    --watch-dock-speed-slider-w: 80px;
+  }
+}
+
 /* .bottom-region (outer) is positioning only — no paint.
    Timeline and dock are sibling shells, each owning their own surface.
    Dock is the primary painted pill (from shared dock-shell.css).
@@ -57,12 +75,23 @@
 }
 /* All icons use shared default size (16px from Icons.tsx) — no watch overrides. */
 
-/* Utility cluster: compact, subordinate */
+/* Utility cluster: two subgroups for stable alignment.
+   Left subgroup (repeat + smooth) anchors nearest the transport cluster.
+   Speed fills the remaining space to the right.
+   Gap and padding use --watch-dock-utility-gap with a fallback for isolated
+   rendering outside .watch-workspace (e.g., Storybook, unit tests). */
 .watch-dock__utility {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 4px;
+  gap: var(--watch-dock-utility-gap, 2px);
+  padding: 0 var(--watch-dock-utility-gap, 2px);
+}
+/* Left subgroup: repeat (icon) + smooth (text label), tightly packed. */
+.watch-dock__utility-left {
+  display: flex;
+  align-items: center;
+  gap: var(--watch-dock-utility-gap, 2px);
+  flex-shrink: 0;
 }
 /* Small utility toggle (repeat) — icon only, no label.
    32px is compact variant of --tap-target (44px), acceptable for secondary controls. */
@@ -71,6 +100,15 @@
   min-height: 32px;
   padding: 4px;
 }
+/* Smooth toggle — text label, no icon. Uses --watch-dock-smooth-min-w token. */
+.watch-dock__smooth {
+  min-width: var(--watch-dock-smooth-min-w, 58px);
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: var(--font-xs, 12px);
+  font-family: var(--font-family, inherit);
+  white-space: nowrap;
+}
 
 /* ── Speed control ── */
 .watch-dock__speed {
@@ -78,10 +116,10 @@
   align-items: center;
   gap: 6px;
 }
-/* Speed slider: 80px is tuned for the utility cluster — wide enough for log-mapped
-   control, narrow enough to stay subordinate to the transport cluster. */
+/* Speed slider: width from --watch-dock-speed-slider-w token.
+   Log-mapped — both phone and desktop widths are usable. */
 .watch-dock__speed-slider {
-  width: 80px;
+  width: var(--watch-dock-speed-slider-w, 60px);
   accent-color: var(--color-accent);
 }
 .watch-dock__speed-label {
@@ -97,7 +135,30 @@
 }
 .watch-dock__speed-label:hover { color: var(--color-accent); }
 
+/* Responsive values for the utility cluster are handled entirely by the
+   --watch-dock-* custom properties defined on .watch-workspace above. No per-component
+   media query needed — the tokens change at 768px, and components read them. */
+
 /* Segmented controls use shared src/ui/segmented.css + lab's Segmented component. */
+
+/* ── Round 6: Smooth Playback settings group cosmetics ── */
+.watch-experimental-label {
+  display: block;
+  font-size: var(--font-xs, 12px);
+  color: var(--color-text-secondary, #888);
+  margin-top: 2px;
+}
+.group-item--note {
+  display: block;
+  font-size: var(--font-xs, 12px);
+  color: var(--color-text-secondary, #888);
+  line-height: 1.4;
+  white-space: normal;
+  padding: 6px 0 2px;
+}
+.watch-fallback-note {
+  color: var(--color-text, #333);
+}
 
 /* ── Help page back button (inside sheet) ── */
 .watch-help-back {

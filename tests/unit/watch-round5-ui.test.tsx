@@ -30,12 +30,14 @@ describe('Hold threshold constant', () => {
 // ── Dock structure ──
 
 describe('WatchDock structure', () => {
-  it('dock source has transport cluster, utility cluster, and settings zones', async () => {
+  it('dock source has transport cluster, utility cluster (with text-label Smooth), and settings zones', async () => {
     const fs = await import('fs');
     const source = fs.readFileSync('watch/js/components/WatchDock.tsx', 'utf-8');
     expect(source).toContain('watch-dock__transport');
     expect(source).toContain('watch-dock__utility');
+    expect(source).toContain('watch-dock__smooth');
     expect(source).toContain('IconSettings');
+    expect(source).not.toContain('IconSmooth');
   });
 
   it('dock CSS uses fixed-width grid for transport cluster (no layout shift)', async () => {
@@ -170,6 +172,7 @@ function renderDock(overrides: Partial<React.ComponentProps<typeof WatchDock>> =
     speed: 1,
     repeat: false,
     playDirection: 0,
+    smoothPlayback: false,
     onTogglePlay: vi.fn(),
     onStepForward: vi.fn(),
     onStepBackward: vi.fn(),
@@ -178,6 +181,7 @@ function renderDock(overrides: Partial<React.ComponentProps<typeof WatchDock>> =
     onOpenSettings: vi.fn(),
     onStartDirectionalPlayback: vi.fn(),
     onStopDirectionalPlayback: vi.fn(),
+    onToggleSmoothPlayback: vi.fn(),
     ...overrides,
   };
   return { ...render(<WatchDock {...props} />), props };
@@ -233,6 +237,41 @@ describe('WatchDock behavioral', () => {
       expect((btn as HTMLButtonElement).disabled).toBe(true);
     }
   });
+
+  // ── Round 6: Smooth toggle (text-label button, not icon) ──
+
+  it('Smooth toggle calls onToggleSmoothPlayback when clicked', () => {
+    const { container, props } = renderDock({ smoothPlayback: false });
+    const toggle = container.querySelector('[data-testid="watch-smooth-toggle"]');
+    expect(toggle).not.toBeNull();
+    fireEvent.click(toggle!);
+    expect(props.onToggleSmoothPlayback).toHaveBeenCalledTimes(1);
+  });
+
+  it('Smooth toggle shows visible "Smooth" text label', () => {
+    const { container } = renderDock({ smoothPlayback: true });
+    const toggle = container.querySelector('[data-testid="watch-smooth-toggle"]') as HTMLButtonElement;
+    expect(toggle.textContent?.trim()).toBe('Smooth');
+  });
+
+  it('Smooth toggle uses watch-dock__smooth class (not icon-only watch-dock__small)', () => {
+    const { container } = renderDock({ smoothPlayback: false });
+    const toggle = container.querySelector('[data-testid="watch-smooth-toggle"]') as HTMLButtonElement;
+    expect(toggle.classList.contains('watch-dock__smooth')).toBe(true);
+    expect(toggle.classList.contains('watch-dock__small')).toBe(false);
+  });
+
+  it('Smooth toggle reflects active state via aria-pressed + .active class', () => {
+    const { container: off } = renderDock({ smoothPlayback: false });
+    const toggleOff = off.querySelector('[data-testid="watch-smooth-toggle"]') as HTMLButtonElement;
+    expect(toggleOff.getAttribute('aria-pressed')).toBe('false');
+    expect(toggleOff.classList.contains('active')).toBe(false);
+    cleanup();
+    const { container: on } = renderDock({ smoothPlayback: true });
+    const toggleOn = on.querySelector('[data-testid="watch-smooth-toggle"]') as HTMLButtonElement;
+    expect(toggleOn.getAttribute('aria-pressed')).toBe('true');
+    expect(toggleOn.classList.contains('active')).toBe(true);
+  });
 });
 
 // ── WatchSettingsSheet behavioral tests ──
@@ -248,6 +287,17 @@ function renderSheet(overrides: Partial<React.ComponentProps<typeof WatchSetting
     textSize: 'normal',
     onSetTheme: vi.fn(),
     onSetTextSize: vi.fn(),
+    smoothPlayback: false,
+    interpolationMode: 'linear',
+    activeInterpolationMethod: 'linear',
+    lastFallbackReason: 'none',
+    registeredMethods: [
+      { id: 'linear', label: 'Linear', stability: 'stable', availability: 'product', requiresVelocities: false, requires4Frames: false },
+      { id: 'hermite', label: 'Hermite (Velocity-Based)', stability: 'experimental', availability: 'product', requiresVelocities: true, requires4Frames: false },
+      { id: 'catmull-rom', label: 'Catmull-Rom', stability: 'experimental', availability: 'product', requiresVelocities: false, requires4Frames: true },
+    ],
+    onToggleSmoothPlayback: vi.fn(),
+    onSetInterpolationMode: vi.fn(),
     atomCount: 100,
     frameCount: 50,
     fileKind: 'full',
@@ -320,6 +370,65 @@ describe('WatchSettingsSheet behavioral', () => {
     const textAfter = container.textContent ?? '';
     expect(textAfter).toContain('Settings');
     expect(textAfter).toContain('Appearance');
+  });
+
+  // ── Round 6: Smooth Playback group ──
+
+  it('Smooth Playback group is rendered with experimental note', async () => {
+    const { container } = renderSheet({ isOpen: true });
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    expect(container.querySelector('[data-testid="watch-settings-smooth-group"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="watch-experimental-note"]')).not.toBeNull();
+  });
+
+  it('diagnostic fallback note is hidden when selectedMode is linear', async () => {
+    const { container } = renderSheet({
+      isOpen: true,
+      interpolationMode: 'linear',
+      activeInterpolationMethod: 'linear',
+      lastFallbackReason: 'none',
+    });
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    expect(container.querySelector('[data-testid="watch-fallback-note"]')).toBeNull();
+  });
+
+  it('diagnostic fallback note is hidden when experimental method runs cleanly (active == selected)', async () => {
+    const { container } = renderSheet({
+      isOpen: true,
+      interpolationMode: 'hermite',
+      activeInterpolationMethod: 'hermite',
+      lastFallbackReason: 'none',
+    });
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    expect(container.querySelector('[data-testid="watch-fallback-note"]')).toBeNull();
+  });
+
+  it('diagnostic fallback note shows when experimental method falls back AND smooth is on', async () => {
+    const { container } = renderSheet({
+      isOpen: true,
+      smoothPlayback: true,
+      interpolationMode: 'hermite',
+      activeInterpolationMethod: 'linear',
+      lastFallbackReason: 'velocities-unavailable',
+    });
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    const note = container.querySelector('[data-testid="watch-fallback-note"]');
+    expect(note).not.toBeNull();
+    expect(note!.textContent).toContain('Linear');
+  });
+
+  it('diagnostic fallback note hidden when smooth is OFF even if experimental method selected', async () => {
+    const { container } = renderSheet({
+      isOpen: true,
+      smoothPlayback: false,
+      interpolationMode: 'hermite',
+      activeInterpolationMethod: 'linear',
+      lastFallbackReason: 'disabled',
+    });
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    expect(container.querySelector('[data-testid="watch-fallback-note"]')).toBeNull();
+    // Neutral "Smooth Playback is currently off" note should appear instead
+    expect(container.querySelector('[data-testid="watch-disabled-note"]')).not.toBeNull();
   });
 });
 
@@ -399,9 +508,11 @@ describe('WatchDock hold-to-play', () => {
     const { container, rerender } = render(
       <WatchDock
         playing={false} canPlay={true} speed={1} repeat={false} playDirection={0}
+        smoothPlayback={false}
         onTogglePlay={vi.fn()} onStepForward={onStep} onStepBackward={vi.fn()}
         onSpeedChange={vi.fn()} onToggleRepeat={vi.fn()} onOpenSettings={vi.fn()}
         onStartDirectionalPlayback={onStart} onStopDirectionalPlayback={onStop}
+        onToggleSmoothPlayback={vi.fn()}
       />
     );
     const transport = container.querySelector('.watch-dock__transport');
@@ -417,9 +528,11 @@ describe('WatchDock hold-to-play', () => {
     rerender(
       <WatchDock
         playing={true} canPlay={true} speed={1} repeat={false} playDirection={1}
+        smoothPlayback={false}
         onTogglePlay={vi.fn()} onStepForward={vi.fn()} onStepBackward={vi.fn()}
         onSpeedChange={vi.fn()} onToggleRepeat={vi.fn()} onOpenSettings={vi.fn()}
         onStartDirectionalPlayback={vi.fn()} onStopDirectionalPlayback={onStop}
+        onToggleSmoothPlayback={vi.fn()}
       />
     );
 

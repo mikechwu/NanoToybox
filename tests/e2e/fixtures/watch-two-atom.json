@@ -1,0 +1,33 @@
+{
+  "format": "atomdojo-history",
+  "version": 1,
+  "kind": "full",
+  "producer": { "app": "lab", "appVersion": "0.1.0", "exportedAt": "2026-04-08T00:00:00Z" },
+  "simulation": {
+    "title": null, "description": null,
+    "units": { "time": "ps", "length": "angstrom" },
+    "maxAtomCount": 2, "durationPs": 99.999, "frameCount": 5,
+    "indexingModel": "dense-prefix"
+  },
+  "atoms": { "atoms": [
+    { "id": 0, "element": "C" },
+    { "id": 1, "element": "C" }
+  ] },
+  "timeline": {
+    "denseFrames": [
+      { "frameId": 0, "timePs": 0.001, "n": 2, "atomIds": [0, 1], "positions": [0, 0, 0, 1, 0, 0], "interaction": null, "boundary": {} },
+      { "frameId": 1, "timePs": 25, "n": 2, "atomIds": [0, 1], "positions": [0.5, 0, 0, 1.5, 0, 0], "interaction": null, "boundary": {} },
+      { "frameId": 2, "timePs": 50, "n": 2, "atomIds": [0, 1], "positions": [1, 0, 0, 2, 0, 0], "interaction": null, "boundary": {} },
+      { "frameId": 3, "timePs": 75, "n": 2, "atomIds": [0, 1], "positions": [1.5, 0, 0, 2.5, 0, 0], "interaction": null, "boundary": {} },
+      { "frameId": 4, "timePs": 100, "n": 2, "atomIds": [0, 1], "positions": [2, 0, 0, 3, 0, 0], "interaction": null, "boundary": {} }
+    ],
+    "restartFrames": [
+      { "frameId": 0, "timePs": 0.001, "n": 2, "atomIds": [0, 1], "positions": [0, 0, 0, 1, 0, 0], "velocities": [0.0001, 0, 0, 0.0001, 0, 0], "bonds": [{ "a": 0, "b": 1, "distance": 1.42 }], "config": { "damping": 0.995, "kDrag": 1.2, "kRotate": 0.6, "dtFs": 0.5, "dampingRefDurationFs": 2.0 }, "interaction": null, "boundary": {} },
+      { "frameId": 1, "timePs": 25, "n": 2, "atomIds": [0, 1], "positions": [0.5, 0, 0, 1.5, 0, 0], "velocities": [0.0001, 0, 0, 0.0001, 0, 0], "bonds": [{ "a": 0, "b": 1, "distance": 1.42 }], "config": { "damping": 0.995, "kDrag": 1.2, "kRotate": 0.6, "dtFs": 0.5, "dampingRefDurationFs": 2.0 }, "interaction": null, "boundary": {} },
+      { "frameId": 2, "timePs": 50, "n": 2, "atomIds": [0, 1], "positions": [1, 0, 0, 2, 0, 0], "velocities": [0.0001, 0, 0, 0.0001, 0, 0], "bonds": [{ "a": 0, "b": 1, "distance": 1.42 }], "config": { "damping": 0.995, "kDrag": 1.2, "kRotate": 0.6, "dtFs": 0.5, "dampingRefDurationFs": 2.0 }, "interaction": null, "boundary": {} },
+      { "frameId": 3, "timePs": 75, "n": 2, "atomIds": [0, 1], "positions": [1.5, 0, 0, 2.5, 0, 0], "velocities": [0.0001, 0, 0, 0.0001, 0, 0], "bonds": [{ "a": 0, "b": 1, "distance": 1.42 }], "config": { "damping": 0.995, "kDrag": 1.2, "kRotate": 0.6, "dtFs": 0.5, "dampingRefDurationFs": 2.0 }, "interaction": null, "boundary": {} },
+      { "frameId": 4, "timePs": 100, "n": 2, "atomIds": [0, 1], "positions": [2, 0, 0, 3, 0, 0], "velocities": [0.0001, 0, 0, 0.0001, 0, 0], "bonds": [{ "a": 0, "b": 1, "distance": 1.42 }], "config": { "damping": 0.995, "kDrag": 1.2, "kRotate": 0.6, "dtFs": 0.5, "dampingRefDurationFs": 2.0 }, "interaction": null, "boundary": {} }
+    ],
+    "checkpoints": []
+  }
+}

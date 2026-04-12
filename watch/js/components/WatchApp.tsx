@@ -34,6 +34,16 @@ export function WatchApp({ controller }: WatchAppProps) {
   const handleStopDirectional = useCallback(() => controller.stopDirectionalPlayback(), [controller]);
   const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
 
+  // Round 6: smooth playback commands
+  const handleToggleSmoothPlayback = useCallback(
+    () => controller.setSmoothPlayback(!snapshot.smoothPlayback),
+    [controller, snapshot.smoothPlayback],
+  );
+  const handleSetInterpolationMode = useCallback(
+    (mode: import('../watch-settings').WatchInterpolationMode) => controller.setInterpolationMode(mode),
+    [controller],
+  );
+
   const handleOpenFile = useCallback(() => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -114,6 +124,7 @@ export function WatchApp({ controller }: WatchAppProps) {
             speed={snapshot.speed}
             repeat={snapshot.repeat}
             playDirection={snapshot.playDirection}
+            smoothPlayback={snapshot.smoothPlayback}
             onTogglePlay={handleTogglePlay}
             onStepForward={handleStepForward}
             onStepBackward={handleStepBackward}
@@ -122,6 +133,7 @@ export function WatchApp({ controller }: WatchAppProps) {
             onOpenSettings={handleOpenSettings}
             onStartDirectionalPlayback={handleStartDirectional}
             onStopDirectionalPlayback={handleStopDirectional}
+            onToggleSmoothPlayback={handleToggleSmoothPlayback}
           />
         </div>
       </div>
@@ -134,6 +146,13 @@ export function WatchApp({ controller }: WatchAppProps) {
         textSize={snapshot.textSize}
         onSetTheme={(t) => controller.setTheme(t)}
         onSetTextSize={(s) => controller.setTextSize(s)}
+        smoothPlayback={snapshot.smoothPlayback}
+        interpolationMode={snapshot.interpolationMode}
+        activeInterpolationMethod={snapshot.activeInterpolationMethod}
+        lastFallbackReason={snapshot.lastFallbackReason}
+        registeredMethods={controller.getRegisteredInterpolationMethods()}
+        onToggleSmoothPlayback={handleToggleSmoothPlayback}
+        onSetInterpolationMode={handleSetInterpolationMode}
         atomCount={snapshot.atomCount}
         frameCount={snapshot.frameCount}
         fileKind={snapshot.fileKind}

@@ -464,13 +464,15 @@ This layering ensures that a policy change triggers conformance failures (intent
 - **Connected-components in `src/history/connected-components.ts`** — used by both lab simulation-timeline and watch bonded-groups.
 - **Bonded-group projection in `src/history/bonded-group-projection.ts`** — pure logic; lab and watch each have thin adapters.
 - **Validator is fully shape-safe:** structural guards before semantic checks, safe prev-tracking for monotonicity, bond endpoint validation.
-- **Watch uses plain TS + DOM (no React/Zustand for v1)**, separated playback sampling channels for future interpolation.
+- **Watch uses plain TS + DOM (no React/Zustand for v1)**, separated playback sampling channels (now used by Round 6 trajectory interpolation).
 
 ## D57: Watch v1 Uses Exact Recorded Frames with Separated Sampling Channels
 
 **Decision:** v1 watch playback uses exact recorded frames with 4 independent sampling methods on `WatchPlaybackModel` instead of one monolithic `getDisplayFrameAtTime`.
 
 **Rationale:** v1 does not implement interpolation, but the architecture must leave room for it. Position sampling may later become interpolated while topology/config/boundary remain stepwise. Separating the channels now avoids a breaking refactor when interpolation is added — each channel can independently switch from stepwise to interpolated without affecting the others.
+
+**Update (Round 6):** Position interpolation is now implemented via the trajectory interpolation runtime (`watch-trajectory-interpolation.ts`). The separated-channel architecture proved correct — only positions are interpolated; topology, config, and boundary remain discrete at-or-before. The playback model's sampling channels are unchanged; interpolation runs in the controller's unified pipeline (`applyReviewFrameAtTime`) between the playback model and the renderer.
 
 ## D58: Watch Controller Owns RAF Clock and Renderer Frame Application
 
@@ -531,3 +533,83 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Decision:** The bottom-region shell (`.dock-region` / `.bottom-region`) is a positioning-only container with no background, border, or shadow. The dock itself is the painted pill surface.
 
 **Rationale:** This matches lab's `.dock-region` architecture, where the region element exists solely to position its child within the viewport layout (e.g., fixed bottom, centered, safe-area insets). Painting belongs to the dock pill — it owns its own background, border-radius, and shadow. Splitting positioning from painting means the region can be reused for different dock styles or swapped between apps without carrying visual baggage. It also avoids double-painting artifacts (region background showing through dock border-radius corners).
+
+## D68: Smooth Playback Defaults to ON
+
+**Decision:** `_smoothPlayback` defaults to `true` in `createWatchSettings()`. Linear interpolation is the default mode (`_interpolationMode = 'linear'`).
+
+**Rationale:** Smooth playback produces visibly better motion between recorded frames with negligible cost (linear interpolation is a single lerp per component). Defaulting to on means first-time users see the best available visual quality immediately. The default mode is linear because it is the only stable strategy (see D69). Users who prefer exact recorded frames can disable smooth playback in settings.
+
+**Evidence:** `watch/js/watch-settings.ts` (`_smoothPlayback = true`, `_interpolationMode: WatchInterpolationMode = 'linear'`)
+
+## D69: Linear Stable, Hermite + Catmull-Rom Experimental (metadata.stability)
+
+**Decision:** Each interpolation strategy declares a `stability` field in its metadata: `'stable'` for Linear, `'experimental'` for Hermite (velocity-based) and Catmull-Rom. The UI can filter or annotate methods by stability.
+
+**Rationale:** Linear interpolation is unconditionally safe — it always succeeds, never overshoots, and has no data requirements beyond two adjacent frames. Hermite requires aligned velocity data and can produce overshoot if velocities are noisy. Catmull-Rom requires a valid 4-frame window and can overshoot away from knots. Marking these as experimental allows the UI to warn users and prevents accidental promotion of methods that may produce visual artifacts in edge cases.
+
+**Evidence:** `watch/js/watch-trajectory-interpolation.ts` (`LinearStrategy.metadata.stability: 'stable'`, `HermiteStrategy.metadata.stability: 'experimental'`, `CatmullRomStrategy.metadata.stability: 'experimental'`)
+
+## D70: Strategy Registry Pattern (Map + InterpolationStrategy Interface)
+
+**Decision:** Interpolation methods are registered in a `Map<InterpolationMethodId, InterpolationStrategy>` keyed by string ID. New methods plug in by implementing the `InterpolationStrategy` interface (metadata + `run()`) and calling `registerStrategy()`. The controller and UI do not need to change when a strategy is added.
+
+**Rationale:** An if/else or switch chain would require editing the resolution loop for every new method, creating coupling between method implementation and orchestration. The registry pattern inverts this: the resolution loop is closed to modification — it reads strategy metadata to decide what inputs to prepare (velocities, 4-frame window), calls `run()`, and handles decline/fallback generically. Dev-only or research strategies can register with arbitrary string IDs without widening the productized `WatchInterpolationMode` union.
+
+**Evidence:** `watch/js/watch-trajectory-interpolation.ts` (`registry: Map<InterpolationMethodId, InterpolationStrategy>`, `registerStrategy()`, `unregisterStrategy()`, `InterpolationStrategy` interface)
+
+## D71: Capability Layer Precomputed at Import Time
+
+**Decision:** `InterpolationCapability` (per-bracket, per-window, per-endpoint flags and reason codes) is computed once at file import in `computeInterpolationCapability()` and stored on `LoadedFullHistory`. The interpolation runtime reads these flags on the hot path via typed-array indexing — no per-frame recomputation.
+
+**Rationale:** Capability determination involves cross-frame comparisons (atom count parity, atomId equality, velocity plausibility, 4-frame window consistency) that are invariant for a given file. Recomputing per frame would waste cycles on the hot path. Precomputing at import and storing as `Uint8Array` flags (`bracketSafe`, `hermiteSafe`, `window4Safe`) gives O(1) lookup during playback. Diagnostic reason arrays (`bracketReason`, `velocityReason`, `window4Reason`) are regular arrays on the cold path for UI messaging.
+
+**Evidence:** `watch/js/full-history-import.ts` (`computeInterpolationCapability()`, `InterpolationCapability` interface, typed-array flags on `LoadedFullHistory`)
+
+## D72: Unified Render Pipeline — Single applyReviewFrameAtTime() Helper
+
+**Decision:** All render entry points in the watch controller (RAF tick, scrub, step, initial load, rollback, renderer reattach) route through a single `applyReviewFrameAtTime()` helper. This helper is the only direct caller of `interpolation.resolve()` and `renderer.updateReviewFrame()`. Enforced by a source-level meta-test that greps the controller source (with comments stripped) and asserts exactly one call site for each.
+
+**Rationale:** Multiple call sites for resolve or updateReviewFrame would allow them to diverge (different arguments, missing steps, inconsistent ordering). A single helper guarantees that every rendered frame goes through the same sequence: interpolation resolve, topology lookup, renderer update, appearance sync, analysis update, highlight application. The meta-test prevents regression — adding a second direct call to either function will fail the test.
+
+**Evidence:** `watch/js/watch-controller.ts` (`applyReviewFrameAtTime()` — sole caller), `tests/unit/watch-round6-interpolation.test.ts` (`'Controller unified render pipeline'` describe block — source grep meta-tests)
+
+## D73: Follow Excluded from Render Helper (Rate-Based Easing)
+
+**Decision:** Camera follow (`viewService.updateFollow(dtMs, renderer)`) is called in the RAF tick loop AFTER `applyReviewFrameAtTime()` and BEFORE the final `renderer.render()`, but NOT inside the render helper itself.
+
+**Rationale:** `Renderer.updateOrbitFollow()` uses frame-rate-independent exponential easing (`1 - Math.exp(-8 * (dtMs / 1000))`). If follow were inside the render helper, scrub and load paths would call it with `dtMs = 0`, producing a blend factor of zero — a no-op that would make follow appear broken on non-RAF paths. Keeping follow in the RAF tick ensures it always receives real elapsed time. The render helper's `render` flag (true for scrub/load/rollback, false for RAF tick) cleanly separates the two concerns: the helper owns frame data, the tick owns camera animation.
+
+**Evidence:** `watch/js/watch-controller.ts` (RAF tick: `applyReviewFrameAtTime(…, { render: false })` then `viewService.updateFollow(dtMs, renderer)` then `renderer.render()`), `lab/js/renderer.ts` (`updateOrbitFollow` — `Math.exp(-8 * (dtMs / 1000))` easing)
+
+## D74: Conservative At-or-Before Fallback Policy
+
+**Decision:** When the interpolation runtime cannot interpolate (smoothPlayback disabled, boundary degeneracy, non-interpolatable bracket, strategy decline), it falls back to the at-or-before frame — never the nearest frame.
+
+**Rationale:** "Nearest" lookup can return a future frame, violating temporal monotonicity: if the user scrubs forward past a boundary, the displayed frame could jump backward to the nearest neighbor behind. At-or-before guarantees that the displayed frame's timestamp is always less than or equal to the requested time, preserving forward-only temporal progression. This is consistent with the binary search policy (`bsearchAtOrBefore`) and the bracket lookup, which both use `<=` as the match criterion.
+
+**Evidence:** `watch/js/watch-trajectory-interpolation.ts` (`bsearchAtOrBefore()` — `frames[lo].timePs <= timePs`, `atOrBeforeReference()` used on all fallback paths), `tests/unit/watch-round6-interpolation.test.ts` (`'Conservative fallback policy (at-or-before)'` describe block)
+
+## D75: Discriminated Metadata Union (Product vs. Dev Methods)
+
+**Decision:** Strategy metadata uses a discriminated union: `ProductMethodMetadata` (with `availability: 'product'` and `id: WatchInterpolationMode`) vs. `DevMethodMetadata` (with `availability: 'dev-only'` and `id: string`). The `availability` field is the discriminant.
+
+**Rationale:** The settings UI picker must show only productized methods and use their IDs as `WatchInterpolationMode` without unsafe casts. Dev-only or research methods need arbitrary string IDs that do not widen the product type. The discriminated union lets the UI narrow via `m.availability === 'product'` and then safely read `m.id` as `WatchInterpolationMode`. Without the union, either the registry would need a separate dev-only map (duplication) or the product type would need to accept arbitrary strings (loss of type safety).
+
+**Evidence:** `watch/js/watch-trajectory-interpolation.ts` (`ProductMethodMetadata`, `DevMethodMetadata`, `InterpolationMethodMetadata` union, `availability` discriminant)
+
+## D76: Registry Metadata Not in Snapshot (Stable Frozen Accessor)
+
+**Decision:** The array of registered interpolation method metadata is NOT part of `WatchControllerSnapshot`. It is accessed via a dedicated `getRegisteredInterpolationMethods()` accessor on the controller that returns a stable, frozen array reference.
+
+**Rationale:** Registry metadata is configuration metadata (what methods exist), not per-frame state. Including it in the snapshot would cause reference-inequality churn on every `buildSnapshot()` call, triggering unnecessary React re-renders in the settings UI. The frozen array reference changes only when the registry is mutated (register/unregister/dispose), so React components that call the accessor will not re-render on every frame tick. The snapshot carries only the scalar results of interpolation (`activeInterpolationMethod`, `lastFallbackReason`).
+
+**Evidence:** `watch/js/watch-controller.ts` (`getRegisteredInterpolationMethods()` — separate from `WatchControllerSnapshot`), `watch/js/watch-trajectory-interpolation.ts` (`_cachedMethods` — frozen, rebuilt only on registry mutation)
+
+## D77: CSS Tokens Scoped to .watch-workspace (Not :root)
+
+**Decision:** Watch-specific CSS custom properties (`--watch-dock-utility-gap`, `--watch-dock-smooth-min-w`, `--watch-dock-speed-slider-w`) are scoped to `.watch-workspace`, not `:root`.
+
+**Rationale:** The watch app renders inside a `.watch-workspace` container. Scoping tokens to this container keeps watch-specific layout policy local and avoids polluting the global CSS namespace. If both lab and watch were loaded in the same document (e.g., a future multi-app shell), `:root`-scoped tokens would collide. `.watch-workspace` scoping also documents intent: these tokens are consumed only by descendants of the watch workspace, and their responsive breakpoint (`@media (min-width: 768px)`) mirrors `dock-shell.css`.
+
+**Evidence:** `watch/css/watch-dock.css` (tokens defined on `.watch-workspace`, not `:root`), `watch/css/watch.css` (`.watch-workspace` grid container)

@@ -460,8 +460,8 @@ Once a valid file loads, the app presents:
 | Top bar | File-kind badge + file name + "Open File" action |
 | Bonded-groups panel | Two-tier expand (large/small clusters) with hover preview, Center/Follow buttons, and authored color editing (see Color Editing below) |
 | Timeline | Custom scrub track (thick variant from shared `timeline-track.css`) with pointer-event scrubbing and time readouts at both ends |
-| Playback dock | Transport cluster + utility cluster + settings button (see Playback Dock below) |
-| Settings sheet | Appearance, File Info, Help sections (see Settings below) |
+| Playback dock | Transport cluster + utility cluster (repeat, smooth toggle, speed) + settings button (see Playback Dock below) |
+| Settings sheet | Smooth Playback, Appearance, File Info, Help sections (see Settings below) |
 
 The workspace grid (`watch-workspace`) uses `grid-template-rows: auto 1fr auto` — top bar, canvas area (with overlaid bonded-groups panel), and bottom chrome region.
 
@@ -498,7 +498,7 @@ The dock (`WatchDock`) is a 3-zone hierarchical toolbar using shared `dock-shell
 | Zone | Content |
 |------|---------|
 | **Transport** (Zone 1) | Step Back, Play/Pause, Step Forward — fixed-width 3-column grid, no layout shift on label swap |
-| **Utility** (Zone 2) | Repeat toggle (icon-only 32 px button) + continuous speed control |
+| **Utility** (Zone 2) | Left subgroup: Repeat toggle (icon-only 32 px button) + Smooth text-label toggle. Right subgroup: continuous speed control |
 | **Settings** (Zone 3) | Settings button (opens settings sheet) |
 
 **Transport buttons (Step Back / Step Forward):** Dual-mode gesture — tap triggers a single dense-frame step; hold (past `HOLD_PLAY_THRESHOLD_MS` = 160 ms) initiates continuous directional playback with an immediate nudge frame. Release stops directional playback. The `useTransportButton` hook stores callbacks in refs so React re-renders do not kill active hold gestures. Pointer capture is attempted but optional; global fallback listeners (pointerup, pointercancel, blur, visibilitychange) ensure release is always detected.
@@ -506,6 +506,8 @@ The dock (`WatchDock`) is a 3-zone hierarchical toolbar using shared `dock-shell
 **Speed control:** `PlaybackSpeedControl` — a continuous logarithmic slider (0.5x to 20x) plus a speed readout button. The slider maps `[0,1]` to `[SPEED_MIN, SPEED_MAX]` via `sliderToSpeed()`/`speedToSlider()` (shared from `src/config/playback-speed-constants.ts`). Logarithmic mapping gives ~37% of slider travel to the 0.5x-2x range where fine control matters most. Clicking the speed readout resets to 1x.
 
 **Repeat:** Toggle button — when active, playback wraps around (modulo) at file boundaries in both forward and backward directions.
+
+**Smooth:** Text-label toggle button (no icon). When active, positions between recorded dense frames are interpolated at render time using the strategy selected in settings (Linear by default). When off, the renderer displays discrete at-or-before frames only. The toggle re-renders immediately so the change is visible even when paused. CSS class `.watch-dock__smooth` with responsive min-width via `--watch-dock-smooth-min-w`.
 
 ### Timeline
 
@@ -545,11 +547,22 @@ The color editor open/close state is local React state — auto-cleared when the
 
 | Section | Content |
 |---------|---------|
+| **Smooth Playback** | On/Off toggle (shared Segmented control, default On) + Interpolation Method picker (see below). Per-frame diagnostic note when an experimental method falls back to Linear. Neutral note when smooth playback is off and a non-stable method is selected |
 | **Appearance** | Theme: Dark / Light (shared Segmented control). Text Size: Normal / Large (shared Segmented control, CSS-only via `[data-text-size]`) |
 | **File Info** | Kind, Atoms, Frames, Duration (formatted via shared `formatTime`) |
 | **Help** | Navigates to a viewer-specific help page with sections: Playback, Timeline, Bonded Groups, Camera, File. Back button returns to main settings |
 
 Speed and repeat controls live in the dock only — they are not duplicated in settings.
+
+**Interpolation Method picker:** A Segmented control built from the strategy registry's product-visible methods (filtered by `availability === 'product'`). Stable methods appear first, then experimental. Dev-only methods are excluded from the user-facing picker.
+
+| Method | Stability | Description |
+|--------|-----------|-------------|
+| **Linear** | Stable (default) | Component-wise lerp between bracket endpoints. Always succeeds — universal fallback for all other strategies |
+| **Hermite (Velocity-Based)** | Experimental | Cubic Hermite using real velocities from restart frames (Å/fs, converted via `FS_PER_PS`). Requires velocity data aligned to both bracket endpoints. Falls back to Linear when velocities are unavailable or implausible |
+| **Catmull-Rom** | Experimental | Catmull-Rom spline over a 4-frame window (f[i-1], prev, next, f[i+2]). Requires 4 safe frames with matching atom counts and IDs. Falls back to Linear at timeline edges or when the window has mismatched atoms |
+
+When an experimental method cannot run for a specific bracket, the runtime falls back to Linear automatically and the settings sheet shows a diagnostic note explaining why (e.g., "velocities not available for this frame pair", "timeline edge").
 
 ### Playback Model
 
@@ -562,6 +575,24 @@ Speed and repeat controls live in the dock only — they are not duplicated in s
 - **Gap clamp:** Wall-clock delta capped at `PLAYBACK_GAP_CLAMP_MS` (250 ms) to prevent large jumps after tab-background return
 - **Topology:** Reconstructed from `restartFrames` via binary search at-or-before
 - **Bonded-group analysis:** Memoized to avoid redundant recomputation during scrubbing
+
+### Smooth Playback & Interpolation
+
+When smooth playback is enabled (default), positions between recorded dense frames are reconstructed at render time via a trajectory interpolation runtime (`watch-trajectory-interpolation.ts`). The runtime is created on file load and disposed on unload, sized to the file's `maxAtomCount`.
+
+**Render pipeline:** All render entry points (RAF tick, scrub, step, initial load, rollback) route through a single `applyReviewFrameAtTime()` helper in the controller. This helper is the sole caller of `interpolation.resolve()` and `renderer.updateReviewFrame()` — enforcing a unified pipeline for geometry, authored colors, analysis, and highlight in one pass.
+
+**Strategy registry:** The runtime ships three built-in strategies (Linear, Hermite, Catmull-Rom) and accepts new strategies at runtime via `registerStrategy()`. The `resolve()` API takes the current playback time and the user's preference (`enabled` + `mode`) and returns positions, atom IDs, and per-frame diagnostics (active method + fallback reason). Unregistered or unknown mode IDs fall back to Linear.
+
+**Capability layer:** Precomputed at import time in `full-history-import.ts`. Per-bracket and per-4-frame-window flags (`bracketSafe`, `hermiteSafe`, `window4Safe`) are stored as typed arrays for hot-path lookup. Diagnostic reason arrays (`bracketReason`, `velocityReason`, `window4Reason`) explain why specific brackets are not safely interpolatable. The capability layer also maps each dense frame to its aligned restart frame for velocity access.
+
+**Bracket lookup:** Binary search with a cursor-cache fast path. Same-bracket and one-step-forward lookups are O(1); all other cases (backward, jump, wrap, first call) fall through to binary search.
+
+**Fallback taxonomy:** When a strategy cannot run (missing velocities, insufficient frames, atom-count mismatch, timeline edge), the runtime falls back to Linear over the same bracket and records a typed `FallbackReason` for UI diagnostics.
+
+**Settings ownership:** `smoothPlayback` (boolean) and `interpolationMode` (WatchInterpolationMode: `'linear' | 'hermite' | 'catmull-rom'`) are session-only viewer preferences in `watch-settings.ts`. They survive file replacement but are not persisted to localStorage.
+
+**Unit conversion:** Hermite interpolation converts Å/fs velocities to Å/ps using `FS_PER_PS` (1000) from `src/history/units.ts`. An import-time sanity check flags implausibly large velocities (> `IMPLAUSIBLE_VELOCITY_A_PER_FS` = 10.0 Å/fs) so Hermite falls back to Linear cleanly.
 
 ### Shared Design System
 
@@ -586,11 +617,11 @@ Watch-specific overrides live in `watch/css/watch-dock.css` (dock grid, transpor
 
 ### Error Handling
 
-Transactional file open: a bad replacement file keeps the current document intact and shows an error overlay. Commit-phase rollback restores the previous document on failure (including color assignment rollback). The error overlay is visible in both the landing and workspace states.
+Transactional file open: a bad replacement file keeps the current document intact and shows an error overlay. Commit-phase rollback restores the previous document on failure (including color assignment and interpolation runtime rollback). The error overlay is visible in both the landing and workspace states.
 
 ### Theme & Renderer
 
-Uses the same `DEFAULT_THEME` as lab, applied via `applyThemeTokens`. Text size applied via `applyTextSizeTokens`. The renderer is a thin adapter over the lab `Renderer` — it calls `initForPlayback` for setup and `updateReviewFrame` for each displayed frame, never mutating physics state.
+Uses the same `DEFAULT_THEME` as lab, applied via `applyThemeTokens`. Text size applied via `applyTextSizeTokens`. The renderer is a thin adapter over the lab `Renderer` — it calls `initForPlayback` for setup and `updateReviewFrame` for each displayed frame, never mutating physics state. All frame application routes through the controller's unified `applyReviewFrameAtTime()` pipeline, which resolves interpolated (or discrete) positions before passing them to the renderer.
 
 ---
 

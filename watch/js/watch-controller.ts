@@ -1,18 +1,25 @@
 /**
  * Watch controller facade — orchestration layer over domain services.
  *
- * Round 2 additions:
- *   - View service: camera target, follow state, center/follow commands
- *   - Analysis interaction: hover/select state, highlight resolution
- *   - Per-frame follow update + highlight application in RAF tick
- *   - Interaction commands exposed to UI
+ * Round 2: view service, analysis interaction, follow, highlight.
+ * Round 5: transport + settings domain (theme, text-size).
+ * Round 6: smooth playback runtime (interpolation strategies + unified render pipeline).
  *
  * Domains:
  *   - Document: watch-document-service.ts
  *   - Playback: watch-playback-model.ts
  *   - Analysis: watch-bonded-groups.ts (interaction state + highlight priority)
  *   - View: watch-view-service.ts (camera target, follow)
- *   - Settings: future (documented seam only)
+ *   - Settings: watch-settings.ts (viewer preferences — theme, text-size,
+ *               smoothPlayback, interpolationMode)
+ *   - Interpolation: watch-trajectory-interpolation.ts (strategy runtime,
+ *               render-time reconstruction; owned by controller, recreated on
+ *               file load/rollback, disposed on unload)
+ *
+ * Render pipeline: ALL render entry points (RAF tick, scrub/step, initial load,
+ * rollback) route through the single applyReviewFrameAtTime() helper. That
+ * helper is the only direct caller of interpolation.resolve() and
+ * renderer.updateReviewFrame() — enforced by code review + a meta-test.
  */
 
 import { createWatchDocumentService, type DocumentMetadata } from './watch-document-service';
@@ -23,7 +30,15 @@ import { createWatchRenderer, type WatchRenderer } from './watch-renderer';
 import { createWatchCameraInput, type WatchCameraInput } from './watch-camera-input';
 import { createWatchOverlayLayout, type WatchOverlayLayout } from './watch-overlay-layout';
 import { createWatchBondedGroupAppearance, type WatchBondedGroupAppearance } from './watch-bonded-group-appearance';
-import { createWatchSettings, type WatchSettings } from './watch-settings';
+import { createWatchSettings, type WatchSettings, type WatchInterpolationMode } from './watch-settings';
+import {
+  createWatchTrajectoryInterpolation,
+  type WatchTrajectoryInterpolation,
+  type FallbackReason,
+  type InterpolationMethodMetadata,
+  type InterpolationMethodId,
+} from './watch-trajectory-interpolation';
+import type { LoadedFullHistory, ImportDiagnostic } from './full-history-import';
 import { VIEWER_DEFAULTS } from '../../src/config/viewer-defaults';
 import type { BondedGroupSummary } from './watch-bonded-groups';
 
@@ -50,6 +65,17 @@ export interface WatchControllerSnapshot {
   playDirection: 1 | -1 | 0;
   theme: 'dark' | 'light';
   textSize: 'normal' | 'large';
+  // ── Round 6: smooth playback ──
+  smoothPlayback: boolean;
+  interpolationMode: WatchInterpolationMode;
+  /** What the runtime actually used for the last rendered frame. This is a
+   *  string (InterpolationMethodId) rather than the closed WatchInterpolationMode
+   *  union because the registry can hold dev/research strategies with arbitrary
+   *  IDs. For productized methods, the value will still be 'linear', 'hermite',
+   *  or 'catmull-rom'. */
+  activeInterpolationMethod: InterpolationMethodId;
+  lastFallbackReason: FallbackReason;
+  importDiagnostics: readonly ImportDiagnostic[];
 }
 
 export interface WatchController {
@@ -76,14 +102,24 @@ export interface WatchController {
   stopDirectionalPlayback(): void;
   setTheme(theme: 'dark' | 'light'): void;
   setTextSize(size: 'normal' | 'large'): void;
+  // ── Round 6: smooth playback commands ──
+  setSmoothPlayback(enabled: boolean): void;
+  setInterpolationMode(mode: WatchInterpolationMode): void;
+  getRegisteredInterpolationMethods(): readonly InterpolationMethodMetadata[];
   // ── Runtime access ──
   getPlaybackModel(): WatchPlaybackModel;
   getBondedGroups(): WatchBondedGroups;
+  /** Test/debug access to the interpolation runtime. Not consumed by
+   *  production UI code. */
+  getInterpolationRuntime(): WatchTrajectoryInterpolation | null;
   createRenderer(container: HTMLElement): WatchRenderer;
   getRenderer(): WatchRenderer | null;
   detachRenderer(): void;
   dispose(): void;
 }
+
+const EMPTY_DIAGNOSTICS: readonly ImportDiagnostic[] = Object.freeze([]);
+const EMPTY_METHODS: readonly InterpolationMethodMetadata[] = Object.freeze([]);
 
 const EMPTY_SNAPSHOT: WatchControllerSnapshot = {
   loaded: false, playing: false, currentTimePs: 0, startTimePs: 0, endTimePs: 0,
@@ -91,6 +127,9 @@ const EMPTY_SNAPSHOT: WatchControllerSnapshot = {
   fileKind: null, fileName: null, error: null,
   hoveredGroupId: null, following: false, followedGroupId: null,
   speed: 1, repeat: false, playDirection: 0, theme: VIEWER_DEFAULTS.defaultTheme, textSize: 'normal',
+  smoothPlayback: true, interpolationMode: 'linear',
+  activeInterpolationMethod: 'linear', lastFallbackReason: 'none',
+  importDiagnostics: EMPTY_DIAGNOSTICS,
 };
 
 export function createWatchController(): WatchController {
@@ -107,6 +146,14 @@ export function createWatchController(): WatchController {
   let renderer: WatchRenderer | null = null;
   let cameraInput: WatchCameraInput | null = null;
   let overlayLayout: WatchOverlayLayout | null = null;
+  let interpolation: WatchTrajectoryInterpolation | null = null;
+  /** Last-frame diagnostic state from interpolation.resolve(). Kept on the
+   *  controller so snapshot publication has a cheap read path — the runtime
+   *  also owns this state but we cache it here to avoid another call per
+   *  snapshot build. */
+  let _lastActiveMethod: InterpolationMethodId = 'linear';
+  let _lastFallbackReason: FallbackReason = 'none';
+  let _lastImportDiagnostics: readonly ImportDiagnostic[] = EMPTY_DIAGNOSTICS;
 
   let _snapshot: WatchControllerSnapshot = { ...EMPTY_SNAPSHOT };
   const _listeners = new Set<() => void>();
@@ -126,24 +173,6 @@ export function createWatchController(): WatchController {
     bondedGroups.updateForTime(timePs, topology);
   }
 
-  /** Immediate render-sync at current playback time. Used by scrub, step, rollback. */
-  function renderAtCurrentTime() {
-    const timePs = playback.getCurrentTimePs();
-    if (renderer) {
-      const posData = playback.getDisplayPositionsAtTime(timePs);
-      const topology = playback.getTopologyAtTime(timePs);
-      if (posData) renderer.updateReviewFrame(posData.positions, posData.n, topology?.bonds ?? []);
-      appearance.projectAndSync(timePs);
-      updateAnalysis();
-      applyHighlight();
-      renderer.render();
-    } else {
-      appearance.projectAndSync(timePs);
-      updateAnalysis();
-      applyHighlight();
-    }
-  }
-
   /** Apply current highlight to renderer based on analysis domain priority. */
   function applyHighlight() {
     if (!renderer) return;
@@ -155,10 +184,86 @@ export function createWatchController(): WatchController {
     }
   }
 
+  /** Single source of truth for producing + applying a rendered frame at a
+   *  given playback time. Called by RAF tick (with render=false), scrub/step,
+   *  initial load, and rollback (all with render=true).
+   *
+   *  Does NOT call viewService.updateFollow() — follow is rate-based (uses
+   *  real dtMs for exponential easing) and therefore belongs in the RAF tick
+   *  loop, NOT in the render helper. The tick loop calls this helper with
+   *  render=false, then calls updateFollow(dtMs, renderer), then
+   *  renderer.render(). Scrub/load/rollback call this helper with render=true
+   *  and do not touch follow (current behavior preserved).
+   *
+   *  This is the ONLY function in the controller that invokes interpolation
+   *  or renderer.updateReviewFrame(). All other render paths must route
+   *  through here — direct calls are a bug. */
+  function applyReviewFrameAtTime(timePs: number, opts: { render: boolean }): void {
+    if (!renderer || !playback.isLoaded() || !interpolation) return;
+
+    // 1. Resolve positions via the interpolation runtime (always — the
+    //    runtime handles smoothPlayback=off, boundary degeneracy, capability
+    //    decline, and linear fallback internally).
+    const resolved = interpolation.resolve(timePs, {
+      enabled: settings.getSmoothPlayback(),
+      mode: settings.getInterpolationMode(),
+    });
+    _lastActiveMethod = resolved.activeMethod;
+    _lastFallbackReason = resolved.fallbackReason;
+
+    // 2. Discrete topology (still dense-prefix, not interpolated in Round 6).
+    const topology = playback.getTopologyAtTime(timePs);
+
+    // 3. Apply frame geometry — renderer retains `resolved.positions` by
+    //    reference in _reviewPositions, which display-aware queries (follow,
+    //    highlight, centroid) will read between now and the next
+    //    updateReviewFrame call.
+    renderer.updateReviewFrame(resolved.positions, resolved.n, topology?.bonds ?? []);
+
+    // 4. Authored color projection for this frame's atomId ordering.
+    appearance.projectAndSync(timePs);
+
+    // 5. Bonded-group topology / analysis state (discrete, unchanged).
+    updateAnalysis();
+
+    // 6. Highlight layer — reads renderer's displayed positions via
+    //    _applyHighlightLayer, so highlight geometry automatically tracks
+    //    the interpolated buffer from step 3 without special handling.
+    applyHighlight();
+
+    // 7. Final render (optional — RAF tick sets render=false and renders
+    //    AFTER calling updateFollow separately; scrub/load/rollback set
+    //    render=true).
+    if (opts.render) renderer.render();
+  }
+
+  /** Immediate render-sync at current playback time. Used by scrub, step,
+   *  rollback. Routes through the unified helper with render=true. */
+  function renderAtCurrentTime() {
+    applyReviewFrameAtTime(playback.getCurrentTimePs(), { render: true });
+  }
+
+  /** Viewer preferences are user-owned and independent of whether a file is
+   *  loaded. Surface them even in the empty-snapshot path so the UI can
+   *  reflect toggle changes on the landing page. */
+  function baseEmptySnapshot(): WatchControllerSnapshot {
+    return {
+      ...EMPTY_SNAPSHOT,
+      error: _snapshot.error,
+      theme: settings.getTheme(),
+      textSize: settings.getTextSize(),
+      smoothPlayback: settings.getSmoothPlayback(),
+      interpolationMode: settings.getInterpolationMode(),
+      activeInterpolationMethod: _lastActiveMethod,
+      lastFallbackReason: _lastFallbackReason,
+      importDiagnostics: _lastImportDiagnostics,
+    };
+  }
+
   function buildSnapshot(): WatchControllerSnapshot {
-    if (!playback.isLoaded()) return { ...EMPTY_SNAPSHOT, error: _snapshot.error };
+    if (!playback.isLoaded()) return baseEmptySnapshot();
     const meta = documentService.getMetadata();
-    if (!meta.fileName) return { ...EMPTY_SNAPSHOT, error: _snapshot.error };
+    if (!meta.fileName) return baseEmptySnapshot();
 
     return {
       loaded: true,
@@ -183,6 +288,11 @@ export function createWatchController(): WatchController {
       playDirection: playback.getPlaybackDirection(),
       theme: settings.getTheme(),
       textSize: settings.getTextSize(),
+      smoothPlayback: settings.getSmoothPlayback(),
+      interpolationMode: settings.getInterpolationMode(),
+      activeInterpolationMethod: _lastActiveMethod,
+      lastFallbackReason: _lastFallbackReason,
+      importDiagnostics: _lastImportDiagnostics,
     };
   }
 
@@ -196,7 +306,12 @@ export function createWatchController(): WatchController {
       || a.hoveredGroupId !== b.hoveredGroupId
       || a.following !== b.following || a.followedGroupId !== b.followedGroupId
       || a.speed !== b.speed || a.repeat !== b.repeat || a.playDirection !== b.playDirection
-      || a.theme !== b.theme || a.textSize !== b.textSize;
+      || a.theme !== b.theme || a.textSize !== b.textSize
+      || a.smoothPlayback !== b.smoothPlayback
+      || a.interpolationMode !== b.interpolationMode
+      || a.activeInterpolationMethod !== b.activeInterpolationMethod
+      || a.lastFallbackReason !== b.lastFallbackReason
+      || a.importDiagnostics !== b.importDiagnostics;
   }
 
   function setErrorKeepingCurrentState(error: string) {
@@ -209,6 +324,28 @@ export function createWatchController(): WatchController {
     if (!snapshotChanged(_snapshot, next)) return;
     _snapshot = next;
     notify();
+  }
+
+  // ── Interpolation runtime lifecycle helpers ──
+
+  /** Dispose any existing runtime and create a fresh one for `history`. */
+  function installInterpolationRuntime(history: LoadedFullHistory): void {
+    if (interpolation) interpolation.dispose();
+    interpolation = createWatchTrajectoryInterpolation(history);
+    _lastActiveMethod = 'linear';
+    _lastFallbackReason = 'none';
+    _lastImportDiagnostics = history.importDiagnostics;
+  }
+
+  /** Release the interpolation runtime — called on unload. */
+  function teardownInterpolationRuntime(): void {
+    if (interpolation) {
+      interpolation.dispose();
+      interpolation = null;
+    }
+    _lastActiveMethod = 'linear';
+    _lastFallbackReason = 'none';
+    _lastImportDiagnostics = EMPTY_DIAGNOSTICS;
   }
 
   // ── RAF loop ──
@@ -231,37 +368,28 @@ export function createWatchController(): WatchController {
       return;
     }
 
-    // ── Round 4 tick order: colors + follow projected before render ──
-    // 1. advance (above) → 2. sample → 3. updateReviewFrame → 4. project colors
-    // → 5. setAtomColorOverrides → 6. analysis → 7. follow → 8. highlight → 9. render → 10. snapshot
+    // ── Round 6 tick order ──
+    //   Step 1: unified render pipeline (resolve → updateReviewFrame →
+    //           appearance → analysis → highlight). No follow, no final render.
+    //   Step 2: rate-based camera follow using real dtMs. Must run AFTER the
+    //           helper (so _reviewPositions reflects the interpolated frame)
+    //           and BEFORE the final render (so camera position is current
+    //           for this frame).
+    //   Step 3: final composited render.
+    //   Step 4: publish snapshot.
     if (renderer && playback.isLoaded()) {
       try {
-        const timePs = playback.getCurrentTimePs();
-        const posData = playback.getDisplayPositionsAtTime(timePs);
-        const topology = playback.getTopologyAtTime(timePs);
-        if (posData) {
-          // 3. Apply frame geometry
-          renderer.updateReviewFrame(posData.positions, posData.n, topology?.bonds ?? []);
-          // 4-5. Project authored colors for this frame's atomId ordering
-          appearance.projectAndSync(timePs);
-        }
+        applyReviewFrameAtTime(playback.getCurrentTimePs(), { render: false });
       } catch (e) {
         console.error('[watch] render error (non-fatal):', e);
       }
     }
 
     try {
-      // 6. Bonded-group topology projection
-      updateAnalysis();
-      // 7. Camera follow — tracks target before render
       if (renderer && viewService.isFollowing()) {
         viewService.updateFollow(dtMs, renderer);
       }
-      // 8. Highlight on top of authored colors
-      applyHighlight();
-      // 9. Final composited render
       if (renderer) renderer.render();
-      // 10. Publish snapshot
       publishSnapshot();
     } catch (e) {
       console.error('[watch] snapshot error:', e);
@@ -320,15 +448,13 @@ export function createWatchController(): WatchController {
         // and deferring them preserves rollback safety (if renderer init fails, follow/hover
         // state is never cleared, so rollback doesn't need to restore them).
         appearance.reset();
+        // Round 6: install a fresh interpolation runtime sized to the new file's
+        // maxAtomCount and bound to its capability layer. Must precede the first
+        // applyReviewFrameAtTime call.
+        installInterpolationRuntime(history);
         if (renderer) {
           renderer.initForPlayback(history.simulation.maxAtomCount);
-          const timePs = playback.getCurrentTimePs();
-          const posData = playback.getDisplayPositionsAtTime(timePs);
-          const topology = playback.getTopologyAtTime(timePs);
-          if (posData) {
-            renderer.updateReviewFrame(posData.positions, posData.n, topology?.bonds ?? []);
-          }
-          renderer.render();
+          applyReviewFrameAtTime(playback.getCurrentTimePs(), { render: true });
         }
         // Reset interaction/view state after all risky init succeeded.
         // This ensures rollback preserves prior follow/hover state naturally.
@@ -352,11 +478,20 @@ export function createWatchController(): WatchController {
             appearance.restoreAssignments(prevAppearance);
             // Fully restore the visual scene
             if (renderer) renderer.initForPlayback(prevHistory.simulation.maxAtomCount);
+            // Round 6: recreate interpolation runtime against the ROLLED-BACK file
+            // BEFORE calling renderAtCurrentTime(). Without this step the helper
+            // would invoke a runtime still sized for the failed file.
+            installInterpolationRuntime(prevHistory);
             renderAtCurrentTime();
             if (wasRunning) startRAF();
           } catch (rollbackErr) {
             console.error('[watch] rollback also failed:', rollbackErr);
           }
+        } else {
+          // No prior history to roll back to — tear down the orphaned runtime
+          // that was installed for the failed file so subsequent calls don't
+          // see stale capability metadata or import diagnostics.
+          teardownInterpolationRuntime();
         }
         setErrorKeepingCurrentState(`Failed to initialize playback: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -483,8 +618,41 @@ export function createWatchController(): WatchController {
       publishSnapshot();
     },
 
+    // ── Round 6: smooth playback commands ──
+
+    setSmoothPlayback(enabled) {
+      settings.setSmoothPlayback(enabled);
+      // Re-render current frame so the mode change is immediately visible
+      // (especially when paused or scrubbing).
+      if (playback.isLoaded() && renderer) {
+        renderAtCurrentTime();
+      }
+      publishSnapshot();
+    },
+
+    setInterpolationMode(mode) {
+      settings.setInterpolationMode(mode);
+      if (playback.isLoaded() && renderer) {
+        renderAtCurrentTime();
+      }
+      publishSnapshot();
+    },
+
+    /** Stable immutable array of registered method metadata. The reference
+     *  only changes when the registry is mutated (register/unregister) or
+     *  when a new file is loaded (runtime recreation). Safe to call during
+     *  React render — will not cause rerender churn on its own because the
+     *  identity is stable between mutations. Returns a frozen empty array
+     *  when no file is loaded. */
+    getRegisteredInterpolationMethods() {
+      return interpolation
+        ? interpolation.getRegisteredMethods()
+        : EMPTY_METHODS;
+    },
+
     getPlaybackModel: () => playback,
     getBondedGroups: () => bondedGroups,
+    getInterpolationRuntime: () => interpolation,
 
     createRenderer(container) {
       // Guard: tear down any prior renderer subsystems to prevent listener/RAF leaks
@@ -497,8 +665,15 @@ export function createWatchController(): WatchController {
       if (playback.isLoaded()) {
         const meta = documentService.getMetadata();
         if (meta.maxAtomCount > 0) renderer.initForPlayback(meta.maxAtomCount);
-        // Resync authored colors into the new renderer
-        appearance.projectAndSync(playback.getCurrentTimePs());
+        // Route through the unified render pipeline so the newly attached
+        // renderer gets current geometry, interpolation, colors, analysis,
+        // and highlight state in one pass. Without this, a reattach while
+        // paused would leave the renderer blank until the next RAF tick.
+        if (interpolation) {
+          applyReviewFrameAtTime(playback.getCurrentTimePs(), { render: true });
+        } else {
+          appearance.projectAndSync(playback.getCurrentTimePs());
+        }
       }
       return renderer;
     },
@@ -513,6 +688,7 @@ export function createWatchController(): WatchController {
       viewService.reset();
       appearance.reset();
       documentService.clear();
+      teardownInterpolationRuntime();
       detachRenderer();
     },
   };

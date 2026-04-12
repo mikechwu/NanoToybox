@@ -256,9 +256,19 @@ describe('Architecture ownership boundaries', () => {
     const { fileURLToPath } = await import('url');
     const dir = path.dirname(fileURLToPath(import.meta.url));
     const src = fs.readFileSync(path.resolve(dir, '../../watch/js/watch-controller.ts'), 'utf8');
-    // Controller should not import loadHistoryFile or importFullHistory directly
+    // Controller must not call file parsing functions at runtime.
+    // Runtime imports from history-file-loader are forbidden entirely.
     expect(src).not.toContain("from './history-file-loader'");
-    expect(src).not.toContain("from './full-history-import'");
+    // Round 6: controller may reference types from full-history-import (to
+    // describe capability-layer fields and import diagnostics in its snapshot
+    // interface) but must NOT invoke runtime functions from it. Enforce via
+    // type-only import: `import type { ... } from './full-history-import';`
+    // Runtime imports (without `type`) remain forbidden.
+    const runtimeImport = /^\s*import\s+\{[^}]*\}\s*from\s*['"]\.\/full-history-import['"]/m;
+    expect(runtimeImport.test(src)).toBe(false);
+    // Controller never calls importFullHistory / loadHistoryFile.
+    expect(src).not.toMatch(/\bimportFullHistory\s*\(/);
+    expect(src).not.toMatch(/\bloadHistoryFile\s*\(/);
   });
 
   it('controller does not own playback rate constant', async () => {

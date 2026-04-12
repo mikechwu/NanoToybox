@@ -147,7 +147,8 @@ NanoToybox/
 │   │   ├── history-file-v1.ts        # Shared v1 file types, detection (detectHistoryFile), shape-safe validation (validateFullHistoryFile)
 │   │   ├── connected-components.ts   # Union-find connected-component computation (extracted from simulation-timeline.ts)
 │   │   ├── bonded-group-projection.ts # Pure overlap reconciliation, stable group IDs, display ordering (extracted from bonded-group-runtime.ts)
-│   │   └── bonded-group-utils.ts     # Shared bonded-group partitioning (partitionBondedGroups, SMALL_CLUSTER_THRESHOLD). Extracted from lab/js/store/selectors/bonded-groups.ts
+│   │   ├── bonded-group-utils.ts     # Shared bonded-group partitioning (partitionBondedGroups, SMALL_CLUSTER_THRESHOLD). Extracted from lab/js/store/selectors/bonded-groups.ts
+│   │   └── units.ts                  # Physical unit constants (FS_PER_PS, IMPLAUSIBLE_VELOCITY_A_PER_FS) for history-file interpolation math
 │   ├── input/
 │   │   └── camera-gesture-constants.ts   # Shared triad tap/drag/double-tap discrimination thresholds (TRIAD_DRAG_COMMIT_PX, TAP_MAX_DURATION_MS, DOUBLE_TAP_WINDOW_MS, etc.)
 │   ├── appearance/
@@ -177,28 +178,29 @@ NanoToybox/
 │   │   └── watch-dock.css            # Watch dock CSS (3-zone hierarchical layout)
 │   └── js/
 │       ├── main.ts                   # Thin bootstrap: theme init, controller creation, React mount
-│       ├── watch-controller.ts       # Non-React facade: orchestrates domain services, owns RAF clock, snapshot publication, transactional file open
+│       ├── watch-controller.ts       # Non-React facade: orchestrates domain services, owns RAF clock, snapshot publication, transactional file open, interpolation runtime lifecycle
 │       ├── watch-document-service.ts # File lifecycle: read, detect, validate, import, document metadata. Non-destructive prepare/commit.
 │       ├── watch-view-service.ts     # Camera target, follow state (frozen atom set), center/follow commands
 │       ├── watch-camera-input.ts     # DOM event binding for orbit + triad interaction (desktop orbit + mobile triad, no atom picking)
 │       ├── watch-overlay-layout.ts   # Triad sizing/positioning using lab-parity formulas (device-aware, dock-clearance)
 │       ├── watch-bonded-group-appearance.ts # Stable-atomId color model: authored assignments keyed by stable atomIds, per-frame projection to dense indices, renderer sync
-│       ├── watch-settings.ts         # Persistent appearance preferences: theme + text-size (session-only, survives file replacement)
+│       ├── watch-settings.ts         # Viewer preferences: theme, text-size, smoothPlayback, interpolationMode (session-only, survives file replacement)
+│       ├── watch-trajectory-interpolation.ts # Interpolation runtime: strategy registry (Linear stable, Hermite + Catmull-Rom experimental), bracket lookup with cursor cache, preallocated output buffer, resolve() API, fallback taxonomy
 │       ├── watch-playback-model.ts   # Separated sampling channels (positions, topology, config, boundary) with time clamping; bidirectional playback, speed 0.5x–20x, repeat
 │       ├── watch-renderer.ts         # Thin adapter over lab Renderer (initForPlayback, updateReviewFrame, applyTheme)
 │       ├── watch-bonded-groups.ts    # Memoized bonded-group tracking via shared projection (no Zustand)
 │       ├── react-root.tsx            # React mount/unmount entry point
 │       ├── history-file-loader.ts    # Two-step file detection + support decision (delegates to shared schema module)
-│       ├── full-history-import.ts    # Normalizes v1 file data (number[] → Float64Array, {a,b,distance} → tuples)
+│       ├── full-history-import.ts    # Normalizes v1 file data (number[] → Float64Array, {a,b,distance} → tuples); precomputes InterpolationCapability (per-bracket/per-window typed-array flags + reason arrays), import diagnostics, velocity sanity check
 │       ├── settings-content.ts       # Structured help section data for WatchSettingsSheet (viewer-specific, not cloned from lab)
 │       └── components/
 │           ├── WatchApp.tsx              # Top-level shell: landing vs workspace switching
 │           ├── WatchCanvas.tsx           # Renderer lifecycle via useEffect + ref (create/destroy only)
 │           ├── WatchLanding.tsx          # File-open landing with drag/drop
 │           ├── WatchTopBar.tsx           # File badge + file name + open-file action
-│           ├── WatchDock.tsx             # 3-zone hierarchical dock: transport (tap=step, hold=directional play), speed (log slider), settings/repeat
+│           ├── WatchDock.tsx             # 3-zone hierarchical dock: transport (tap=step, hold=directional play), speed (log slider), repeat + Smooth toggle + settings
 │           ├── WatchTimeline.tsx         # Custom scrubber track using shared timeline-track.css primitives (full-width, no mode rail)
-│           ├── WatchSettingsSheet.tsx    # Settings sheet: Appearance (theme, text-size via Segmented), File Info, Help. Uses shared useSheetLifecycle + sheet-shell.css
+│           ├── WatchSettingsSheet.tsx    # Settings sheet: Smooth Playback (toggle + method picker from registry), Appearance (theme, text-size via Segmented), File Info, Help. Uses shared useSheetLifecycle + sheet-shell.css
 │           ├── WatchBondedGroupsPanel.tsx # Two-tier bonded-groups display using shared partitionBondedGroups; color chip + popover
 │           └── PlaybackSpeedControl.tsx  # Compact log-mapped speed slider + readout (uses shared playback-speed-constants)
 ├── viewer/
@@ -234,6 +236,8 @@ Pure, framework-free modules consumed by both `lab/` and `watch/`. No Zustand, n
 - **`src/history/bonded-group-projection.ts`** — pure overlap reconciliation, stable ID assignment, display ordering, and summary construction. Canonical definition of `BondedGroupSummary` (re-exported by `app-store.ts` for lab consumers). Provides `createBondedGroupProjection()` factory that returns a stateful projector tracking previous-frame IDs for stability across topology changes. Used by `lab/js/runtime/bonded-group-runtime.ts` (lab/store adapter) and `watch/js/watch-bonded-groups.ts` (local adapter without Zustand).
 
 - **`src/history/bonded-group-utils.ts`** — pure partitioning function (`partitionBondedGroups`) that splits `BondedGroupSummary[]` into large and small buckets by atom count (threshold: `SMALL_CLUSTER_THRESHOLD`). Shared between `lab/js/store/selectors/bonded-groups.ts` (re-exports for lab consumers) and `watch/js/components/WatchBondedGroupsPanel.tsx`. No framework dependencies.
+
+- **`src/history/units.ts`** — physical unit conversion constants for history-file interpolation math. `FS_PER_PS` (1000 fs/ps) for converting Å/fs velocities to Å/ps in Hermite tangent computation. `IMPLAUSIBLE_VELOCITY_A_PER_FS` (10.0 Å/fs, ~66x simulator V_HARD_MAX) for import-time velocity magnitude sanity check — frames exceeding this threshold get `velocityReason = 'velocities-implausible'` so Hermite falls back to linear. Owned here (not in watch/) because the unit convention originates from the simulator. Used by `watch/js/watch-trajectory-interpolation.ts` (Hermite strategy) and `watch/js/full-history-import.ts` (sanity check).
 
 #### `src/input/` — Shared input discrimination constants
 
@@ -717,7 +721,7 @@ bonded-group-highlight-runtime.ts          interaction-highlight-runtime.ts
 
 ### Watch App (`watch/`)
 
-`watch/` is a read-only history file viewer — it imports `.atomdojo` files exported by the lab and plays them back with full bidirectional playback (0.5x-20x speed, repeat, step forward/backward). No simulation, no editing, no Zustand store. React UI with a controller facade: `main.ts` creates the controller and mounts React; the controller orchestrates domain services (document, playback, view, camera, overlay, bonded groups, appearance, settings) and owns the RAF clock; React components subscribe via `useSyncExternalStore`. Reuses the lab renderer via a narrow adapter.
+`watch/` is a read-only history file viewer — it imports `.atomdojo` files exported by the lab and plays them back with full bidirectional playback (0.5x-20x speed, repeat, step forward/backward), with optional smooth inter-frame interpolation (Linear stable default; Hermite and Catmull-Rom experimental). No simulation, no editing, no Zustand store. React UI with a controller facade: `main.ts` creates the controller and mounts React; the controller orchestrates domain services (document, playback, view, camera, overlay, bonded groups, appearance, settings, interpolation) and owns the RAF clock; React components subscribe via `useSyncExternalStore`. Reuses the lab renderer via a narrow adapter.
 
 **Domain service architecture:**
 ```
@@ -730,7 +734,15 @@ watch-controller.ts (facade: orchestrates domains, RAF clock, snapshot publicati
        │       │                           document metadata, transactional rollback
        │       ├── history-file-loader.ts   ← file I/O, delegates detection + validation
        │       │                               to src/history/history-file-v1.ts
-       │       └── full-history-import.ts   ← normalizes v1 data into playback-ready model
+       │       └── full-history-import.ts   ← normalizes v1 data into playback-ready model;
+       │                                       precomputes InterpolationCapability + diagnostics
+       │
+       ├── watch-trajectory-interpolation.ts ← interpolation runtime: strategy registry,
+       │       │                                bracket lookup with cursor cache, resolve() API,
+       │       │                                preallocated output buffer, fallback taxonomy.
+       │       │                                Owned by controller (created on file load,
+       │       │                                disposed on unload/rollback)
+       │       └── src/history/units.ts        (FS_PER_PS, IMPLAUSIBLE_VELOCITY_A_PER_FS)
        │
        ├── watch-playback-model.ts      ← separated sampling channels (positions,
        │                                   topology, config, boundary); bidirectional
@@ -763,7 +775,8 @@ watch-controller.ts (facade: orchestrates domains, RAF clock, snapshot publicati
        ├── watch-view-service.ts        ← camera target, follow state (frozen atom set),
        │                                   center/follow commands
        │
-       └── watch-settings.ts            ← persistent appearance: theme + text-size
+       └── watch-settings.ts            ← viewer preferences: theme, text-size,
+                                           smoothPlayback, interpolationMode
                                            (session-only, survives file replacement)
 ```
 
@@ -784,35 +797,37 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
            ├── WatchDock             ← 3-zone hierarchical playback dock:
            │   ├── [transport]          tap=step, hold=directional play (pointer capture)
            │   ├── PlaybackSpeedControl log-mapped 0.5x–20x slider + readout
-           │   └── [meta]              settings + repeat toggle
+           │   └── [meta]              repeat + Smooth toggle (.watch-dock__smooth) + settings
            ├── WatchTimeline         ← full-width scrubber (no mode rail — watch advantage over lab)
-           └── WatchSettingsSheet    ← Appearance (theme, text-size), File Info, Help
+           └── WatchSettingsSheet    ← Smooth Playback (toggle + method picker),
+                                       Appearance (theme, text-size), File Info, Help
                                        (shared Segmented + useSheetLifecycle)
 ```
 
 **Domain modules:**
 - **main.ts** — thin bootstrap: applies theme tokens, creates the `WatchController`, mounts the React UI via `mountWatchUI()`. Does NOT own DOM manipulation, playback logic, or renderer lifecycle.
-- **watch-controller.ts** — non-React facade that orchestrates domain services and bridges to React UI. Owns: RAF clock (playback timing + renderer frame application + follow tracking + appearance sync in the same `tick()`), `WatchControllerSnapshot` publication via `getSnapshot()`/`subscribe()`. Delegates file lifecycle to `watch-document-service.ts`, playback to `watch-playback-model.ts`, camera input to `watch-camera-input.ts`, overlay to `watch-overlay-layout.ts`, color to `watch-bonded-group-appearance.ts`, and appearance to `watch-settings.ts`. Coordinates commit/rollback across services on file open.
+- **watch-controller.ts** — non-React facade that orchestrates domain services and bridges to React UI. Owns: RAF clock (playback timing + renderer frame application + follow tracking + appearance sync in the same `tick()`), `WatchControllerSnapshot` publication via `getSnapshot()`/`subscribe()`, interpolation runtime lifecycle (`installInterpolationRuntime`/`teardownInterpolationRuntime` — recreated on file load, disposed on unload/rollback). All render entry points (RAF tick, scrub/step, initial load, rollback) route through the single `applyReviewFrameAtTime()` helper, which is the sole caller of `interpolation.resolve()` and `renderer.updateReviewFrame()`. Snapshot fields include `smoothPlayback`, `interpolationMode`, `activeInterpolationMethod` (string `InterpolationMethodId`), `lastFallbackReason`, and `importDiagnostics`. Exposes `getRegisteredInterpolationMethods()` as a stable accessor (frozen array, reference changes only on registry mutation). Delegates file lifecycle to `watch-document-service.ts`, playback to `watch-playback-model.ts`, camera input to `watch-camera-input.ts`, overlay to `watch-overlay-layout.ts`, color to `watch-bonded-group-appearance.ts`, interpolation to `watch-trajectory-interpolation.ts`, and viewer preferences to `watch-settings.ts`. Coordinates commit/rollback across services on file open.
 - **watch-document-service.ts** — file lifecycle service. Non-destructive `prepare()` (read, detect, validate, import -- no side effects) and `commit()` (apply to playback model). Owns `DocumentMetadata` (fileName, fileKind, atomCount, frameCount, maxAtomCount). The controller coordinates commit/rollback around this service.
-- **watch-playback-model.ts** — separated sampling channels for positions, topology, config, and boundary state. Bidirectional playback with speed 0.5x-20x (logarithmic mapping via shared `playback-speed-constants.ts`), repeat, step forward/backward. Gap clamp prevents huge jumps after tab-background return. v1: all channels return exact recorded data (stepwise from nearest frame at or before `timePs`). v2 path: only position sampling may become interpolated; topology/config/boundary remain stepwise.
+- **watch-playback-model.ts** — separated sampling channels for positions, topology, config, and boundary state. Bidirectional playback with speed 0.5x-20x (logarithmic mapping via shared `playback-speed-constants.ts`), repeat, step forward/backward. Gap clamp prevents huge jumps after tab-background return. All channels return exact recorded data (stepwise from nearest frame at or before `timePs`). Position interpolation is handled by the trajectory interpolation runtime in the controller pipeline, not in the playback model itself; topology/config/boundary remain stepwise.
 - **watch-camera-input.ts** — DOM event binding for orbit and triad interaction. Simpler than lab's `InputManager` because watch has no atoms to interact with -- only discriminates triad hit area vs. background. Desktop: left/right-drag orbit, scroll zoom. Mobile: 1-finger orbit via triad, 2-finger pinch zoom, tap to snap to axis, double-tap to reset. Uses shared `camera-gesture-constants.ts` for numerical thresholds.
 - **watch-overlay-layout.ts** — triad sizing and positioning using the same formulas as lab's `overlay-layout.ts`. Measures dock region, applies device-mode-aware sizing (phone/tablet/desktop via shared `device-mode.ts`). Phone clears full-width dock; tablet/desktop uses safe-area corner margins.
 - **watch-bonded-group-appearance.ts** — authored color assignments using stable atomIds (from history file frames), not dense slot indices. Each frame, stable atomIds are projected to current dense slot indices via `rebuildOverridesFromDenseIndices()` from the shared appearance module before passing to the renderer. Owns: authored color assignments, per-frame projection, renderer sync. Does NOT own: hover highlight, follow state, color editor UI state.
 - **watch-view-service.ts** — camera target and follow state. Follow model matches lab: follow freezes the atom membership at click time and tracks those specific atoms, not the live group-id projection. This prevents follow from drifting when group IDs or memberships change. Owns: camera target ref, follow target (frozen atom set), center/follow commands.
-- **watch-settings.ts** — persistent appearance preferences: theme and text-size. Session-only (no localStorage). Survives file replacement (appearance, not transport). Does NOT own speed or repeat (transport -- owned by playback model).
+- **watch-settings.ts** — viewer preferences: theme, text-size, `smoothPlayback` (default ON), and `interpolationMode` (default `'linear'`). Session-only (no localStorage). Survives file replacement (viewer preferences, not transport). Exports the `WatchInterpolationMode` type (derived from `PRODUCT_INTERPOLATION_MODE_IDS` frozen tuple: `'linear' | 'hermite' | 'catmull-rom'`), the `isWatchInterpolationMode()` type guard, and the `PRODUCT_INTERPOLATION_MODE_IDS` tuple as single source of truth for productized mode IDs. Does NOT own speed or repeat (transport -- owned by playback model).
 - **watch-renderer.ts** — narrow adapter over the lab `Renderer`, exposing only `initForPlayback()`, `updateReviewFrame()`, `applyTheme()`, and canvas access. Shields watch code from the 2500+ line lab renderer surface. Lab's renderer provides `_getDisplayedAtomCount()` which uses `_reviewAtomCount` in review mode so that `_applyAtomColorOverrides()` iterates over the correct atom count for watch display.
 - **watch-bonded-groups.ts** — local adapter that computes bonded groups from imported topology using the shared `connected-components` and `bonded-group-projection` modules. Memoized by topology `frameId` -- skips recomputation when the frame has not changed. No Zustand dependency.
 - **react-root.tsx** — React mount/unmount entry point. Mounts `WatchApp` under `React.StrictMode` into `#watch-root`.
 - **history-file-loader.ts** — two-step file load: `detectHistoryFile()` (envelope) then `validateFullHistoryFile()` (semantic), both delegated to the shared schema module. Owns only `File` I/O and the user-facing load flow.
-- **full-history-import.ts** — normalizes validated v1 file data into `LoadedFullHistory`: converts `number[]` to `Float64Array` for positions/velocities, `{ a, b, distance }` to `[a, b, distance]` tuples for bonds, and precomputes `restartAlignedToDense` flag.
+- **full-history-import.ts** — normalizes validated v1 file data into `LoadedFullHistory`: converts `number[]` to `Float64Array` for positions/velocities, `{ a, b, distance }` to `[a, b, distance]` tuples for bonds, and precomputes `restartAlignedToDense` flag. Round 6 additions: precomputes `InterpolationCapability` — per-frame velocity endpoint reasons, per-bracket `bracketSafe` / `hermiteSafe` typed-array flags, per-4-window `window4Safe` flags, plus diagnostic reason arrays (`BracketReason`, `WindowReason`, `VelocityEndpointReason`). Records `velocityUnit` (always `'angstrom-per-fs'` for v1; `'unknown'` reserved for hypothetical v2). Performs velocity magnitude sanity check against `IMPLAUSIBLE_VELOCITY_A_PER_FS` from `src/history/units.ts`. Collects `ImportDiagnostic[]` (typed codes: `'velocities-implausible'`, `'restart-count-mismatch'`, `'restart-time-mismatch'`, `'atomids-mismatch-at-frame'`) surfaced to the settings UI.
+- **watch-trajectory-interpolation.ts** — interpolation runtime created by the controller on file load. Strategy registry ships three built-in strategies (`BUILTIN_STRATEGIES` export): Linear (stable, universal fallback), Hermite (experimental, velocity-based cubic using `FS_PER_PS` tangent scaling), and Catmull-Rom (experimental, 4-frame window). New strategies can be registered via `registerStrategy()` with any string `InterpolationMethodId` — dev-only methods do not widen the productized `WatchInterpolationMode` union. Method metadata uses a discriminated union (`ProductMethodMetadata` / `DevMethodMetadata`) with `availability` as discriminant, so the UI can narrow to product methods without casting. The `resolve()` API handles the full resolution chain: smoothPlayback-disabled bypass, bracket lookup (binary search with cursor-cache fast path for monotonic playback), non-interpolatable bracket fallback (via capability layer flags), strategy input assembly (velocity pairs for Hermite, 4-frame windows for Catmull-Rom), strategy execution, and decline-to-linear fallback. `FallbackReason` taxonomy (`'none' | 'disabled' | 'at-boundary' | 'single-frame' | 'variable-n' | 'atomids-mismatch' | 'velocities-unavailable' | 'insufficient-frames' | 'window-mismatch' | 'capability-declined'`) surfaces in the controller snapshot. Buffer ownership: the preallocated `Float64Array` output buffer (sized to `maxAtomCount * 3` at file load) is returned by reference on interpolated paths; on boundary/fallback paths the importer's immutable dense-frame positions reference is returned directly. Lifecycle: `reset()` clears cursor cache and diagnostics; `dispose()` releases internal state.
 - **settings-content.ts** — structured help section data (`WATCH_HELP_SECTIONS`) for `WatchSettingsSheet`. Viewer-specific content (not cloned from lab simulation instructions). Separates content from presentation.
 
 **React components:**
 - **WatchApp** — top-level shell. Subscribes to controller via `useSyncExternalStore(controller.subscribe, controller.getSnapshot)`. Routes between `WatchLanding` (no file loaded) and the workspace layout (file loaded). Owns local panel expand/collapse and sheet open/close state.
 - **WatchCanvas** — owns Three.js renderer create/destroy lifecycle only. Creates the renderer via `controller.createRenderer()` on mount, destroys and detaches on unmount. Does NOT own the playback clock or frame updates -- the controller's RAF loop pushes frames into the renderer directly.
-- **WatchDock** — 3-zone hierarchical dock. Transport zone: tap=step, hold=directional play using pointer capture; uses `HOLD_PLAY_THRESHOLD_MS` from shared speed constants. Speed zone: `PlaybackSpeedControl` (log-mapped slider + readout). Meta zone: settings button + repeat toggle. Uses shared `dock-shell.css` and `dock-tokens.css` plus watch-specific `watch-dock.css`.
+- **WatchDock** — 3-zone hierarchical dock. Transport zone: tap=step, hold=directional play using pointer capture; uses `HOLD_PLAY_THRESHOLD_MS` from shared speed constants. Speed zone: `PlaybackSpeedControl` (log-mapped slider + readout). Meta zone: left subgroup (repeat icon + Smooth text-label toggle `.watch-dock__smooth` with `aria-pressed`), right subgroup (settings button). Uses shared `dock-shell.css` and `dock-tokens.css` plus watch-specific `watch-dock.css`.
 - **WatchTimeline** — custom scrubber using shared `timeline-track.css` primitives (`.timeline-track`, `.timeline-fill`, `.timeline-thumb`). Full-width track (no mode rail -- watch advantage over lab). Drag resilience via pointer capture with fallback. Uses `formatTime` from lab's `timeline-format.ts`.
-- **WatchSettingsSheet** — settings surface with three sections: Appearance (theme + text-size via shared `Segmented` component), File Info (atom count, frame count, duration), Help (viewer-specific sections from `settings-content.ts`). Uses shared `useSheetLifecycle` hook for mount/animate/escape lifecycle, shared `sheet-shell.css` and `segmented.css` for styling.
+- **WatchSettingsSheet** — settings surface with four sections: Smooth Playback (on/off toggle + interpolation method picker driven from registry metadata via `getRegisteredInterpolationMethods()`, with per-frame diagnostic note when active method diverges from selection), Appearance (theme + text-size via shared `Segmented` component), File Info (atom count, frame count, duration), Help (viewer-specific sections from `settings-content.ts`). Method picker shows product methods only (filtered via `availability === 'product'` discriminant); stable methods first, then experimental. Uses shared `useSheetLifecycle` hook for mount/animate/escape lifecycle, shared `sheet-shell.css` and `segmented.css` for styling.
 - **PlaybackSpeedControl** — compact log-mapped speed slider with numeric readout. Click readout to reset to 1x. Uses `sliderToSpeed`, `speedToSlider`, `formatSpeed` from shared `playback-speed-constants.ts`.
 - **WatchBondedGroupsPanel** — collapsible bonded-group inspector with two-level display (large/small clusters via `partitionBondedGroups` from `src/history/bonded-group-utils.ts`). Includes color chip + popover for per-group color assignment. Uses shared `review-parity.css` and `bonded-groups-parity.css`.
 - **WatchTopBar** — file kind badge, filename, open-another action. Uses `.review-topbar` class names from shared `review-parity.css`.
