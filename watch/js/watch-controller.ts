@@ -33,12 +33,14 @@ import { createWatchBondedGroupAppearance, type WatchBondedGroupAppearance } fro
 import { createWatchSettings, type WatchSettings, type WatchInterpolationMode } from './watch-settings';
 import {
   createWatchTrajectoryInterpolation,
+  createWatchTrajectoryInterpolationForReduced,
   type WatchTrajectoryInterpolation,
   type FallbackReason,
   type InterpolationMethodMetadata,
   type InterpolationMethodId,
 } from './watch-trajectory-interpolation';
 import type { LoadedFullHistory, ImportDiagnostic } from './full-history-import';
+import type { LoadedWatchHistory } from './watch-playback-model';
 import { VIEWER_DEFAULTS } from '../../src/config/viewer-defaults';
 import type { BondedGroupSummary } from './watch-bonded-groups';
 
@@ -328,13 +330,20 @@ export function createWatchController(): WatchController {
 
   // ── Interpolation runtime lifecycle helpers ──
 
-  /** Dispose any existing runtime and create a fresh one for `history`. */
-  function installInterpolationRuntime(history: LoadedFullHistory): void {
+  /** Dispose any existing runtime and create a fresh one for `history`.
+   *  Full-history files use the standard factory. Reduced files use a
+   *  dedicated factory that computes a minimal capability layer internally. */
+  function installInterpolationRuntime(history: LoadedWatchHistory): void {
     if (interpolation) interpolation.dispose();
-    interpolation = createWatchTrajectoryInterpolation(history);
+    if (history.kind === 'full') {
+      interpolation = createWatchTrajectoryInterpolation(history);
+      _lastImportDiagnostics = history.importDiagnostics;
+    } else {
+      interpolation = createWatchTrajectoryInterpolationForReduced(history);
+      _lastImportDiagnostics = EMPTY_DIAGNOSTICS;
+    }
     _lastActiveMethod = 'linear';
     _lastFallbackReason = 'none';
-    _lastImportDiagnostics = history.importDiagnostics;
   }
 
   /** Release the interpolation runtime — called on unload. */

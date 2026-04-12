@@ -3,12 +3,16 @@
  *
  * Delegates detection and validation to the shared schema module.
  * Owns only file I/O and the user-facing load flow.
+ *
+ * Supports kind: 'full' and 'reduced'. Rejects 'replay' (legacy).
  */
 
 import {
   detectHistoryFile,
   validateFullHistoryFile,
+  validateReducedFile,
   type AtomDojoHistoryFileV1,
+  type AtomDojoReducedFileV1,
   type DetectedHistoryFile,
 } from '../../src/history/history-file-v1';
 
@@ -17,6 +21,7 @@ export type { DetectedHistoryFile };
 /** Policy decision: can this build of watch/ open the detected file? */
 export type LoadDecision =
   | { status: 'supported'; kind: 'full'; file: AtomDojoHistoryFileV1 }
+  | { status: 'supported'; kind: 'reduced'; file: AtomDojoReducedFileV1 }
   | { status: 'unsupported'; kind: string; reason: string }
   | { status: 'invalid'; errors: string[] };
 
@@ -53,6 +58,19 @@ export function loadHistoryFile(text: string): LoadDecision {
       return { status: 'invalid', errors };
     }
     return { status: 'supported', kind: 'full', file: detected.file as AtomDojoHistoryFileV1 };
+  }
+
+  if (detected.kind === 'reduced') {
+    let errors: string[];
+    try {
+      errors = validateReducedFile(detected.file);
+    } catch (e) {
+      return { status: 'invalid', errors: [`Validation error: ${e instanceof Error ? e.message : String(e)}`] };
+    }
+    if (errors.length > 0) {
+      return { status: 'invalid', errors };
+    }
+    return { status: 'supported', kind: 'reduced', file: detected.file as AtomDojoReducedFileV1 };
   }
 
   if (detected.kind === 'replay') {

@@ -1,11 +1,16 @@
 /**
- * Shared bond-topology builders — naive (loader) and accelerated (physics).
+ * Shared bond-topology builders — three entry points for three callers:
+ *
+ *   buildBondTopologyFromAtoms     — loader path (StructureAtom-shaped objects)
+ *   buildBondTopologyFromPositions — Watch reconstruction path (dense positions + atomIds + element map)
+ *   buildBondTopologyAccelerated   — physics hot path (spatial-hash, caller-owned output buffer)
  *
  * Pure module: depends only on src/types/interfaces (BondTuple) and ./bond-rules.
  * No lab/, watch/, or CONFIG dependencies.
  *
- * Owns:        buildBondTopologyFromAtoms, buildBondTopologyAccelerated,
- *              BondTopologyWorkspace, createBondTopologyWorkspace
+ * Owns:        buildBondTopologyFromAtoms, buildBondTopologyFromPositions,
+ *              buildBondTopologyAccelerated, BondTopologyWorkspace,
+ *              createBondTopologyWorkspace
  * Depends on:  BondTuple from src/types/interfaces, BondRuleSet from ./bond-rules
  */
 
@@ -36,6 +41,47 @@ export function buildBondTopologyFromAtoms(
       const pairCutoff = rules.maxPairDistance(atoms[i].element, atoms[j].element);
       const pairCutoff2 = pairCutoff * pairCutoff;
       if (d2 < pairCutoff2 && d2 > minDist2) {
+        bonds.push([i, j, Math.sqrt(d2)]);
+      }
+    }
+  }
+  return bonds;
+}
+
+/** Lower-level naive builder — accepts dense interleaved positions + atomIds +
+ *  an element-by-ID lookup. Avoids allocating per-atom { element, x, y, z }
+ *  records, making it suited for Watch reconstruction where data is already in
+ *  this format. Global-rule-only (uses rules.globalMaxDist2) when elementById
+ *  is null; pair-aware when an element map is provided. */
+export function buildBondTopologyFromPositions(
+  n: number,
+  positions: Float64Array | ArrayLike<number>,
+  atomIds: readonly number[],
+  elementById: ReadonlyMap<number, string> | null,
+  rules: BondRuleSet,
+): BondTuple[] {
+  const bonds: BondTuple[] = [];
+  const minDist2 = rules.minDist2;
+  for (let i = 0; i < n; i++) {
+    const i3 = i * 3;
+    for (let j = i + 1; j < n; j++) {
+      const j3 = j * 3;
+      const dx = (positions[j3] as number) - (positions[i3] as number);
+      const dy = (positions[j3 + 1] as number) - (positions[i3 + 1] as number);
+      const dz = (positions[j3 + 2] as number) - (positions[i3 + 2] as number);
+      const d2 = dx * dx + dy * dy + dz * dz;
+      let cutoff2: number;
+      if (elementById) {
+        const eA = elementById.get(atomIds[i]);
+        const eB = elementById.get(atomIds[j]);
+        if (eA === undefined) throw new Error(`buildBondTopologyFromPositions: atomId ${atomIds[i]} not found in elementById map`);
+        if (eB === undefined) throw new Error(`buildBondTopologyFromPositions: atomId ${atomIds[j]} not found in elementById map`);
+        const c = rules.maxPairDistance(eA, eB);
+        cutoff2 = c * c;
+      } else {
+        cutoff2 = rules.globalMaxDist2;
+      }
+      if (d2 < cutoff2 && d2 > minDist2) {
         bonds.push([i, j, Math.sqrt(d2)]);
       }
     }

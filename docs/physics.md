@@ -182,7 +182,16 @@ The interactive page applies a soft containment boundary to prevent atoms from e
 The browser implementation (`lab/js/physics.ts`) includes several optimizations beyond a direct port:
 
 - **On-the-fly distance computation** — distances and unit vectors are computed inline from the `pos` array instead of pre-cached in N×N `Float64Array` buffers. Benchmarked 45% faster than the cached approach at 2040 atoms because the `pos` array (~49 KB) fits in L1 cache while the N×N arrays (~127 MB at 2040 atoms) cause main-memory random-access traffic.
-- **Spatial hash acceleration** — `buildNeighborList()` and `updateBondList()` use a Teschner spatial hash (3-pass: count, prefix-sum, scatter) instead of O(N²) all-pairs scans. `tableSize = 2N` — O(N) time and memory regardless of domain extent. No dense grid allocation, no span-dependent costs. Neighbor hash uses 2.60 Å cells; bond hash uses 1.8 Å cells. Shared `_buildCellGrid()` helper with 27-cell stencil lookup and cell-coordinate collision filtering. Validated via `lab/bench/bench-celllist.html` (equivalence against all-pairs reference) and `lab/bench/bench-spread.html` (span-independence under dynamic expansion).
+- **Spatial hash acceleration** — `buildNeighborList()` and `updateBondList()` use a Teschner spatial hash (3-pass: count, prefix-sum, scatter) instead of O(N²) all-pairs scans. `tableSize = 2N` — O(N) time and memory regardless of domain extent. No dense grid allocation, no span-dependent costs. Neighbor hash uses 2.60 Å cells; bond hash uses 1.8 Å cells. Shared `_buildCellGrid()` helper with 27-cell stencil lookup and cell-coordinate collision filtering. `updateBondList()` delegates to `buildBondTopologyAccelerated` from `src/topology/build-bond-topology.ts`, which uses a preallocated workspace with grow-only semantics to avoid per-call allocation. Validated via `lab/bench/bench-celllist.html` (equivalence against all-pairs reference) and `lab/bench/bench-spread.html` (span-independence under dynamic expansion).
+
+#### Shared Bond Topology
+
+Bond topology computation is extracted into shared modules under `src/topology/` so that both the lab engine and the watch viewer can reuse the same logic:
+
+- **Bond rules** — `BondRuleSet` (`src/topology/bond-rules.ts`) defines the global fast-path scalars (cutoff, minDist) used by all topology builders. `createBondRules()` is a pure factory; `bond-policy-resolver.ts` resolves a `BondPolicyV1` to a `BondRuleSet` via registry.
+- **Bond defaults** — `src/config/bond-defaults.ts` exports `BOND_DEFAULTS` (`cutoff: 1.8` Å, `minDist: 0.5` Å) as the single source of truth. `lab/js/config.ts` reads `bonds.cutoff` and `bonds.minDist` from `BOND_DEFAULTS`.
+- **Topology builders** — `src/topology/build-bond-topology.ts` provides three entry points: `buildBondTopologyFromAtoms` (loader path), `buildBondTopologyFromPositions` (Watch reconstruction), and `buildBondTopologyAccelerated` (physics hot path with output-buffer reuse and preallocated workspace).
+
 - **InstancedMesh rendering** — atoms and bonds are rendered via `THREE.InstancedMesh` (2 draw calls total) instead of individual `THREE.Mesh` objects. Active-instance compaction for bonds (only visible bonds uploaded). Highlight via separate overlay mesh.
 
 ### Force Safety Controls

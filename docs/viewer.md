@@ -447,7 +447,8 @@ npm run dev
 
 | Kind | Version | Status |
 |------|---------|--------|
-| `"full"` | v1 | Supported — loads into workspace |
+| `"full"` | v1 | Supported — loads into workspace. Contains dense frames, restart frames, and checkpoints. Bond topology is stored in restart frames. |
+| `"reduced"` | v1 | Supported — loads into workspace. Contains dense frames and atoms but NO restart frames or checkpoints. Bond topology is reconstructed at playback time from atom positions. |
 | `"replay"` | — | Politely rejected with an explanatory message |
 
 ### Workspace
@@ -573,8 +574,24 @@ When an experimental method cannot run for a specific bracket, the runtime falls
 - **Repeat:** Modulo wrap at file boundaries in both directions
 - **Step:** Dense-frame-boundary stepping via binary search index
 - **Gap clamp:** Wall-clock delta capped at `PLAYBACK_GAP_CLAMP_MS` (250 ms) to prevent large jumps after tab-background return
-- **Topology:** Reconstructed from `restartFrames` via binary search at-or-before
+- **Topology:** Provided by a `WatchTopologySource` — an abstraction over how bond data is obtained for a given playback time. Full files use `StoredTopologySource` (restart-frame lookup via binary search at-or-before). Reduced files use `ReconstructedTopologySource` (builds bonds from atom positions at playback time). The playback model delegates `getTopologyAtTime()` to the active source without knowing which strategy is in use
+- **Bond-policy resolution:** `ReconstructedTopologySource` resolves bond rules at load time via `resolveBondPolicy()`. If the file declares a `bondPolicy` (policyId + cutoff + minDist), those parameters are used. If `bondPolicy` is null (legacy compatibility only — production exports must always include it), the resolver falls back to `BOND_DEFAULTS`
+- **Stable atomId semantics:** Atom IDs in reduced files are stable identifiers from the original simulation, not array indices. The `elementById` map (`ReadonlyMap<number, string>`) in `LoadedReducedHistory` is keyed by these stable IDs, enabling correct element lookup during reconstruction even when dense-frame slot ordering varies across frames
 - **Bonded-group analysis:** Memoized to avoid redundant recomputation during scrubbing
+
+### Topology Reconstruction
+
+Reduced files carry dense frames with atom positions but no stored bond topology. Watch reconstructs bonds at playback time using the following pipeline:
+
+1. **Source selection:** On file load, the playback model creates a `ReconstructedTopologySource` (for reduced files) or a `StoredTopologySource` (for full files). Both implement the `WatchTopologySource` interface — the rest of the playback pipeline is source-agnostic.
+
+2. **Bond-policy resolution:** `resolveBondPolicy()` converts the file's `bondPolicy` field into a `BondRuleSet` at load time. The policy declares the cutoff distance, minimum distance, and policy ID used at export. Missing `bondPolicy` (null) falls back to `BOND_DEFAULTS` for legacy compatibility.
+
+3. **Per-frame reconstruction:** When `getTopologyAtTime(timePs)` is called, the source locates the dense frame at-or-before `timePs` via binary search, then builds bond topology from atom positions using the shared topology builders and the resolved bond rules. Results are cached per frame index to avoid redundant recomputation during scrubbing.
+
+4. **Element identity:** Reconstruction requires knowing each atom's element to apply element-pair-specific bond rules. The `elementById` map (built once at import from the atom table) maps stable `atomId` values to element strings. Atom IDs are not array indices — they are stable identifiers that persist across frames even when atoms are added or removed.
+
+5. **Import validation:** The reduced-file import pipeline validates: simulation metadata (maxAtomCount, frameCount, durationPs), atom table uniqueness (no duplicate IDs), stable atomId references (every frame's atomIds reference valid atom-table entries), per-frame atomId uniqueness, position components (finite numbers, correct length), durationPs span (matches computed timeline extent), and bondPolicy fields (valid policyId, positive cutoff, non-negative minDist, minDist < cutoff).
 
 ### Smooth Playback & Interpolation
 

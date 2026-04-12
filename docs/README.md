@@ -114,13 +114,14 @@ Browser                          Web Worker
 │  └── PlacementFraming │
 └─────────────────────┘
 
-src/history/ (5 modules):       watch/js/ (~25 modules):
+src/history/ (6 modules):       watch/js/ (~25 modules):
 ├── v1 schema types             ├── 16 runtime modules
-├── connected-component         │   (document service, playback model,
-│   computation                 │    renderer, camera input, overlay,
-├── bonded-group projection     │    bonded-groups, settings, trajectory
-│   (shared by lab/ & watch/)   │    interpolation, view service,
-├── bonded-group-utils          │    controller, bootstrap)
+├── bond-policy types           │   (document service, playback model,
+├── connected-component         │    renderer, camera input, overlay,
+│   computation                 │    bonded-groups, settings, trajectory
+├── bonded-group projection     │    interpolation, view service,
+│   (shared by lab/ & watch/)   │    controller, bootstrap)
+├── bonded-group-utils          │
 └── units (FS_PER_PS,           │
     IMPLAUSIBLE_VELOCITY)       │
                                 ├── 9 React components
@@ -134,15 +135,21 @@ src/ui/ (13 files):             │    sheet, bonded-groups panel,
 ├── bottom-region.css           ├── watch.css
 ├── timeline-track.css          └── watch-dock.css
 ├── text-size-tokens.css
-├── review-parity.css           src/config/ (2 files):
-├── bonded-groups-parity.css    ├── playback-speed-constants.ts
-├── bonded-group-chip-style.ts  └── viewer-defaults.ts
-├── device-mode.ts
-└── useSheetLifecycle.ts        src/appearance/ (1 file):
-    (shared design system:      └── bonded-group-color-assignments.ts
-     CSS tokens, hooks, and
-     component styles used      src/input/ (1 file):
-     by both lab/ and watch/)   └── camera-gesture-constants.ts
+├── review-parity.css           src/topology/ (3 files):
+├── bonded-groups-parity.css    ├── bond-rules.ts
+├── bonded-group-chip-style.ts  ├── build-bond-topology.ts
+├── device-mode.ts              └── bond-policy-resolver.ts
+└── useSheetLifecycle.ts
+    (shared design system:      src/config/ (3 files):
+     CSS tokens, hooks, and     ├── playback-speed-constants.ts
+     component styles used      ├── viewer-defaults.ts
+     by both lab/ and watch/)   └── bond-defaults.ts
+
+                                src/appearance/ (1 file):
+                                └── bonded-group-color-assignments.ts
+
+                                src/input/ (1 file):
+                                └── camera-gesture-constants.ts
 ```
 
 ### Key Architectural Decisions
@@ -160,7 +167,7 @@ src/ui/ (13 files):             │    sheet, bonded-groups panel,
 - **React UI** — all 11 UI components are React-authoritative with Zustand store, glassmorphic CSS, responsive layout (phone/tablet/desktop); panel fixed width 250px with scrollbar-gutter stable
 - **Performance optimized** — InstancedMesh rendering (2 draw calls), on-the-fly Tersoff kernel (45% faster), spatial-hash neighbor/bond search (O(N))
 - **Wasm Tersoff kernel** — deployed and enabled by default, automatic JS fallback
-- **CI/CD** — GitHub Actions: typecheck, unit tests, build, E2E, deploy smoke, Python physics tests (88 test files, 1521 tests)
+- **CI/CD** — GitHub Actions: typecheck, unit tests, build, E2E, deploy smoke, Python physics tests (90 test files, 1597 tests)
 - **Containment boundary** — dynamic soft wall with Contain/Remove modes, live atom count, auto-scaling radius
 - **Placement camera framing** — smooth camera assist keeps scene + preview visible during molecule placement; continuous drag with pointer capture and per-frame cursor-lock reprojection
 - **Review mode UI lock** — display-only enforcement across all React surfaces during timeline review; centralized selector, runtime guards, ActionHint tooltips (desktop), transient status hints (mobile)
@@ -170,8 +177,8 @@ src/ui/ (13 files):             │    sheet, bonded-groups panel,
 - Three.js trajectory viewer: functional at `viewer/index.html`
 - Performance benchmarks in `lab/bench/`
 - **Bonded group architecture** — display-source-aware projection, capability policy, annotation-model atom color overrides; inline color editing via per-row color chip with portal popover (preset swatches, responsive layout, disclosure-pattern panel expanded by default), conic-gradient multi-color chips, group color intents persist across topology changes; persistent tracked highlight feature-gated off (hover preview remains active); review-mode inspection deferred until historical topology exists
-- **Watch app** — near-parity review viewer at `watch/` with React shell; camera orbit + triad, authored atom colors, playback dock (step/play/speed/repeat), timeline scrubber, settings sheet (theme/text-size/file-info/help); transactional file open preserves current document on failure; bonded-group analysis panel and automatic file-type detection; smooth playback (on by default) with strategy-based trajectory interpolation (Linear stable default + Hermite/Catmull-Rom experimental), dock Smooth toggle, and settings method picker
-- **Shared design system** — `src/ui/` (13 files: CSS tokens, hooks, component styles) provides the shared design system used by both `lab/` and `watch/`; `src/history/` provides v1 schema types, connected-component computation, bonded-group projection, bonded-group utilities, and physical unit constants; `src/config/` provides playback speed constants and viewer defaults; `src/appearance/` provides bonded-group color assignments; `src/input/` provides camera gesture constants
+- **Watch app** — near-parity review viewer at `watch/` with React shell; camera orbit + triad, authored atom colors, playback dock (step/play/speed/repeat), timeline scrubber, settings sheet (theme/text-size/file-info/help); transactional file open preserves current document on failure; bonded-group analysis panel and automatic file-type detection; reduced-file topology reconstruction support; smooth playback (on by default) with strategy-based trajectory interpolation (Linear stable default + Hermite/Catmull-Rom experimental), dock Smooth toggle, and settings method picker
+- **Shared design system** — `src/ui/` (13 files: CSS tokens, hooks, component styles) provides the shared design system used by both `lab/` and `watch/`; `src/history/` provides v1 schema types, bond-policy types, connected-component computation, bonded-group projection, bonded-group utilities, and physical unit constants; `src/topology/` provides bond rules, topology builders, and policy resolution; `src/config/` provides playback speed constants, viewer defaults, and bond defaults; `src/appearance/` provides bonded-group color assignments; `src/input/` provides camera gesture constants
 
 ## Project Goal
 

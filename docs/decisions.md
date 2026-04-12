@@ -613,3 +613,43 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Rationale:** The watch app renders inside a `.watch-workspace` container. Scoping tokens to this container keeps watch-specific layout policy local and avoids polluting the global CSS namespace. If both lab and watch were loaded in the same document (e.g., a future multi-app shell), `:root`-scoped tokens would collide. `.watch-workspace` scoping also documents intent: these tokens are consumed only by descendants of the watch workspace, and their responsive breakpoint (`@media (min-width: 768px)`) mirrors `dock-shell.css`.
 
 **Evidence:** `watch/css/watch-dock.css` (tokens defined on `.watch-workspace`, not `:root`), `watch/css/watch.css` (`.watch-workspace` grid container)
+
+## D78: Shared Bond Topology Extraction
+
+**Decision:** Extract bond-topology computation from PhysicsEngine into reusable shared modules under `src/topology/` with three entry points: naive (loader), position-based (Watch reconstruction), and accelerated (physics hot path).
+
+**Rationale:** Lab and Watch both need bond topology. The physics engine's bond computation was tightly coupled to its spatial hash and state. Three entry points serve different callers without leaking physics internals.
+
+**Evidence:** `src/topology/bond-rules.ts`, `src/topology/build-bond-topology.ts`, `lab/js/physics.ts` (delegates to `buildBondTopologyAccelerated`), `watch/js/topology-sources/reconstructed-topology-source.ts` (uses `buildBondTopologyFromPositions`)
+
+## D79: Neutral Bond-Policy Module
+
+**Decision:** Bond-policy types (`BondPolicyId`, `BondPolicyV1`, `KNOWN_BOND_POLICY_IDS`, `isBondPolicyId`) live in `src/history/bond-policy-v1.ts` — a neutral module with no dependencies. The file schema imports types for its own fields. The topology resolver imports types for its registry. Neither re-exports them.
+
+**Rationale:** `history-file-v1.ts` and `bond-policy-resolver.ts` both needed `BondPolicyId`. Having the schema import from the resolver (or vice versa) created a cycle. A neutral module breaks the cycle without re-export hubs.
+
+**Evidence:** `src/history/bond-policy-v1.ts`, `src/history/history-file-v1.ts` (import type only), `src/topology/bond-policy-resolver.ts` (import type only)
+
+## D80: Registry-Based Bond-Policy Resolution
+
+**Decision:** Bond-policy resolution uses a `Record<BondPolicyId, resolver>` registry. The `Record` type annotation enforces compile-time exhaustiveness — adding a new policy ID without a resolver entry (or vice versa) is a type error. No separate type assertions or runtime constants needed.
+
+**Rationale:** Switch-based resolution required manual fallthrough handling. Separate `KNOWN_BOND_POLICY_IDS` + resolver lists drifted independently. `Record<BondPolicyId,...>` makes the two inseparable at the type level.
+
+**Evidence:** `src/topology/bond-policy-resolver.ts` (`BOND_POLICY_RESOLVERS`)
+
+## D81: Watch Topology Source Abstraction
+
+**Decision:** Watch playback uses a `WatchTopologySource` interface with two implementations: `StoredTopologySource` (restart-frame lookup for full files) and `ReconstructedTopologySource` (position-based bond building for reduced files). The playback model branches on file kind at load time.
+
+**Rationale:** Full history files include pre-computed topology in restart frames. Reduced files omit restart frames entirely — topology must be reconstructed from dense-frame positions and the shared bond builders. A common interface lets the playback model delegate without file-kind conditionals in every topology access.
+
+**Evidence:** `watch/js/watch-playback-model.ts` (`WatchTopologySource`), `watch/js/topology-sources/`
+
+## D82: Fail-Fast Element Lookup in Reconstruction
+
+**Decision:** `buildBondTopologyFromPositions` throws on missing element IDs in the `elementById` map. No silent fallback to carbon (`'C'`).
+
+**Rationale:** An earlier version silently substituted `'C'` for unknown atom IDs. This masked data-integrity bugs in reduced-file import — wrong element assignments would produce wrong bond cutoffs with no diagnostic. Throwing immediately at the reconstruction call site surfaces the root cause.
+
+**Evidence:** `src/topology/build-bond-topology.ts` (`buildBondTopologyFromPositions`), `watch/js/reduced-history-import.ts` (builds `elementById` map with uniqueness validation)

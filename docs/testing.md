@@ -329,7 +329,57 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **End-to-end pipeline:** load → import → playback → groups.
 
-*All 1521 tests pass across 88 test files, including existing lab tests.*
+*All 1597 tests pass across 90 test files, including existing lab tests.*
+
+### Bond Topology Parity (23 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `bond-topology-parity.test.ts` | 23 | Shared bond topology builders, engine parity, ordering contract, timeline continuity (see breakdown below) |
+
+**BondRuleSet:** `createBondRules` precomputes squared values and returns correct `maxPairDistance`.
+
+**buildBondTopologyFromAtoms (shared naive builder):** empty atoms produce empty bonds, dimer at 1.42 Ang produces one bond, atoms at 3.0 Ang produce no bond, triangle produces three bonds in ascending (i,j) order, mixed geometry respects minDist filter (0-3 too close), pair-aware heterogeneous rules produce different bonds than global cutoff (tight rules block C-O and H-O while keeping C-H).
+
+**buildBondTopologyAccelerated (shared accelerated builder):** rejects non-null elements at runtime (JS/any-typed callers), n=0 with prepopulated outBonds returns 0, dimer matches naive builder, triangle produces ascending (i,j) order, output-buffer reuse reuses existing tuple entries in-place, workspace grows transparently when n exceeds initial capacity.
+
+**PhysicsEngine.updateBondList() parity with shared builder:** dimer engine.getBonds() matches naive builder, triangle ascending (i,j) order matches naive, engine with no-bond pair returns empty, mixed two bonds (0-1 + 1-3) with minDist blocking 0-3.
+
+**Bond ordering contract:** triangle produces bonds in ascending (i,j) order: [0,1], [0,2], [1,2].
+
+**Timeline/export continuity:** captureRestartFrameData produces the same bond tuples as getBonds.
+
+**buildBondTopologyFromPositions (lower-level shared builder):** pair-aware element lookup with heterogeneous rule set, elementById null uses global-rule fast path, throws on missing element ID when elementById is provided, output ordering is ascending (i, j).
+
+### Watch Topology Reconstruction (53 tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-topology-sources.test.ts` | 53 | Topology source abstraction, stored vs reconstructed parity, reduced-history import validation, bond-policy resolution, controller integration (see breakdown below) |
+
+**BOND_DEFAULTS shared source of truth:** exports cutoff and minDist with expected values.
+
+**StoredTopologySource:** returns restart-frame topology at or before time, returns null before first frame, reset clears the reference.
+
+**ReconstructedTopologySource:** reconstructs bonds from dense-frame positions, uses dense-frame frameId, cache object-identity (same frame returns same instance), cache invalidation (different frame returns new instance), reset clears cache and reference, works with non-contiguous stable atom IDs (10, 42).
+
+**Topology parity (stored vs reconstructed):** same geometry produces same bond tuples.
+
+**validateReducedFile:** accepts a valid reduced file, rejects missing simulation, rejects missing denseFrames, rejects wrong kind.
+
+**importReducedHistory:** imports a valid reduced file, rejects non-monotonic timePs, rejects duplicate atom IDs in atom table, rejects atomId not in atom table (stable-ID validation), rejects duplicate atomIds within a frame, accepts non-contiguous stable IDs (10, 42), rejects unsupported indexingModel, rejects non-string element, rejects non-finite timePs, rejects non-finite atom ID, rejects NaN in positions, rejects Infinity in positions, rejects non-numeric value in positions, rejects NaN maxAtomCount, rejects non-finite durationPs, rejects negative frameCount, rejects invalid bondPolicy.cutoff, rejects bondPolicy.minDist >= cutoff, rejects unknown bondPolicy.policyId, accepts valid bondPolicy, legacy file with no bondPolicy sets bondPolicy to null, rejects mismatched durationPs vs frame span.
+
+**Bonded-group parity (stored vs reconstructed topology):** same topology input produces same bonded-group summaries.
+
+**Controller loads both file kinds:** full-history file loads and produces topology, reduced-history file loads and produces topology, reduced-history scrub + smooth playback + topology + groups work end-to-end.
+
+**File-declared bondPolicy overrides BOND_DEFAULTS in reconstruction:** tighter cutoff produces fewer bonds than default.
+
+**buildReducedInterpolationCapability:** marks compatible adjacent frames as bracketSafe, marks last frame as last-frame, all hermiteSafe are 0 (no restart data), all velocityReason are restart-misaligned.
+
+**createWatchTrajectoryInterpolationForReduced:** linear interpolation works between compatible dense frames, Hermite selected on reduced files falls back to linear, Catmull-Rom selected on reduced files falls back to linear, variable-n bracket degrades conservatively.
+
+**history-file-loader (reduced kind):** accepts a valid reduced file, still accepts full files, still rejects replay files.
 
 ### Watch Controller & Parity (~40+ tests)
 

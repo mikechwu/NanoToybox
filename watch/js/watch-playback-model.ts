@@ -3,20 +3,37 @@
  *
  * Round 5 additions: speed multiplier (0.5x–20x), repeat (modulo wrap),
  * step forward/backward (dense frame boundaries), gap clamp.
+ *
+ * Topology reconstruction: topology sampling delegates to a WatchTopologySource.
+ * Full-history files use StoredTopologySource; reduced files use ReconstructedTopologySource.
  */
 
 import type { LoadedFullHistory, NormalizedDenseFrame, NormalizedRestartFrame } from './full-history-import';
+import type { LoadedReducedHistory } from './reduced-history-import';
 import { VIEWER_DEFAULTS } from '../../src/config/viewer-defaults';
 import { SPEED_MIN, SPEED_MAX, SPEED_DEFAULT, PLAYBACK_GAP_CLAMP_MS } from '../../src/config/playback-speed-constants';
+import { bsearchAtOrBefore, bsearchIndexAtOrBefore } from './frame-search';
+import { createStoredTopologySource } from './topology-sources/stored-topology-source';
+import { createReconstructedTopologySource } from './topology-sources/reconstructed-topology-source';
 
 /** Canonical x1 playback rate: ps advanced per real ms. */
 const PS_PER_MS_AT_1X = VIEWER_DEFAULTS.baseSimRatePsPerSecond / 1000;
 
+/** Watch-local topology provider abstraction. The playback model delegates
+ *  getTopologyAtTime() to the active source. */
+export interface WatchTopologySource {
+  reset(): void;
+  getTopologyAtTime(timePs: number): { bonds: [number, number, number][]; n: number; frameId: number } | null;
+}
+
+/** Discriminated union of loaded history kinds. */
+export type LoadedWatchHistory = LoadedFullHistory | LoadedReducedHistory;
+
 export interface WatchPlaybackModel {
-  load(file: LoadedFullHistory): void;
+  load(file: LoadedWatchHistory): void;
   unload(): void;
   isLoaded(): boolean;
-  getLoadedHistory(): LoadedFullHistory | null;
+  getLoadedHistory(): LoadedWatchHistory | null;
   /** Derived from playDirection !== 0. No separate setPlaying — use start/stop/pause. */
   isPlaying(): boolean;
   setCurrentTimePs(timePs: number): void;
@@ -52,33 +69,11 @@ export interface WatchPlaybackModel {
   getBoundaryAtTime(timePs: number): unknown | null;
 }
 
-// ── Binary search: find frame at or before timePs ──
-
-function bsearchAtOrBefore<T extends { timePs: number }>(frames: T[], timePs: number): T | null {
-  if (frames.length === 0) return null;
-  let lo = 0, hi = frames.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >>> 1;
-    if (frames[mid].timePs <= timePs) lo = mid;
-    else hi = mid - 1;
-  }
-  return frames[lo].timePs <= timePs ? frames[lo] : null;
-}
-
-/** Binary search returning the INDEX of the frame at or before timePs. Returns -1 if none. */
-function bsearchIndexAtOrBefore<T extends { timePs: number }>(frames: T[], timePs: number): number {
-  if (frames.length === 0) return -1;
-  let lo = 0, hi = frames.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >>> 1;
-    if (frames[mid].timePs <= timePs) lo = mid;
-    else hi = mid - 1;
-  }
-  return frames[lo].timePs <= timePs ? lo : -1;
-}
+// Binary search helpers shared across watch/ — see frame-search.ts
 
 export function createWatchPlaybackModel(): WatchPlaybackModel {
-  let _history: LoadedFullHistory | null = null;
+  let _history: LoadedWatchHistory | null = null;
+  let _topologySource: WatchTopologySource | null = null;
   let _currentTimePs = 0;
   // Single source of truth: 0=paused, 1=forward, -1=backward.
   // isPlaying() is derived from this. No separate _playing boolean.
@@ -100,9 +95,16 @@ export function createWatchPlaybackModel(): WatchPlaybackModel {
       _playDirection = 0;
       _speedMultiplier = SPEED_DEFAULT;
       _repeat = false;
+      // Select topology source based on file kind
+      if (file.kind === 'full') {
+        _topologySource = createStoredTopologySource(file.restartFrames);
+      } else {
+        _topologySource = createReconstructedTopologySource(file.denseFrames, file.elementById, file.bondPolicy);
+      }
     },
 
     unload() {
+      if (_topologySource) { _topologySource.reset(); _topologySource = null; }
       _history = null;
       _currentTimePs = 0;
       _playDirection = 0;
@@ -219,14 +221,12 @@ export function createWatchPlaybackModel(): WatchPlaybackModel {
     },
 
     getTopologyAtTime(timePs: number) {
-      if (!_history) return null;
-      const frame = bsearchAtOrBefore<NormalizedRestartFrame>(_history.restartFrames, timePs);
-      if (!frame) return null;
-      return { bonds: frame.bonds, n: frame.n, frameId: frame.frameId };
+      if (!_topologySource) return null;
+      return _topologySource.getTopologyAtTime(timePs);
     },
 
     getConfigAtTime(timePs: number) {
-      if (!_history) return null;
+      if (!_history || _history.kind !== 'full') return null;
       const frame = bsearchAtOrBefore<NormalizedRestartFrame>(_history.restartFrames, timePs);
       return frame?.config ?? null;
     },

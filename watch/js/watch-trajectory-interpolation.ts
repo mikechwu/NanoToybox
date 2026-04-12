@@ -35,6 +35,7 @@ import type {
   NormalizedRestartFrame,
   InterpolationCapability,
 } from './full-history-import';
+import type { LoadedReducedHistory } from './reduced-history-import';
 import type { WatchInterpolationMode } from './watch-settings';
 import { FS_PER_PS } from '../../src/history/units';
 
@@ -299,13 +300,20 @@ export interface WatchTrajectoryInterpolation {
   getBinarySearchCount(): number;
 }
 
-export function createWatchTrajectoryInterpolation(
-  history: LoadedFullHistory,
+/** Narrow internal input — the minimum the interpolation runtime actually
+ *  needs. Both createWatchTrajectoryInterpolation (full) and the reduced
+ *  factory normalize into this shape. */
+interface InterpolationRuntimeInput {
+  denseFrames: NormalizedDenseFrame[];
+  restartFrames: NormalizedRestartFrame[];
+  capability: InterpolationCapability;
+  maxAtomCount: number;
+}
+
+function createInterpolationRuntimeFromInput(
+  input: InterpolationRuntimeInput,
 ): WatchTrajectoryInterpolation {
-  const denseFrames = history.denseFrames;
-  const restartFrames = history.restartFrames;
-  const capability = history.interpolationCapability;
-  const maxAtomCount = history.simulation.maxAtomCount;
+  const { denseFrames, restartFrames, capability, maxAtomCount } = input;
 
   // Preallocated output buffer sized to worst-case dense-prefix atom count.
   const outputBuffer = new Float64Array(Math.max(1, maxAtomCount) * 3);
@@ -668,6 +676,76 @@ export function createWatchTrajectoryInterpolation(
     dispose,
     getBinarySearchCount,
   };
+}
+
+/** Create an interpolation runtime for full-history files. */
+export function createWatchTrajectoryInterpolation(
+  history: LoadedFullHistory,
+): WatchTrajectoryInterpolation {
+  return createInterpolationRuntimeFromInput({
+    denseFrames: history.denseFrames,
+    restartFrames: history.restartFrames,
+    capability: history.interpolationCapability,
+    maxAtomCount: history.simulation.maxAtomCount,
+  });
+}
+
+/** Build a minimal InterpolationCapability for reduced files. Only bracketSafe
+ *  is computed from dense-frame adjacency; all other capabilities are zeroed
+ *  (no Hermite or Catmull-Rom data available). Properly typed — no `as any`. */
+export function buildReducedInterpolationCapability(
+  denseFrames: readonly NormalizedDenseFrame[],
+): InterpolationCapability {
+  const n = denseFrames.length;
+  const denseToRestartIndex = new Int32Array(n).fill(-1);
+  const velocityReason: import('./full-history-import').VelocityEndpointReason[] =
+    new Array<import('./full-history-import').VelocityEndpointReason>(n).fill('restart-misaligned');
+  const bracketSafe = new Uint8Array(n);
+  const bracketReason: import('./full-history-import').BracketReason[] =
+    new Array<import('./full-history-import').BracketReason>(n).fill('last-frame');
+  const hermiteSafe = new Uint8Array(n);
+  const window4Safe = new Uint8Array(n);
+  const window4Reason: import('./full-history-import').WindowReason[] =
+    new Array<import('./full-history-import').WindowReason>(n).fill('timeline-edge');
+
+  for (let i = 0; i < n - 1; i++) {
+    const a = denseFrames[i];
+    const b = denseFrames[i + 1];
+    if (a.n !== b.n) {
+      bracketReason[i] = 'bracket-n-mismatch';
+      continue;
+    }
+    let match = a.atomIds.length === b.atomIds.length;
+    if (match) {
+      for (let j = 0; j < a.atomIds.length; j++) {
+        if (a.atomIds[j] !== b.atomIds[j]) { match = false; break; }
+      }
+    }
+    if (match) {
+      bracketSafe[i] = 1;
+      bracketReason[i] = 'ok';
+    } else {
+      bracketReason[i] = 'bracket-atomids-mismatch';
+    }
+  }
+
+  return {
+    denseToRestartIndex, velocityReason, bracketSafe, bracketReason,
+    hermiteSafe, window4Safe, window4Reason,
+  };
+}
+
+/** Create an interpolation runtime for reduced-history files. Feeds directly
+ *  into the narrow internal input — no synthetic LoadedFullHistory bridge. */
+export function createWatchTrajectoryInterpolationForReduced(
+  history: LoadedReducedHistory,
+): WatchTrajectoryInterpolation {
+  return createInterpolationRuntimeFromInput({
+    denseFrames: history.denseFrames,
+    restartFrames: [],
+    capability: buildReducedInterpolationCapability(history.denseFrames),
+    maxAtomCount: history.simulation.maxAtomCount,
+  });
 }
 
 // ── Exposed for tests that want to re-register built-ins after a test

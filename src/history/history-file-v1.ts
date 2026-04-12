@@ -98,6 +98,41 @@ export interface ViewStateV1 {
   theme?: 'light' | 'dark' | null;
 }
 
+// ── Reduced-file schema (minimal import contract) ──
+
+/** Dense frame for reduced files. Only the fields needed for reconstruction.
+ *  interaction and boundary are optional — reduced files may omit them for
+ *  size savings. The importer normalizes missing fields to null/{}. */
+export interface ReducedDenseFrameV1 {
+  frameId: number;
+  timePs: number;
+  n: number;
+  atomIds: number[];
+  positions: number[];
+  interaction?: unknown;
+  boundary?: unknown;
+}
+
+/** Minimal import contract for Watch topology reconstruction.
+ *  NOT a final product schema — future rounds may add fields additively.
+ *  Validation is intentionally narrow (see validateReducedFile). */
+// Bond-policy types live in the neutral module src/history/bond-policy-v1.ts.
+import type { BondPolicyV1 } from './bond-policy-v1';
+
+export interface AtomDojoReducedFileV1 {
+  format: 'atomdojo-history';
+  version: 1;
+  kind: 'reduced';
+  producer: { app: 'lab'; appVersion: string; exportedAt: string };
+  simulation: SimulationMetaV1;
+  atoms: { atoms: AtomInfoV1[] };
+  timeline: { denseFrames: ReducedDenseFrameV1[] };
+  /** Bond policy used at export time. Production exports must always include
+   *  this field; omission is a legacy-compatibility path only (Watch falls
+   *  back to BOND_DEFAULTS). */
+  bondPolicy?: BondPolicyV1;
+}
+
 // ── Detection (purely descriptive) ──
 
 export type DetectedHistoryFile =
@@ -273,5 +308,32 @@ export function validateFullHistoryFile(file: unknown): string[] {
     prevCp = { checkpointId: cp.checkpointId, timePs: cp.timePs };
   }
 
+  return errors;
+}
+
+// ── Reduced-file validation (structural only) ──
+
+/** Minimal structural validation for reduced files. Semantic validation
+ *  (frameCount parity, positions length, monotonic timePs, etc.) is the
+ *  importer's responsibility, not this function's. */
+export function validateReducedFile(file: unknown): string[] {
+  const errors: string[] = [];
+  if (!file || typeof file !== 'object') return ['file is not an object'];
+  const f = file as Record<string, unknown>;
+  if (f.format !== 'atomdojo-history') errors.push('format must be atomdojo-history');
+  if (f.version !== 1) errors.push('version must be 1');
+  if (f.kind !== 'reduced') errors.push('kind must be reduced');
+  if (!f.simulation || typeof f.simulation !== 'object') errors.push('missing or invalid simulation');
+  if (!f.atoms || typeof f.atoms !== 'object') errors.push('missing atoms');
+  else {
+    const atoms = f.atoms as Record<string, unknown>;
+    if (!Array.isArray(atoms.atoms)) errors.push('atoms.atoms must be an array');
+  }
+  if (!f.timeline || typeof f.timeline !== 'object') errors.push('missing timeline');
+  else {
+    const tl = f.timeline as Record<string, unknown>;
+    if (!Array.isArray(tl.denseFrames)) errors.push('timeline.denseFrames must be an array');
+    else if (tl.denseFrames.length === 0) errors.push('timeline.denseFrames must not be empty');
+  }
   return errors;
 }

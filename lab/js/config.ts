@@ -4,6 +4,7 @@
  */
 
 import { VIEWER_DEFAULTS } from '../../src/config/viewer-defaults';
+import { BOND_DEFAULTS } from '../../src/config/bond-defaults';
 import { isTouchInteraction as _sharedIsTouchInteraction } from '../../src/ui/device-mode';
 
 /** Default theme — canonical source is VIEWER_DEFAULTS. Re-exported for lab consumers. */
@@ -13,9 +14,9 @@ export const CONFIG = {
   libraryPath: '../structures/library',
 
   bonds: {
-    cutoff: 1.8,          // Å — atoms closer than this are bonded
-    visibilityCutoff: 2.0, // Å — renderer hides bonds stretched beyond this
-    minDist: 0.5,          // Å — ignore pairs closer than this (overlap)
+    cutoff: BOND_DEFAULTS.cutoff,          // Å — from shared source
+    visibilityCutoff: 2.0, // Å — renderer hides bonds stretched beyond this (lab-specific)
+    minDist: BOND_DEFAULTS.minDist,        // Å — from shared source
   },
 
   atoms: {

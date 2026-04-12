@@ -615,7 +615,7 @@ describe('end-to-end: load → import → playback → groups', () => {
     // Load
     const decision = loadHistoryFile(text);
     expect(decision.status).toBe('supported');
-    if (decision.status !== 'supported') return;
+    if (decision.status !== 'supported' || decision.kind !== 'full') return;
 
     // Import
     const history = importFullHistory(decision.file);

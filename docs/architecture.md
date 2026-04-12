@@ -129,13 +129,13 @@ NanoToybox/
 │   │   │   ├── useSheetAnimation.ts # Sheet open/close CSS transitions
 │   │   │   └── useReviewLockedInteraction.ts # Shared hook for review-locked control behavior (tooltip, activation, keyboard)
 │   │   ├── react-root.tsx        # React mount/unmount entry point
-│   │   ├── config.ts             # Centralized page configuration
-│   │   ├── physics.ts            # Tersoff force engine + interaction forces
+│   │   ├── config.ts             # Centralized page configuration; bonds.cutoff/minDist read from BOND_DEFAULTS
+│   │   ├── physics.ts            # Tersoff force engine + interaction forces; updateBondList() delegates to buildBondTopologyAccelerated, bonds typed as BondTuple[]
 │   │   ├── renderer.ts           # Three.js scene, InstancedMesh, PBR materials, dual highlight layers, orbit + interactive triad
 │   │   ├── orbit-math.ts         # Pure orbit math: arcball deltas, rigid rotation, shared constants
 │   │   ├── input.ts              # Mouse/touch input, raycasting, triad drag/tap/snap, background orbit
 │   │   ├── state-machine.ts      # Interaction state transitions
-│   │   ├── loader.ts             # Structure library loader + bond topology
+│   │   ├── loader.ts             # Structure library loader; delegates bond topology to shared buildBondTopologyFromAtoms
 │   │   ├── format-status.ts      # Shared FPS/status text formatter
 │   │   ├── scheduler-pure.ts     # Pure-function scheduler computations
 │   │   ├── simulation-worker.ts  # Web Worker for off-thread physics
@@ -144,10 +144,11 @@ NanoToybox/
 │   │   └── tersoff-wasm.ts       # Wasm kernel bridge
 ├── src/                          # Shared modules consumed by both lab/ and watch/
 │   ├── history/
-│   │   ├── history-file-v1.ts        # Shared v1 file types, detection (detectHistoryFile), shape-safe validation (validateFullHistoryFile)
+│   │   ├── history-file-v1.ts        # Shared v1 file types (full + reduced), detection, validation (validateFullHistoryFile, validateReducedFile)
 │   │   ├── connected-components.ts   # Union-find connected-component computation (extracted from simulation-timeline.ts)
 │   │   ├── bonded-group-projection.ts # Pure overlap reconciliation, stable group IDs, display ordering (extracted from bonded-group-runtime.ts)
 │   │   ├── bonded-group-utils.ts     # Shared bonded-group partitioning (partitionBondedGroups, SMALL_CLUSTER_THRESHOLD). Extracted from lab/js/store/selectors/bonded-groups.ts
+│   │   ├── bond-policy-v1.ts         # Neutral bond-policy types: KNOWN_BOND_POLICY_IDS, BondPolicyId, isBondPolicyId guard, BondPolicyV1 interface. No deps.
 │   │   └── units.ts                  # Physical unit constants (FS_PER_PS, IMPLAUSIBLE_VELOCITY_A_PER_FS) for history-file interpolation math
 │   ├── input/
 │   │   └── camera-gesture-constants.ts   # Shared triad tap/drag/double-tap discrimination thresholds (TRIAD_DRAG_COMMIT_PX, TAP_MAX_DURATION_MS, DOUBLE_TAP_WINDOW_MS, etc.)
@@ -155,7 +156,12 @@ NanoToybox/
 │   │   └── bonded-group-color-assignments.ts # Shared pure domain logic for group→atom color projection (AtomColorOverrideMap, rebuildOverridesFromDenseIndices, computeGroupColorState). No framework deps.
 │   ├── config/
 │   │   ├── viewer-defaults.ts            # Shared viewer configuration defaults (VIEWER_DEFAULTS)
-│   │   └── playback-speed-constants.ts   # Speed range (0.5x–20x), log slider mapping (sliderToSpeed/speedToSlider), gap clamp, hold threshold, formatSpeed
+│   │   ├── playback-speed-constants.ts   # Speed range (0.5x–20x), log slider mapping (sliderToSpeed/speedToSlider), gap clamp, hold threshold, formatSpeed
+│   │   └── bond-defaults.ts              # Bond-policy defaults (BOND_DEFAULTS: cutoff, minDist) — single source of truth for both lab/ and watch/
+│   ├── topology/                     # Bond-rule contracts, topology builders, policy resolution
+│   │   ├── bond-rules.ts                 # BondRuleSet interface + createBondRules() factory (pure, no CONFIG)
+│   │   ├── build-bond-topology.ts        # Three entry points: FromAtoms (loader), FromPositions (Watch reconstruction), Accelerated (physics hot path)
+│   │   └── bond-policy-resolver.ts       # BOND_POLICY_RESOLVERS registry + resolveBondPolicy(); Record<BondPolicyId,...> exhaustive coverage
 │   ├── types/                        # Shared TypeScript types
 │   └── ui/                           # Shared UI assets consumed by both lab/ and watch/
 │       ├── core-tokens.css               # Core CSS design tokens (colors, spacing, radii)
@@ -179,19 +185,24 @@ NanoToybox/
 │   └── js/
 │       ├── main.ts                   # Thin bootstrap: theme init, controller creation, React mount
 │       ├── watch-controller.ts       # Non-React facade: orchestrates domain services, owns RAF clock, snapshot publication, transactional file open, interpolation runtime lifecycle
-│       ├── watch-document-service.ts # File lifecycle: read, detect, validate, import, document metadata. Non-destructive prepare/commit.
+│       ├── watch-document-service.ts # File lifecycle: read, detect, validate, import (kind-based dispatch to full or reduced importer), document metadata. Non-destructive prepare/commit.
 │       ├── watch-view-service.ts     # Camera target, follow state (frozen atom set), center/follow commands
 │       ├── watch-camera-input.ts     # DOM event binding for orbit + triad interaction (desktop orbit + mobile triad, no atom picking)
 │       ├── watch-overlay-layout.ts   # Triad sizing/positioning using lab-parity formulas (device-aware, dock-clearance)
 │       ├── watch-bonded-group-appearance.ts # Stable-atomId color model: authored assignments keyed by stable atomIds, per-frame projection to dense indices, renderer sync
 │       ├── watch-settings.ts         # Viewer preferences: theme, text-size, smoothPlayback, interpolationMode (session-only, survives file replacement)
 │       ├── watch-trajectory-interpolation.ts # Interpolation runtime: strategy registry (Linear stable, Hermite + Catmull-Rom experimental), bracket lookup with cursor cache, preallocated output buffer, resolve() API, fallback taxonomy
-│       ├── watch-playback-model.ts   # Separated sampling channels (positions, topology, config, boundary) with time clamping; bidirectional playback, speed 0.5x–20x, repeat
+│       ├── watch-playback-model.ts   # WatchTopologySource abstraction + LoadedWatchHistory discriminated union (full | reduced); separated sampling channels, bidirectional playback, speed 0.5x–20x, repeat
 │       ├── watch-renderer.ts         # Thin adapter over lab Renderer (initForPlayback, updateReviewFrame, applyTheme)
 │       ├── watch-bonded-groups.ts    # Memoized bonded-group tracking via shared projection (no Zustand)
 │       ├── react-root.tsx            # React mount/unmount entry point
-│       ├── history-file-loader.ts    # Two-step file detection + support decision (delegates to shared schema module)
+│       ├── history-file-loader.ts    # Two-step file detection + support decision; LoadDecision includes { kind: 'reduced' } (delegates to shared schema module)
 │       ├── full-history-import.ts    # Normalizes v1 file data (number[] → Float64Array, {a,b,distance} → tuples); precomputes InterpolationCapability (per-bracket/per-window typed-array flags + reason arrays), import diagnostics, velocity sanity check
+│       ├── reduced-history-import.ts # LoadedReducedHistory: elementById map, comprehensive semantic + bondPolicy validation for reduced history files
+│       ├── frame-search.ts           # Shared binary search helpers: bsearchAtOrBefore, bsearchIndexAtOrBefore (time-indexed frame lookup)
+│       ├── topology-sources/         # Topology source implementations for WatchTopologySource
+│       │   ├── stored-topology-source.ts        # Wraps restart-frame topology lookup using shared bsearchAtOrBefore
+│       │   └── reconstructed-topology-source.ts # Reconstructs bonds from dense frames via buildBondTopologyFromPositions + resolveBondPolicy(); object-identity cache by dense-frame index
 │       ├── settings-content.ts       # Structured help section data for WatchSettingsSheet (viewer-specific, not cloned from lab)
 │       └── components/
 │           ├── WatchApp.tsx              # Top-level shell: landing vs workspace switching
@@ -229,13 +240,15 @@ Pure, framework-free modules consumed by both `lab/` and `watch/`. No Zustand, n
 
 #### `src/history/` — History file format and topology analysis
 
-- **`src/history/history-file-v1.ts`** — single source of truth for the v1 atomdojo-history wire format. Owns: envelope types (`AtomDojoHistoryFileV1`, `SimulationMetaV1`, frame/checkpoint types), `detectHistoryFile()` (envelope inspection -- format + version + kind without deep validation), `validateFullHistoryFile()` (shape-safe parse then semantic checks: monotonic ordering, atom table integrity, per-frame atomId uniqueness). Used by `lab/js/runtime/history-export.ts` (build + validate before download) and `watch/js/history-file-loader.ts` (detect + validate on import).
+- **`src/history/history-file-v1.ts`** — single source of truth for the v1 atomdojo-history wire format. Owns: full-history envelope types (`AtomDojoHistoryFileV1`, `SimulationMetaV1`, frame/checkpoint types), reduced-history types (`ReducedDenseFrameV1`, `AtomDojoReducedFileV1` with optional `bondPolicy` field -- legacy-only omission path), `detectHistoryFile()` (envelope inspection -- format + version + kind without deep validation), `validateFullHistoryFile()` (shape-safe parse then semantic checks: monotonic ordering, atom table integrity, per-frame atomId uniqueness), `validateReducedFile()` (structural shape checks for reduced files). Imports `BondPolicyV1` from `bond-policy-v1.ts` for its own use only -- does NOT re-export bond-policy types. Used by `lab/js/runtime/history-export.ts` (build + validate before download), `watch/js/history-file-loader.ts` (detect + validate on import), and `watch/js/reduced-history-import.ts` (reduced-file types).
 
 - **`src/history/connected-components.ts`** — pure union-find algorithm for computing connected components from bond topology. Returns `BondedComponent[]` (atom indices + size). Used by `lab/js/runtime/simulation-timeline.ts` (review topology) and `watch/js/watch-bonded-groups.ts` (imported topology).
 
 - **`src/history/bonded-group-projection.ts`** — pure overlap reconciliation, stable ID assignment, display ordering, and summary construction. Canonical definition of `BondedGroupSummary` (re-exported by `app-store.ts` for lab consumers). Provides `createBondedGroupProjection()` factory that returns a stateful projector tracking previous-frame IDs for stability across topology changes. Used by `lab/js/runtime/bonded-group-runtime.ts` (lab/store adapter) and `watch/js/watch-bonded-groups.ts` (local adapter without Zustand).
 
 - **`src/history/bonded-group-utils.ts`** — pure partitioning function (`partitionBondedGroups`) that splits `BondedGroupSummary[]` into large and small buckets by atom count (threshold: `SMALL_CLUSTER_THRESHOLD`). Shared between `lab/js/store/selectors/bonded-groups.ts` (re-exports for lab consumers) and `watch/js/components/WatchBondedGroupsPanel.tsx`. No framework dependencies.
+
+- **`src/history/bond-policy-v1.ts`** — neutral bond-policy type module. Owns: `KNOWN_BOND_POLICY_IDS` (canonical runtime list of known policy identifiers, currently `['default-carbon-v1']`), `BondPolicyId` type (derived from the runtime constant), `isBondPolicyId()` runtime type guard, `BondPolicyV1` interface (policyId + cutoff + minDist metadata for reduced files). Depends on nothing. Imported by `src/history/history-file-v1.ts` (reduced-file types), `src/topology/bond-policy-resolver.ts` (resolution), and `watch/js/reduced-history-import.ts` (validation).
 
 - **`src/history/units.ts`** — physical unit conversion constants for history-file interpolation math. `FS_PER_PS` (1000 fs/ps) for converting Å/fs velocities to Å/ps in Hermite tangent computation. `IMPLAUSIBLE_VELOCITY_A_PER_FS` (10.0 Å/fs, ~66x simulator V_HARD_MAX) for import-time velocity magnitude sanity check — frames exceeding this threshold get `velocityReason = 'velocities-implausible'` so Hermite falls back to linear. Owned here (not in watch/) because the unit convention originates from the simulator. Used by `watch/js/watch-trajectory-interpolation.ts` (Hermite strategy) and `watch/js/full-history-import.ts` (sanity check).
 
@@ -251,7 +264,19 @@ Pure, framework-free modules consumed by both `lab/` and `watch/`. No Zustand, n
 
 - **`src/config/viewer-defaults.ts`** — shared viewer configuration defaults (`VIEWER_DEFAULTS`). Consumed by both lab and watch for consistent initial camera, scene, and display parameters.
 
+- **`src/config/bond-defaults.ts`** — single source of truth for bond-topology distance defaults. Owns: `BOND_DEFAULTS` (`cutoff: 1.8` A, `minDist: 0.5` A). Imported by `lab/js/config.ts` (bonds configuration) and `src/topology/bond-policy-resolver.ts` (fallback for legacy files with no declared bond policy).
+
 - **`src/config/playback-speed-constants.ts`** — single source of truth for playback speed configuration. Owns: speed range (`SPEED_MIN` 0.5x, `SPEED_MAX` 20x, `SPEED_DEFAULT` 1x), preset values (`SPEED_PRESETS`), gap clamp (`PLAYBACK_GAP_CLAMP_MS` 250ms, prevents jumps after tab-background return), hold threshold (`HOLD_PLAY_THRESHOLD_MS` 160ms, tap-step vs hold-play discrimination). Provides logarithmic slider mapping functions (`sliderToSpeed`, `speedToSlider`) that give ~37% of slider travel to the fine-control 0.5x-2x range, and `formatSpeed()` for display formatting. Consumed by `watch/js/watch-playback-model.ts` (engine) and `watch/js/components/PlaybackSpeedControl.tsx` + `WatchDock.tsx` (UI).
+
+#### `src/topology/` — Bond rules, topology builders, and policy resolution
+
+Pure modules for bond-topology computation. No lab/, watch/, CONFIG, or framework dependencies (except imports from `src/` siblings).
+
+- **`src/topology/bond-rules.ts`** — bond-rule contract. Owns: `BondRuleSet` interface (minDist, globalMaxDist, per-pair `maxPairDistance()`, precomputed squared values for the hot-path inner loop) and `createBondRules()` factory. Pure — callers pass explicit distance values, no CONFIG import. Used by `src/topology/build-bond-topology.ts` (all three entry points) and `src/topology/bond-policy-resolver.ts` (creates rules from policy metadata).
+
+- **`src/topology/build-bond-topology.ts`** — shared bond-topology builders with three entry points for three callers. `buildBondTopologyFromAtoms()` — naive O(n^2) pair-scan for loader path (`lab/js/loader.ts`), genuinely pair-aware via `rules.maxPairDistance()`. `buildBondTopologyFromPositions()` — lower-level naive builder accepting dense interleaved positions + atomIds + element-by-ID map, suited for Watch reconstruction (`watch/js/topology-sources/reconstructed-topology-source.ts`); throws on missing element. `buildBondTopologyAccelerated()` — spatial-hash accelerated builder for the physics hot path (`lab/js/physics.ts`), with caller-owned `BondTopologyWorkspace` for output-buffer reuse (grow-only buffers, never shrink); global-rule-only in this round (elements must be null). Depends only on `BondTuple` from `src/types/interfaces` and `BondRuleSet` from `./bond-rules`.
+
+- **`src/topology/bond-policy-resolver.ts`** — resolves file-declared `BondPolicyV1` (or null for legacy files) to a `BondRuleSet`. Owns: `BOND_POLICY_RESOLVERS` registry keyed by `BondPolicyId` — the `Record<BondPolicyId, ...>` type annotation enforces exhaustive coverage at compile time (adding a new ID to `KNOWN_BOND_POLICY_IDS` without a resolver entry is a compile error). `resolveBondPolicy(policy)` dispatches to the registry; null policies fall back to `BOND_DEFAULTS`. Depends on: `BondPolicyV1`/`BondPolicyId` from `src/history/bond-policy-v1` (neutral types), `createBondRules` from `./bond-rules`, `BOND_DEFAULTS` from `src/config/bond-defaults`. Used by `watch/js/topology-sources/reconstructed-topology-source.ts`.
 
 #### `src/ui/` — Shared UI assets (CSS + hooks)
 
@@ -731,11 +756,15 @@ main.ts (bootstrap: theme init, controller creation, React mount)
 watch-controller.ts (facade: orchestrates domains, RAF clock, snapshot publication)
        │
        ├── watch-document-service.ts    ← file lifecycle: non-destructive prepare/commit,
-       │       │                           document metadata, transactional rollback
+       │       │                           document metadata, kind-based importer dispatch
+       │       │                           (full vs reduced), transactional rollback
        │       ├── history-file-loader.ts   ← file I/O, delegates detection + validation
-       │       │                               to src/history/history-file-v1.ts
-       │       └── full-history-import.ts   ← normalizes v1 data into playback-ready model;
-       │                                       precomputes InterpolationCapability + diagnostics
+       │       │                               to src/history/history-file-v1.ts;
+       │       │                               LoadDecision widened with { kind: 'reduced' }
+       │       ├── full-history-import.ts   ← normalizes v1 data into playback-ready model;
+       │       │                               precomputes InterpolationCapability + diagnostics
+       │       └── reduced-history-import.ts ← LoadedReducedHistory: elementById map,
+       │                                       semantic + bondPolicy validation
        │
        ├── watch-trajectory-interpolation.ts ← interpolation runtime: strategy registry,
        │       │                                bracket lookup with cursor cache, resolve() API,
@@ -744,9 +773,19 @@ watch-controller.ts (facade: orchestrates domains, RAF clock, snapshot publicati
        │       │                                disposed on unload/rollback)
        │       └── src/history/units.ts        (FS_PER_PS, IMPLAUSIBLE_VELOCITY_A_PER_FS)
        │
-       ├── watch-playback-model.ts      ← separated sampling channels (positions,
-       │                                   topology, config, boundary); bidirectional
-       │                                   playback, speed 0.5x–20x, repeat, step
+       ├── watch-playback-model.ts      ← WatchTopologySource abstraction +
+       │       │                           LoadedWatchHistory discriminated union
+       │       │                           (LoadedFullHistory | LoadedReducedHistory);
+       │       │                           separated sampling channels, bidirectional
+       │       │                           playback, speed 0.5x–20x, repeat, step
+       │       │
+       │       ├── frame-search.ts         ← shared bsearchAtOrBefore / bsearchIndexAtOrBefore
+       │       │
+       │       └── topology-sources/
+       │               ├── stored-topology-source.ts        ← restart-frame topology lookup
+       │               └── reconstructed-topology-source.ts ← bond reconstruction from dense
+       │                       │                               frames (object-identity cache)
+       │                       └── buildBondTopologyFromPositions + resolveBondPolicy()
        │
        ├── watch-renderer.ts            ← thin adapter over lab Renderer
        │       │                           (initForPlayback, updateReviewFrame, applyTheme)
@@ -807,8 +846,8 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
 **Domain modules:**
 - **main.ts** — thin bootstrap: applies theme tokens, creates the `WatchController`, mounts the React UI via `mountWatchUI()`. Does NOT own DOM manipulation, playback logic, or renderer lifecycle.
 - **watch-controller.ts** — non-React facade that orchestrates domain services and bridges to React UI. Owns: RAF clock (playback timing + renderer frame application + follow tracking + appearance sync in the same `tick()`), `WatchControllerSnapshot` publication via `getSnapshot()`/`subscribe()`, interpolation runtime lifecycle (`installInterpolationRuntime`/`teardownInterpolationRuntime` — recreated on file load, disposed on unload/rollback). All render entry points (RAF tick, scrub/step, initial load, rollback) route through the single `applyReviewFrameAtTime()` helper, which is the sole caller of `interpolation.resolve()` and `renderer.updateReviewFrame()`. Snapshot fields include `smoothPlayback`, `interpolationMode`, `activeInterpolationMethod` (string `InterpolationMethodId`), `lastFallbackReason`, and `importDiagnostics`. Exposes `getRegisteredInterpolationMethods()` as a stable accessor (frozen array, reference changes only on registry mutation). Delegates file lifecycle to `watch-document-service.ts`, playback to `watch-playback-model.ts`, camera input to `watch-camera-input.ts`, overlay to `watch-overlay-layout.ts`, color to `watch-bonded-group-appearance.ts`, interpolation to `watch-trajectory-interpolation.ts`, and viewer preferences to `watch-settings.ts`. Coordinates commit/rollback across services on file open.
-- **watch-document-service.ts** — file lifecycle service. Non-destructive `prepare()` (read, detect, validate, import -- no side effects) and `commit()` (apply to playback model). Owns `DocumentMetadata` (fileName, fileKind, atomCount, frameCount, maxAtomCount). The controller coordinates commit/rollback around this service.
-- **watch-playback-model.ts** — separated sampling channels for positions, topology, config, and boundary state. Bidirectional playback with speed 0.5x-20x (logarithmic mapping via shared `playback-speed-constants.ts`), repeat, step forward/backward. Gap clamp prevents huge jumps after tab-background return. All channels return exact recorded data (stepwise from nearest frame at or before `timePs`). Position interpolation is handled by the trajectory interpolation runtime in the controller pipeline, not in the playback model itself; topology/config/boundary remain stepwise.
+- **watch-document-service.ts** — file lifecycle service. Non-destructive `prepare()` (read, detect, validate, import -- no side effects) and `commit()` (apply to playback model). Kind-based importer dispatch: branches on `LoadDecision.kind` to route files to `full-history-import.ts` or `reduced-history-import.ts`, producing the appropriate `LoadedWatchHistory` variant. Owns `DocumentMetadata` (fileName, fileKind, atomCount, frameCount, maxAtomCount). The controller coordinates commit/rollback around this service.
+- **watch-playback-model.ts** — defines `WatchTopologySource` interface and `LoadedWatchHistory` discriminated union (`LoadedFullHistory | LoadedReducedHistory`). At load time, branches on `kind` to select the appropriate topology source: `StoredTopologySource` for full histories (restart-frame lookup), `ReconstructedTopologySource` for reduced histories (bond reconstruction). Separated sampling channels for positions, topology, config, and boundary state. Bidirectional playback with speed 0.5x-20x (logarithmic mapping via shared `playback-speed-constants.ts`), repeat, step forward/backward. Gap clamp prevents huge jumps after tab-background return. All channels return exact recorded data (stepwise from nearest frame at or before `timePs`). Position interpolation is handled by the trajectory interpolation runtime in the controller pipeline, not in the playback model itself; topology/config/boundary remain stepwise.
 - **watch-camera-input.ts** — DOM event binding for orbit and triad interaction. Simpler than lab's `InputManager` because watch has no atoms to interact with -- only discriminates triad hit area vs. background. Desktop: left/right-drag orbit, scroll zoom. Mobile: 1-finger orbit via triad, 2-finger pinch zoom, tap to snap to axis, double-tap to reset. Uses shared `camera-gesture-constants.ts` for numerical thresholds.
 - **watch-overlay-layout.ts** — triad sizing and positioning using the same formulas as lab's `overlay-layout.ts`. Measures dock region, applies device-mode-aware sizing (phone/tablet/desktop via shared `device-mode.ts`). Phone clears full-width dock; tablet/desktop uses safe-area corner margins.
 - **watch-bonded-group-appearance.ts** — authored color assignments using stable atomIds (from history file frames), not dense slot indices. Each frame, stable atomIds are projected to current dense slot indices via `rebuildOverridesFromDenseIndices()` from the shared appearance module before passing to the renderer. Owns: authored color assignments, per-frame projection, renderer sync. Does NOT own: hover highlight, follow state, color editor UI state.
@@ -817,8 +856,12 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
 - **watch-renderer.ts** — narrow adapter over the lab `Renderer`, exposing only `initForPlayback()`, `updateReviewFrame()`, `applyTheme()`, and canvas access. Shields watch code from the 2500+ line lab renderer surface. Lab's renderer provides `_getDisplayedAtomCount()` which uses `_reviewAtomCount` in review mode so that `_applyAtomColorOverrides()` iterates over the correct atom count for watch display.
 - **watch-bonded-groups.ts** — local adapter that computes bonded groups from imported topology using the shared `connected-components` and `bonded-group-projection` modules. Memoized by topology `frameId` -- skips recomputation when the frame has not changed. No Zustand dependency.
 - **react-root.tsx** — React mount/unmount entry point. Mounts `WatchApp` under `React.StrictMode` into `#watch-root`.
-- **history-file-loader.ts** — two-step file load: `detectHistoryFile()` (envelope) then `validateFullHistoryFile()` (semantic), both delegated to the shared schema module. Owns only `File` I/O and the user-facing load flow.
+- **history-file-loader.ts** — two-step file load: `detectHistoryFile()` (envelope) then `validateFullHistoryFile()` (semantic), both delegated to the shared schema module. `LoadDecision` widened with `{ kind: 'reduced' }` for reduced history file detection. Owns only `File` I/O and the user-facing load flow.
 - **full-history-import.ts** — normalizes validated v1 file data into `LoadedFullHistory`: converts `number[]` to `Float64Array` for positions/velocities, `{ a, b, distance }` to `[a, b, distance]` tuples for bonds, and precomputes `restartAlignedToDense` flag. Round 6 additions: precomputes `InterpolationCapability` — per-frame velocity endpoint reasons, per-bracket `bracketSafe` / `hermiteSafe` typed-array flags, per-4-window `window4Safe` flags, plus diagnostic reason arrays (`BracketReason`, `WindowReason`, `VelocityEndpointReason`). Records `velocityUnit` (always `'angstrom-per-fs'` for v1; `'unknown'` reserved for hypothetical v2). Performs velocity magnitude sanity check against `IMPLAUSIBLE_VELOCITY_A_PER_FS` from `src/history/units.ts`. Collects `ImportDiagnostic[]` (typed codes: `'velocities-implausible'`, `'restart-count-mismatch'`, `'restart-time-mismatch'`, `'atomids-mismatch-at-frame'`) surfaced to the settings UI.
+- **reduced-history-import.ts** — imports and validates reduced history files into `LoadedReducedHistory`. Owns `elementById: ReadonlyMap<number, string>` for atom-id-to-element resolution. Performs comprehensive semantic validation (frame ordering, atom table consistency) and `bondPolicy` validation to ensure reconstructed bonds can be resolved at playback time.
+- **frame-search.ts** — shared binary search helpers for time-indexed frame lookup. `bsearchAtOrBefore(frames, timePs)` returns the frame at or before the target time; `bsearchIndexAtOrBefore` returns the index. Used by both `StoredTopologySource` (restart-frame lookup) and the playback model's channel sampling.
+- **topology-sources/stored-topology-source.ts** — `StoredTopologySource` implements `WatchTopologySource` for full history files. Wraps restart-frame topology lookup using `bsearchAtOrBefore` from `frame-search.ts`. Returns pre-recorded bond arrays from the nearest restart frame at or before the requested time.
+- **topology-sources/reconstructed-topology-source.ts** — `ReconstructedTopologySource` implements `WatchTopologySource` for reduced history files that lack stored bond topology. Reconstructs bonds from dense-frame atom positions using `buildBondTopologyFromPositions` and resolves the bond-distance policy via `resolveBondPolicy()`. Maintains an object-identity cache keyed by dense-frame index so repeated queries for the same frame avoid redundant reconstruction.
 - **watch-trajectory-interpolation.ts** — interpolation runtime created by the controller on file load. Strategy registry ships three built-in strategies (`BUILTIN_STRATEGIES` export): Linear (stable, universal fallback), Hermite (experimental, velocity-based cubic using `FS_PER_PS` tangent scaling), and Catmull-Rom (experimental, 4-frame window). New strategies can be registered via `registerStrategy()` with any string `InterpolationMethodId` — dev-only methods do not widen the productized `WatchInterpolationMode` union. Method metadata uses a discriminated union (`ProductMethodMetadata` / `DevMethodMetadata`) with `availability` as discriminant, so the UI can narrow to product methods without casting. The `resolve()` API handles the full resolution chain: smoothPlayback-disabled bypass, bracket lookup (binary search with cursor-cache fast path for monotonic playback), non-interpolatable bracket fallback (via capability layer flags), strategy input assembly (velocity pairs for Hermite, 4-frame windows for Catmull-Rom), strategy execution, and decline-to-linear fallback. `FallbackReason` taxonomy (`'none' | 'disabled' | 'at-boundary' | 'single-frame' | 'variable-n' | 'atomids-mismatch' | 'velocities-unavailable' | 'insufficient-frames' | 'window-mismatch' | 'capability-declined'`) surfaces in the controller snapshot. Buffer ownership: the preallocated `Float64Array` output buffer (sized to `maxAtomCount * 3` at file load) is returned by reference on interpolated paths; on boundary/fallback paths the importer's immutable dense-frame positions reference is returned directly. Lifecycle: `reset()` clears cursor cache and diagnostics; `dispose()` releases internal state.
 - **settings-content.ts** — structured help section data (`WATCH_HELP_SECTIONS`) for `WatchSettingsSheet`. Viewer-specific content (not cloned from lab simulation instructions). Separates content from presentation.
 
@@ -834,6 +877,8 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
 - **WatchLanding** — drag-drop zone and open-file button for initial file selection.
 
 **State model:** watch/ has no Zustand store. The `WatchController` holds all mutable state across its domain services as plain local variables in closures. React components subscribe via `useSyncExternalStore` -- the controller publishes immutable `WatchControllerSnapshot` objects and notifies listeners on change. Local UI state (panel expanded, small clusters expanded, sheet open) lives in React `useState`.
+
+**Topology reconstruction:** The playback model supports two topology source strategies behind the `WatchTopologySource` interface. Full history files use `StoredTopologySource`, which performs binary search (`bsearchAtOrBefore` from `frame-search.ts`) over restart frames to find pre-recorded bond arrays. Reduced history files lack stored topology and use `ReconstructedTopologySource`, which rebuilds bonds on demand from dense-frame atom positions via `buildBondTopologyFromPositions` with a bond-distance policy resolved by `resolveBondPolicy()`. Reconstructed results are cached by dense-frame index (object-identity cache) to avoid redundant computation during scrub and repeat. The playback model selects the topology source at load time by branching on the `LoadedWatchHistory` discriminated union's `kind` field (`'full'` vs `'reduced'`). The `reduced-history-import.ts` module validates `bondPolicy` at import time so reconstruction can proceed without runtime policy errors.
 
 **Shared CSS architecture:** Both apps import from `src/ui/` for dock (`dock-shell.css`, `dock-tokens.css`), sheet (`sheet-shell.css`), segmented (`segmented.css`), timeline (`timeline-track.css`), and tokens (`core-tokens.css`, `text-size-tokens.css`). Lab keeps only app-specific overrides in `index.html`. Watch adds `watch-dock.css` for its 3-zone transport layout.
 

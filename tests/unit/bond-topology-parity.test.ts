@@ -16,6 +16,7 @@ import { PhysicsEngine } from '../../lab/js/physics';
 import { createBondRules } from '../../src/topology/bond-rules';
 import {
   buildBondTopologyFromAtoms,
+  buildBondTopologyFromPositions,
   buildBondTopologyAccelerated,
   createBondTopologyWorkspace,
 } from '../../src/topology/build-bond-topology';
@@ -306,5 +307,64 @@ describe('Timeline/export continuity', () => {
       expect(restartData.bonds[i][1]).toBe(engineBonds[i][1]);
       expect(restartData.bonds[i][2]).toBeCloseTo(engineBonds[i][2]);
     }
+  });
+});
+
+// ── buildBondTopologyFromPositions (lower-level shared builder) ──
+
+describe('buildBondTopologyFromPositions', () => {
+  it('pair-aware element lookup with heterogeneous rule set', () => {
+    // C at origin, H at 1.1 Å, O at 1.5 Å along x
+    const positions = new Float64Array([0, 0, 0, 1.1, 0, 0, 1.5, 0, 0]);
+    const atomIds = [10, 42, 99];
+    const elementById = new Map<number, string>([[10, 'C'], [42, 'H'], [99, 'O']]);
+    // Custom heterogeneous rules: C-H → 1.2, C-O → 1.8, H-O → 0.3
+    const heteroRules = {
+      minDist: 0.2,
+      minDist2: 0.04,
+      globalMaxDist: 1.8,
+      globalMaxDist2: 3.24,
+      maxPairDistance(a: string, b: string): number {
+        const pair = [a, b].sort().join('-');
+        if (pair === 'C-H') return 1.2;  // C-H at 1.1 → bonds
+        if (pair === 'C-O') return 1.8;  // C-O at 1.5 → bonds
+        return 0.3;                       // H-O at 0.4 → does NOT bond (0.4 > 0.3)
+      },
+    };
+    const bonds = buildBondTopologyFromPositions(3, positions, atomIds, elementById, heteroRules);
+    // Only C-H and C-O should bond; H-O should not
+    expect(bonds).toHaveLength(2);
+    expect(bonds[0][0]).toBe(0); expect(bonds[0][1]).toBe(1); // C-H
+    expect(bonds[1][0]).toBe(0); expect(bonds[1][1]).toBe(2); // C-O
+  });
+
+  it('elementById === null uses global-rule fast path', () => {
+    const positions = new Float64Array([0, 0, 0, 1.42, 0, 0]);
+    const atomIds = [0, 1];
+    const rules = createBondRules({ minDist: 0.5, cutoff: 1.8 });
+    const bonds = buildBondTopologyFromPositions(2, positions, atomIds, null, rules);
+    expect(bonds).toHaveLength(1);
+  });
+
+  it('throws on missing element ID when elementById is provided', () => {
+    const positions = new Float64Array([0, 0, 0, 1.42, 0, 0]);
+    const atomIds = [0, 999]; // 999 not in map
+    const elementById = new Map<number, string>([[0, 'C']]);
+    const rules = createBondRules({ minDist: 0.5, cutoff: 1.8 });
+    expect(() =>
+      buildBondTopologyFromPositions(2, positions, atomIds, elementById, rules),
+    ).toThrow(/atomId 999 not found/);
+  });
+
+  it('output ordering is ascending (i, j)', () => {
+    const d = 1.42;
+    const positions = new Float64Array([0, 0, 0, d, 0, 0, d / 2, d * Math.sqrt(3) / 2, 0]);
+    const atomIds = [0, 1, 2];
+    const rules = createBondRules({ minDist: 0.5, cutoff: 1.8 });
+    const bonds = buildBondTopologyFromPositions(3, positions, atomIds, null, rules);
+    expect(bonds).toHaveLength(3);
+    expect(bonds[0][0]).toBe(0); expect(bonds[0][1]).toBe(1);
+    expect(bonds[1][0]).toBe(0); expect(bonds[1][1]).toBe(2);
+    expect(bonds[2][0]).toBe(1); expect(bonds[2][1]).toBe(2);
   });
 });

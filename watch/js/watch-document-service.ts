@@ -4,13 +4,18 @@
  * Owns:        file reading, detection, validation, import, current document metadata.
  * Does NOT own: playback state, renderer, analysis, RAF.
  * Called by:    watch-controller.ts (facade coordinates commit/rollback).
+ *
+ * Supports both full-history and reduced-history files. Dispatches to the
+ * appropriate importer based on detected file kind.
  */
 
 import { loadHistoryFile, type LoadDecision } from './history-file-loader';
 import { importFullHistory, type LoadedFullHistory } from './full-history-import';
+import { importReducedHistory, type LoadedReducedHistory } from './reduced-history-import';
+import type { LoadedWatchHistory } from './watch-playback-model';
 
 export type DocumentPrepareResult =
-  | { status: 'ready'; history: LoadedFullHistory; fileName: string }
+  | { status: 'ready'; history: LoadedWatchHistory; fileName: string }
   | { status: 'error'; message: string };
 
 export interface DocumentMetadata {
@@ -29,7 +34,7 @@ export interface WatchDocumentService {
   /** Non-destructive prepare: reads, parses, validates, imports. No side effects. */
   prepare(file: File): Promise<DocumentPrepareResult>;
   /** Commit a prepared document — stores metadata. Called by facade on successful load. */
-  commit(history: LoadedFullHistory, fileName: string): void;
+  commit(history: LoadedWatchHistory, fileName: string): void;
   /** Get current document metadata. */
   getMetadata(): DocumentMetadata;
   /** Save metadata for rollback. */
@@ -66,9 +71,14 @@ export function createWatchDocumentService(): WatchDocumentService {
         return { status: 'error', message: `${decision.reason} (detected kind: ${decision.kind})` };
       }
 
-      let history: LoadedFullHistory;
+      // Dispatch to the appropriate importer based on file kind
+      let history: LoadedWatchHistory;
       try {
-        history = importFullHistory(decision.file);
+        if (decision.kind === 'full') {
+          history = importFullHistory(decision.file);
+        } else {
+          history = importReducedHistory(decision.file);
+        }
       } catch (e) {
         return { status: 'error', message: `Import failed: ${e instanceof Error ? e.message : String(e)}` };
       }
@@ -80,10 +90,10 @@ export function createWatchDocumentService(): WatchDocumentService {
       return { status: 'ready', history, fileName: file.name };
     },
 
-    commit(history: LoadedFullHistory, fileName: string) {
+    commit(history: LoadedWatchHistory, fileName: string) {
       _metadata = {
         fileName,
-        fileKind: 'full',
+        fileKind: history.kind,
         atomCount: history.atoms.length,
         frameCount: history.simulation.frameCount,
         maxAtomCount: history.simulation.maxAtomCount,
