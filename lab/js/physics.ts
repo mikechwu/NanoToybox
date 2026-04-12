@@ -15,6 +15,13 @@
  */
 import { CONFIG } from './config';
 import { initWasm, isReady, callTersoff, marshalCSR, csrIsCurrent } from './tersoff-wasm';
+import type { BondTuple } from '../../src/types/interfaces';
+import { createBondRules, type BondRuleSet } from '../../src/topology/bond-rules';
+import {
+  buildBondTopologyAccelerated,
+  createBondTopologyWorkspace,
+  type BondTopologyWorkspace,
+} from '../../src/topology/build-bond-topology';
 
 // ─── Tersoff parameters for carbon (1988) ───
 const LAMBDA1 = 3.4879;
@@ -308,7 +315,7 @@ function computeTersoffForces(pos, force, nl, nlc, n) {
 }
 
 export class PhysicsEngine {
-  // Typed storage for dynamic spatial-hash buffers (_cellHead_hash*, _bondCellHead_hash*)
+  // Typed storage for dynamic spatial-hash buffers (neighbor-list path only; bond hash moved to src/topology/)
   _hashBuffers: Map<string, Int32Array | number>;
 
   // ─── Typed field declarations ───
@@ -334,7 +341,7 @@ export class PhysicsEngine {
 
   // Neighbor lists and bonds
   neighborList!: Int32Array[] | null;
-  bonds!: number[][];
+  bonds!: BondTuple[];
   componentId!: Int32Array | null;
   components!: { atoms: number[]; size: number }[];
   stepCount!: number;
@@ -369,8 +376,9 @@ export class PhysicsEngine {
   // Cell-list spatial acceleration buffers
   _cellHead!: Int32Array | null;
   _cellNext!: Int32Array | null;
-  _bondCellHead!: Int32Array | null;
-  _bondCellNext!: Int32Array | null;
+  // Shared bond topology (Round 7 extraction)
+  _bondRules!: BondRuleSet;
+  _bondWorkspace!: BondTopologyWorkspace;
 
   // CSR neighbor list (Wasm bridge)
   _csrOffsets!: Int32Array | null;
@@ -409,6 +417,8 @@ export class PhysicsEngine {
     this.dragTarget = [0, 0, 0];
     this.neighborList = null;
     this.bonds = [];
+    this._bondRules = createBondRules({ minDist: CONFIG.bonds.minDist, cutoff: CONFIG.bonds.cutoff });
+    this._resetBondWorkspace();
     this.componentId = null;   // Int32Array[n] — component index per atom
     this.components = [];      // [{ atoms: number[], size: number }]
     this.stepCount = 0;
@@ -430,11 +440,9 @@ export class PhysicsEngine {
     this._nlArrays = null;  // Reusable neighbor list sub-arrays
     this._nlCounts = null;  // Int32Array tracking used length of each sub-array
 
-    // Cell-list spatial acceleration buffers (allocated on demand)
+    // Cell-list spatial acceleration buffers (neighbor-list path only; bond hash in _bondWorkspace)
     this._cellHead = null;
     this._cellNext = null;
-    this._bondCellHead = null;
-    this._bondCellNext = null;
 
     // CSR neighbor list (cached derivative for Wasm bridge)
     this._csrOffsets = null;  // Int32Array[n+1]
@@ -474,7 +482,8 @@ export class PhysicsEngine {
     this.isRotateMode = false;
     this.isTranslateMode = false;
     this.activeComponent = -1;
-    this.bonds = bonds.map(b => [...b]);
+    this.bonds = bonds.map(b => [b[0], b[1], b[2]] as BondTuple);
+    this._resetBondWorkspace();
     this.stepCount = 0;
     this.neighborList = null;
 
@@ -491,18 +500,15 @@ export class PhysicsEngine {
     this.rebuildComponents();
   }
 
-  /**
-   * Shared cell-grid construction. Computes bounding box, grid dimensions,
-   * assigns atoms to cells via linked-list insertion.
-   * @returns {{ cellHead, cellNext, nx, ny, nz, minX, minY, minZ, cellSide }} or null if n===0
-   */
-  /**
-   * Spatial hash construction. O(N) time and O(N) memory regardless of domain extent.
-   * Replaces the dense cell grid to avoid cubic blowup when atoms spread apart.
-   * Uses Teschner et al. (2003) hash function with 3-pass compact layout (Müller).
+  /** Spatial-hash construction for the NEIGHBOR-LIST path only. O(N) time and
+   *  O(N) memory regardless of domain extent. Teschner et al. (2003) hash with
+   *  3-pass compact layout (Müller).
    *
-   * @returns {{ counts, offsets, atoms, cells, tableSize, cellSide }} or null if n===0
-   */
+   *  The structurally similar bond-path hash now lives in
+   *  src/topology/build-bond-topology.ts (buildSpatialHash). A future round
+   *  should extract both into one shared low-level spatial-hash helper.
+   *
+   *  @returns {{ counts, offsets, atoms, cells, tableSize, cellSide }} or null if n===0 */
   _buildCellGrid(cellSide, headKey, _nextKey) {
     const p = this.pos;
     const n = this.n;
@@ -987,62 +993,24 @@ export class PhysicsEngine {
     }
   }
 
+  /** Reset bond workspace to a small initial allocation. Called on all
+   *  full-state-replacement paths: constructor, init(), clearScene(),
+   *  restoreCheckpoint(), and _removeAtomsOutsideWall(). Grow-only during
+   *  active simulation (updateBondList / appendMolecule do not reset). */
+  private _resetBondWorkspace(): void {
+    this._bondWorkspace = createBondTopologyWorkspace(64);
+  }
+
   /**
-   * Update bond list using cell-list spatial acceleration.
-   * Uses bond-specific cell side (1.8 Å) for tighter candidate density.
+   * Update bond list via the shared accelerated topology builder.
+   * Delegates to buildBondTopologyAccelerated() with output-buffer reuse.
+   * The public API (this.bonds, getBonds()) is unchanged.
    */
   updateBondList() {
-    const p = this.pos;
-    const n = this.n;
-    const bondCutoff = CONFIG.bonds.cutoff;
-    const bondCutoff2 = bondCutoff * bondCutoff;
-    const minDist = CONFIG.bonds.minDist;
-    const minDist2 = minDist * minDist;
-    let count = 0;
-
-    if (n === 0) { this.bonds.length = 0; return; }
-
-    const hash = this._buildCellGrid(bondCutoff, '_bondCellHead', '_bondCellNext');
-    if (!hash) { this.bonds.length = 0; return; }
-    const { counts: hCounts, offsets, atoms: hAtoms, cells, tableSize, cellSide } = hash;
-
-    for (let i = 0; i < n; i++) {
-      const i3 = i * 3;
-      const px = p[i3], py = p[i3 + 1], pz = p[i3 + 2];
-      const cx = cells[i3], cy = cells[i3 + 1], cz = cells[i3 + 2];
-
-      for (let ddz = -1; ddz <= 1; ddz++) {
-        const ncz = cz + ddz;
-        for (let ddy = -1; ddy <= 1; ddy++) {
-          const ncy = cy + ddy;
-          for (let ddx = -1; ddx <= 1; ddx++) {
-            const ncx = cx + ddx;
-            const h = _hashCell(ncx, ncy, ncz, tableSize);
-            const start = offsets[h];
-            const end = start + hCounts[h];
-            for (let k = start; k < end; k++) {
-              const j = hAtoms[k];
-              if (cells[j * 3] !== ncx || cells[j * 3 + 1] !== ncy || cells[j * 3 + 2] !== ncz) continue;
-              if (j <= i) continue;
-              const j3 = j * 3;
-              const dx = p[j3] - px, dy = p[j3 + 1] - py, dz = p[j3 + 2] - pz;
-              const d2 = dx * dx + dy * dy + dz * dz;
-              if (d2 < bondCutoff2 && d2 > minDist2) {
-                const d = Math.sqrt(d2);
-                if (count < this.bonds.length) {
-                  this.bonds[count][0] = i;
-                  this.bonds[count][1] = j;
-                  this.bonds[count][2] = d;
-                } else {
-                  this.bonds.push([i, j, d]);
-                }
-                count++;
-              }
-            }
-          }
-        }
-      }
-    }
+    if (this.n === 0) { this.bonds.length = 0; return; }
+    const count = buildBondTopologyAccelerated(
+      this.n, this.pos, null, this._bondRules, this._bondWorkspace, this.bonds,
+    );
     this.bonds.length = count;
   }
 
@@ -1312,6 +1280,7 @@ export class PhysicsEngine {
     this.vel = new Float64Array(0);
     this.force = new Float64Array(0);
     this.bonds = [];
+    this._resetBondWorkspace();
     this.dragAtom = -1;
     this.isRotateMode = false;
     this.isTranslateMode = false;
@@ -1323,8 +1292,6 @@ export class PhysicsEngine {
     this._nlCounts = null;
     this._cellHead = null;
     this._cellNext = null;
-    this._bondCellHead = null;
-    this._bondCellNext = null;
     this._csrOffsets = null;
     this._csrData = null;
     this._csrGeneration++;
@@ -1541,6 +1508,7 @@ export class PhysicsEngine {
     this.neighborList = null;
     // Bonds and components will be rebuilt on next updateBondList/rebuildComponents cycle
     this.bonds = [];
+    this._resetBondWorkspace();
     this.componentId = null;
     this.components = [];
     this.activeComponent = -1;
@@ -1571,24 +1539,25 @@ export class PhysicsEngine {
 
   // ─── Checkpoint / restore ───
 
-  createCheckpoint(): { n: number; pos: Float64Array; vel: Float64Array; bonds: number[][]; } {
+  createCheckpoint(): { n: number; pos: Float64Array; vel: Float64Array; bonds: BondTuple[]; } {
     return {
       n: this.n,
       pos: this.pos ? new Float64Array(this.pos.slice(0, this.n * 3)) : new Float64Array(0),
       vel: this.vel ? new Float64Array(this.vel.slice(0, this.n * 3)) : new Float64Array(0),
-      bonds: this.bonds ? this.bonds.map(b => [...b]) : [],
+      bonds: this.bonds ? this.bonds.map(b => [b[0], b[1], b[2]] as BondTuple) : [],
     };
   }
 
-  restoreCheckpoint(cp: { n: number; pos: Float64Array; vel: Float64Array; bonds: number[][]; }) {
+  restoreCheckpoint(cp: { n: number; pos: Float64Array; vel: Float64Array; bonds: BondTuple[]; }) {
     this.n = cp.n;
     this.pos = new Float64Array(cp.pos);
     this.vel = new Float64Array(cp.vel);
     this.force = new Float64Array(cp.n * 3);
-    this.bonds = cp.bonds.map(b => [...b]);
+    this.bonds = [];
+    this._resetBondWorkspace();
     this.neighborList = null;  // force rebuild
     this.computeForces();
-    this.updateBondList();
+    this.updateBondList();  // recomputes bonds from restored positions
     this.rebuildComponents();
   }
 

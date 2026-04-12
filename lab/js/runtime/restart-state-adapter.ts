@@ -22,6 +22,10 @@ import type { AtomXYZ } from '../../../src/types/domain';
 import type { BondTuple } from '../../../src/types/interfaces';
 import { captureInteractionState, captureBoundaryState, type TimelineInteractionState, type TimelineBoundaryState } from './timeline-context-capture';
 
+function cloneBondTuple(b: BondTuple): BondTuple {
+  return [b[0], b[1], b[2]];
+}
+
 // ── Worker restore payload ──
 
 export interface WorkerRestorePayload {
@@ -46,7 +50,7 @@ export function serializeForWorkerRestore(
   return {
     config: buildConfig(),
     atoms,
-    bonds: physics.getBonds().map((b: number[]) => [b[0], b[1], b[2]] as BondTuple),
+    bonds: physics.getBonds().map(cloneBondTuple),
     velocities: new Float64Array(physics.vel.subarray(0, physics.n * 3)),
     boundary: physics.getBoundarySnapshot(),
   };
@@ -61,7 +65,7 @@ export function applyRestartState(physics: PhysicsEngine, rs: RestartState): voi
     n: rs.n,
     pos: new Float64Array(rs.positions),
     vel: new Float64Array(rs.velocities),
-    bonds: rs.bonds.map(b => [...b] as [number, number, number]),
+    bonds: rs.bonds.map(cloneBondTuple),
   });
   physics.restoreBoundarySnapshot(rs.boundary);
   physics.setDamping(rs.config.damping);
@@ -77,7 +81,7 @@ export interface RestartFrameData {
   n: number;
   positions: Float64Array;
   velocities: Float64Array;
-  bonds: [number, number, number][];
+  bonds: BondTuple[];
   config: TimelinePhysicsConfig;
   interaction: TimelineInteractionState;
   boundary: TimelineBoundaryState;
@@ -90,7 +94,7 @@ export function captureRestartFrameData(physics: PhysicsEngine): RestartFrameDat
     n: physics.n,
     positions: physics.pos.subarray(0, physics.n * 3),
     velocities: physics.vel.subarray(0, physics.n * 3),
-    bonds: physics.getBonds().map((b: number[]) => [b[0], b[1], b[2]] as [number, number, number]),
+    bonds: physics.getBonds().map(cloneBondTuple),
     config: {
       damping: physics.getDamping(),
       kDrag: physics.getDragStrength(),

@@ -1,9 +1,16 @@
 /**
  * Structure loader — fetches manifest and XYZ files from the library.
- * Builds bond topology via distance cutoff.
+ * Builds bond topology via the shared topology builder.
+ *
+ * Round 7: buildBondTopology(atoms, cutoff) is a permanent compatibility
+ * adapter — it translates the caller-provided cutoff into a BondRuleSet
+ * and delegates to the shared buildBondTopologyFromAtoms(). The export
+ * signature is unchanged; existing tests and call sites are unaffected.
  */
 import { CONFIG } from './config';
 import type { StructureAtom, StructureBond } from './placement';
+import { createBondRules } from '../../src/topology/bond-rules';
+import { buildBondTopologyFromAtoms } from '../../src/topology/build-bond-topology';
 
 const LIBRARY_PATH = CONFIG.libraryPath;
 
@@ -48,19 +55,7 @@ export function parseXYZ(text: string): StructureAtom[] {
   return [];
 }
 
+/** Compatibility adapter — unchanged export signature, delegates to shared builder. */
 export function buildBondTopology(atoms: StructureAtom[], cutoff: number): StructureBond[] {
-  const bonds = [];
-  const n = atoms.length;
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      const dx = atoms[j].x - atoms[i].x;
-      const dy = atoms[j].y - atoms[i].y;
-      const dz = atoms[j].z - atoms[i].z;
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist < cutoff && dist > CONFIG.bonds.minDist) {
-        bonds.push([i, j, dist]);
-      }
-    }
-  }
-  return bonds;
+  return buildBondTopologyFromAtoms(atoms, createBondRules({ minDist: CONFIG.bonds.minDist, cutoff }));
 }
