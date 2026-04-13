@@ -13,6 +13,8 @@
 
 # --- Security (NEVER COMMIT) ---
 .env
+.dev.vars
+.dev.vars.*
 .env.local
 .env.*.local
 *.pem
