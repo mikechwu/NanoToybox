@@ -5,13 +5,14 @@
  * Does NOT own: playback state, renderer, analysis, RAF.
  * Called by:    watch-controller.ts (facade coordinates commit/rollback).
  *
- * Supports both full-history and reduced-history files. Dispatches to the
- * appropriate importer based on detected file kind.
+ * Supports full, capsule, and legacy reduced files. Dispatches to the
+ * appropriate importer based on detected file kind. Both capsule and
+ * reduced route to the capsule importer (legacy reduced normalized at import).
  */
 
 import { loadHistoryFile, type LoadDecision } from './history-file-loader';
-import { importFullHistory, type LoadedFullHistory } from './full-history-import';
-import { importReducedHistory, type LoadedReducedHistory } from './reduced-history-import';
+import { importFullHistory } from './full-history-import';
+import { importCapsuleHistory, importReducedAsCapsule } from './capsule-history-import';
 import type { LoadedWatchHistory } from './watch-playback-model';
 
 export type DocumentPrepareResult =
@@ -76,8 +77,10 @@ export function createWatchDocumentService(): WatchDocumentService {
       try {
         if (decision.kind === 'full') {
           history = importFullHistory(decision.file);
+        } else if (decision.kind === 'capsule') {
+          history = importCapsuleHistory(decision.file);
         } else {
-          history = importReducedHistory(decision.file);
+          history = importReducedAsCapsule(decision.file);
         }
       } catch (e) {
         return { status: 'error', message: `Import failed: ${e instanceof Error ? e.message : String(e)}` };

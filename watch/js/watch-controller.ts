@@ -33,7 +33,7 @@ import { createWatchBondedGroupAppearance, type WatchBondedGroupAppearance } fro
 import { createWatchSettings, type WatchSettings, type WatchInterpolationMode } from './watch-settings';
 import {
   createWatchTrajectoryInterpolation,
-  createWatchTrajectoryInterpolationForReduced,
+  createWatchTrajectoryInterpolationForCapsule,
   type WatchTrajectoryInterpolation,
   type FallbackReason,
   type InterpolationMethodMetadata,
@@ -339,7 +339,7 @@ export function createWatchController(): WatchController {
       interpolation = createWatchTrajectoryInterpolation(history);
       _lastImportDiagnostics = history.importDiagnostics;
     } else {
-      interpolation = createWatchTrajectoryInterpolationForReduced(history);
+      interpolation = createWatchTrajectoryInterpolationForCapsule(history);
       _lastImportDiagnostics = EMPTY_DIAGNOSTICS;
     }
     _lastActiveMethod = 'linear';
@@ -457,6 +457,9 @@ export function createWatchController(): WatchController {
         // and deferring them preserves rollback safety (if renderer init fails, follow/hover
         // state is never cleared, so rollback doesn't need to restore them).
         appearance.reset();
+        if (history.kind === 'capsule' && history.appearance) {
+          appearance.importColorAssignments(history.appearance.colorAssignments);
+        }
         // Round 6: install a fresh interpolation runtime sized to the new file's
         // maxAtomCount and bound to its capability layer. Must precede the first
         // applyReviewFrameAtTime call.

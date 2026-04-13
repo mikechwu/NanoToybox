@@ -389,7 +389,7 @@ describe('TimelineSubsystem', () => {
   // ── Export capability lifecycle ──
 
   describe('export capability lifecycle', () => {
-    const exportCaps = { replay: false, full: true };
+    const exportCaps = { full: true, capsule: true };
 
     function createSubWithExport(physics = makePhysics(), renderer = makeRenderer(), molecules = makeSceneMolecules(physics.n)): TimelineSubsystem {
       return createTimelineSubsystem({
@@ -585,11 +585,11 @@ describe('TimelineSubsystem', () => {
   // ── Worker staleness → export disabled (integration) ──
 
   describe('worker staleness disables export end-to-end', () => {
-    const exportCaps = { replay: false, full: true };
+    const exportCaps = { full: true, capsule: true };
 
     it('markIdentityStale disables capability, export callback throws', async () => {
       let exportError: Error | null = null;
-      const exportHistory = vi.fn(async (_kind: 'replay' | 'full') => {
+      const exportHistory = vi.fn(async (_kind: 'full' | 'capsule') => {
         // Simulate the real main.ts export callback pattern
         if (sub.isIdentityStale()) {
           throw new Error('Export is unavailable because atom identity is stale after worker compaction.');

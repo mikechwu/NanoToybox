@@ -76,7 +76,7 @@ export interface TimelineCallbacks {
   onRestartFromHere: () => void;
   onStartRecordingNow: () => void;
   onTurnRecordingOff: () => void;
-  onExportHistory?: (kind: 'replay' | 'full') => Promise<void> | void;
+  onExportHistory?: (kind: 'full' | 'capsule') => Promise<void> | void;
 }
 
 /** Imperative callbacks for the bonded-group panel, registered by main.ts. */
@@ -108,10 +108,15 @@ import type { AtomColorOverrideMap as _AtomColorOverrideMap } from '../../../src
 export type AtomColorOverrideMap = _AtomColorOverrideMap;
 
 /** Frozen color assignment — captures the exact atom set at the time of coloring.
- *  Topology changes never expand atomIndices. Only atom removal can shrink the visible set. */
+ *  atomIds is the canonical source of truth for rendering and export.
+ *  atomIndices is an authoring-time snapshot for UI chip state — it is never
+ *  mutated after creation and does not drive renderer or export behavior. */
 export interface BondedGroupColorAssignment {
   id: string;
+  /** Authoring-time dense slot snapshot. Historical only — does not drive rendering. */
   atomIndices: number[];
+  /** Stable atom IDs captured at authoring time. Canonical for rendering and export. */
+  atomIds: number[];
   colorHex: string;
   sourceGroupId: string;
 }
@@ -240,9 +245,9 @@ export interface AppStore {
   timelineRestartTargetPs: number | null;
   timelineCallbacks: TimelineCallbacks | null;
   /** Export capability gate — null means export unavailable. Set only by timeline subsystem. */
-  timelineExportCapabilities: { replay: boolean; full: boolean } | null;
+  timelineExportCapabilities: { full: boolean; capsule: boolean } | null;
   /** Internal — write-authority is timeline subsystem only. Tests may call directly for lifecycle simulation. */
-  setTimelineExportCapabilities: (caps: { replay: boolean; full: boolean } | null) => void;
+  setTimelineExportCapabilities: (caps: { full: boolean; capsule: boolean } | null) => void;
   setTimelineInstalled: (v: boolean) => void;
   setTimelineRecordingMode: (mode: 'off' | 'ready' | 'active') => void;
   setTimelineMode: (mode: 'live' | 'review') => void;
@@ -262,7 +267,7 @@ export interface AppStore {
     restartTargetPs: number | null;
   }) => void;
   /** Atomic batch: install timeline UI in one store write (no intermediate states). */
-  installTimelineUI: (callbacks: TimelineCallbacks, mode: 'off' | 'ready' | 'active', exportCapabilities?: { replay: boolean; full: boolean } | null) => void;
+  installTimelineUI: (callbacks: TimelineCallbacks, mode: 'off' | 'ready' | 'active', exportCapabilities?: { full: boolean; capsule: boolean } | null) => void;
   /** Atomic batch: uninstall timeline UI in one store write. */
   uninstallTimelineUI: () => void;
   /** Atomic batch: reset timeline to off state without uninstalling (keeps callbacks). */

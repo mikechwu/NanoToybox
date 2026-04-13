@@ -652,4 +652,28 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** An earlier version silently substituted `'C'` for unknown atom IDs. This masked data-integrity bugs in reduced-file import — wrong element assignments would produce wrong bond cutoffs with no diagnostic. Throwing immediately at the reconstruction call site surfaces the root cause.
 
-**Evidence:** `src/topology/build-bond-topology.ts` (`buildBondTopologyFromPositions`), `watch/js/reduced-history-import.ts` (builds `elementById` map with uniqueness validation)
+**Evidence:** `src/topology/build-bond-topology.ts` (`buildBondTopologyFromPositions`), `watch/js/capsule-history-import.ts` (builds `elementById` map with uniqueness validation)
+
+## D83: Playback Capsule File Format
+
+**Decision:** Add `kind: 'capsule'` as a production compact file format alongside `kind: 'full'`. Capsule files carry mandatory `bondPolicy`, optional `appearance` (assignment-grouped `atomIds` + `colorHex`), and optional sparse interaction timeline (event-stream keyed by `frameId`). Legacy `kind: 'reduced'` is accepted on import as an alias.
+
+**Rationale:** The codebase needed a cloud-friendly compact format. Capsule is smaller than full (no restart frames, checkpoints, or per-frame interaction/boundary) while preserving topology reconstruction, authored colors, and interaction semantics.
+
+**Evidence:** `src/history/history-file-v1.ts` (capsule types), `watch/js/capsule-history-import.ts`, `lab/js/runtime/history-export.ts` (`buildCapsuleHistoryFile`)
+
+## D84: Stable Atom ID Appearance Model
+
+**Decision:** Lab color assignments are authored by stable `atomId` (captured from the identity tracker at coloring time). Both Lab rendering and capsule export project from `atomIds` onto current dense slots. `atomIndices` is an authoring-time snapshot only.
+
+**Rationale:** The original model froze dense slot indices, which drifted after compaction/reorder. Watch already used stable `atomIds`. Unifying both apps on the same identity model eliminates the Lab/Watch rendering mismatch.
+
+**Evidence:** `lab/js/runtime/bonded-group-appearance-runtime.ts` (`projectOverridesFromAtomIds`, `syncToRenderer`), `lab/js/store/app-store.ts` (`BondedGroupColorAssignment.atomIds`)
+
+## D85: Replay Removed from Lab Export UI
+
+**Decision:** Remove replay from the export dialog and Lab export types. `TimelineExportKind` is now `'full' | 'capsule'`. Capsule is the preferred compact export; full is the review-complete export.
+
+**Rationale:** Replay was a legacy format with no implementation path. Keeping it in the UI created dead product surface and confused the export state machine.
+
+**Evidence:** `lab/js/components/timeline-export-dialog.tsx`, `lab/js/store/app-store.ts`

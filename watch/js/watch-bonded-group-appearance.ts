@@ -45,6 +45,8 @@ export interface WatchBondedGroupAppearance {
   restoreAssignments(assignments: WatchColorAssignment[]): void;
   /** Get the current dense-index override map (for chip state derivation). */
   getOverrideMap(): AtomColorOverrideMap;
+  /** Import color assignments from a capsule file (creates synthetic WatchColorAssignments). */
+  importColorAssignments(assignments: { atomIds: number[]; colorHex: string }[]): void;
   /** Reset all state (called on file load). */
   reset(): void;
 }
@@ -168,17 +170,31 @@ export function createWatchBondedGroupAppearance(deps: {
     if (r) r.setAtomColorOverrides(null);
   }
 
+  function importColorAssignments(assignments: { atomIds: number[]; colorHex: string }[]): void {
+    for (const a of assignments) {
+      const assignmentId = _nextId++;
+      _assignments.push({
+        id: `imported-${assignmentId}`,
+        atomIds: [...a.atomIds],
+        colorHex: a.colorHex,
+        sourceGroupId: `imported-group-${assignmentId}`,
+      });
+    }
+  }
+
   return {
     applyGroupColor,
     clearGroupColor,
     clearAllColors,
     projectAndSync,
     getGroupColorState,
+    importColorAssignments,
     getAssignments: () => _assignments,
     restoreAssignments(assignments: WatchColorAssignment[]) {
       _assignments = [...assignments];
       _nextId = assignments.reduce((max, a) => {
-        const n = parseInt(a.id.replace('wca', ''), 10);
+        const stripped = a.id.replace(/^(wca|imported-)/, '');
+        const n = parseInt(stripped, 10);
         return isNaN(n) ? max : Math.max(max, n + 1);
       }, _nextId);
     },

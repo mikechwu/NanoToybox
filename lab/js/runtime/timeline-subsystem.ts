@@ -61,8 +61,8 @@ export interface TimelineSubsystemDeps {
   /** Current scene molecules — for rebuilding export atom state on recording restart. */
   getSceneMolecules: () => TimelineSceneMolecule[];
   /** Export dependency — only injected when export is implemented. */
-  exportHistory?: (kind: 'replay' | 'full') => Promise<void> | void;
-  exportCapabilities?: { replay: boolean; full: boolean };
+  exportHistory?: (kind: 'full' | 'capsule') => Promise<void> | void;
+  exportCapabilities?: { full: boolean; capsule: boolean };
 }
 
 /** High-level subsystem handle — main.ts should only use these methods. */
@@ -336,7 +336,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
         onRestartFromHere: () => { coordinator.restartFromHere(); },
         onStartRecordingNow: () => startRecordingNow(),
         onTurnRecordingOff: () => turnRecordingOff(),
-        ...(hasExport ? { onExportHistory: (kind: 'replay' | 'full') => deps.exportHistory!(kind) } : {}),
+        ...(hasExport ? { onExportHistory: (kind: 'full' | 'capsule') => deps.exportHistory!(kind) } : {}),
       }, 'ready', currentExportCapability());
     },
     getReviewBondedGroupComponents: (timePs) => timeline.getReviewBondedGroupComponents(timePs),

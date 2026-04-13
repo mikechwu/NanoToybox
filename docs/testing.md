@@ -112,7 +112,7 @@ npx vitest run tests/unit/simulation-timeline.test.ts
 | File | Tests | What it validates |
 |------|------:|-------------------|
 | `simulation-timeline.test.ts` | 28+ | Core SimulationTimeline: recording frames, retention limits, review mode entry/exit, scrub to arbitrary frame, restart from timeline, truncation on re-record, motion preservation across restore, arming lifecycle |
-| `timeline-bar-lifecycle.test.tsx` | 32 | TimelineBar unified shell: invariant lane skeleton across all modes (time + overlay-zone + track + action-zone), off/ready use simple label not segmented switch, active uses two-segment mode switch, bidirectional mode switch (onEnterReview, onReturnToLive), Review segment disabled when no recorded range, restart anchor edge clamping (0% at 5%, 100% at 95%), clear confirmation dialog flow (confirm fires, cancel safe), format correctness across all unit ranges (fs/ps/ns/µs with exact string assertions), mode transitions (off→ready→active store changes, startup null→installed), accessibility labels (return-to-sim, restart-with-time, clear trigger), no old row1/row2 layout remnants, thick track across all states, lane structure identical for short and long time values, hint tooltip visibility (6 tests: start recording hint on hover+delay, simulation segment hint in review, review segment hint with range, disabled review hint via focus when no range, restart anchor hint on hover, clear trigger hint on hover — all use `vi.useFakeTimers()` + `fireEvent.mouseEnter` + `vi.advanceTimersByTime(HINT_DELAY_MS)` and assert `timeline-hint--visible` class) |
+| `timeline-bar-lifecycle.test.tsx` | 32 | TimelineBar unified shell: invariant lane skeleton across all modes (time + overlay-zone + track + action-zone), off/ready use simple label not segmented switch, active uses two-segment mode switch, bidirectional mode switch (onEnterReview, onReturnToLive), Review segment disabled when no recorded range, restart anchor edge clamping (0% at 5%, 100% at 95%), clear confirmation dialog flow (confirm fires, cancel safe), format correctness across all unit ranges (fs/ps/ns/µs with exact string assertions), mode transitions (off→ready→active store changes, startup null→installed), accessibility labels (return-to-sim, restart-with-time, clear trigger), no old row1/row2 layout remnants, thick track across all states, lane structure identical for short and long time values, hint tooltip visibility (6 tests: start recording hint on hover+delay, simulation segment hint in review, review segment hint with range, disabled review hint via focus when no range, restart anchor hint on hover, clear trigger hint on hover — all use `vi.useFakeTimers()` + `fireEvent.mouseEnter` + `vi.advanceTimersByTime(HINT_DELAY_MS)` and assert `timeline-hint--visible` class), export dialog tests use capsule/full format options (no replay) |
 | `timeline-recording-orchestrator.test.ts` | 9 | Orchestrator arming, recording cadence (frame capture rate), review-mode blocking of new recordings, sim-time advancement during recording, reset behavior |
 | `timeline-recording-policy.test.ts` | 5 | Arm/disarm/re-arm lifecycle, policy state transitions |
 | `timeline-subsystem.test.ts` | 11 | Subsystem boundary isolation, clearAndDisarm, teardown cleanup, isInReview predicate, installStoreCallbacks wiring, placement-does-not-arm regression tests |
@@ -303,7 +303,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
-| `bonded-group-prefeature.test.ts` | 17 | Display source: live resolution, review resolution, null case, strict review (no live fallback). Capabilities: live allows all, review blocks mutation but allows inspect/target/edit, live mode `canTrackBondedGroupHighlight` false, review mode `canTrackBondedGroupHighlight` false. Appearance: group color writes atom overrides, clear removes overrides, syncToRenderer drives renderer, syncGroupIntents propagates to uncolored atoms, syncGroupIntents does NOT overwrite existing overrides from merged groups, pruning (group disappears then intent pruned), clearGroupColor removes intent so syncGroupIntents won't re-apply. Wiring: initial sync with preloaded store, applyGroupColor drives renderer. Persistence: colors survive timeline mode transitions, annotation-global semantics. |
+| `bonded-group-prefeature.test.ts` | 17 | Display source: live resolution, review resolution, null case, strict review (no live fallback). Capabilities: live allows all, review blocks mutation but allows inspect/target/edit, live mode `canTrackBondedGroupHighlight` false, review mode `canTrackBondedGroupHighlight` false. Appearance: group color writes atom overrides, clear removes overrides, syncToRenderer drives renderer, syncGroupIntents propagates to uncolored atoms, syncGroupIntents does NOT overwrite existing overrides from merged groups, pruning (group disappears then intent pruned), clearGroupColor removes intent so syncGroupIntents won't re-apply. Wiring: initial sync with preloaded store, applyGroupColor drives renderer. Persistence: colors survive timeline mode transitions, annotation-global semantics. Stable-ID capture: stable atom IDs captured at group color assignment time, identity preserved across frame reordering. Identity drift: group identity tracked across topology changes, drift detected when atom membership diverges beyond threshold. Coordinator lifecycle: coordinator initializes with preloaded state, coordinator tears down cleanly on file change, coordinator reset does not leak subscriptions. |
 
 ### Shared History Modules & Watch App
 
@@ -329,7 +329,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **End-to-end pipeline:** load → import → playback → groups.
 
-*All 1597 tests pass across 90 test files, including existing lab tests.*
+*All 1700 tests pass across 91 test files, including existing lab tests.*
 
 ### Bond Topology Parity (23 tests)
 
@@ -355,7 +355,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
-| `watch-topology-sources.test.ts` | 53 | Topology source abstraction, stored vs reconstructed parity, reduced-history import validation, bond-policy resolution, controller integration (see breakdown below) |
+| `watch-topology-sources.test.ts` | 53 | Topology source abstraction, stored vs reconstructed parity, reduced-history import validation, bond-policy resolution, controller integration, capsule schema validation, capsule importer, appearance import, getInteractionAtTime, export builder, legacy normalization (see breakdown below) |
 
 **BOND_DEFAULTS shared source of truth:** exports cutoff and minDist with expected values.
 
@@ -367,19 +367,51 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **validateReducedFile:** accepts a valid reduced file, rejects missing simulation, rejects missing denseFrames, rejects wrong kind.
 
-**importReducedHistory:** imports a valid reduced file, rejects non-monotonic timePs, rejects duplicate atom IDs in atom table, rejects atomId not in atom table (stable-ID validation), rejects duplicate atomIds within a frame, accepts non-contiguous stable IDs (10, 42), rejects unsupported indexingModel, rejects non-string element, rejects non-finite timePs, rejects non-finite atom ID, rejects NaN in positions, rejects Infinity in positions, rejects non-numeric value in positions, rejects NaN maxAtomCount, rejects non-finite durationPs, rejects negative frameCount, rejects invalid bondPolicy.cutoff, rejects bondPolicy.minDist >= cutoff, rejects unknown bondPolicy.policyId, accepts valid bondPolicy, legacy file with no bondPolicy sets bondPolicy to null, rejects mismatched durationPs vs frame span.
+**importReducedAsCapsule (legacy reduced normalization):** imports a valid reduced file (normalizes to capsule kind), rejects non-monotonic timePs, rejects duplicate atom IDs, rejects atomId not in atom table, rejects duplicate atomIds within frame, accepts non-contiguous stable IDs, rejects unsupported indexingModel, rejects non-string element, rejects non-finite scalars, rejects NaN/Infinity in positions, rejects invalid bondPolicy, legacy file with no bondPolicy resolves to BOND_DEFAULTS via buildExportBondPolicy(), preserves frame-local interaction/boundary payloads, preserves optional title/description from legacy metadata, validates simulation.units.
 
 **Bonded-group parity (stored vs reconstructed topology):** same topology input produces same bonded-group summaries.
 
-**Controller loads both file kinds:** full-history file loads and produces topology, reduced-history file loads and produces topology, reduced-history scrub + smooth playback + topology + groups work end-to-end.
+**Controller loads all file kinds:** full-history file loads and produces topology, reduced-history file loads (normalized to capsule), capsule file loads end-to-end (loader → importer → playback → topology → interpolation), reduced-history scrub + smooth playback + topology + groups work end-to-end.
 
 **File-declared bondPolicy overrides BOND_DEFAULTS in reconstruction:** tighter cutoff produces fewer bonds than default.
 
-**buildReducedInterpolationCapability:** marks compatible adjacent frames as bracketSafe, marks last frame as last-frame, all hermiteSafe are 0 (no restart data), all velocityReason are restart-misaligned.
+**buildCapsuleInterpolationCapability:** marks compatible adjacent frames as bracketSafe, marks last frame as last-frame, all hermiteSafe are 0 (no restart data), all velocityReason are restart-misaligned.
 
-**createWatchTrajectoryInterpolationForReduced:** linear interpolation works between compatible dense frames, Hermite selected on reduced files falls back to linear, Catmull-Rom selected on reduced files falls back to linear, variable-n bracket degrades conservatively.
+**createWatchTrajectoryInterpolationForCapsule:** linear interpolation works between compatible dense frames, Hermite selected on capsule files falls back to linear, Catmull-Rom selected on capsule files falls back to linear, variable-n bracket degrades conservatively.
 
-**history-file-loader (reduced kind):** accepts a valid reduced file, still accepts full files, still rejects replay files.
+**validateCapsuleFile:** accepts valid capsule file, rejects missing bondPolicy, rejects wrong kind, rejects empty denseFrames.
+
+**importCapsuleHistory:** valid capsule import, required bondPolicy, frameId monotonicity, appearance import (present/absent/unknown atomId/malformed colorHex), interaction import (present/absent/unknown frameId/non-monotonic/unknown atomId/missing target/wrong target length/NaN target/unknown kind), units validation (missing/wrong time/wrong length), dense frames have interaction: null and boundary: {}.
+
+**getInteractionAtTime:** returns interaction event at exact frame time, interpolates between bracketing frames, returns null before first interaction, returns null after last interaction, handles non-monotonic query times gracefully.
+
+**export builder:** builds capsule export from playback model, preserves topology and appearance through round-trip, export file validates against capsule schema, exported bondPolicy matches source.
+
+**legacy reduced normalization:** kind erased to capsule, frame-local interaction preserved, bondPolicy defaults to BOND_DEFAULTS, null appearance/interaction/frameIdToIndex, preserves title/description metadata, validates units.
+
+**buildExportBondPolicy:** returns valid BondPolicyV1 from BOND_DEFAULTS.
+
+**loader accepts capsule kind:** capsule file detected and supported, capsule with appearance passes, capsule without bondPolicy rejected.
+
+**LoadedWatchHistory is 2-way union:** capsule has kind=capsule, full has kind=full.
+
+**history-file-loader:** accepts capsule files, accepts reduced files (legacy), still accepts full files, still rejects replay files.
+
+### Capsule Parity (21 golden tests)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `capsule-parity.test.ts` | 21 | Golden parity tests across topology, appearance, interaction, sparsification, and file size (see breakdown below) |
+
+**Topology parity:** capsule topology matches full-history topology at sampled timestamps, bond counts identical across file kinds, bonded-group structure consistent between capsule and full representations.
+
+**Appearance parity:** authored atom color overrides round-trip through capsule export/import, appearance data preserved across capsule serialization, color assignments survive capsule normalization.
+
+**Interaction parity:** interaction events preserved in capsule format, getInteractionAtTime returns correct interaction data from capsule files, interaction timestamps align with dense frame boundaries.
+
+**Sparsification parity:** sparsified capsule retains topology fidelity at sampled frames, reduced frame count does not corrupt bond or group structure, interpolation between sparse frames maintains structural consistency.
+
+**File size:** capsule file size is strictly smaller than equivalent full-history file, size reduction scales with sparsification level.
 
 ### Watch Controller & Parity (~40+ tests)
 

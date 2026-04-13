@@ -133,6 +133,59 @@ export interface AtomDojoReducedFileV1 {
   bondPolicy?: BondPolicyV1;
 }
 
+// ── Capsule-file schema (Playback Capsule — production compact format) ──
+
+export interface CapsuleSimulationMetaV1 {
+  units: { time: 'ps'; length: 'angstrom' };
+  maxAtomCount: number;
+  durationPs: number;
+  frameCount: number;
+  indexingModel: 'dense-prefix';
+}
+
+export interface CapsuleDenseFrameV1 {
+  frameId: number;
+  timePs: number;
+  n: number;
+  atomIds: number[];
+  positions: number[];
+}
+
+export interface CapsuleColorAssignmentV1 {
+  atomIds: number[];
+  colorHex: string;
+}
+
+export interface CapsuleAppearanceV1 {
+  colorAssignments: CapsuleColorAssignmentV1[];
+}
+
+export type CapsuleInteractionEventV1 =
+  | { frameId: number; kind: 'none' }
+  | { frameId: number; kind: 'atom_drag'; atomId: number; target: [number, number, number] }
+  | { frameId: number; kind: 'move_group'; atomId: number; target: [number, number, number] }
+  | { frameId: number; kind: 'rotate_group'; atomId: number; target: [number, number, number] };
+
+export interface CapsuleInteractionTimelineV1 {
+  encoding: 'event-stream-v1';
+  events: CapsuleInteractionEventV1[];
+}
+
+export interface AtomDojoPlaybackCapsuleFileV1 {
+  format: 'atomdojo-history';
+  version: 1;
+  kind: 'capsule';
+  producer: { app: 'lab'; appVersion: string; exportedAt: string };
+  simulation: CapsuleSimulationMetaV1;
+  atoms: { atoms: AtomInfoV1[] };
+  bondPolicy: BondPolicyV1;
+  timeline: {
+    denseFrames: CapsuleDenseFrameV1[];
+    interactionTimeline?: CapsuleInteractionTimelineV1;
+  };
+  appearance?: CapsuleAppearanceV1;
+}
+
 // ── Detection (purely descriptive) ──
 
 export type DetectedHistoryFile =
@@ -329,6 +382,31 @@ export function validateReducedFile(file: unknown): string[] {
     const atoms = f.atoms as Record<string, unknown>;
     if (!Array.isArray(atoms.atoms)) errors.push('atoms.atoms must be an array');
   }
+  if (!f.timeline || typeof f.timeline !== 'object') errors.push('missing timeline');
+  else {
+    const tl = f.timeline as Record<string, unknown>;
+    if (!Array.isArray(tl.denseFrames)) errors.push('timeline.denseFrames must be an array');
+    else if (tl.denseFrames.length === 0) errors.push('timeline.denseFrames must not be empty');
+  }
+  return errors;
+}
+
+// ── Capsule-file validation (structural only) ──
+
+export function validateCapsuleFile(file: unknown): string[] {
+  const errors: string[] = [];
+  if (!file || typeof file !== 'object') return ['file is not an object'];
+  const f = file as Record<string, unknown>;
+  if (f.format !== 'atomdojo-history') errors.push('format must be atomdojo-history');
+  if (f.version !== 1) errors.push('version must be 1');
+  if (f.kind !== 'capsule') errors.push('kind must be capsule');
+  if (!f.simulation || typeof f.simulation !== 'object') errors.push('missing or invalid simulation');
+  if (!f.atoms || typeof f.atoms !== 'object') errors.push('missing atoms');
+  else {
+    const atoms = f.atoms as Record<string, unknown>;
+    if (!Array.isArray(atoms.atoms)) errors.push('atoms.atoms must be an array');
+  }
+  if (!f.bondPolicy || typeof f.bondPolicy !== 'object') errors.push('missing or invalid bondPolicy');
   if (!f.timeline || typeof f.timeline !== 'object') errors.push('missing timeline');
   else {
     const tl = f.timeline as Record<string, unknown>;

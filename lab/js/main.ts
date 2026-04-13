@@ -623,6 +623,8 @@ async function init() {
   _bondedGroupAppearance = createBondedGroupAppearanceRuntime({
     getBondedGroupRuntime: () => _bondedGroups,
     getRenderer: () => renderer,
+    getStableAtomIds: () => _timelineSub?.getAtomIdentityTracker().captureForCurrentState(physics?.n ?? 0) ?? [],
+    setStatusText: (text) => useAppStore.getState().setStatusText(text),
   });
   // Initial sync (annotation-global colors may already exist in store)
   _bondedGroupAppearance.syncToRenderer();
@@ -677,26 +679,43 @@ async function init() {
     forceRender: () => { scheduler.forceRenderThisTick = true; },
     clearBondedGroupHighlight: () => { _bondedGroupHighlight?.clearHighlight(); },
     clearRendererFeedback: () => { if (renderer) renderer.clearFeedback(); },
-    syncBondedGroupsForDisplayFrame: () => { _bondedGroupCoordinator?.update(); },
+    syncBondedGroupsForDisplayFrame: () => { _bondedGroupCoordinator?.update(); _bondedGroupAppearance?.syncToRenderer(); },
     getSceneMolecules: () => session.scene.molecules,
     exportHistory: async (kind) => {
-      if (kind !== 'full' || !_timelineSub) return;
-      // Defensive runtime gate — identity may be stale after worker compaction
+      if (!_timelineSub) return;
       if (_timelineSub.isIdentityStale()) {
         throw new Error('Export is unavailable because atom identity is stale after worker compaction.');
       }
-      const { buildFullHistoryFile, downloadHistoryFile, validateFullHistoryFile } = await import('./runtime/history-export');
-      const file = buildFullHistoryFile({
-        getTimelineExportData: () => _timelineSub!.getTimelineExportSnapshot(),
-        getAtomTable: () => _timelineSub!.getAtomMetadataRegistry().getAtomTable(),
-        appVersion: '0.1.0',
-      });
-      if (!file) throw new Error('No recorded history to export.');
-      const errors = validateFullHistoryFile(file);
-      if (errors.length > 0) throw new Error(`Export validation failed: ${errors[0]}`);
-      downloadHistoryFile(file);
+      if (kind === 'capsule') {
+        const { buildCapsuleHistoryFile, downloadCapsuleFile } = await import('./runtime/history-export');
+        const { validateCapsuleFile } = await import('../../src/history/history-file-v1');
+        const file = buildCapsuleHistoryFile({
+          getTimelineExportData: () => _timelineSub!.getTimelineExportSnapshot(),
+          getAtomTable: () => _timelineSub!.getAtomMetadataRegistry().getAtomTable(),
+          getColorAssignments: () => useAppStore.getState().bondedGroupColorAssignments.map(a => ({
+            atomIds: a.atomIds,
+            colorHex: a.colorHex,
+          })),
+          appVersion: '0.1.0',
+        });
+        if (!file) throw new Error('No recorded history to export.');
+        const errors = validateCapsuleFile(file);
+        if (errors.length > 0) throw new Error(`Export validation failed: ${errors[0]}`);
+        downloadCapsuleFile(file);
+      } else if (kind === 'full') {
+        const { buildFullHistoryFile, downloadHistoryFile, validateFullHistoryFile } = await import('./runtime/history-export');
+        const file = buildFullHistoryFile({
+          getTimelineExportData: () => _timelineSub!.getTimelineExportSnapshot(),
+          getAtomTable: () => _timelineSub!.getAtomMetadataRegistry().getAtomTable(),
+          appVersion: '0.1.0',
+        });
+        if (!file) throw new Error('No recorded history to export.');
+        const errors = validateFullHistoryFile(file);
+        if (errors.length > 0) throw new Error(`Export validation failed: ${errors[0]}`);
+        downloadHistoryFile(file);
+      }
     },
-    exportCapabilities: { replay: false, full: true },
+    exportCapabilities: { full: true, capsule: true },
   });
   _timelineSub.installAndEnable(); // Atomic: install callbacks + enter ready state (no transient off flash)
 

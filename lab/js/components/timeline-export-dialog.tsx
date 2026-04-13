@@ -9,16 +9,16 @@ import { TIMELINE_HINTS } from './timeline-hints';
 
 // ── Types ──
 
-export type TimelineExportKind = 'replay' | 'full';
+export type TimelineExportKind = 'full' | 'capsule';
 
 // ── Hook ──
 
 export function useExportDialog() {
   const [open, setOpen] = useState(false);
-  const [kind, setKind] = useState<TimelineExportKind>('replay');
+  const [kind, setKind] = useState<TimelineExportKind>('capsule');
   const request = useCallback(() => { setOpen(true); }, []);
   const cancel = useCallback(() => { setOpen(false); }, []);
-  const reset = useCallback(() => { setOpen(false); setKind('replay'); }, []);
+  const reset = useCallback(() => { setOpen(false); setKind('capsule'); }, []);
   return { open, kind, request, cancel, reset, setKind };
 }
 
@@ -52,14 +52,14 @@ export function ExportTrigger({ onClick }: { onClick: () => void }) {
 
 interface TimelineExportDialogProps {
   open: boolean;
-  availableKinds: { replay: boolean; full: boolean };
+  availableKinds: { full: boolean; capsule: boolean };
   kind: TimelineExportKind;
   submitting: boolean;
   /** True when the export action is reachable (callback + capability both present). */
   confirmEnabled: boolean;
   error: string | null;
-  replayEstimate?: string;
   fullEstimate?: string;
+  capsuleEstimate?: string;
   onSelectKind: (kind: TimelineExportKind) => void;
   onCancel: () => void;
   onConfirm: () => void;
@@ -67,7 +67,7 @@ interface TimelineExportDialogProps {
 
 export function TimelineExportDialog({
   open, availableKinds, kind, submitting, confirmEnabled, error,
-  replayEstimate, fullEstimate,
+  fullEstimate, capsuleEstimate,
   onSelectKind, onCancel, onConfirm,
 }: TimelineExportDialogProps) {
   const firstEnabledRef = useRef<HTMLInputElement>(null);
@@ -77,18 +77,16 @@ export function TimelineExportDialog({
   // Focus first enabled option on open transition
   useEffect(() => {
     if (open && !prevOpen.current) {
-      // Delay to ensure DOM is ready
       requestAnimationFrame(() => {
-        if (kind === 'replay' && availableKinds.replay) {
+        if (kind === 'capsule' && availableKinds.capsule) {
           firstEnabledRef.current?.focus();
         } else if (kind === 'full' && availableKinds.full) {
           secondRef.current?.focus();
-        } else if (availableKinds.replay) {
+        } else if (availableKinds.capsule) {
           firstEnabledRef.current?.focus();
         } else if (availableKinds.full) {
           secondRef.current?.focus();
         } else {
-          // Fallback: focus Cancel when no radio is enabled
           const dialog = firstEnabledRef.current?.closest('.timeline-export-dialog')
             ?? document.querySelector('.timeline-export-dialog');
           dialog?.querySelector<HTMLButtonElement>('.timeline-export-dialog__cancel')?.focus();
@@ -133,23 +131,23 @@ export function TimelineExportDialog({
       <div className="timeline-modal-card timeline-export-dialog" role="dialog" aria-modal="true" aria-label="Export History">
         <p className="timeline-export-dialog__title">Export History</p>
         <div className="timeline-export-dialog__options" role="radiogroup" aria-label="Export format">
-          <label className={`timeline-export-dialog__option${!availableKinds.replay ? ' timeline-export-dialog__option--disabled' : ''}`}>
+          <label className={`timeline-export-dialog__option${!availableKinds.capsule ? ' timeline-export-dialog__option--disabled' : ''}`}>
             <input
               ref={firstEnabledRef}
               className="timeline-export-dialog__radio-native"
               type="radio"
               name="export-kind"
-              value="replay"
-              checked={kind === 'replay'}
-              disabled={!availableKinds.replay}
-              onChange={() => onSelectKind('replay')}
+              value="capsule"
+              checked={kind === 'capsule'}
+              disabled={!availableKinds.capsule}
+              onChange={() => onSelectKind('capsule')}
               tabIndex={-1}
             />
             <span className="timeline-export-dialog__radio-ui" aria-hidden="true" />
             <span className="timeline-export-dialog__option-text">
-              <strong>Replay</strong>
-              <span>Small file, playback only</span>
-              {replayEstimate ? <span className="timeline-export-dialog__estimate">{replayEstimate}</span> : null}
+              <strong>Capsule</strong>
+              <span>Compact playback</span>
+              {capsuleEstimate ? <span className="timeline-export-dialog__estimate">{capsuleEstimate}</span> : null}
             </span>
           </label>
           <label className={`timeline-export-dialog__option${!availableKinds.full ? ' timeline-export-dialog__option--disabled' : ''}`}>

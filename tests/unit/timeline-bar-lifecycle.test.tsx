@@ -670,7 +670,7 @@ describe('TimelineBar unified shell', () => {
 
   // ── Export UI ──
 
-  function installWithExport(mode: 'off' | 'ready' | 'active' = 'active', caps: { replay: boolean; full: boolean } = { replay: true, full: true }) {
+  function installWithExport(mode: 'off' | 'ready' | 'active' = 'active', caps: { full: boolean; capsule: boolean } = { full: true, capsule: true }) {
     useAppStore.getState().installTimelineUI(
       { ...defaultCallbacks, onExportHistory: vi.fn() },
       mode,
@@ -777,7 +777,7 @@ describe('TimelineBar unified shell', () => {
     expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
   });
 
-  it('export dialog defaults to replay when both available', () => {
+  it('export dialog defaults to capsule when both available', () => {
     act(() => {
       installWithExport('active');
       useAppStore.getState().updateTimelineState({
@@ -788,13 +788,13 @@ describe('TimelineBar unified shell', () => {
     });
     const { container } = render(<TimelineBar />);
     act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
-    const replayRadio = document.querySelector('input[value="replay"]') as HTMLInputElement;
-    expect(replayRadio.checked).toBe(true);
+    const capsuleRadio = document.querySelector('input[value="capsule"]') as HTMLInputElement;
+    expect(capsuleRadio.checked).toBe(true);
   });
 
   it('export dialog disables unavailable kinds', () => {
     act(() => {
-      installWithExport('active', { replay: true, full: false });
+      installWithExport('active', { full: false, capsule: true });
       useAppStore.getState().updateTimelineState({
         mode: 'live', currentTimePs: 100, reviewTimePs: null,
         rangePs: { start: 0, end: 200 },
@@ -813,7 +813,7 @@ describe('TimelineBar unified shell', () => {
       useAppStore.getState().installTimelineUI(
         { ...defaultCallbacks, onExportHistory: onExport },
         'active',
-        { replay: true, full: true },
+        { full: true, capsule: true },
       );
       useAppStore.getState().updateTimelineState({
         mode: 'live', currentTimePs: 100, reviewTimePs: null,
@@ -825,7 +825,7 @@ describe('TimelineBar unified shell', () => {
     act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
     const confirmBtn = document.querySelector('.timeline-export-dialog__confirm') as HTMLButtonElement;
     act(() => { confirmBtn.click(); });
-    expect(onExport).toHaveBeenCalledWith('replay');
+    expect(onExport).toHaveBeenCalledWith('capsule');
   });
 
   it('opening export closes clear dialog', () => {
@@ -942,9 +942,9 @@ describe('TimelineBar unified shell', () => {
     expect(document.querySelector('.timeline-export-dialog')).toBeNull();
   });
 
-  it('selected full falls back to replay when full becomes unavailable', () => {
+  it('selected full falls back to capsule when full becomes unavailable', () => {
     act(() => {
-      installWithExport('active', { replay: true, full: true });
+      installWithExport('active', { full: true, capsule: true });
       useAppStore.getState().updateTimelineState({
         mode: 'live', currentTimePs: 100, reviewTimePs: null,
         rangePs: { start: 0, end: 200 },
@@ -958,10 +958,10 @@ describe('TimelineBar unified shell', () => {
     act(() => { fireEvent.click(fullRadio); });
     expect(fullRadio.checked).toBe(true);
     // Remove full capability
-    act(() => { useAppStore.getState().setTimelineExportCapabilities({ replay: true, full: false }); });
-    // Should fall back to replay
-    const replayRadio = document.querySelector('input[value="replay"]') as HTMLInputElement;
-    expect(replayRadio.checked).toBe(true);
+    act(() => { useAppStore.getState().setTimelineExportCapabilities({ full: false, capsule: true }); });
+    // Should fall back to capsule
+    const capsuleRadio = document.querySelector('input[value="capsule"]') as HTMLInputElement;
+    expect(capsuleRadio.checked).toBe(true);
   });
 
   it('publishTimelineOffState clears capability atomically', () => {
@@ -982,7 +982,7 @@ describe('TimelineBar unified shell', () => {
   it('export confirm disabled when callback is missing but capability exists', () => {
     act(() => {
       // Install with capability but WITHOUT onExportHistory callback
-      useAppStore.getState().installTimelineUI(defaultCallbacks, 'active', { replay: true, full: true });
+      useAppStore.getState().installTimelineUI(defaultCallbacks, 'active', { full: true, capsule: true });
       useAppStore.getState().updateTimelineState({
         mode: 'live', currentTimePs: 100, reviewTimePs: null,
         rangePs: { start: 0, end: 200 },
@@ -1023,7 +1023,7 @@ describe('TimelineBar unified shell', () => {
     // 3. Simulate start recording again — restore mode + capability + range
     act(() => {
       useAppStore.getState().setTimelineRecordingMode('active');
-      useAppStore.getState().setTimelineExportCapabilities({ replay: true, full: true });
+      useAppStore.getState().setTimelineExportCapabilities({ full: true, capsule: true });
       useAppStore.getState().updateTimelineState({
         mode: 'live', currentTimePs: 50, reviewTimePs: null,
         rangePs: { start: 0, end: 100 },

@@ -46,7 +46,7 @@ These checks require a real browser with WebGL and cannot run in headless CI. Ru
 - [ ] **Viewer:** Open `/viewer/`, drag-drop an `.xyz` file, verify atoms and bonds render
 - [ ] Placement camera framing: preview does not cause camera snap, drag past boundary works
 - [ ] Review mode UI lock: enter review → dock Add/mode/Pause disabled with hints → Settings Add Molecule/Clear disabled → Live/Restart exit re-enables
-- [ ] History export: record a timeline with 2+ molecules → open export dialog → export downloads valid `.atomdojo-history` file → verify file contains stable atom IDs and metadata
+- [ ] History export: record a timeline with 2+ molecules → open export dialog → export capsule (`.atomdojo`) or full (`.atomdojo-history`) → verify file contains stable atom IDs and metadata
 - [ ] Dock stability: Pause ↔ Resume toggle does not shift neighboring controls
 - [ ] Bonded groups: panel expanded by default with Collapse/Expand disclosure hint visible; per-row inline color chip opens preset swatch popover with responsive layout; authored color overrides persist across theme/structure changes; persistent tracked highlight is feature-gated off (hover preview remains active)
 - [ ] Verify bonded-group color persists across topology changes (group merge/split)
@@ -167,17 +167,17 @@ src/ui/ (13 files):             │    sheet, bonded-groups panel,
 - **React UI** — all 11 UI components are React-authoritative with Zustand store, glassmorphic CSS, responsive layout (phone/tablet/desktop); panel fixed width 250px with scrollbar-gutter stable
 - **Performance optimized** — InstancedMesh rendering (2 draw calls), on-the-fly Tersoff kernel (45% faster), spatial-hash neighbor/bond search (O(N))
 - **Wasm Tersoff kernel** — deployed and enabled by default, automatic JS fallback
-- **CI/CD** — GitHub Actions: typecheck, unit tests, build, E2E, deploy smoke, Python physics tests (90 test files, 1597 tests)
+- **CI/CD** — GitHub Actions: typecheck, unit tests, build, E2E, deploy smoke, Python physics tests (91 test files, 1700 tests)
 - **Containment boundary** — dynamic soft wall with Contain/Remove modes, live atom count, auto-scaling radius
 - **Placement camera framing** — smooth camera assist keeps scene + preview visible during molecule placement; continuous drag with pointer capture and per-frame cursor-lock reprojection
 - **Review mode UI lock** — display-only enforcement across all React surfaces during timeline review; centralized selector, runtime guards, ActionHint tooltips (desktop), transient status hints (mobile)
-- **History export** — export simulation timeline as v1 atomdojo-history files with stable atom identity tracking across topology changes (placement, removal, merge/split); full position + metadata export via download trigger
+- **History export** — export simulation timeline as capsule (`.atomdojo`) or full (`.atomdojo-history`) with stable atom identity tracking across topology changes (placement, removal, merge/split); lab appearance uses stable-ID projection model; download trigger
 - Structure library: 15 canonical relaxed structures (60–720 atoms) with derived honeycomb geometry
 - Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)
 - Three.js trajectory viewer: functional at `viewer/index.html`
 - Performance benchmarks in `lab/bench/`
 - **Bonded group architecture** — display-source-aware projection, capability policy, annotation-model atom color overrides; inline color editing via per-row color chip with portal popover (preset swatches, responsive layout, disclosure-pattern panel expanded by default), conic-gradient multi-color chips, group color intents persist across topology changes; persistent tracked highlight feature-gated off (hover preview remains active); review-mode inspection deferred until historical topology exists
-- **Watch app** — near-parity review viewer at `watch/` with React shell; camera orbit + triad, authored atom colors, playback dock (step/play/speed/repeat), timeline scrubber, settings sheet (theme/text-size/file-info/help); transactional file open preserves current document on failure; bonded-group analysis panel and automatic file-type detection; reduced-file topology reconstruction support; smooth playback (on by default) with strategy-based trajectory interpolation (Linear stable default + Hermite/Catmull-Rom experimental), dock Smooth toggle, and settings method picker
+- **Watch app** — near-parity review viewer at `watch/` with React shell; camera orbit + triad, authored atom colors, playback dock (step/play/speed/repeat), timeline scrubber, settings sheet (theme/text-size/file-info/help); transactional file open preserves current document on failure; bonded-group analysis panel and automatic file-type detection; capsule file support (compact playback with appearance + interaction data, imported via capsule-history-import); smooth playback (on by default) with strategy-based trajectory interpolation (Linear stable default + Hermite/Catmull-Rom experimental), dock Smooth toggle, and settings method picker
 - **Shared design system** — `src/ui/` (13 files: CSS tokens, hooks, component styles) provides the shared design system used by both `lab/` and `watch/`; `src/history/` provides v1 schema types, bond-policy types, connected-component computation, bonded-group projection, bonded-group utilities, and physical unit constants; `src/topology/` provides bond rules, topology builders, and policy resolution; `src/config/` provides playback speed constants, viewer defaults, and bond defaults; `src/appearance/` provides bonded-group color assignments; `src/input/` provides camera gesture constants
 
 ## Project Goal

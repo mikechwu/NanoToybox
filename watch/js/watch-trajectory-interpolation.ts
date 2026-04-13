@@ -35,7 +35,7 @@ import type {
   NormalizedRestartFrame,
   InterpolationCapability,
 } from './full-history-import';
-import type { LoadedReducedHistory } from './reduced-history-import';
+import type { LoadedCapsuleHistory } from './capsule-history-import';
 import type { WatchInterpolationMode } from './watch-settings';
 import { FS_PER_PS } from '../../src/history/units';
 
@@ -690,10 +690,10 @@ export function createWatchTrajectoryInterpolation(
   });
 }
 
-/** Build a minimal InterpolationCapability for reduced files. Only bracketSafe
+/** Build a minimal InterpolationCapability for capsule/compact files. Only bracketSafe
  *  is computed from dense-frame adjacency; all other capabilities are zeroed
  *  (no Hermite or Catmull-Rom data available). Properly typed — no `as any`. */
-export function buildReducedInterpolationCapability(
+export function buildCapsuleInterpolationCapability(
   denseFrames: readonly NormalizedDenseFrame[],
 ): InterpolationCapability {
   const n = denseFrames.length;
@@ -735,15 +735,15 @@ export function buildReducedInterpolationCapability(
   };
 }
 
-/** Create an interpolation runtime for reduced-history files. Feeds directly
+/** Create an interpolation runtime for capsule/compact-history files. Feeds directly
  *  into the narrow internal input — no synthetic LoadedFullHistory bridge. */
-export function createWatchTrajectoryInterpolationForReduced(
-  history: LoadedReducedHistory,
+export function createWatchTrajectoryInterpolationForCapsule(
+  history: LoadedCapsuleHistory,
 ): WatchTrajectoryInterpolation {
   return createInterpolationRuntimeFromInput({
     denseFrames: history.denseFrames,
     restartFrames: [],
-    capability: buildReducedInterpolationCapability(history.denseFrames),
+    capability: buildCapsuleInterpolationCapability(history.denseFrames),
     maxAtomCount: history.simulation.maxAtomCount,
   });
 }

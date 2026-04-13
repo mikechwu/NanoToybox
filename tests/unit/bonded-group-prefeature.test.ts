@@ -106,6 +106,7 @@ describe('bonded-group appearance runtime', () => {
           getAtomIndicesForGroup: (id: string) => mockGroupAtoms[id] ?? null,
         }),
         getRenderer: () => mockRenderer,
+        getStableAtomIds: () => [0, 1, 2, 3, 4],
       }),
       mockRenderer,
     };
@@ -150,6 +151,7 @@ describe('bonded-group appearance runtime', () => {
         getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
       }),
       getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
+      getStableAtomIds: () => [0, 1, 2, 3, 4],
     });
 
     runtime.applyGroupColor('g1', '#ff0000');
@@ -191,7 +193,7 @@ describe('bonded-group appearance runtime', () => {
       getBondedGroupRuntime: () => ({
         getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
       }),
-      getRenderer: () => mockRenderer,
+      getRenderer: () => mockRenderer, getStableAtomIds: () => [0, 1, 2, 3, 4],
     });
 
     runtime.applyGroupColor('g1', '#ff0000');
@@ -233,6 +235,7 @@ describe('bonded-group appearance runtime', () => {
         getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
       }),
       getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
+      getStableAtomIds: () => [0, 1, 2, 3, 4],
     });
 
     // Apply color in "review frame A"
@@ -262,6 +265,7 @@ describe('bonded-group appearance runtime', () => {
         getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
       }),
       getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
+      getStableAtomIds: () => [0, 1, 2, 3, 4],
     });
 
     runtime.applyGroupColor('g1', '#ff0000');
@@ -311,7 +315,7 @@ describe('bonded-group appearance runtime', () => {
       getBondedGroupRuntime: () => ({
         getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
       }),
-      getRenderer: () => mockRenderer,
+      getRenderer: () => mockRenderer, getStableAtomIds: () => [0, 1, 2, 3, 4],
     });
 
     // Wire callbacks as main.ts does
@@ -359,20 +363,18 @@ describe('bonded-group appearance wiring', () => {
     useAppStore.getState().resetTransientState();
   });
 
-  it('syncToRenderer calls renderer.setAtomColorOverrides with store overrides', () => {
+  it('syncToRenderer projects from assignments via stable IDs and syncs renderer', () => {
     const mockRenderer = { setAtomColorOverrides: vi.fn() };
     const runtime = createBondedGroupAppearanceRuntime({
       getBondedGroupRuntime: () => ({
         getAtomIndicesForGroup: (id: string) => id === 'g1' ? [0, 1, 2] : null,
       }),
-      getRenderer: () => mockRenderer,
+      getRenderer: () => mockRenderer, getStableAtomIds: () => [0, 1, 2, 3, 4],
     });
 
-    // Raw override seeding — this test validates renderer sync from existing state,
-    // not authored ownership. Use seedColorAssignments() for assignment-authoritative tests.
-    useAppStore.setState({ bondedGroupColorOverrides: { 0: { hex: '#ff0000' }, 1: { hex: '#ff0000' } } });
+    runtime.applyGroupColor('g1', '#ff0000');
+    mockRenderer.setAtomColorOverrides.mockClear();
 
-    // Initial sync should drive renderer
     runtime.syncToRenderer();
     expect(mockRenderer.setAtomColorOverrides).toHaveBeenCalledWith(
       expect.objectContaining({ 0: { hex: '#ff0000' } }),
@@ -385,7 +387,7 @@ describe('bonded-group appearance wiring', () => {
       getBondedGroupRuntime: () => ({
         getAtomIndicesForGroup: (id: string) => id === 'g1' ? [0, 1, 2] : null,
       }),
-      getRenderer: () => mockRenderer,
+      getRenderer: () => mockRenderer, getStableAtomIds: () => [0, 1, 2, 3, 4],
     });
 
     runtime.applyGroupColor('g1', '#00ff00');
@@ -394,6 +396,114 @@ describe('bonded-group appearance wiring', () => {
     const lastCall = mockRenderer.setAtomColorOverrides.mock.calls.at(-1)![0];
     expect(lastCall[0]).toEqual({ hex: '#00ff00' });
     expect(lastCall[2]).toEqual({ hex: '#00ff00' });
+  });
+
+  it('applyGroupColor captures stable atomIds from getStableAtomIds', () => {
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1, 2] };
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
+      getStableAtomIds: () => [100, 101, 102, 103, 104],
+    });
+    runtime.applyGroupColor('g1', '#ff0000');
+    const assignments = useAppStore.getState().bondedGroupColorAssignments;
+    expect(assignments).toHaveLength(1);
+    expect(assignments[0].atomIndices).toEqual([0, 1, 2]);
+    expect(assignments[0].atomIds).toEqual([100, 101, 102]);
+  });
+
+  it('stable atomIds reflect identity at authoring time, not later changes', () => {
+    let stableIds = [100, 101, 102];
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1] };
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
+      getStableAtomIds: () => stableIds,
+    });
+    runtime.applyGroupColor('g1', '#ff0000');
+    stableIds = [200, 201, 202];
+    const assignments = useAppStore.getState().bondedGroupColorAssignments;
+    expect(assignments[0].atomIds).toEqual([100, 101]);
+  });
+
+  it('applyGroupColor skips assignment when no stable IDs resolve', () => {
+    const groupAtoms: Record<string, number[]> = { g1: [10, 11] };
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
+      getStableAtomIds: () => [0, 1],
+    });
+    runtime.applyGroupColor('g1', '#ff0000');
+    expect(useAppStore.getState().bondedGroupColorAssignments).toHaveLength(0);
+  });
+
+  it('applyGroupColor skips assignment on partial stable-ID resolution', () => {
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1, 2] };
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => ({ setAtomColorOverrides: vi.fn() }),
+      getStableAtomIds: () => [100, 101],
+    });
+    runtime.applyGroupColor('g1', '#ff0000');
+    expect(useAppStore.getState().bondedGroupColorAssignments).toHaveLength(0);
+  });
+
+  it('renderer projection follows identity drift (slot reorder)', () => {
+    let stableIds = [100, 101, 102];
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1] };
+    const mockRenderer = { setAtomColorOverrides: vi.fn() };
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => mockRenderer,
+      getStableAtomIds: () => stableIds,
+    });
+
+    runtime.applyGroupColor('g1', '#ff0000');
+    const assignments = useAppStore.getState().bondedGroupColorAssignments;
+    expect(assignments[0].atomIds).toEqual([100, 101]);
+
+    // Simulate identity reorder: stable IDs shift to different slots
+    stableIds = [102, 100, 101];
+    mockRenderer.setAtomColorOverrides.mockClear();
+    runtime.syncToRenderer();
+
+    // Renderer should now color slots 1 and 2 (where 100 and 101 landed),
+    // NOT the original slots 0 and 1
+    const call = mockRenderer.setAtomColorOverrides.mock.calls.at(-1)![0];
+    expect(call[1]).toEqual({ hex: '#ff0000' });
+    expect(call[2]).toEqual({ hex: '#ff0000' });
+    expect(call[0]).toBeUndefined();
+  });
+
+  it('pruneAndSync removes assignments for atoms no longer in identity set', () => {
+    let stableIds = [100, 101, 102];
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1] };
+    const mockRenderer = { setAtomColorOverrides: vi.fn() };
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => mockRenderer,
+      getStableAtomIds: () => stableIds,
+    });
+
+    runtime.applyGroupColor('g1', '#ff0000');
+    expect(useAppStore.getState().bondedGroupColorAssignments[0].atomIds).toEqual([100, 101]);
+
+    // Simulate atom removal: only atom 102 survives (atomCount=1)
+    stableIds = [102];
+    runtime.pruneAndSync(1);
+    expect(useAppStore.getState().bondedGroupColorAssignments).toHaveLength(0);
   });
 });
 
@@ -421,5 +531,93 @@ describe('bonded-group color persistence (annotation model)', () => {
     useAppStore.getState().setTimelineMode('review');
     useAppStore.getState().setTimelineMode('live');
     expect(Object.keys(useAppStore.getState().bondedGroupColorOverrides)).toHaveLength(1);
+  });
+});
+
+// ── Coordinator lifecycle: appearance re-projection on display-frame transitions ──
+
+import { createTimelineCoordinator, type TimelineCoordinatorDeps } from '../../lab/js/runtime/simulation-timeline-coordinator';
+import { createSimulationTimeline } from '../../lab/js/runtime/simulation-timeline';
+
+describe('coordinator calls syncBondedGroupsForDisplayFrame on all transitions', () => {
+  function makeCoordinatorWithSpy() {
+    const timeline = createSimulationTimeline();
+    timeline.recordFrame({ timePs: 0.1, n: 2, positions: new Float64Array(6), interaction: null, boundary: { mode: 'contain', wallRadius: 100, wallCenter: [0, 0, 0], wallCenterSet: true, removedCount: 0, damping: 0 } });
+    timeline.recordFrame({ timePs: 10, n: 2, positions: new Float64Array(6), interaction: null, boundary: { mode: 'contain', wallRadius: 100, wallCenter: [0, 0, 0], wallCenterSet: true, removedCount: 0, damping: 0 } });
+    timeline.recordRestartFrame({
+      timePs: 0.1, n: 2,
+      positions: new Float64Array(6),
+      velocities: new Float64Array(6),
+      bonds: [[0, 1, 1.42]],
+      config: { damping: 0, kDrag: 2, kRotate: 5, dtFs: 0.5, dampingRefDurationFs: 2.0 },
+      interaction: null,
+      boundary: { mode: 'contain', wallRadius: 100, wallCenter: [0, 0, 0], wallCenterSet: true, removedCount: 0, damping: 0 },
+    });
+
+    const syncSpy = vi.fn();
+    const mockPhysics = {
+      n: 2, pos: new Float64Array(6), vel: new Float64Array(6),
+      force: new Float64Array(6), bonds: [[0, 1, 1.42]], dragAtom: -1,
+      restoreCheckpoint: vi.fn(), restoreBoundarySnapshot: vi.fn(),
+      setDamping: vi.fn(), setDragStrength: vi.fn(), setRotateStrength: vi.fn(),
+      endDrag: vi.fn(),
+    };
+    const mockRenderer = {
+      getAtomCount: () => 2,
+      setAtomCount: vi.fn(),
+      setPhysicsRef: vi.fn(),
+      updateFromSnapshot: vi.fn(),
+      updateReviewFrame: vi.fn(),
+    };
+
+    const deps: TimelineCoordinatorDeps = {
+      timeline,
+      getPhysics: () => mockPhysics as any,
+      getRenderer: () => mockRenderer as any,
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isPaused: () => false,
+      reinitWorker: vi.fn(async () => {}),
+      isWorkerActive: () => false,
+      forceRender: vi.fn(),
+      syncStoreState: vi.fn(),
+      setSimTimePs: vi.fn(),
+      clearBondedGroupHighlight: vi.fn(),
+      clearRendererFeedback: vi.fn(),
+      syncBondedGroupsForDisplayFrame: syncSpy,
+    };
+
+    const coordinator = createTimelineCoordinator(deps);
+    return { coordinator, syncSpy, timeline };
+  }
+
+  it('enterReview calls syncBondedGroupsForDisplayFrame', () => {
+    const { coordinator, syncSpy } = makeCoordinatorWithSpy();
+    coordinator.enterReview(0.1);
+    expect(syncSpy).toHaveBeenCalled();
+  });
+
+  it('scrubTo calls syncBondedGroupsForDisplayFrame', () => {
+    const { coordinator, syncSpy } = makeCoordinatorWithSpy();
+    coordinator.enterReview(0.1);
+    syncSpy.mockClear();
+    coordinator.scrubTo(10);
+    expect(syncSpy).toHaveBeenCalled();
+  });
+
+  it('returnToLive calls syncBondedGroupsForDisplayFrame', () => {
+    const { coordinator, syncSpy } = makeCoordinatorWithSpy();
+    coordinator.enterReview(0.1);
+    syncSpy.mockClear();
+    coordinator.returnToLive();
+    expect(syncSpy).toHaveBeenCalled();
+  });
+
+  it('restartFromHere calls syncBondedGroupsForDisplayFrame', async () => {
+    const { coordinator, syncSpy } = makeCoordinatorWithSpy();
+    coordinator.enterReview(0.1);
+    syncSpy.mockClear();
+    await coordinator.restartFromHere();
+    expect(syncSpy).toHaveBeenCalled();
   });
 });

@@ -9,10 +9,10 @@
  * Color edits use the annotation model (Option B): they are global overrides
  * that persist across live/review modes and are not part of timeline history.
  *
- * Frozen atom ownership: when a user colors a group, the exact atom indices
- * at that moment are frozen into a BondedGroupColorAssignment. Topology
- * changes (merges, splits, new bonds) never expand color ownership.
- * Only atom removal can shrink the visible colored set.
+ * Identity model: assignments are authored by stable atomId. Both rendering
+ * and export project from atomIds onto current dense slots via the identity
+ * tracker. atomIndices is retained as an authoring-time snapshot for UI
+ * (e.g., group chip state derivation) but does NOT drive renderer truth.
  */
 
 import { useAppStore, type BondedGroupColorAssignment } from '../store/app-store';
@@ -23,45 +23,63 @@ export interface BondedGroupAppearanceRenderer {
 }
 
 export interface BondedGroupAppearanceRuntime {
-  /** Apply a color to all atoms in the given bonded group (freezes atom set). */
   applyGroupColor(groupId: string, colorHex: string): void;
-  /** Clear color assignments whose sourceGroupId matches. */
   clearGroupColor(groupId: string): void;
-  /** Clear a specific color assignment by its unique id. */
   clearColorAssignment(assignmentId: string): void;
-  /** Clear all authored color assignments and overrides. */
   clearAllColors(): void;
-  /** Sync current authored overrides to the renderer. */
   syncToRenderer(): void;
-  /** Prune assignments for atom indices that no longer exist, then rebuild + sync.
-   *  Call after scene mutations that remove atoms (clearPlayground, wall removal). */
   pruneAndSync(atomCount: number): void;
 }
 
-/** Re-export shared projection under the old name for existing lab consumers. */
 export const rebuildOverridesFromAssignments = rebuildOverridesFromDenseIndices;
 
 export function createBondedGroupAppearanceRuntime(deps: {
   getBondedGroupRuntime: () => { getAtomIndicesForGroup(id: string): number[] | null } | null;
   getRenderer: () => BondedGroupAppearanceRenderer | null;
+  getStableAtomIds: () => number[];
+  setStatusText?: (text: string | null) => void;
 }): BondedGroupAppearanceRuntime {
 
   let nextAssignmentId = 1;
+
+  function projectOverridesFromAtomIds(assignments: BondedGroupColorAssignment[]): AtomColorOverrideMap {
+    if (assignments.length === 0) return {};
+    const stableIds = deps.getStableAtomIds();
+    const stableIdToSlot = new Map<number, number>();
+    for (let i = 0; i < stableIds.length; i++) {
+      stableIdToSlot.set(stableIds[i], i);
+    }
+    const projected = assignments.map(a => {
+      const atomIndices: number[] = [];
+      for (const id of a.atomIds) {
+        const slot = stableIdToSlot.get(id);
+        if (slot !== undefined) atomIndices.push(slot);
+      }
+      return { atomIndices, colorHex: a.colorHex };
+    }).filter(a => a.atomIndices.length > 0);
+    return rebuildOverridesFromDenseIndices(projected);
+  }
 
   function applyGroupColor(groupId: string, colorHex: string): void {
     const bgr = deps.getBondedGroupRuntime();
     const atoms = bgr?.getAtomIndicesForGroup(groupId);
     if (!atoms || atoms.length === 0) return;
 
-    // Freeze atom indices — clone so future topology changes cannot mutate ownership
+    const stableIds = deps.getStableAtomIds();
+    const resolvedAtomIds = atoms.filter(i => i < stableIds.length).map(i => stableIds[i]);
+    if (resolvedAtomIds.length !== atoms.length) {
+      console.warn(`[appearance] applyGroupColor('${groupId}'): stable-ID resolution incomplete (${resolvedAtomIds.length}/${atoms.length} atoms resolved). Assignment not persisted.`);
+      deps.setStatusText?.('Could not persist color — atom identity mapping is stale.');
+      return;
+    }
     const assignment: BondedGroupColorAssignment = {
       id: `ca${nextAssignmentId++}`,
       atomIndices: [...atoms],
+      atomIds: resolvedAtomIds,
       colorHex,
       sourceGroupId: groupId,
     };
 
-    // Replace any prior assignment for the same source group, then append
     const current = useAppStore.getState().bondedGroupColorAssignments
       .filter(a => a.sourceGroupId !== groupId);
     const updated = [...current, assignment];
@@ -71,56 +89,56 @@ export function createBondedGroupAppearanceRuntime(deps: {
 
   function clearGroupColor(groupId: string): void {
     const current = useAppStore.getState().bondedGroupColorAssignments;
-    const updated = current.filter(a => a.sourceGroupId !== groupId);
-    writeAssignments(updated);
+    writeAssignments(current.filter(a => a.sourceGroupId !== groupId));
   }
 
   function clearColorAssignment(assignmentId: string): void {
     const current = useAppStore.getState().bondedGroupColorAssignments;
-    const updated = current.filter(a => a.id !== assignmentId);
-    writeAssignments(updated);
+    writeAssignments(current.filter(a => a.id !== assignmentId));
   }
 
   function clearAllColors(): void {
     writeAssignments([]);
   }
 
-  /** Write assignments to store, rebuild derived overrides, sync renderer.
-   *  Uses a single setState call to avoid intermediate inconsistency. */
   function writeAssignments(assignments: BondedGroupColorAssignment[]): void {
-    const overrides = rebuildOverridesFromAssignments(assignments);
+    const overrides = projectOverridesFromAtomIds(assignments);
     useAppStore.setState({ bondedGroupColorAssignments: assignments, bondedGroupColorOverrides: overrides });
-    syncToRenderer();
+    applyOverridesToRenderer(overrides);
   }
 
   function syncToRenderer(): void {
+    const assignments = useAppStore.getState().bondedGroupColorAssignments;
+    const overrides = projectOverridesFromAtomIds(assignments);
+    useAppStore.setState({ bondedGroupColorOverrides: overrides });
+    applyOverridesToRenderer(overrides);
+  }
+
+  function applyOverridesToRenderer(overrides: AtomColorOverrideMap): void {
     const r = deps.getRenderer();
     if (!r) return;
-    const overrides = useAppStore.getState().bondedGroupColorOverrides;
     const hasOverrides = Object.keys(overrides).length > 0;
     r.setAtomColorOverrides(hasOverrides ? overrides : null);
   }
 
-  /** Prune assignments for atom indices that no longer exist, then rebuild + sync.
-   *
-   *  Contract: atom removal compacts active atoms to 0..atomCount-1.
-   *  Indices >= atomCount are guaranteed invalid (owned by PhysicsEngine compaction).
-   *  This is the main lifecycle guard for post-mutation color safety — if atom
-   *  indexing rules ever change, this function must be updated to match. */
   function pruneAndSync(atomCount: number): void {
     const assignments = useAppStore.getState().bondedGroupColorAssignments;
     if (assignments.length === 0) { syncToRenderer(); return; }
-    // Filter out atom indices >= atomCount (removed atoms)
+    const stableIds = deps.getStableAtomIds();
+    const liveIdSet = new Set(stableIds.slice(0, atomCount));
+    // Prune by stable-ID membership only. atomIndices is an authoring-time
+    // snapshot — it is not mutated here because it does not drive rendering
+    // or export. Projection from atomIds handles current slot mapping.
     const pruned = assignments.map(a => ({
       ...a,
-      atomIndices: a.atomIndices.filter(idx => idx < atomCount),
-    })).filter(a => a.atomIndices.length > 0);
+      atomIds: a.atomIds.filter(id => liveIdSet.has(id)),
+    })).filter(a => a.atomIds.length > 0);
     const changed = pruned.length !== assignments.length
-      || pruned.some((a, i) => a.atomIndices.length !== assignments[i].atomIndices.length);
+      || pruned.some((a, i) => a.atomIds.length !== assignments[i].atomIds.length);
     if (changed) {
-      writeAssignments(pruned); // rebuilds overrides + syncs renderer
+      writeAssignments(pruned);
     } else {
-      syncToRenderer(); // no-change recovery sync
+      syncToRenderer();
     }
   }
 

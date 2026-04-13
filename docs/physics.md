@@ -188,7 +188,7 @@ The browser implementation (`lab/js/physics.ts`) includes several optimizations 
 
 Bond topology computation is extracted into shared modules under `src/topology/` so that both the lab engine and the watch viewer can reuse the same logic:
 
-- **Bond rules** — `BondRuleSet` (`src/topology/bond-rules.ts`) defines the global fast-path scalars (cutoff, minDist) used by all topology builders. `createBondRules()` is a pure factory; `bond-policy-resolver.ts` resolves a `BondPolicyV1` to a `BondRuleSet` via registry.
+- **Bond rules** — `BondRuleSet` (`src/topology/bond-rules.ts`) defines the global fast-path scalars (cutoff, minDist) used by all topology builders. `createBondRules()` is a pure factory; `bond-policy-resolver.ts` resolves a `BondPolicyV1` to a `BondRuleSet` via registry. `buildExportBondPolicy()` (same module) produces the canonical `BondPolicyV1` from `BOND_DEFAULTS` for embedding in exported capsule and history files.
 - **Bond defaults** — `src/config/bond-defaults.ts` exports `BOND_DEFAULTS` (`cutoff: 1.8` Å, `minDist: 0.5` Å) as the single source of truth. `lab/js/config.ts` reads `bonds.cutoff` and `bonds.minDist` from `BOND_DEFAULTS`.
 - **Topology builders** — `src/topology/build-bond-topology.ts` provides three entry points: `buildBondTopologyFromAtoms` (loader path), `buildBondTopologyFromPositions` (Watch reconstruction), and `buildBondTopologyAccelerated` (physics hot path with output-buffer reuse and preallocated workspace).
 

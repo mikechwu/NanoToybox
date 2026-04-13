@@ -31,3 +31,11 @@ export function resolveBondPolicy(policy: BondPolicyV1 | null): BondRuleSet {
   }
   return resolver(policy);
 }
+
+export function buildExportBondPolicy(): BondPolicyV1 {
+  return {
+    policyId: 'default-carbon-v1',
+    cutoff: BOND_DEFAULTS.cutoff,
+    minDist: BOND_DEFAULTS.minDist,
+  };
+}

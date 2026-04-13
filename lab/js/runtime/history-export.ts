@@ -12,11 +12,15 @@ import type { TimelineFrame, TimelineRestartFrame, TimelineCheckpoint } from './
 import type { AtomMetadataEntry } from './atom-metadata-registry';
 import type {
   AtomDojoHistoryFileV1,
+  AtomDojoPlaybackCapsuleFileV1,
+  CapsuleInteractionEventV1,
   FullDenseFrameV1,
   FullRestartFrameV1,
   FullCheckpointV1,
   SimulationMetaV1,
 } from '../../../src/history/history-file-v1';
+import type { TimelineInteractionState } from './timeline-context-capture';
+import { buildExportBondPolicy } from '../../../src/topology/bond-policy-resolver';
 
 // Re-export shared types and validation for existing consumers
 export { validateFullHistoryFile } from '../../../src/history/history-file-v1';
@@ -153,6 +157,128 @@ export function downloadHistoryFile(file: AtomDojoHistoryFileV1, filename?: stri
   const now = new Date();
   const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
   const name = filename ?? `atomdojo-full-${ts}.atomdojo`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ── Capsule export ──
+
+export interface CapsuleExportDeps {
+  getTimelineExportData: () => TimelineExportData | null;
+  getAtomTable: () => AtomMetadataEntry[];
+  getColorAssignments: () => { atomIds: number[]; colorHex: string }[];
+  appVersion: string;
+}
+
+export function buildCapsuleHistoryFile(deps: CapsuleExportDeps): AtomDojoPlaybackCapsuleFileV1 | null {
+  const data = deps.getTimelineExportData();
+  if (!data || data.denseFrames.length === 0) return null;
+
+  const atomTable = deps.getAtomTable();
+  const { denseFrames } = data;
+
+  const firstFrame = denseFrames[0];
+  const lastFrame = denseFrames[denseFrames.length - 1];
+  let maxAtomCount = 0;
+  for (const f of denseFrames) if (f.n > maxAtomCount) maxAtomCount = f.n;
+
+  const capsuleFrames = denseFrames.map(f => ({
+    frameId: f.frameId,
+    timePs: f.timePs,
+    n: f.n,
+    atomIds: f.atomIds,
+    positions: float64ToArray(f.positions),
+  }));
+
+  // Appearance: use stable atomIds captured at authoring time
+  const colorAssignments = deps.getColorAssignments();
+  const appearance = colorAssignments.length > 0 ? {
+    colorAssignments: colorAssignments
+      .filter(a => a.atomIds.length > 0)
+      .map(a => ({ atomIds: a.atomIds, colorHex: a.colorHex })),
+  } : undefined;
+
+  // Interaction: each frame carries its own stable atomIds — use frame-local lookup
+  const interactionTimeline = sparsifyInteractionTimeline(denseFrames);
+
+  return {
+    format: 'atomdojo-history',
+    version: 1,
+    kind: 'capsule',
+    producer: {
+      app: 'lab',
+      appVersion: deps.appVersion,
+      exportedAt: new Date().toISOString(),
+    },
+    simulation: {
+      units: { time: 'ps', length: 'angstrom' },
+      maxAtomCount,
+      durationPs: lastFrame.timePs - firstFrame.timePs,
+      frameCount: denseFrames.length,
+      indexingModel: 'dense-prefix',
+    },
+    atoms: {
+      atoms: atomTable.map(e => ({
+        id: e.id,
+        element: e.element,
+        isotope: null,
+        charge: null,
+        label: null,
+      })),
+    },
+    bondPolicy: buildExportBondPolicy(),
+    timeline: {
+      denseFrames: capsuleFrames,
+      ...(interactionTimeline ? { interactionTimeline } : {}),
+    },
+    ...(appearance && appearance.colorAssignments.length > 0 ? { appearance } : {}),
+  };
+}
+
+function sparsifyInteractionTimeline(
+  frames: readonly TimelineFrame[],
+): { encoding: 'event-stream-v1'; events: CapsuleInteractionEventV1[] } | undefined {
+  const events: CapsuleInteractionEventV1[] = [];
+  let lastKey = 'none';
+  for (const f of frames) {
+    const interaction = f.interaction as TimelineInteractionState | null;
+    const key = interaction ? canonicalInteractionKey(interaction) : 'none';
+    if (key === lastKey) continue;
+    lastKey = key;
+    if (!interaction || interaction.kind === 'none') {
+      events.push({ frameId: f.frameId, kind: 'none' });
+    } else {
+      if (interaction.atomIndex >= f.atomIds.length) {
+        console.warn(`[capsule-export] frame ${f.frameId}: interaction.atomIndex ${interaction.atomIndex} >= atomIds.length ${f.atomIds.length}, downgrading to 'none'`);
+        events.push({ frameId: f.frameId, kind: 'none' });
+        lastKey = 'none';
+        continue;
+      }
+      const atomId = f.atomIds[interaction.atomIndex];
+      const target = interaction.target;
+      events.push({ frameId: f.frameId, kind: interaction.kind, atomId, target });
+    }
+  }
+  return events.length > 0 ? { encoding: 'event-stream-v1', events } : undefined;
+}
+
+function canonicalInteractionKey(s: TimelineInteractionState): string {
+  if (s.kind === 'none') return 'none';
+  return `${s.kind}:${s.atomIndex}:${s.target[0]},${s.target[1]},${s.target[2]}`;
+}
+
+export function downloadCapsuleFile(file: AtomDojoPlaybackCapsuleFileV1, filename?: string): void {
+  const json = JSON.stringify(file);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const now = new Date();
+  const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+  const name = filename ?? `atomdojo-capsule-${ts}.atomdojo`;
   const a = document.createElement('a');
   a.href = url;
   a.download = name;

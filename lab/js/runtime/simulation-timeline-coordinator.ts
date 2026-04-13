@@ -155,6 +155,7 @@ export function createTimelineCoordinator(deps: TimelineCoordinatorDeps): Timeli
       _wasPausedBeforeReview = false;
       if (deps.isPaused()) deps.resume();
 
+      deps.syncBondedGroupsForDisplayFrame();
       deps.forceRender();
       deps.syncStoreState();
     } finally {

@@ -9,7 +9,7 @@
  */
 
 import type { LoadedFullHistory, NormalizedDenseFrame, NormalizedRestartFrame } from './full-history-import';
-import type { LoadedReducedHistory } from './reduced-history-import';
+import type { LoadedCapsuleHistory, NormalizedInteractionState } from './capsule-history-import';
 import { VIEWER_DEFAULTS } from '../../src/config/viewer-defaults';
 import { SPEED_MIN, SPEED_MAX, SPEED_DEFAULT, PLAYBACK_GAP_CLAMP_MS } from '../../src/config/playback-speed-constants';
 import { bsearchAtOrBefore, bsearchIndexAtOrBefore } from './frame-search';
@@ -26,8 +26,9 @@ export interface WatchTopologySource {
   getTopologyAtTime(timePs: number): { bonds: [number, number, number][]; n: number; frameId: number } | null;
 }
 
-/** Discriminated union of loaded history kinds. */
-export type LoadedWatchHistory = LoadedFullHistory | LoadedReducedHistory;
+/** Discriminated union of loaded history kinds. Legacy 'reduced' files
+ *  normalize to LoadedCapsuleHistory at import time. */
+export type LoadedWatchHistory = LoadedFullHistory | LoadedCapsuleHistory;
 
 export interface WatchPlaybackModel {
   load(file: LoadedWatchHistory): void;
@@ -67,6 +68,7 @@ export interface WatchPlaybackModel {
   getTopologyAtTime(timePs: number): { bonds: [number, number, number][]; n: number; frameId: number } | null;
   getConfigAtTime(timePs: number): unknown | null;
   getBoundaryAtTime(timePs: number): unknown | null;
+  getInteractionAtTime(timePs: number): import('./capsule-history-import').NormalizedInteractionState | null;
 }
 
 // Binary search helpers shared across watch/ — see frame-search.ts
@@ -90,6 +92,7 @@ export function createWatchPlaybackModel(): WatchPlaybackModel {
 
   return {
     load(file) {
+      if (_topologySource) { _topologySource.reset(); _topologySource = null; }
       _history = file;
       _currentTimePs = file.denseFrames[0]?.timePs ?? 0;
       _playDirection = 0;
@@ -235,6 +238,24 @@ export function createWatchPlaybackModel(): WatchPlaybackModel {
       if (!_history) return null;
       const frame = bsearchAtOrBefore<NormalizedDenseFrame>(_history.denseFrames, timePs);
       return frame?.boundary ?? null;
+    },
+
+    getInteractionAtTime(timePs: number): NormalizedInteractionState | null {
+      if (!_history || _history.kind !== 'capsule') return null;
+      const { interactionTimeline } = _history;
+      if (!interactionTimeline || interactionTimeline.events.length === 0) return null;
+      const denseFrame = bsearchAtOrBefore<NormalizedDenseFrame>(_history.denseFrames, timePs);
+      if (!denseFrame) return null;
+      const events = interactionTimeline.events;
+      let lo = 0, hi = events.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >>> 1;
+        if (events[mid].frameId <= denseFrame.frameId) lo = mid; else hi = mid - 1;
+      }
+      if (events[lo].frameId > denseFrame.frameId) return null;
+      const e = events[lo];
+      if (e.kind === 'none') return { kind: 'none' };
+      return { kind: e.kind, atomId: (e as { atomId: number }).atomId, target: (e as { target: [number, number, number] }).target };
     },
   };
 }

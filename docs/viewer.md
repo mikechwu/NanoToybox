@@ -171,7 +171,7 @@ Empty spacers preserve the grid skeleton in modes that don't use overlays or act
 
 **Clear action**: The close icon (`ClearTrigger`) always triggers a confirmation dialog (`TimelineClearDialog`, portaled to `document.body`) before clearing. The dialog announces "Stop recording?" and requires an explicit "Continue" or "Cancel" — the icon-only control is too ambiguous for an irreversible erase on any device. Focus is trapped inside the dialog; Escape dismisses.
 
-**Export action**: The export icon (`ExportTrigger`) opens an export dialog (`TimelineExportDialog`, portaled to `document.body`) with replay/full kind selection. Export capability is gated by: export dependencies exist AND atom identity is not stale. Export rebuild failures surface via `setStatusText` on the StatusBar.
+**Export action**: The export icon (`ExportTrigger`) opens an export dialog (`TimelineExportDialog`, portaled to `document.body`) with capsule/full kind selection. Export capability is gated by: export dependencies exist AND atom identity is not stale. Export rebuild failures surface via `setStatusText` on the StatusBar.
 
 **Dialog mutual exclusion**: Opening the export dialog closes the clear dialog and vice versa — at most one dialog is visible at a time.
 
@@ -448,8 +448,8 @@ npm run dev
 | Kind | Version | Status |
 |------|---------|--------|
 | `"full"` | v1 | Supported — loads into workspace. Contains dense frames, restart frames, and checkpoints. Bond topology is stored in restart frames. |
-| `"reduced"` | v1 | Supported — loads into workspace. Contains dense frames and atoms but NO restart frames or checkpoints. Bond topology is reconstructed at playback time from atom positions. |
-| `"replay"` | — | Politely rejected with an explanatory message |
+| `"capsule"` | v1 | Supported — loads into workspace. Contains dense frames and atoms but NO restart frames or checkpoints. Bond topology is reconstructed at playback time from atom positions. Capsule files may include optional appearance (`CapsuleAppearanceV1`) with authored color assignments and optional sparse interaction timeline (`CapsuleInteractionTimelineV1`). |
+| `"reduced"` | v1 | Legacy import alias — normalized to `LoadedCapsuleHistory` at import time. Same runtime behavior as capsule. |
 
 ### Workspace
 
@@ -574,16 +574,19 @@ When an experimental method cannot run for a specific bracket, the runtime falls
 - **Repeat:** Modulo wrap at file boundaries in both directions
 - **Step:** Dense-frame-boundary stepping via binary search index
 - **Gap clamp:** Wall-clock delta capped at `PLAYBACK_GAP_CLAMP_MS` (250 ms) to prevent large jumps after tab-background return
-- **Topology:** Provided by a `WatchTopologySource` — an abstraction over how bond data is obtained for a given playback time. Full files use `StoredTopologySource` (restart-frame lookup via binary search at-or-before). Reduced files use `ReconstructedTopologySource` (builds bonds from atom positions at playback time). The playback model delegates `getTopologyAtTime()` to the active source without knowing which strategy is in use
+- **History union:** `LoadedWatchHistory = LoadedFullHistory | LoadedCapsuleHistory`. Full files load as `LoadedFullHistory` (kind `'full'`); capsule files load as `LoadedCapsuleHistory` (kind `'capsule'`). Legacy reduced files are normalized to `LoadedCapsuleHistory` at import time
+- **Topology:** Provided by a `WatchTopologySource` — an abstraction over how bond data is obtained for a given playback time. Full files use `StoredTopologySource` (restart-frame lookup via binary search at-or-before). Capsule files use `ReconstructedTopologySource` (builds bonds from atom positions at playback time). The playback model delegates `getTopologyAtTime()` to the active source without knowing which strategy is in use
 - **Bond-policy resolution:** `ReconstructedTopologySource` resolves bond rules at load time via `resolveBondPolicy()`. If the file declares a `bondPolicy` (policyId + cutoff + minDist), those parameters are used. If `bondPolicy` is null (legacy compatibility only — production exports must always include it), the resolver falls back to `BOND_DEFAULTS`
-- **Stable atomId semantics:** Atom IDs in reduced files are stable identifiers from the original simulation, not array indices. The `elementById` map (`ReadonlyMap<number, string>`) in `LoadedReducedHistory` is keyed by these stable IDs, enabling correct element lookup during reconstruction even when dense-frame slot ordering varies across frames
+- **Interaction timeline:** `getInteractionAtTime(timePs)` is a time-based query API on `WatchTopologySource` that returns the interaction state at a given time from the capsule file's sparse interaction timeline. Returns `null` for full files or capsule files without an interaction timeline. This is a Tier 1 data contract — no visual rendering yet
+- **Appearance import:** Capsule files with an `appearance` field carry authored color assignments. On load, these are imported via `importColorAssignments()` into the bonded-group appearance model so Watch renders the same authored colors as lab
+- **Stable atomId semantics:** Atom IDs in compact files are stable identifiers from the original simulation, not array indices. The `elementById` map (`ReadonlyMap<number, string>`) in `LoadedCapsuleHistory` is keyed by these stable IDs, enabling correct element lookup during reconstruction even when dense-frame slot ordering varies across frames
 - **Bonded-group analysis:** Memoized to avoid redundant recomputation during scrubbing
 
 ### Topology Reconstruction
 
-Reduced files carry dense frames with atom positions but no stored bond topology. Watch reconstructs bonds at playback time using the following pipeline:
+Capsule files (and legacy reduced files) carry dense frames with atom positions but no stored bond topology. Watch reconstructs bonds at playback time using the following pipeline:
 
-1. **Source selection:** On file load, the playback model creates a `ReconstructedTopologySource` (for reduced files) or a `StoredTopologySource` (for full files). Both implement the `WatchTopologySource` interface — the rest of the playback pipeline is source-agnostic.
+1. **Source selection:** On file load, the playback model creates a `ReconstructedTopologySource` (for capsule files) or a `StoredTopologySource` (for full files). Both implement the `WatchTopologySource` interface — the rest of the playback pipeline is source-agnostic.
 
 2. **Bond-policy resolution:** `resolveBondPolicy()` converts the file's `bondPolicy` field into a `BondRuleSet` at load time. The policy declares the cutoff distance, minimum distance, and policy ID used at export. Missing `bondPolicy` (null) falls back to `BOND_DEFAULTS` for legacy compatibility.
 
@@ -591,7 +594,7 @@ Reduced files carry dense frames with atom positions but no stored bond topology
 
 4. **Element identity:** Reconstruction requires knowing each atom's element to apply element-pair-specific bond rules. The `elementById` map (built once at import from the atom table) maps stable `atomId` values to element strings. Atom IDs are not array indices — they are stable identifiers that persist across frames even when atoms are added or removed.
 
-5. **Import validation:** The reduced-file import pipeline validates: simulation metadata (maxAtomCount, frameCount, durationPs), atom table uniqueness (no duplicate IDs), stable atomId references (every frame's atomIds reference valid atom-table entries), per-frame atomId uniqueness, position components (finite numbers, correct length), durationPs span (matches computed timeline extent), and bondPolicy fields (valid policyId, positive cutoff, non-negative minDist, minDist < cutoff).
+5. **Import validation:** The capsule-file import pipeline validates: simulation metadata (maxAtomCount, frameCount, durationPs), atom table uniqueness (no duplicate IDs), stable atomId references (every frame's atomIds reference valid atom-table entries), per-frame atomId uniqueness, position components (finite numbers, correct length), durationPs span (matches computed timeline extent), and bondPolicy fields (valid policyId, positive cutoff, non-negative minDist, minDist < cutoff). Capsule files additionally validate appearance (color assignments reference valid atomIds) and interaction timeline (event-stream-v1 encoding, monotonic timestamps, valid frameId references).
 
 ### Smooth Playback & Interpolation
 
@@ -601,7 +604,7 @@ When smooth playback is enabled (default), positions between recorded dense fram
 
 **Strategy registry:** The runtime ships three built-in strategies (Linear, Hermite, Catmull-Rom) and accepts new strategies at runtime via `registerStrategy()`. The `resolve()` API takes the current playback time and the user's preference (`enabled` + `mode`) and returns positions, atom IDs, and per-frame diagnostics (active method + fallback reason). Unregistered or unknown mode IDs fall back to Linear.
 
-**Capability layer:** Precomputed at import time in `full-history-import.ts`. Per-bracket and per-4-frame-window flags (`bracketSafe`, `hermiteSafe`, `window4Safe`) are stored as typed arrays for hot-path lookup. Diagnostic reason arrays (`bracketReason`, `velocityReason`, `window4Reason`) explain why specific brackets are not safely interpolatable. The capability layer also maps each dense frame to its aligned restart frame for velocity access.
+**Capability layer:** For full files, precomputed at import time in `full-history-import.ts`. Per-bracket and per-4-frame-window flags (`bracketSafe`, `hermiteSafe`, `window4Safe`) are stored as typed arrays for hot-path lookup. Diagnostic reason arrays (`bracketReason`, `velocityReason`, `window4Reason`) explain why specific brackets are not safely interpolatable. The capability layer also maps each dense frame to its aligned restart frame for velocity access. For capsule files, `buildCapsuleInterpolationCapability()` computes bracket adjacency from dense frames only — Hermite and Catmull-Rom capabilities are zeroed (no velocity or restart-frame data available). The interpolation runtime is created via `createWatchTrajectoryInterpolationForCapsule()` which binds the capsule capability layer without requiring a synthetic `LoadedFullHistory` bridge.
 
 **Bracket lookup:** Binary search with a cursor-cache fast path. Same-bracket and one-step-forward lookups are O(1); all other cases (backward, jump, wrap, first call) fall through to binary search.
 

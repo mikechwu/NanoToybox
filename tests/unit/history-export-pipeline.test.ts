@@ -243,7 +243,7 @@ describe('full export after stop → restart lifecycle', () => {
       syncBondedGroupsForDisplayFrame: vi.fn(),
       getSceneMolecules: () => molecules,
       exportHistory: vi.fn(),
-      exportCapabilities: { replay: false, full: true },
+      exportCapabilities: { full: true, capsule: true },
     });
 
     // Cycle 1: start, record, stop
@@ -336,7 +336,7 @@ describe('full export after stop → restart lifecycle', () => {
       syncBondedGroupsForDisplayFrame: vi.fn(),
       getSceneMolecules: () => molecules,
       exportHistory: vi.fn(),
-      exportCapabilities: { replay: false, full: true },
+      exportCapabilities: { full: true, capsule: true },
     });
 
     // Stop → restart cycle

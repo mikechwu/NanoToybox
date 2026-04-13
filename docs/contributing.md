@@ -80,6 +80,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - Watch Round 6 — Interpolation runtime: shared physical constants (`src/history/units.ts`), interpolation runtime with extension-oriented strategy registry (`watch/js/watch-trajectory-interpolation.ts`), three built-in strategies (Linear stable, Hermite + Catmull-Rom experimental), per-bracket capability layer (`InterpolationCapability` from importer), cursor-cache fast path for sequential playback, unified pipeline rule (`applyReviewFrameAtTime()` is sole caller of `interpolation.resolve()` + `renderer.updateReviewFrame()`), interpolation mode types in settings (`WatchInterpolationMode`, `PRODUCT_INTERPOLATION_MODE_IDS`), import diagnostics (`ImportDiagnostic`), CSS tokens scoped to `.watch-workspace`
 - Shared Bond Topology Refactor — extraction of bond-topology computation from PhysicsEngine into reusable shared modules (`src/topology/`): naive builder (loader path), accelerated builder (physics hot path with buffer reuse), shared `BondRuleSet` contract (`bond-rules.ts`), bond-policy defaults (`src/config/bond-defaults.ts`), bond-policy resolver (`bond-policy-resolver.ts`), `lab/js/physics.ts` delegates bond building to shared topology builders
 - Watch Topology Reconstruction — topology-source abstraction with stored (full-history) and reconstructed (reduced-file) sources, reduced-file schema and import with semantic validation, bond-policy metadata and resolution (`src/history/bond-policy-v1.ts`), stable `atomId` element lookup, watch now supports reduced files with on-import topology reconstruction
+- Playback Capsule (Phases 1-4) — capsule file format and shared types in `src/history/history-file-v1.ts`, capsule importer (`watch/js/capsule-history-import.ts` replacing `reduced-history-import.ts`), appearance export/import, sparse interaction data contract, Lab capsule export builder with capsule/full export kinds (replay removed from export UI), stable-ID appearance model (Lab renderer and export use stable `atomId`s), golden parity validation
 
 ## Architecture Rules
 
@@ -96,7 +97,7 @@ Shared TypeScript and CSS modules live in `src/` and are imported by both `lab/`
 | `src/appearance/` | Bonded-group color assignment logic (shared between lab appearance runtime and watch appearance domain) |
 | `src/topology/` | Bond rules (`bond-rules.ts`), topology builders (`build-bond-topology.ts`: naive + accelerated), policy resolution (`bond-policy-resolver.ts`) |
 | `src/config/` | Playback speed constants, viewer defaults (base sim rate, etc.), bond-policy defaults (`bond-defaults.ts`) |
-| `src/history/` | History file v1 types/validation, connected components, bonded-group projection/utils, physical unit constants (`units.ts`: `FS_PER_PS`, `IMPLAUSIBLE_VELOCITY_A_PER_FS`), bond-policy wire types (`bond-policy-v1.ts`) |
+| `src/history/` | History file v1 types/validation (including capsule types), connected components, bonded-group projection/utils, physical unit constants (`units.ts`: `FS_PER_PS`, `IMPLAUSIBLE_VELOCITY_A_PER_FS`), bond-policy wire types (`bond-policy-v1.ts`) |
 | `src/types/` | Worker protocol types |
 
 ### CSS Architecture

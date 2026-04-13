@@ -39,7 +39,8 @@ Or visit the live demo at [atomdojo.pages.dev](https://atomdojo.pages.dev/lab/).
 - **Pre-computed trajectory playback** — load full simulation histories and scrub through them frame-by-frame
 - **Smooth playback** — linear interpolation on by default for fluid motion between keyframes; Hermite (velocity-based) and Catmull-Rom (experimental) available in settings
 - **Dock controls** — play/pause, speed, repeat, Smooth toggle, and interpolation method picker
-- **Reduced file support** — loads position-only trajectories and reconstructs bond topology on the fly via shared topology builders
+- **Capsule and full file support** — loads compact capsule files (position-only with authored appearance) or full simulation histories; reconstructs bond topology on the fly via shared topology builders
+- **Authored color import** — capsule files carry per-group color assignments from the lab; Watch applies them so playback colors match the original session
 - **Shared rendering** — same PBR materials, camera orbit, XYZ triad, overlay layout, and theme system as the interactive lab
 
 ## How It Works
@@ -112,7 +113,7 @@ NanoToybox/
 │   └── wasm/                   # C Tersoff kernel + Emscripten build
 ├── src/                        # Shared modules consumed by both lab/ and watch/
 │   ├── topology/               # Bond rules, topology builders, policy resolution
-│   ├── history/                # V1 file types, bond-policy types, connected components, bonded-group projection, units
+│   ├── history/                # V1 file types (full + capsule), bond-policy types, connected components, bonded-group projection, units
 │   ├── ui/                     # Shared CSS tokens, hooks, component styles
 │   ├── config/                 # Playback speed constants, viewer defaults, bond defaults
 │   ├── appearance/             # Bonded-group color assignment logic

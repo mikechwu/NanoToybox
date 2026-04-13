@@ -158,7 +158,7 @@ function TimelineBarActive() {
   const hasRange = rangePs != null && (rangePs.end - rangePs.start) > 0;
 
   // Export visibility — sole render gate (store capability, not callback presence)
-  const exportAvailable = !!(exportCaps?.replay || exportCaps?.full);
+  const exportAvailable = !!(exportCaps?.full || exportCaps?.capsule);
   const showExport = hasRange && exportAvailable;
 
   const scrubFromEvent = useCallback((clientX: number) => {
@@ -198,7 +198,7 @@ function TimelineBarActive() {
   const [exportError, setExportError] = useState<string | null>(null);
 
   // Preferred default kind — computed at open time, not hook init
-  const preferredKind = exportCaps?.replay ? 'replay' as const : 'full' as const;
+  const preferredKind = exportCaps?.capsule ? 'capsule' as const : 'full' as const;
 
   // Dialog mutual exclusion
   const openExport = useCallback(() => {
@@ -261,8 +261,8 @@ function TimelineBarActive() {
   // Guard: revalidate selected kind if capability changes while dialog is open
   useEffect(() => {
     if (!exportDialog.open) return;
-    if (exportDialog.kind === 'full' && !exportCaps?.full && exportCaps?.replay) exportDialog.setKind('replay');
-    if (exportDialog.kind === 'replay' && !exportCaps?.replay && exportCaps?.full) exportDialog.setKind('full');
+    if (exportDialog.kind === 'full' && !exportCaps?.full && exportCaps?.capsule) exportDialog.setKind('capsule');
+    if (exportDialog.kind === 'capsule' && !exportCaps?.capsule && exportCaps?.full) exportDialog.setKind('full');
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exportDialog.open, exportDialog.kind, exportCaps]);
 
@@ -316,7 +316,7 @@ function TimelineBarActive() {
       <TimelineClearDialog open={clear.open} onCancel={clear.cancel} onConfirm={clear.confirm} />
       <TimelineExportDialog
         open={exportDialog.open}
-        availableKinds={exportCaps ?? { replay: false, full: false }}
+        availableKinds={exportCaps ?? { full: false, capsule: false }}
         kind={exportDialog.kind}
         submitting={exportSubmitting}
         confirmEnabled={exportActionAvailable && !exportSubmitting}
