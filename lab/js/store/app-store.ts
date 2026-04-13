@@ -76,7 +76,10 @@ export interface TimelineCallbacks {
   onRestartFromHere: () => void;
   onStartRecordingNow: () => void;
   onTurnRecordingOff: () => void;
-  onExportHistory?: (kind: 'full' | 'capsule') => Promise<void> | void;
+  onExportHistory?: (kind: 'full' | 'capsule') => Promise<'saved' | 'picker-cancelled'>;
+  onPauseForExport?: () => boolean;
+  onResumeFromExport?: () => void;
+  getExportEstimates?: () => { capsule: string | null; full: string | null };
 }
 
 /** Imperative callbacks for the bonded-group panel, registered by main.ts. */

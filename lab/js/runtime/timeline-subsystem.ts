@@ -63,7 +63,9 @@ export interface TimelineSubsystemDeps {
   /** Sync appearance overrides + renderer after assignment cleanup. */
   syncAppearance?: () => void;
   /** Export dependency — only injected when export is implemented. */
-  exportHistory?: (kind: 'full' | 'capsule') => Promise<void> | void;
+  exportHistory?: (kind: 'full' | 'capsule') => Promise<'saved' | 'picker-cancelled'>;
+  /** Estimate dependency — returns formatted size strings for both export kinds. */
+  getExportEstimates?: () => { capsule: string | null; full: string | null };
   exportCapabilities?: { full: boolean; capsule: boolean };
 }
 
@@ -354,6 +356,12 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
         onStartRecordingNow: () => startRecordingNow(),
         onTurnRecordingOff: () => turnRecordingOff(),
         ...(hasExport ? { onExportHistory: (kind: 'full' | 'capsule') => deps.exportHistory!(kind) } : {}),
+        onPauseForExport: () => {
+          if (!deps.isPaused()) { deps.pause(); return true; }
+          return false;
+        },
+        onResumeFromExport: () => { deps.resume(); },
+        ...(deps.getExportEstimates ? { getExportEstimates: () => deps.getExportEstimates!() } : {}),
       }, 'ready', currentExportCapability());
     },
     getReviewBondedGroupComponents: (timePs) => timeline.getReviewBondedGroupComponents(timePs),

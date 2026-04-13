@@ -45,6 +45,8 @@ import { handleBondedGroupFollowToggle } from './runtime/bonded-group-follow-act
 import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from './runtime/bonded-group-highlight-runtime';
 import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './runtime/bonded-group-coordinator';
 import { createTimelineSubsystem, type TimelineSubsystem } from './runtime/timeline-subsystem';
+import { buildFullHistoryFile, validateFullHistoryFile, buildCapsuleHistoryFile, formatBytes, generateExportFileName, saveHistoryFile, type AtomDojoHistoryFileV1 } from './runtime/history-export';
+import { validateCapsuleFile, type AtomDojoPlaybackCapsuleFileV1 } from '../../src/history/history-file-v1';
 import { executeFrame, type FrameRuntimeSurface } from './app/frame-runtime';
 import { teardownAllSubsystems, resetSchedulerState, resetSessionState, resetEffectsGate, type TeardownSurface } from './app/app-lifecycle';
 import { serializeForWorkerRestore } from './runtime/restart-state-adapter';
@@ -660,6 +662,42 @@ async function init() {
     getGroupAtoms: (id) => _bondedGroups?.getAtomIndicesForGroup(id) ?? null,
   });
 
+  // ── Export artifact builder ──
+
+  type ExportArtifact =
+    | { kind: 'capsule'; file: AtomDojoPlaybackCapsuleFileV1; json: string; blob: Blob; defaultFileName: string }
+    | { kind: 'full'; file: AtomDojoHistoryFileV1; json: string; blob: Blob; defaultFileName: string };
+
+  function buildExportArtifact(kind: 'capsule' | 'full'): ExportArtifact | null {
+    if (!_timelineSub) return null;
+    if (_timelineSub.isIdentityStale()) {
+      throw new Error('Export is unavailable because atom identity is stale after worker compaction.');
+    }
+    if (kind === 'capsule') {
+      const file = buildCapsuleHistoryFile({
+        getTimelineExportData: () => _timelineSub!.getTimelineExportSnapshot(),
+        getAtomTable: () => _timelineSub!.getAtomMetadataRegistry().getAtomTable(),
+        getColorAssignments: () => useAppStore.getState().bondedGroupColorAssignments.map(a => ({
+          atomIds: a.atomIds,
+          colorHex: a.colorHex,
+        })),
+        appVersion: '0.1.0',
+      });
+      if (!file) return null;
+      const json = JSON.stringify(file);
+      return { kind: 'capsule', file, json, blob: new Blob([json], { type: 'application/json' }), defaultFileName: generateExportFileName('atomdojo-capsule') };
+    } else {
+      const file = buildFullHistoryFile({
+        getTimelineExportData: () => _timelineSub!.getTimelineExportSnapshot(),
+        getAtomTable: () => _timelineSub!.getAtomMetadataRegistry().getAtomTable(),
+        appVersion: '0.1.0',
+      });
+      if (!file) return null;
+      const json = JSON.stringify(file);
+      return { kind: 'full', file, json, blob: new Blob([json], { type: 'application/json' }), defaultFileName: generateExportFileName('atomdojo-full') };
+    }
+  }
+
   // ── Simulation timeline subsystem ──
   _timelineSub = createTimelineSubsystem({
     getPhysics: () => physics,
@@ -683,38 +721,26 @@ async function init() {
     getSceneMolecules: () => session.scene.molecules,
     syncAppearance: () => _bondedGroupAppearance?.syncToRenderer(),
     exportHistory: async (kind) => {
-      if (!_timelineSub) return;
-      if (_timelineSub.isIdentityStale()) {
-        throw new Error('Export is unavailable because atom identity is stale after worker compaction.');
-      }
-      if (kind === 'capsule') {
-        const { buildCapsuleHistoryFile, downloadCapsuleFile } = await import('./runtime/history-export');
-        const { validateCapsuleFile } = await import('../../src/history/history-file-v1');
-        const file = buildCapsuleHistoryFile({
-          getTimelineExportData: () => _timelineSub!.getTimelineExportSnapshot(),
-          getAtomTable: () => _timelineSub!.getAtomMetadataRegistry().getAtomTable(),
-          getColorAssignments: () => useAppStore.getState().bondedGroupColorAssignments.map(a => ({
-            atomIds: a.atomIds,
-            colorHex: a.colorHex,
-          })),
-          appVersion: '0.1.0',
-        });
-        if (!file) throw new Error('No recorded history to export.');
-        const errors = validateCapsuleFile(file);
-        if (errors.length > 0) throw new Error(`Export validation failed: ${errors[0]}`);
-        downloadCapsuleFile(file);
-      } else if (kind === 'full') {
-        const { buildFullHistoryFile, downloadHistoryFile, validateFullHistoryFile } = await import('./runtime/history-export');
-        const file = buildFullHistoryFile({
-          getTimelineExportData: () => _timelineSub!.getTimelineExportSnapshot(),
-          getAtomTable: () => _timelineSub!.getAtomMetadataRegistry().getAtomTable(),
-          appVersion: '0.1.0',
-        });
-        if (!file) throw new Error('No recorded history to export.');
-        const errors = validateFullHistoryFile(file);
-        if (errors.length > 0) throw new Error(`Export validation failed: ${errors[0]}`);
-        downloadHistoryFile(file);
-      }
+      const artifact = buildExportArtifact(kind);
+      if (!artifact) throw new Error('No recorded history to export.');
+      const errors = artifact.kind === 'capsule'
+        ? validateCapsuleFile(artifact.file)
+        : validateFullHistoryFile(artifact.file);
+      if (errors.length > 0) throw new Error(`Export validation failed: ${errors[0]}`);
+      return saveHistoryFile(artifact.blob, artifact.defaultFileName);
+    },
+    getExportEstimates: () => {
+      let capsule: string | null = null;
+      let full: string | null = null;
+      try {
+        const a = buildExportArtifact('capsule');
+        if (a) capsule = formatBytes(a.json.length);
+      } catch (err) { console.warn('[export] capsule estimate failed:', err); }
+      try {
+        const a = buildExportArtifact('full');
+        if (a) full = formatBytes(a.json.length);
+      } catch (err) { console.warn('[export] full estimate failed:', err); }
+      return { capsule, full };
     },
     exportCapabilities: { full: true, capsule: true },
   });

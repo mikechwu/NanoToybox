@@ -196,25 +196,63 @@ function TimelineBarActive() {
   const exportDialog = useExportDialog();
   const [exportSubmitting, setExportSubmitting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [estimates, setEstimates] = useState<{ capsule?: string | null; full?: string | null }>({});
+  const exportDidPause = useRef(false);
+
+  // Latest callbacks ref — keeps unmount cleanup current even when callbacks
+  // are installed after mount or reinstalled by the subsystem.
+  const latestCallbacksRef = useRef(callbacks);
+  useEffect(() => { latestCallbacksRef.current = callbacks; }, [callbacks]);
 
   // Preferred default kind — computed at open time, not hook init
   const preferredKind = exportCaps?.capsule ? 'capsule' as const : 'full' as const;
+
+  // Canonical close helper — all close paths converge here
+  const closeExportSession = useCallback(() => {
+    if (exportDidPause.current) {
+      callbacks?.onResumeFromExport?.();
+      exportDidPause.current = false;
+    }
+    exportDialog.reset();
+    setEstimates({});
+    setExportSubmitting(false);
+    setExportError(null);
+  }, [callbacks, exportDialog]);
 
   // Dialog mutual exclusion
   const openExport = useCallback(() => {
     clear.reset();
     setExportSubmitting(false);
     setExportError(null);
+    setEstimates({});
     exportDialog.setKind(preferredKind);
+    exportDidPause.current = callbacks?.onPauseForExport?.() ?? false;
     exportDialog.request();
-  }, [clear, exportDialog, preferredKind]);
+  }, [clear, exportDialog, preferredKind, callbacks]);
 
   const openClear = useCallback(() => {
-    exportDialog.reset();
-    setExportSubmitting(false);
-    setExportError(null);
+    closeExportSession();
     clear.request();
-  }, [clear, exportDialog]);
+  }, [clear, closeExportSession]);
+
+  // Async estimate computation when dialog opens
+  useEffect(() => {
+    if (!exportDialog.open) return;
+    // Defer to microtask so dialog renders with "Estimating…" immediately
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => {
+        if (cancelled) return;
+        const result = callbacks?.getExportEstimates?.() ?? { capsule: null, full: null };
+        if (!cancelled) setEstimates(result);
+      })
+      .catch((err) => {
+        console.warn('[TimelineBar] estimate computation failed:', err);
+        if (!cancelled) setEstimates({ capsule: null, full: null });
+      });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exportDialog.open]);
 
   // Export action guard — defend against impossible state
   const exportActionAvailable = !!callbacks?.onExportHistory && exportAvailable;
@@ -222,6 +260,17 @@ function TimelineBarActive() {
   // Mounted ref for safe async state updates after dialog close or unmount
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
+
+  // Cleanup: resume simulation on unmount if export caused pause.
+  // Uses latestCallbacksRef so the cleanup always calls the current handler,
+  // even if callbacks were installed after mount or reinstalled.
+  useEffect(() => {
+    return () => {
+      if (exportDidPause.current) {
+        latestCallbacksRef.current?.onResumeFromExport?.();
+      }
+    };
+  }, []);
 
   const handleExportConfirm = useCallback(async () => {
     if (!callbacks?.onExportHistory) {
@@ -231,16 +280,22 @@ function TimelineBarActive() {
     setExportSubmitting(true);
     setExportError(null);
     try {
-      await callbacks.onExportHistory(exportDialog.kind);
-      if (mountedRef.current) exportDialog.reset();
+      const result = await callbacks.onExportHistory(exportDialog.kind);
+      if (!mountedRef.current) return;
+      if (result === 'saved') {
+        closeExportSession();
+      } else if (result === 'picker-cancelled') {
+        setExportSubmitting(false);
+        // keep dialog open, keep paused, keep estimates
+      }
     } catch (e) {
+      console.error('[TimelineBar] export failed:', e);
       if (mountedRef.current) {
         setExportError(e instanceof Error ? e.message : 'Export failed.');
+        setExportSubmitting(false);
       }
-    } finally {
-      if (mountedRef.current) setExportSubmitting(false);
     }
-  }, [callbacks, exportDialog]);
+  }, [callbacks, exportDialog, closeExportSession]);
 
   const isReview = mode === 'review';
 
@@ -248,12 +303,10 @@ function TimelineBarActive() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (!isReview) clear.reset(); }, [isReview]);
 
-  // Guard: close export dialog when showExport becomes false
+  // Guard: close export dialog when showExport becomes false (capability loss)
   useEffect(() => {
     if (!showExport) {
-      exportDialog.reset();
-      setExportSubmitting(false);
-      setExportError(null);
+      closeExportSession();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showExport]);
@@ -321,8 +374,10 @@ function TimelineBarActive() {
         submitting={exportSubmitting}
         confirmEnabled={exportActionAvailable && !exportSubmitting}
         error={exportError}
+        fullEstimate={estimates.full}
+        capsuleEstimate={estimates.capsule}
         onSelectKind={exportDialog.setKind}
-        onCancel={exportDialog.cancel}
+        onCancel={closeExportSession}
         onConfirm={handleExportConfirm}
       />
     </>

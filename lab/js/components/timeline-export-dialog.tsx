@@ -48,6 +48,18 @@ export function ExportTrigger({ onClick }: { onClick: () => void }) {
   );
 }
 
+// ── Estimate slot (three-state) ──
+
+function EstimateSlot({ value }: { value?: string | null }) {
+  if (value === undefined) {
+    return <span className="timeline-export-dialog__estimate timeline-export-dialog__estimate--muted" aria-live="polite">Estimating…</span>;
+  }
+  if (value === null) {
+    return <span className="timeline-export-dialog__estimate timeline-export-dialog__estimate--muted" aria-live="polite">Unavailable</span>;
+  }
+  return <span className="timeline-export-dialog__estimate" aria-live="polite">{value}</span>;
+}
+
 // ── Dialog ──
 
 interface TimelineExportDialogProps {
@@ -58,8 +70,8 @@ interface TimelineExportDialogProps {
   /** True when the export action is reachable (callback + capability both present). */
   confirmEnabled: boolean;
   error: string | null;
-  fullEstimate?: string;
-  capsuleEstimate?: string;
+  fullEstimate?: string | null;
+  capsuleEstimate?: string | null;
   onSelectKind: (kind: TimelineExportKind) => void;
   onCancel: () => void;
   onConfirm: () => void;
@@ -147,7 +159,7 @@ export function TimelineExportDialog({
             <span className="timeline-export-dialog__option-text">
               <strong>Capsule</strong>
               <span>Compact playback</span>
-              {capsuleEstimate ? <span className="timeline-export-dialog__estimate">{capsuleEstimate}</span> : null}
+              {availableKinds.capsule && <EstimateSlot value={capsuleEstimate} />}
             </span>
           </label>
           <label className={`timeline-export-dialog__option${!availableKinds.full ? ' timeline-export-dialog__option--disabled' : ''}`}>
@@ -166,7 +178,7 @@ export function TimelineExportDialog({
             <span className="timeline-export-dialog__option-text">
               <strong>Full</strong>
               <span>Review-complete playback</span>
-              {fullEstimate ? <span className="timeline-export-dialog__estimate">{fullEstimate}</span> : null}
+              {availableKinds.full && <EstimateSlot value={fullEstimate} />}
             </span>
           </label>
         </div>

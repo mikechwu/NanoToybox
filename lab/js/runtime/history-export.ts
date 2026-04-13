@@ -148,22 +148,57 @@ export function buildFullHistoryFile(deps: HistoryExportDeps): AtomDojoHistoryFi
   };
 }
 
-// ── Download ──
+// ── Byte formatting ──
 
-export function downloadHistoryFile(file: AtomDojoHistoryFileV1, filename?: string): void {
-  const json = JSON.stringify(file);
-  const blob = new Blob([json], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// ── Filename generation ──
+
+export function generateExportFileName(prefix: string): string {
   const now = new Date();
   const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-  const name = filename ?? `atomdojo-full-${ts}.atomdojo`;
+  return `${prefix}-${ts}.atomdojo`;
+}
+
+// ── Save strategy (picker + anchor fallback) ──
+
+export async function saveHistoryFile(blob: Blob, defaultFileName: string): Promise<'saved' | 'picker-cancelled'> {
+  if (typeof window !== 'undefined' && typeof (window as any).showSaveFilePicker === 'function') {
+    try {
+      const handle = await (window as any).showSaveFilePicker({
+        suggestedName: defaultFileName,
+        types: [{ description: 'AtomDojo History', accept: { 'application/json': ['.atomdojo'] } }],
+      });
+      const writable = await handle.createWritable();
+      try {
+        await writable.write(blob);
+        await writable.close();
+      } catch (writeErr) {
+        await writable.abort().catch((abortErr: unknown) => { console.warn('[history-export] writable.abort() failed:', abortErr); });
+        throw writeErr;
+      }
+      return 'saved';
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return 'picker-cancelled';
+      }
+      throw err;
+    }
+  }
+  // Fallback: anchor click
+  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = name;
+  a.download = defaultFileName;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+  return 'saved';
 }
 
 // ── Capsule export ──
@@ -272,18 +307,3 @@ function canonicalInteractionKey(s: TimelineInteractionState): string {
   return `${s.kind}:${s.atomIndex}:${s.target[0]},${s.target[1]},${s.target[2]}`;
 }
 
-export function downloadCapsuleFile(file: AtomDojoPlaybackCapsuleFileV1, filename?: string): void {
-  const json = JSON.stringify(file);
-  const blob = new Blob([json], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const now = new Date();
-  const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-  const name = filename ?? `atomdojo-capsule-${ts}.atomdojo`;
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}

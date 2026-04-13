@@ -405,7 +405,7 @@ describe('TimelineSubsystem', () => {
         clearRendererFeedback: vi.fn(),
         syncBondedGroupsForDisplayFrame: vi.fn(),
         getSceneMolecules: () => molecules,
-        exportHistory: vi.fn(),
+        exportHistory: vi.fn(async () => 'saved' as const),
         exportCapabilities: exportCaps,
       });
     }
@@ -589,11 +589,12 @@ describe('TimelineSubsystem', () => {
 
     it('markIdentityStale disables capability, export callback throws', async () => {
       let exportError: Error | null = null;
-      const exportHistory = vi.fn(async (_kind: 'full' | 'capsule') => {
+      const exportHistory = vi.fn(async (_kind: 'full' | 'capsule'): Promise<'saved' | 'picker-cancelled'> => {
         // Simulate the real main.ts export callback pattern
         if (sub.isIdentityStale()) {
           throw new Error('Export is unavailable because atom identity is stale after worker compaction.');
         }
+        return 'saved';
       });
 
       const sub = createTimelineSubsystem({
@@ -642,7 +643,7 @@ describe('TimelineSubsystem', () => {
         clearBondedGroupHighlight: vi.fn(), clearRendererFeedback: vi.fn(),
         syncBondedGroupsForDisplayFrame: vi.fn(),
         getSceneMolecules: () => makeSceneMolecules(),
-        exportHistory: vi.fn(),
+        exportHistory: vi.fn(async () => 'saved' as const),
         exportCapabilities: exportCaps,
       });
 
@@ -670,7 +671,7 @@ describe('TimelineSubsystem', () => {
         clearBondedGroupHighlight: vi.fn(), clearRendererFeedback: vi.fn(),
         syncBondedGroupsForDisplayFrame: vi.fn(),
         getSceneMolecules: () => makeSceneMolecules(),
-        exportHistory: vi.fn(),
+        exportHistory: vi.fn(async () => 'saved' as const),
         exportCapabilities: exportCaps,
       });
       sub.installAndEnable();
@@ -717,7 +718,7 @@ describe('TimelineSubsystem', () => {
         syncBondedGroupsForDisplayFrame: vi.fn(),
         getSceneMolecules: () => makeSceneMolecules(),
         syncAppearance,
-        exportHistory: vi.fn(),
+        exportHistory: vi.fn(async () => 'saved' as const),
         exportCapabilities: exportCaps,
       });
       sub.installAndEnable();
@@ -752,7 +753,7 @@ describe('TimelineSubsystem', () => {
         clearBondedGroupHighlight: vi.fn(), clearRendererFeedback: vi.fn(),
         syncBondedGroupsForDisplayFrame: vi.fn(),
         getSceneMolecules: () => makeSceneMolecules(),
-        exportHistory: vi.fn(),
+        exportHistory: vi.fn(async () => 'saved' as const),
         exportCapabilities: exportCaps,
       });
       sub.installAndEnable();
@@ -773,7 +774,7 @@ describe('TimelineSubsystem', () => {
         clearBondedGroupHighlight: vi.fn(), clearRendererFeedback: vi.fn(),
         syncBondedGroupsForDisplayFrame: vi.fn(),
         getSceneMolecules: () => makeSceneMolecules(),
-        exportHistory: vi.fn(),
+        exportHistory: vi.fn(async () => 'saved' as const),
         exportCapabilities: exportCaps,
       });
       sub.installAndEnable();

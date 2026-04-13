@@ -672,7 +672,7 @@ describe('TimelineBar unified shell', () => {
 
   function installWithExport(mode: 'off' | 'ready' | 'active' = 'active', caps: { full: boolean; capsule: boolean } = { full: true, capsule: true }) {
     useAppStore.getState().installTimelineUI(
-      { ...defaultCallbacks, onExportHistory: vi.fn() },
+      { ...defaultCallbacks, onExportHistory: vi.fn(async () => 'saved' as const) },
       mode,
       caps,
     );
@@ -706,7 +706,7 @@ describe('TimelineBar unified shell', () => {
 
   it('export trigger hidden when callback exists but capability is null', () => {
     act(() => {
-      installSubsystemWithCallbacks('active', { onExportHistory: vi.fn() });
+      installSubsystemWithCallbacks('active', { onExportHistory: vi.fn(async () => 'saved' as const) });
       // Do NOT set capabilities
       useAppStore.getState().updateTimelineState({
         mode: 'live', currentTimePs: 100, reviewTimePs: null,

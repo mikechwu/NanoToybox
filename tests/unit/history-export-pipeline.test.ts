@@ -242,7 +242,7 @@ describe('full export after stop → restart lifecycle', () => {
       clearBondedGroupHighlight: vi.fn(), clearRendererFeedback: vi.fn(),
       syncBondedGroupsForDisplayFrame: vi.fn(),
       getSceneMolecules: () => molecules,
-      exportHistory: vi.fn(),
+      exportHistory: vi.fn(async () => 'saved' as const),
       exportCapabilities: { full: true, capsule: true },
     });
 
@@ -335,7 +335,7 @@ describe('full export after stop → restart lifecycle', () => {
       clearBondedGroupHighlight: vi.fn(), clearRendererFeedback: vi.fn(),
       syncBondedGroupsForDisplayFrame: vi.fn(),
       getSceneMolecules: () => molecules,
-      exportHistory: vi.fn(),
+      exportHistory: vi.fn(async () => 'saved' as const),
       exportCapabilities: { full: true, capsule: true },
     });
 
