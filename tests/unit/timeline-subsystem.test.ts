@@ -518,11 +518,11 @@ describe('TimelineSubsystem', () => {
       sub.markAtomInteractionStarted();
       sub.recordAfterReconciliation(4);
 
-      // Reset to passive — clears tracker + registry
+      // Reset to passive — clears then eagerly rebuilds from scene
       sub.resetToPassiveReady();
-      expect(sub.getAtomMetadataRegistry().getAtomTable()).toHaveLength(0);
+      expect(sub.getAtomMetadataRegistry().getAtomTable()).toHaveLength(10);
 
-      // Atom interaction re-arms → should rebuild from scene
+      // Atom interaction re-arms — tracker already valid from eager rebuild
       sub.markAtomInteractionStarted();
       expect(sub.getAtomMetadataRegistry().getAtomTable()).toHaveLength(10);
     });
@@ -658,6 +658,130 @@ describe('TimelineSubsystem', () => {
       sub.resetToPassiveReady();
       expect(sub.isIdentityStale()).toBe(false);
       expect(useAppStore.getState().timelineExportCapabilities).toEqual(exportCaps);
+    });
+
+    it('installAndEnable starts with valid (non-stale) tracker', () => {
+      const sub = createTimelineSubsystem({
+        getPhysics: () => makePhysics(),
+        getRenderer: () => makeRenderer(),
+        pause: vi.fn(), resume: vi.fn(), isPaused: () => false,
+        reinitWorker: vi.fn(async () => {}), isWorkerActive: () => false,
+        forceRender: vi.fn(),
+        clearBondedGroupHighlight: vi.fn(), clearRendererFeedback: vi.fn(),
+        syncBondedGroupsForDisplayFrame: vi.fn(),
+        getSceneMolecules: () => makeSceneMolecules(),
+        exportHistory: vi.fn(),
+        exportCapabilities: exportCaps,
+      });
+      sub.installAndEnable();
+      expect(sub.isIdentityStale()).toBe(false);
+      expect(sub.getAtomIdentityTracker().getTotalAssigned()).toBe(10);
+      sub.teardown();
+    });
+
+    it('tryRebuild cleans corrupted color assignments with negative atomIds', () => {
+      const exportCaps = { full: true, capsule: true };
+      const sub = createSub(exportCaps);
+      sub.installAndEnable();
+
+      // Seed a corrupted assignment with negative atomIds
+      useAppStore.setState({
+        bondedGroupColorAssignments: [
+          { id: 'bad1', atomIndices: [0, 1], atomIds: [-1, -1], colorHex: '#ff0000', sourceGroupId: 'g1' },
+          { id: 'good1', atomIndices: [2, 3], atomIds: [2, 3], colorHex: '#00ff00', sourceGroupId: 'g2' },
+        ],
+      });
+
+      // Rebuild should clean out the bad assignment
+      sub.resetToPassiveReady();
+      const remaining = useAppStore.getState().bondedGroupColorAssignments;
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].id).toBe('good1');
+      sub.teardown();
+    });
+
+    it('corrupted-assignment cleanup syncs appearance and clears stale overrides', () => {
+      const syncAppearance = vi.fn(() => {
+        // Simulate what the real syncToRenderer does: recompute overrides from cleaned assignments
+        const cleaned = useAppStore.getState().bondedGroupColorAssignments;
+        const hasOverrides = cleaned.some(a => a.atomIds.length > 0);
+        useAppStore.setState({ bondedGroupColorOverrides: hasOverrides ? { 0: { hex: '#00ff00' } } : {} });
+      });
+      const sub = createTimelineSubsystem({
+        getPhysics: () => makePhysics(),
+        getRenderer: () => makeRenderer(),
+        pause: vi.fn(), resume: vi.fn(), isPaused: () => false,
+        reinitWorker: vi.fn(async () => {}), isWorkerActive: () => false,
+        forceRender: vi.fn(),
+        clearBondedGroupHighlight: vi.fn(), clearRendererFeedback: vi.fn(),
+        syncBondedGroupsForDisplayFrame: vi.fn(),
+        getSceneMolecules: () => makeSceneMolecules(),
+        syncAppearance,
+        exportHistory: vi.fn(),
+        exportCapabilities: exportCaps,
+      });
+      sub.installAndEnable();
+
+      // Seed corrupted assignment + stale override derived from it
+      useAppStore.setState({
+        bondedGroupColorAssignments: [
+          { id: 'bad', atomIndices: [0], atomIds: [-1], colorHex: '#ff0000', sourceGroupId: 'g1' },
+        ],
+        bondedGroupColorOverrides: { 0: { hex: '#ff0000' } },
+      });
+
+      syncAppearance.mockClear();
+      sub.resetToPassiveReady();
+
+      // Bad assignment removed
+      expect(useAppStore.getState().bondedGroupColorAssignments).toHaveLength(0);
+      // syncAppearance called, which recomputed overrides from empty assignments
+      expect(syncAppearance).toHaveBeenCalledTimes(1);
+      // Stale override is gone (syncAppearance recomputed to empty)
+      expect(useAppStore.getState().bondedGroupColorOverrides).toEqual({});
+      sub.teardown();
+    });
+
+    it('stale export status message is cleared on successful rebuild', () => {
+      const sub = createTimelineSubsystem({
+        getPhysics: () => makePhysics(),
+        getRenderer: () => makeRenderer(),
+        pause: vi.fn(), resume: vi.fn(), isPaused: () => false,
+        reinitWorker: vi.fn(async () => {}), isWorkerActive: () => false,
+        forceRender: vi.fn(),
+        clearBondedGroupHighlight: vi.fn(), clearRendererFeedback: vi.fn(),
+        syncBondedGroupsForDisplayFrame: vi.fn(),
+        getSceneMolecules: () => makeSceneMolecules(),
+        exportHistory: vi.fn(),
+        exportCapabilities: exportCaps,
+      });
+      sub.installAndEnable();
+
+      useAppStore.getState().setStatusText('Export disabled: scene atom metadata is inconsistent.');
+      sub.resetToPassiveReady();
+      expect(useAppStore.getState().statusText).toBeNull();
+      sub.teardown();
+    });
+
+    it('unrelated status text is preserved on successful rebuild', () => {
+      const sub = createTimelineSubsystem({
+        getPhysics: () => makePhysics(),
+        getRenderer: () => makeRenderer(),
+        pause: vi.fn(), resume: vi.fn(), isPaused: () => false,
+        reinitWorker: vi.fn(async () => {}), isWorkerActive: () => false,
+        forceRender: vi.fn(),
+        clearBondedGroupHighlight: vi.fn(), clearRendererFeedback: vi.fn(),
+        syncBondedGroupsForDisplayFrame: vi.fn(),
+        getSceneMolecules: () => makeSceneMolecules(),
+        exportHistory: vi.fn(),
+        exportCapabilities: exportCaps,
+      });
+      sub.installAndEnable();
+
+      useAppStore.getState().setStatusText('Some other message');
+      sub.resetToPassiveReady();
+      expect(useAppStore.getState().statusText).toBe('Some other message');
+      sub.teardown();
     });
   });
 });

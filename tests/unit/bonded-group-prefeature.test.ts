@@ -507,6 +507,106 @@ describe('bonded-group appearance wiring', () => {
   });
 });
 
+// ── Regression: pre-interaction coloring with lazy tracker ──
+
+describe('coloring before interaction with eager tracker init', () => {
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+  });
+
+  it('coloring works with eagerly-initialized tracker (no -1 placeholders)', () => {
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1, 2] };
+    const mockRenderer = { setAtomColorOverrides: vi.fn() };
+    const stableIds = [100, 101, 102];
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => mockRenderer,
+      getStableAtomIds: () => stableIds,
+    });
+
+    runtime.applyGroupColor('g1', '#ff0000');
+    const assignments = useAppStore.getState().bondedGroupColorAssignments;
+    expect(assignments).toHaveLength(1);
+    expect(assignments[0].atomIds).toEqual([100, 101, 102]);
+    expect(assignments[0].atomIds.every((id: number) => id >= 0)).toBe(true);
+
+    const call = mockRenderer.setAtomColorOverrides.mock.calls.at(-1)![0];
+    expect(Object.keys(call)).toHaveLength(3);
+    expect(call[0]).toEqual({ hex: '#ff0000' });
+    expect(call[1]).toEqual({ hex: '#ff0000' });
+    expect(call[2]).toEqual({ hex: '#ff0000' });
+  });
+
+  it('negative atomIds are rejected during projection', () => {
+    const groupAtoms: Record<string, number[]> = { g1: [0, 1] };
+    const mockRenderer = { setAtomColorOverrides: vi.fn() };
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => mockRenderer,
+      getStableAtomIds: () => [-1, -1],
+    });
+
+    runtime.applyGroupColor('g1', '#ff0000');
+    expect(useAppStore.getState().bondedGroupColorAssignments).toHaveLength(0);
+  });
+
+  it('coloring second molecule after append works when tracker is initialized', () => {
+    let groupAtoms: Record<string, number[]> = { g1: [0, 1, 2], g2: [3, 4, 5] };
+    const mockRenderer = { setAtomColorOverrides: vi.fn() };
+    const stableIds = [100, 101, 102, 200, 201, 202];
+    const runtime = createBondedGroupAppearanceRuntime({
+      getBondedGroupRuntime: () => ({
+        getAtomIndicesForGroup: (id: string) => groupAtoms[id] ?? null,
+      }),
+      getRenderer: () => mockRenderer,
+      getStableAtomIds: () => stableIds,
+    });
+
+    runtime.applyGroupColor('g1', '#ff0000');
+    runtime.applyGroupColor('g2', '#00ff00');
+    const assignments = useAppStore.getState().bondedGroupColorAssignments;
+    expect(assignments).toHaveLength(2);
+    expect(assignments[0].atomIds).toEqual([100, 101, 102]);
+    expect(assignments[1].atomIds).toEqual([200, 201, 202]);
+
+    const call = mockRenderer.setAtomColorOverrides.mock.calls.at(-1)![0];
+    expect(Object.keys(call)).toHaveLength(6);
+    expect(call[0]).toEqual({ hex: '#ff0000' });
+    expect(call[3]).toEqual({ hex: '#00ff00' });
+  });
+});
+
+// ── handleAppend invariant ──
+
+import { createTimelineAtomIdentityTracker } from '../../lab/js/runtime/timeline-atom-identity';
+
+describe('handleAppend non-contiguous append invariant', () => {
+  it('throws on gap between existing tracker state and append offset', () => {
+    const tracker = createTimelineAtomIdentityTracker();
+    tracker.captureForCurrentState(3);
+    expect(() => tracker.handleAppend(5, 2)).toThrow(/non-contiguous/);
+  });
+
+  it('succeeds when append offset matches tracker length', () => {
+    const tracker = createTimelineAtomIdentityTracker();
+    tracker.captureForCurrentState(3);
+    const ids = tracker.handleAppend(3, 2);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toBe(3);
+    expect(ids[1]).toBe(4);
+  });
+
+  it('succeeds for first append at offset 0', () => {
+    const tracker = createTimelineAtomIdentityTracker();
+    const ids = tracker.handleAppend(0, 3);
+    expect(ids).toEqual([0, 1, 2]);
+  });
+});
+
 // ── Persistence Semantics (Annotation Model) ──
 
 describe('bonded-group color persistence (annotation model)', () => {

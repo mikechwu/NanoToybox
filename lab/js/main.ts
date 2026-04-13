@@ -681,6 +681,7 @@ async function init() {
     clearRendererFeedback: () => { if (renderer) renderer.clearFeedback(); },
     syncBondedGroupsForDisplayFrame: () => { _bondedGroupCoordinator?.update(); _bondedGroupAppearance?.syncToRenderer(); },
     getSceneMolecules: () => session.scene.molecules,
+    syncAppearance: () => _bondedGroupAppearance?.syncToRenderer(),
     exportHistory: async (kind) => {
       if (!_timelineSub) return;
       if (_timelineSub.isIdentityStale()) {

@@ -47,11 +47,12 @@ export function createBondedGroupAppearanceRuntime(deps: {
     const stableIds = deps.getStableAtomIds();
     const stableIdToSlot = new Map<number, number>();
     for (let i = 0; i < stableIds.length; i++) {
-      stableIdToSlot.set(stableIds[i], i);
+      if (stableIds[i] >= 0) stableIdToSlot.set(stableIds[i], i);
     }
     const projected = assignments.map(a => {
       const atomIndices: number[] = [];
       for (const id of a.atomIds) {
+        if (id < 0) continue;
         const slot = stableIdToSlot.get(id);
         if (slot !== undefined) atomIndices.push(slot);
       }
@@ -66,7 +67,7 @@ export function createBondedGroupAppearanceRuntime(deps: {
     if (!atoms || atoms.length === 0) return;
 
     const stableIds = deps.getStableAtomIds();
-    const resolvedAtomIds = atoms.filter(i => i < stableIds.length).map(i => stableIds[i]);
+    const resolvedAtomIds = atoms.filter(i => i < stableIds.length).map(i => stableIds[i]).filter(id => id >= 0);
     if (resolvedAtomIds.length !== atoms.length) {
       console.warn(`[appearance] applyGroupColor('${groupId}'): stable-ID resolution incomplete (${resolvedAtomIds.length}/${atoms.length} atoms resolved). Assignment not persisted.`);
       deps.setStatusText?.('Could not persist color — atom identity mapping is stale.');

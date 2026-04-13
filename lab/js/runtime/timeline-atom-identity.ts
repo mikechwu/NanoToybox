@@ -37,15 +37,14 @@ export function createTimelineAtomIdentityTracker(): TimelineAtomIdentityTracker
     },
 
     handleAppend(atomOffset: number, atomCount: number): number[] {
+      if (atomOffset !== _slotToAtomId.length) {
+        throw new Error(`handleAppend: non-contiguous append (expected offset ${_slotToAtomId.length}, got ${atomOffset}). Tracker may be uninitialized for pre-existing atoms.`);
+      }
       const assignedIds: number[] = [];
       for (let i = 0; i < atomCount; i++) {
         const id = _nextAtomId++;
         assignedIds.push(id);
-        // Ensure array is large enough, then set at the correct slot
-        while (_slotToAtomId.length <= atomOffset + i) {
-          _slotToAtomId.push(-1); // placeholder
-        }
-        _slotToAtomId[atomOffset + i] = id;
+        _slotToAtomId.push(id);
       }
       return assignedIds;
     },
@@ -54,6 +53,9 @@ export function createTimelineAtomIdentityTracker(): TimelineAtomIdentityTracker
       const newMapping: number[] = [];
       for (let newIdx = 0; newIdx < keep.length; newIdx++) {
         const oldIdx = keep[newIdx];
+        if (oldIdx < 0 || oldIdx >= _slotToAtomId.length) {
+          throw new Error(`handleCompaction: oldIdx ${oldIdx} out of range [0, ${_slotToAtomId.length})`);
+        }
         newMapping[newIdx] = _slotToAtomId[oldIdx];
       }
       _slotToAtomId = newMapping;

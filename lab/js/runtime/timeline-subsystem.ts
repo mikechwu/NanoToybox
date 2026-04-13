@@ -60,6 +60,8 @@ export interface TimelineSubsystemDeps {
   syncBondedGroupsForDisplayFrame: TimelineCoordinatorDeps['syncBondedGroupsForDisplayFrame'];
   /** Current scene molecules — for rebuilding export atom state on recording restart. */
   getSceneMolecules: () => TimelineSceneMolecule[];
+  /** Sync appearance overrides + renderer after assignment cleanup. */
+  syncAppearance?: () => void;
   /** Export dependency — only injected when export is implemented. */
   exportHistory?: (kind: 'full' | 'capsule') => Promise<void> | void;
   exportCapabilities?: { full: boolean; capsule: boolean };
@@ -261,18 +263,31 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
     syncStoreState();
   }
 
-  /** Try to rebuild export atom state; on failure, reset to clean empty state
-   *  and mark stale to durably disable export. */
+  /** Try to rebuild export atom state. On success, clear staleness and restore
+   *  export capability. On failure, reset to clean empty state and mark stale. */
+  const STALE_EXPORT_STATUS = 'Export disabled: scene atom metadata is inconsistent.';
+
   function tryRebuildExportAtomState() {
     try {
       rebuildExportAtomState();
+      clearIdentityStaleness();
+      syncExportCapability();
+      const currentStatus = useAppStore.getState().statusText;
+      if (currentStatus === STALE_EXPORT_STATUS) {
+        useAppStore.getState().setStatusText(null);
+      }
+      const assignments = useAppStore.getState().bondedGroupColorAssignments;
+      const clean = assignments.filter(a => a.atomIds.length > 0 && a.atomIds.every(id => id >= 0));
+      if (clean.length !== assignments.length) {
+        useAppStore.setState({ bondedGroupColorAssignments: clean });
+        deps.syncAppearance?.();
+      }
     } catch (err) {
       console.error('[timeline-subsystem] export atom state rebuild failed:', err);
-      // Restore clean state — partial rebuild left tracker/registry inconsistent
       atomIdentityTracker.reset();
       atomMetadataRegistry.reset();
       setIdentityStale();
-      useAppStore.getState().setStatusText('Export disabled: scene atom metadata is inconsistent.');
+      useAppStore.getState().setStatusText(STALE_EXPORT_STATUS);
     }
   }
 
@@ -319,6 +334,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
       if (timeline.getState().mode === 'review') coordinator.returnToLive();
       resetRuntime();
       policy.turnOn();
+      tryRebuildExportAtomState();
       useAppStore.getState().publishTimelineReadyState();
       syncExportCapability();
     },
@@ -328,6 +344,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
     },
     installAndEnable: () => {
       policy.turnOn();
+      tryRebuildExportAtomState();
       const hasExport = !!(deps.exportHistory && deps.exportCapabilities);
       useAppStore.getState().installTimelineUI({
         onScrub: (timePs: number) => coordinator.handleScrub(timePs),
