@@ -34,8 +34,25 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+      # Cache the chromium binary (~150 MB) keyed by the resolved
+      # @playwright/test version in package-lock.json. A cache hit skips
+      # the binary download entirely; a cache miss runs `playwright install`
+      # without `--with-deps` because the GitHub-hosted ubuntu-latest runner
+      # image already ships every Playwright system library (libnss3, libnspr4,
+      # libgbm1, libcairo2, libxkbcommon0, libdrm2, ...). The packages
+      # `--with-deps` would otherwise install are international font sets
+      # (fonts-ipafont-gothic, fonts-wqy-zenhei, fonts-tlwg-loma-otf, etc.)
+      # that the English-only Lab UI does not exercise. Saves ~30–60s per run.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
 
       - name: Run E2E smoke tests
         run: npm run test:e2e

@@ -117,16 +117,46 @@ test.describe('Phase 3 — Onboarding Overlay', () => {
     expect(errors).toEqual([])
   })
 
-  test('onboarding reappears on page reload (page-lifetime dismissal)', async ({ page, baseURL }) => {
+  test('onboarding stays dismissed across page reload (sessionStorage-scoped)', async ({ page, baseURL }) => {
+    // Phase 6 contract (D107): dismissal is sessionStorage-scoped via the
+    // `atomdojo.onboardingDismissed` sentinel set by markOnboardingDismissed().
+    // A reload preserves sessionStorage, so the overlay must NOT re-appear.
+    // This is what prevents the same-tab OAuth bounce from re-showing the
+    // overlay when the popup-blocked fallback path navigates back to /lab/.
+    // The companion test below covers the full-browser-restart path
+    // (sessionStorage cleared) — the only path that should re-show.
     const errors = collectErrors(page)
 
     await page.goto(`${baseURL}/lab/`)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
 
-    // Dismiss onboarding
     await dismissOnboardingIfPresent(page)
 
-    // Reload — onboarding should reappear (no persistent storage)
+    await page.reload()
+    await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
+    await page.waitForTimeout(500)
+
+    const overlay = page.locator('[data-onboarding]')
+    await expect(overlay).not.toBeAttached({ timeout: 1500 })
+
+    expect(errors).toEqual([])
+  })
+
+  test('onboarding reappears after sessionStorage clear (full browser restart analogue)', async ({ page, baseURL }) => {
+    // Browser restart drops sessionStorage entirely; the overlay should
+    // come back on the next visit so first-time users still see it.
+    // Emulated here by an explicit sessionStorage.clear() before reload.
+    const errors = collectErrors(page)
+
+    await page.goto(`${baseURL}/lab/`)
+    await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
+
+    await dismissOnboardingIfPresent(page)
+
+    // Drop the sessionStorage sentinel — analogous to closing every
+    // tab and reopening the browser.
+    await page.evaluate(() => { sessionStorage.clear() })
+
     await page.reload()
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 10000 })
     await page.waitForTimeout(500)

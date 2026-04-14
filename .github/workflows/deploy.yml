@@ -59,8 +59,21 @@ jobs:
           ls dist/assets/tersoff-*.wasm >/dev/null 2>&1 || (echo "MISSING: Wasm binary" && exit 1)
           echo "Build output verified: $TOTAL HTML entrypoints, manifest, wasm"
 
-      - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+      # See ci.yml for the rationale behind the cached / no-deps install.
+      # Same pattern: cache the chromium binary by resolved @playwright/test
+      # version, skip --with-deps because the runner image already ships
+      # every required system library and the missing packages are i18n
+      # fonts our English-only UI doesn't exercise. Saves ~30–60s per deploy.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
 
       - name: Run E2E smoke tests
         run: npm run test:e2e
