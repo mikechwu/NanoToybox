@@ -83,6 +83,23 @@ jobs:
           fi
           bash scripts/deploy-smoke.sh
 
+      # D1 migrations must land BEFORE the Pages deploy so new code
+      # never hits a schema it assumes. wrangler tracks applied migrations
+      # in a d1_migrations table; this step is idempotent — it only
+      # applies what hasn't already been applied, so repeated runs are
+      # cheap no-ops. Requires CLOUDFLARE_API_TOKEN to have D1:Edit scope.
+      #
+      # Safety: only additive migrations are safe to auto-apply here.
+      # Destructive changes (DROP, column removal, data loss) must be
+      # rolled out manually via a separate operator workflow after
+      # review — never add one to migrations/ and let CI auto-apply it.
+      - name: Apply D1 migrations (production)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 migrations apply atomdojo-capsules --remote
+
       - name: Deploy to Cloudflare Pages
         id: deploy
         uses: cloudflare/wrangler-action@v3

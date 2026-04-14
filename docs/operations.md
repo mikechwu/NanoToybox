@@ -321,7 +321,20 @@ Current migrations (in `migrations/`, applied in order by wrangler):
   for orphan sweep performance — without it, the D1 join per R2 object is
   O(N²) over the full share table).
 
-Apply to remote:
+Remote application is automatic on deploy: `.github/workflows/deploy.yml`
+runs `wrangler d1 migrations apply atomdojo-capsules --remote` right
+before `pages deploy`. `wrangler` tracks applied migrations in a
+`d1_migrations` table, so the step is idempotent — repeated runs are
+cheap no-ops.
+
+**Only add additive migrations to `migrations/`.** Destructive changes
+(column drops, table drops, data-mutating statements) must NOT be
+auto-applied in CI. For those, run them manually first via
+`wrangler d1 execute atomdojo-capsules --remote --file=migrations/NNNN-destructive.sql`
+against a staging DB, verify, then commit the migration file only after
+production has been hand-applied and verified.
+
+Manual remote apply (unblock CI or out-of-band schema changes):
 
 ```bash
 wrangler d1 migrations apply atomdojo-capsules --remote
