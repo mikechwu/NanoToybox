@@ -10,12 +10,17 @@
  * hashed with SHA-256 + a server-provided salt (SESSION_SECRET) to give
  * us a stable de-dup key without reversible exposure.
  *
- * Owns:        AuditEventType enum, recordAuditEvent, hasRecentReport,
- *              incrementUsageCounter
+ * Owns:        AuditEventType enum, recordAuditEvent, hasRecentAuditEvent,
+ *              hashIp, getClientIp, incrementUsageCounter, dayKey
  * Depends on:  src/share/d1-types.ts
  * Called by:   functions/api/capsules/[code]/report.ts,
- *              functions/api/capsules/publish.ts (quota events),
- *              functions/api/admin/capsules/[code]/delete.ts
+ *              functions/api/capsules/publish.ts (quota + publish events),
+ *              functions/api/admin/capsules/[code]/delete.ts,
+ *              functions/api/admin/sweep/audit.ts (audit_swept),
+ *              functions/api/account/age-confirmation/index.ts,
+ *              functions/api/account/delete.ts (account_delete),
+ *              functions/api/privacy-request.ts (hashIp / getClientIp),
+ *              src/share/capsule-delete.ts (owner/moderation deletes)
  */
 
 import type { D1Database } from './d1-types';
@@ -35,7 +40,21 @@ export type AuditEventType =
   | 'publish_rejected_invalid'
   | 'orphan_swept'
   | 'orphan_sweep_failed'
-  | 'session_swept';
+  | 'session_swept'
+  // Self-service capsule deletion (distinct from 'moderation_delete'
+  // so forensic queries can separate owner-initiated deletes from
+  // admin moderation).
+  | 'owner_delete'
+  // Account-wide deletion. One emitted per account-delete cascade
+  // run; details_json carries { capsuleCount, succeeded, failed }.
+  | 'account_delete'
+  // Age-gate acceptance recorded. Emitted from
+  // /api/account/age-confirmation (first acceptance or retro-ack).
+  | 'age_confirmation_recorded'
+  // Class-based audit retention sweep. Emitted ONCE per sweep run
+  // (mode=scrub or mode=delete-abuse-reports) with a summary of
+  // affected rows. Per-row audit-on-audit would self-inflate.
+  | 'audit_swept';
 
 export type AuditSeverity = 'info' | 'warning' | 'critical';
 

@@ -10,12 +10,12 @@ Welcome to the NanoToybox project — a browser-based interactive carbon nanostr
 | [Physics & Simulation](physics.md) | Tersoff potential, integrator, units, validation |
 | [Structure Library](structure-library.md) | Canonical structures, generation pipeline, CLI usage |
 | [ML Surrogate](ml-surrogate.md) | Force decomposition, training pipeline, lessons learned |
-| [Testing & Validation](testing.md) | Test ladder, pass criteria, how to run |
+| [Testing & Validation](testing.md) | Test ladder, pass criteria, how to run, Pages-dev E2E lane |
 | [Viewer](viewer.md) | Trajectory viewer and interactive page |
 | [Project Decisions](decisions.md) | Key strategic decisions and their rationale |
 | [Scaling Research](scaling-research.md) | Real-time browser limits, collision benchmarks, bottleneck analysis |
-| [Operations](operations.md) | Share-link deployment runbook: secrets, schedules, alerting, reconciliation |
-| [Contributing](contributing.md) | How to continue development, rules, workflow |
+| [Operations](operations.md) | Share-link deployment runbook: secrets, schedules, alerting, reconciliation, `/privacy-request` operator runbook, Pages-dev E2E lane |
+| [Contributing](contributing.md) | How to continue development, rules, workflow, shared-utility conventions (`b64url`, `error-message`, `http-cache`, `signed-intents`) |
 
 ## Quick Start
 
@@ -168,7 +168,7 @@ src/ui/ (13 files):             │    sheet, bonded-groups panel,
 - **React UI** — all UI components are React-authoritative with Zustand store, glassmorphic CSS, responsive layout (phone/tablet/desktop); panel fixed width 250px with scrollbar-gutter stable
 - **Performance optimized** — InstancedMesh rendering (2 draw calls), on-the-fly Tersoff kernel (45% faster), spatial-hash neighbor/bond search (O(N))
 - **Wasm Tersoff kernel** — deployed and enabled by default, automatic JS fallback
-- **CI/CD** — GitHub Actions: typecheck, unit tests, build, E2E, deploy smoke, Python physics tests (91 test files, 1700 tests)
+- **CI/CD** — GitHub Actions: typecheck, unit tests, build, E2E, deploy smoke, Python physics tests (120 test files, 2130 tests; run `npx vitest run` for the authoritative live total)
 - **Containment boundary** — dynamic soft wall with Contain/Remove modes, live atom count, auto-scaling radius
 - **Placement camera framing** — smooth camera assist keeps scene + preview visible during molecule placement; continuous drag with pointer capture and per-frame cursor-lock reprojection
 - **Review mode UI lock** — display-only enforcement across all React surfaces during timeline review; centralized selector, runtime guards, ActionHint tooltips (desktop), transient status hints (mobile)
@@ -179,6 +179,7 @@ src/ui/ (13 files):             │    sheet, bonded-groups panel,
 - Performance benchmarks in `lab/bench/`
 - **Bonded group architecture** — display-source-aware projection, capability policy, annotation-model atom color overrides; inline color editing via per-row color chip with portal popover (preset swatches, responsive layout, disclosure-pattern panel expanded by default), conic-gradient multi-color chips, group color intents persist across topology changes; persistent tracked highlight feature-gated off (hover preview remains active); review-mode inspection deferred until historical topology exists
 - **Watch app** — near-parity review viewer at `watch/` with React shell; camera orbit + triad, authored atom colors, playback dock (step/play/speed/repeat), timeline scrubber, settings sheet (theme/text-size/file-info/help); transactional file open preserves current document on failure; bonded-group analysis panel and automatic file-type detection; capsule file support (compact playback with appearance + interaction data, imported via capsule-history-import); smooth playback (on by default) with strategy-based trajectory interpolation (Linear stable default + Hermite/Catmull-Rom experimental), dock Smooth toggle, and settings method picker
+- **Phase 7 — account, privacy, age-gate, erasure** — account surfaces, privacy-request flow (user-facing + `/privacy-request` operator runbook in `docs/operations.md`), age-gate, and erasure pipeline; policy source-of-truth in `src/policy/policy-config.ts` (version `2026-04-14.3`, build-time injected — see `docs/architecture.md`); shared utilities (`b64url`, `error-message`, `http-cache`, `signed-intents`) documented in `docs/contributing.md`; Pages-dev E2E lane in `docs/operations.md` + `docs/testing.md`
 - **Shared design system** — `src/ui/` (13 files: CSS tokens, hooks, component styles) provides the shared design system used by both `lab/` and `watch/`; `src/history/` provides v1 schema types, bond-policy types, connected-component computation, bonded-group projection, bonded-group utilities, and physical unit constants; `src/topology/` provides bond rules, topology builders, and policy resolution; `src/config/` provides playback speed constants, viewer defaults, and bond defaults; `src/appearance/` provides bonded-group color assignments; `src/input/` provides camera gesture constants
 
 ## Project Goal

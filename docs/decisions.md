@@ -857,3 +857,87 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Rationale:** Without any sentinel, a same-tab OAuth bounce reshows the onboarding overlay on return to Lab, which is disorienting for a user who already dismissed it moments ago. `localStorage` would overcorrect by remembering the dismissal forever, making users who return days later miss the intended fresh-load welcome. `sessionStorage` scopes dismissal to the current browser session, matching the implicit contract users expect from "I dismissed this on this visit."
 
 **Evidence:** `lab/js/runtime/onboarding.ts`
+
+## D108: Server-Authoritative 13+ Age Gate via Short-Lived HMAC Nonce
+
+**Decision:** `auth/{provider}/start` requires a nonce minted by `POST /api/account/age-confirmation/intent`. The HMAC nonce is short-lived and bound to the pending OAuth flow. Already-signed-in users get a live-session bypass (their prior acknowledgement stands).
+
+**Rationale:** The gate must be enforced where accounts are actually created, which is the OAuth start path. A checkbox alone is UI friction, not enforcement — nothing prevents a client bypassing it. Binding the start to a server-issued nonce means the server refuses to begin OAuth without prior acknowledgement.
+
+**Alternatives rejected:** Client-only checkbox (UI friction is not enforcement); on-publish-only check (would let an unauthenticated user create an account first, then be gated — inverts the consent order).
+
+## D109: Publish 428 Precondition (Not 401 or 403)
+
+**Decision:** `POST /api/capsules/publish` returns `428 Precondition Required` with a structured body when a signed-in user has no `age_13_plus` row. The client uses this signal to render the retro-acknowledgement UI.
+
+**Rationale:** 401 misrepresents a valid session as missing; 403 misrepresents a policy precondition as an authorization denial. 428 is the exact semantic — the request would succeed once the precondition is satisfied — and gives the client a clean signal to drive the retro-ack UI.
+
+**Alternatives rejected:** 401 (not a session problem); 403 (not an authorization problem); silent block (user needs the retro-ack UI, not a dead button).
+
+## D110: Owner-Delete 404 (Not 403) on Cross-User
+
+**Decision:** `DELETE /api/account/capsules/:code` returns 404 for a wrong-owner request, indistinguishable from "no such code." No existence disclosure.
+
+**Rationale:** A 403 on someone else's share code leaks that the code exists. 404 in both the missing-code and wrong-owner branches removes the oracle.
+
+## D111: Tombstone (Not Hard-Delete) for `users` Row on Account Deletion
+
+**Decision:** Account deletion sets `users.deleted_at` and nulls `display_name`; the row is not removed. Auth middleware's `LEFT JOIN ON u.deleted_at IS NULL` makes a tombstoned row behave like a missing row for session resolution.
+
+**Rationale:** `capsule_share.owner_user_id` and `capsule_share_audit.actor` foreign references must remain resolvable for historical integrity and chain-of-custody; a hard delete would either cascade-destroy those records or leave dangling IDs. Tombstoning preserves referential integrity while the middleware JOIN condition ensures the user cannot authenticate.
+
+## D112: Capsule Delete Cascade — Ordered Steps With Audit Folded Into `ok`
+
+**Decision:** The account-delete cascade executes in this order and tracks each in a `steps` map: sessions → quota → capsules → oauth → user-tombstone → audit. The final `ok` flag folds in the `audit` step — an audit-write failure cannot silently report success.
+
+**Rationale:** Ordering is chosen so that auth-terminating steps (sessions, oauth) land early, content steps land in the middle, and the audit record is written last to capture the final state. Folding audit into `ok` forces any observability gap to surface as a visible failure rather than a silent drop.
+
+## D113: Re-Scan for Concurrent-Publish Race Window in Delete Cascade
+
+**Decision:** The cascade selects owned capsules twice — once before sessions-DELETE and once after. Any capsule that appears in the second scan but not the first is processed identically.
+
+**Rationale:** A publish that resolved auth before sessions-DELETE can land after the first scan, leaving an unreachable owned capsule row otherwise. The re-scan closes that window without requiring a distributed lock.
+
+## D114: Cursor Pagination With Base64url Padding Restoration
+
+**Decision:** The capsule list API uses keyset pagination on `(created_at DESC, share_code DESC)` with a base64url-encoded opaque cursor. The decoder MUST restore `=` padding before `atob`. A shared helper at `src/share/b64url.ts` enforces this for both cursor and signed-intent encodings.
+
+**Rationale:** Keyset pagination is stable under concurrent inserts (OFFSET is not). Base64url omits padding, but `atob` requires it — skipping restoration produces intermittent `InvalidCharacterError`. Centralizing the helper prevents drift between cursor and intent code paths.
+
+**Evidence:** `src/share/b64url.ts`
+
+## D115: Class-Based Audit Retention — Scrub, Not Delete
+
+**Decision:** `capsule_share_audit` is treated as operational chain-of-custody. A 180-day sweep nulls PII fields (`ip_hash`, `user_agent`, and `reason` for `abuse_report` + `moderation_delete` event types) while retaining the row skeleton indefinitely. Only rows with `event_type='abuse_report'` are row-deleted.
+
+**Rationale:** The audit stream is the only durable record of moderation and quota decisions — deleting rows would break forensic reconstruction. Scrubbing PII reconciles retention minimization with chain-of-custody. Abuse reports are the one class that is appropriate to row-delete because the report itself is PII and has no post-resolution operational value.
+
+## D116: Privacy Contact Channel — In-App Form (Option B), Not Mailbox
+
+**Decision:** Privacy / data-subject requests flow through an in-app `/privacy-request` form rather than a `privacy@` mailbox. Form protections: CSRF nonce, honeypot, per-IP D1 quota, 24h body de-dup. `POLICY_FEATURES.privacyContactMode = 'form'` is the source-of-truth flag; flipping to mailbox requires hiding the route and the link in the same change.
+
+**Rationale:** The project does not yet own a custom domain, so a `privacy@` address would either be a third-party forwarder (trust/latency issues) or unavailable. The form channel also gives the server-side quota, dedup, and audit hooks that an inbox cannot. The feature flag makes the mode switchable without code archaeology.
+
+## D117: Build-Time Policy-Version Injection via Vite Plugin
+
+**Decision:** `src/policy/policy-config.ts` is the single source of truth for `POLICY_VERSION`. A Vite plugin injects the value into HTML placeholders at build and throws if any required placeholder (`<!--POLICY_META-->`, `__POLICY_VERSION__`, `<!--POLICY_FEATURES-->`) is missing from the template.
+
+**Rationale:** Duplicating the version across HTML, meta tags, and TS constants guarantees drift. A single constant plus a build-time injector makes the value mechanically consistent, and the fail-on-missing-placeholder check turns a silent template regression into a loud build failure.
+
+**Evidence:** `src/policy/policy-config.ts`
+
+## D118: AgeGateCheckbox Refresh Strategy — Interval + Visibility + Consumer-Bumped Token
+
+**Decision:** The age-gate intent nonce refreshes on a 4-minute interval, on `visibilitychange`, and when the consumer bumps a `refreshNonce` counter. A click-time staleness check reroutes the user back to the picker via the popup-blocked descriptor's `ageIntentMintedAt` if the nonce has aged out.
+
+**Rationale:** A just-in-time fetch on click would introduce an async hop between user gesture and `window.open`, which browsers treat as a non-gesture-initiated popup and block. The interval + visibility refresh keeps the nonce warm without breaking gesture semantics; the click-time staleness check is a safety net that reroutes rather than silently failing.
+
+**Alternatives rejected:** Just-in-time fetch on click (breaks popup-not-blocked semantics).
+
+## D119: Pages-Dev E2E Lane Separate From Default Lane
+
+**Decision:** Backend-dependent E2E specs (`tests/e2e/pages-dev-flows.spec.ts`) gate via `testInfo.project.name !== 'pages-dev'` and are skipped by the default project. The default lane runs against `vite preview` and stays fast; contributors do not need wrangler installed to run it.
+
+**Rationale:** A single-lane setup either forces every contributor to install and run wrangler (high friction) or drops backend coverage (quality regression). Splitting the projects lets each lane optimize for its constraint — default for speed and zero-install, pages-dev for real backend paths.
+
+**Evidence:** `tests/e2e/pages-dev-flows.spec.ts`

@@ -434,6 +434,62 @@ For flows that survive a full-page redirect (OAuth same-tab fallback is the cano
 
 Scope sentinels to a narrow key (the existing `atomdojo.resumePublish` is the canonical example) and always clear them after consumption — a stale sentinel that survives into the next session is a latent bug.
 
+### Phase 7 Conventions (Account, Privacy, Audit)
+
+Phase 7 added account deletion, privacy/policy acceptance, per-row PII sweeping, and hardened the Pages Functions contract. These conventions are load-bearing — please do not open-code around them.
+
+#### Shared utilities — single source of truth
+
+Use these modules directly; do not inline equivalent logic:
+
+| Module | Exports | Use for |
+|---|---|---|
+| `src/share/b64url.ts` | `b64urlEncode`, `b64urlDecode` (decoder restores `=` padding) | Any base64url encode/decode on client or shared code. Phase 7 consolidated two divergent decoders that disagreed on padding — do not reintroduce an inline variant |
+| `src/share/error-message.ts` | `errorMessage(unknown): string` | Replaces inline `err instanceof Error ? err.message : String(err)` patterns. Use in catch blocks that render a user-visible message |
+| `functions/http-cache.ts` | `NO_CACHE_HEADERS`, `noCacheHeaders()`, `noCacheJson(body, init?)` | **Every** account/privacy endpoint response. Sets `Cache-Control: no-store, private`, `Pragma: no-cache`, `Vary: Cookie` in one place |
+| `functions/signed-intents.ts` | `createSignedIntent`, `verifySignedIntent` | Any new HMAC-signed CSRF/intent flow (account-delete confirmation, privacy request submission, etc.). Do not hand-roll HMAC with `SESSION_SECRET` |
+
+#### Policy text source-of-truth
+
+`src/policy/policy-config.ts` is the **single** definition of `POLICY_VERSION`, `ACTIVE_POLICY_SEGMENTS`, and `POLICY_FEATURES`. The Vite plugin at `src/policy/vite-policy-plugin.ts` injects them into `/privacy` and `/terms` HTML at build time via the `__POLICY_VERSION__` placeholder.
+
+- **Do NOT** hardcode the version string in HTML — use the placeholder
+- **Do NOT** add a new policy segment without updating all three: `ACTIVE_POLICY_SEGMENTS`, the segment-gating block in `scripts/deploy-smoke.sh`, and the relevant E2E spec
+
+#### Pages Functions auth contract (`/api/account/*`)
+
+- Per-user endpoints **must** call `authenticateRequest()` and return **401** when it yields `null`
+- Owner-vs-other rows must return **404** (not 403) — no existence disclosure. See `tests/unit/owner-delete-endpoint.test.ts` for the canonical pattern
+- **All** account endpoints set no-cache headers via `noCacheJson` / `noCacheHeaders` — never hand-roll `Cache-Control`
+
+#### Audit log contract
+
+New `AuditEventType` values introduced in Phase 7: `'owner_delete'`, `'account_delete'`, `'age_confirmation_recorded'`, `'audit_swept'`.
+
+Per-row PII fields (`ip_hash`, `user_agent`, `reason`) are scrubbed at 180 days by the cron sweeper. When adding a new audit field, classify it explicitly: **skeleton** (retained indefinitely) or **PII** (scrubbed at the 180-day window). Document the classification in the same PR.
+
+#### Migrations 0004–0007
+
+Additive only; applied automatically by `deploy.yml`. New tables/columns contributors should know about:
+
+- `user_policy_acceptance`
+- `privacy_requests`
+- `privacy_request_quota_window`
+- `users.deleted_at` column
+
+Convention is unchanged from prior migrations — name files `NNNN_<slug>.sql`, additive only, no destructive operations.
+
+#### E2E lanes
+
+Two lanes exist and have different backing servers:
+
+| Command | Server | Use for |
+|---|---|---|
+| `npm run test:e2e` (default) | `vite preview` (static) | Frontend-only specs; Pages Functions are unavailable |
+| `npm run test:e2e:pages-dev` | `wrangler pages dev` | Backend-dependent specs (auth, account, privacy, publish) |
+
+Pages-dev specs must gate themselves via `test.beforeEach(({}, testInfo) => test.skip(testInfo.project.name !== 'pages-dev'))` so they no-op under the default lane.
+
 ## Next Steps (Priority Order)
 
 ### 1. Expand Structure Library
@@ -562,14 +618,15 @@ npm run test:e2e -- tests/e2e/topbar-right-layout.spec.ts
 | `tests/unit/session-endpoint.test.ts` | Backend — 200 contract for signed-in **and** signed-out, dev-cookie handling, user-missing recovery (Workers tsconfig) |
 | `tests/e2e/topbar-right-layout.spec.ts` | AccountControl + FPSDisplay flex-container geometry regression |
 
-The two backend tests (`auth-middleware.test.ts`, `session-endpoint.test.ts`) compile under `tsconfig.functions.json` so they see the Workers runtime globals. They are listed in `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — same pattern as the capsule endpoint tests. Follow the same dual-listing rule when adding new backend-handler tests.
+The backend auth tests (`auth-middleware.test.ts`, `session-endpoint.test.ts`) compile under `tsconfig.functions.json` so they see the Workers runtime globals. They are listed in `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — same pattern as the capsule endpoint tests. Follow the same dual-listing rule when adding new backend-handler tests. The full `tsconfig.json` `exclude` list (18 entries as of Phase 7) is the authoritative source for what lives under the Workers config.
 
 #### Adding a new endpoint test
 
 - Place the test at `tests/unit/<name>-endpoint.test.ts` (or `<name>-middleware.test.ts` for middleware)
-- Add the filename to **both** `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — this prevents Workers globals from leaking into frontend compilation
+- Add the filename to **both** `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — this prevents Workers globals from leaking into frontend compilation. There is a precedent block of 18 dual-listed files as of Phase 7 (authoritative count: the exclude list in `tsconfig.json`); follow the existing ordering
 - Use hoisted `vi.fn<(...args: unknown[]) => ...>()` for module mocks
-- See `tests/unit/publish-endpoint.test.ts` and `tests/unit/session-endpoint.test.ts` for the canonical patterns (`minimalValidCapsule()`, `makePermissiveEnv()` helpers)
+- See `tests/unit/publish-endpoint.test.ts`, `tests/unit/session-endpoint.test.ts`, and `tests/unit/owner-delete-endpoint.test.ts` for the canonical patterns (`minimalValidCapsule()`, `makePermissiveEnv()` helpers; owner-vs-other 404 contract)
+- New account/privacy endpoints should emit responses through `noCacheJson` (from `functions/http-cache.ts`) — tests should assert the no-cache headers are present
 
 #### Cron Worker
 

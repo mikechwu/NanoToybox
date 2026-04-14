@@ -48,9 +48,24 @@ vi.mock('../../src/share/audit', async () => {
 });
 
 function makeContext(request: Request) {
-  // Minimal context shape — publish.ts only reads .request, .env.
+  // Minimal context shape — publish.ts only reads .request, .env. The
+  // age-gate precondition added in Phase B does a point-read against
+  // `user_policy_acceptance`; the stub returns a truthy `ok` row so
+  // these tests (which exercise OTHER paths — quota / size / invalid)
+  // pass the age check without spelunking into mock plumbing they
+  // don't care about.
   const env: Env = {
-    DB: undefined as unknown as Env['DB'],
+    DB: {
+      prepare: (sql: string) => ({
+        bind: () => ({
+          run: async () => ({ success: true }),
+          first: async () =>
+            sql.includes('user_policy_acceptance') ? { ok: 1 } : null,
+          all: async () => ({ success: true, results: [] }),
+        }),
+      }),
+      async batch() { return []; },
+    } as unknown as Env['DB'],
     R2_BUCKET: undefined as unknown as Env['R2_BUCKET'],
   };
   return { request, env } as unknown as Parameters<typeof onRequestPost>[0];
@@ -94,10 +109,15 @@ function makePermissiveEnv() {
   const r2Deletes: string[] = [];
   const env = {
     DB: {
-      prepare: () => ({
+      prepare: (sql: string) => ({
         bind: () => ({
           run: async () => ({ success: true }),
-          first: async () => null,
+          // The publish endpoint reads `user_policy_acceptance` as a
+          // point-check before the quota/size paths — tests that do not
+          // specifically exercise the 428 branch treat acceptance as
+          // present so the legacy paths they assert still fire.
+          first: async () =>
+            sql.includes('user_policy_acceptance') ? { ok: 1 } : null,
           all: async () => ({ success: true, results: [] }),
         }),
       }),

@@ -32,7 +32,8 @@ import {
   useTransferDialog,
   TransferTrigger,
 } from './timeline-transfer-dialog';
-import { hydrateAuthSession, AuthRequiredError } from '../runtime/auth-runtime';
+import { hydrateAuthSession, AuthRequiredError, AgeConfirmationRequiredError } from '../runtime/auth-runtime';
+import { AGE_INTENT_STALE_AFTER_MS } from './AgeGateCheckbox';
 import { ActionHint } from './ActionHint';
 import { TIMELINE_HINTS } from './timeline-hints';
 
@@ -239,7 +240,12 @@ function TimelineBarActive() {
   // error must NOT render as an auth-note (misleads the user about why
   // sign-in is being asked for). The dialog reads these as two separate
   // props rather than one field + a conditional clear effect.
-  const [shareError, setShareError] = useState<{ kind: 'auth' | 'other'; message: string } | null>(null);
+  const [shareError, setShareError] = useState<
+    | { kind: 'auth'; message: string }
+    | { kind: 'other'; message: string }
+    | { kind: 'age-confirmation'; message: string; policyVersion: string | null }
+    | null
+  >(null);
   const [shareResult, setShareResult] = useState<{
     shareCode: string;
     shareUrl: string;
@@ -323,9 +329,28 @@ function TimelineBarActive() {
   // resume-publish intent so the user lands back on the Share tab after the
   // OAuth round-trip — the store's requestShareTabOpen() will then flip the
   // flag and the effect below will re-open this dialog.
-  const handleAuthSignIn = useCallback((provider: 'google' | 'github') => {
-    authCallbacks?.onSignIn(provider, { resumePublish: true });
-  }, [authCallbacks]);
+  const handleAuthSignIn = useCallback(
+    (provider: 'google' | 'github', ageIntent: string, ageIntentMintedAt: number) => {
+      authCallbacks?.onSignIn(provider, {
+        resumePublish: true,
+        ageIntent,
+        ageIntentMintedAt,
+      });
+    },
+    [authCallbacks],
+  );
+
+  /** Stale-snapshot guard for popup-blocked retry / same-tab paths.
+   *  Returns true if the descriptor's stored ageIntent is older than
+   *  the AgeGateCheckbox staleness threshold; in that case, clearing
+   *  popupBlocked sends the user back to the Transfer dialog's
+   *  provider picker, where the dialog's own AgeGateCheckbox state
+   *  (independently refreshed every 4 min) is the source of truth. */
+  const popupBlockedTokenIsStale = useCallback(() => {
+    const p = authPopupBlocked;
+    if (!p?.ageIntent || p.ageIntentMintedAt == null) return false;
+    return Date.now() - p.ageIntentMintedAt > AGE_INTENT_STALE_AFTER_MS;
+  }, [authPopupBlocked]);
 
   // Popup-blocked Retry button: re-issues the same sign-in call that was
   // blocked. The runtime clears the popup-blocked flag at the start of
@@ -333,15 +358,35 @@ function TimelineBarActive() {
   const handleRetryPopup = useCallback(() => {
     const pending = authPopupBlocked;
     if (!pending) return;
-    authCallbacks?.onSignIn(pending.provider, { resumePublish: pending.resumePublish });
-  }, [authPopupBlocked, authCallbacks]);
+    // Stale-token reroute: clear the descriptor so the dialog
+    // re-renders the provider picker. The dialog's own AgeGateCheckbox
+    // has its own periodic refresh; the user's next click will use the
+    // live token. The dialog's click-time staleness check is the
+    // backstop if both are stale at the same moment.
+    if (popupBlockedTokenIsStale()) {
+      useAppStore.getState().setAuthPopupBlocked(null);
+      return;
+    }
+    authCallbacks?.onSignIn(pending.provider, {
+      resumePublish: pending.resumePublish,
+      ageIntent: pending.ageIntent ?? null,
+      ageIntentMintedAt: pending.ageIntentMintedAt ?? null,
+    });
+  }, [authPopupBlocked, authCallbacks, popupBlockedTokenIsStale]);
 
   // Popup-blocked Continue-in-tab button: explicit user consent to the
   // destructive same-tab redirect. Wired to the runtime's dedicated
   // commit callback rather than re-invoking onSignIn.
   const handleContinueInTab = useCallback(() => {
+    // Same staleness guard as the popup retry — the same-tab redirect
+    // would otherwise reuse an expired snapshot and 400 the user
+    // mid-navigation.
+    if (popupBlockedTokenIsStale()) {
+      useAppStore.getState().setAuthPopupBlocked(null);
+      return;
+    }
     authCallbacks?.onSignInSameTab();
-  }, [authCallbacks]);
+  }, [authCallbacks, popupBlockedTokenIsStale]);
 
   // Popup-blocked Back button: dismiss the pending descriptor so the
   // provider picker re-renders and the user can try a different provider
@@ -461,6 +506,19 @@ function TimelineBarActive() {
         // signed-out auth-note slot (not the red-error slot).
         useAppStore.getState().setAuthSignedOut();
         setShareError({ kind: 'auth', message: e.message });
+        setShareSubmitting(false);
+        return;
+      }
+      if (e instanceof AgeConfirmationRequiredError) {
+        // 428 — user is signed in but has no age_13_plus acceptance row.
+        // Surface the retro-ack inline; the dialog handles the checkbox
+        // POST to /api/account/age-confirmation and triggers a re-publish
+        // via the passed-through retryShare callback.
+        setShareError({
+          kind: 'age-confirmation',
+          message: e.message,
+          policyVersion: e.policyVersion,
+        });
         setShareSubmitting(false);
         return;
       }
@@ -659,6 +717,29 @@ function TimelineBarActive() {
         shareSubmitting={shareSubmitting}
         shareError={shareError?.kind === 'other' ? shareError.message : null}
         authNote={shareError?.kind === 'auth' ? shareError.message : null}
+        ageConfirmationRequired={shareError?.kind === 'age-confirmation' ? {
+          message: shareError.message,
+          policyVersion: shareError.policyVersion,
+        } : null}
+        onAgeConfirmationAck={async () => {
+          try {
+            const res = await fetch('/api/account/age-confirmation', {
+              method: 'POST',
+              credentials: 'include',
+            });
+            if (!res.ok) {
+              setShareError({ kind: 'other', message: `Age confirmation failed (${res.status}).` });
+              return;
+            }
+            setShareError(null);
+            await handleShareConfirm();
+          } catch (err) {
+            setShareError({
+              kind: 'other',
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }}
         shareUrl={shareResult?.shareUrl ?? null}
         shareCode={shareResult?.shareCode ?? null}
         shareWarnings={shareResult?.warnings ?? null}

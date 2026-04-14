@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="index, follow">
+  <title>Privacy Policy — atomdojo</title>
+  <link rel="stylesheet" href="/policy-layout.css">
+  <!--POLICY_META-->
+</head>
+<body class="policy-page">
+  <main class="policy-shell">
+    <header class="policy-header">
+      <h1>Privacy Policy</h1>
+      <p class="policy-effective" data-policy-segment="A">
+        Effective: 2026-04-14 · Version <span id="policy-version">__POLICY_VERSION__</span>
+      </p>
+      <nav class="policy-nav" aria-label="Policy navigation">
+        <a href="/terms/">Terms</a>
+        <a href="/lab/">Lab</a>
+      </nav>
+    </header>
+
+    <section data-policy-segment="A">
+      <h2>What we collect</h2>
+      <p>
+        atomdojo is a browser-based molecular-simulation playground.
+        Most usage — exploring in Lab, watching in Watch, downloading
+        local capsules — never contacts our servers and never stores
+        anything about you. Signing in and publishing public share
+        links do, and the table below is the exhaustive list of what
+        we collect when you do.
+      </p>
+      <table class="policy-table">
+        <thead>
+          <tr><th>Field</th><th>Source</th><th>Purpose</th><th>Retention</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>users.id</code></td>
+            <td>Server-generated UUID at first sign-in</td>
+            <td>Opaque account identifier; join key for capsules, sessions, and audit events</td>
+            <td>Until account deletion (then tombstoned)</td>
+          </tr>
+          <tr>
+            <td><code>users.display_name</code></td>
+            <td>OAuth provider <code>name</code> claim</td>
+            <td>Shown in the sign-in chip and in the Uploads list</td>
+            <td>Until account deletion</td>
+          </tr>
+          <tr>
+            <td><code>oauth_accounts.provider</code>, <code>provider_account_id</code></td>
+            <td>OAuth provider (Google / GitHub)</td>
+            <td>Lookup key on every sign-in</td>
+            <td>Until account deletion</td>
+          </tr>
+          <tr>
+            <td><code>oauth_accounts.email</code></td>
+            <td>OAuth <code>email</code> claim</td>
+            <td>Stored on first sign-in; not currently read by any application code path</td>
+            <td>Until account deletion</td>
+          </tr>
+          <tr>
+            <td><code>oauth_accounts.email_verified</code></td>
+            <td>Google <code>verified_email</code>; GitHub stored as false</td>
+            <td>Stored on first sign-in; not currently read by any application code path</td>
+            <td>Until account deletion</td>
+          </tr>
+          <tr>
+            <td><code>sessions.*</code></td>
+            <td>Server-generated at sign-in</td>
+            <td>Validating the HttpOnly session cookie; opportunistic last-seen update at most every 5 minutes</td>
+            <td>30 days absolute; 30 days idle; whichever fires first</td>
+          </tr>
+          <tr>
+            <td><code>capsule_share.*</code></td>
+            <td>User publish action</td>
+            <td>Share-link retrieval, moderation, owner-side uploads list</td>
+            <td>See "Deletion" below</td>
+          </tr>
+          <tr>
+            <td><code>capsule_share_audit.ip_hash</code></td>
+            <td>SHA-256 hash of the request IP with a server secret; raw IP is never stored</td>
+            <td>Abuse-report de-dup and security investigations</td>
+            <td>Class-based retention (see "Audit retention")</td>
+          </tr>
+          <tr>
+            <td><code>capsule_share_audit.user_agent</code></td>
+            <td>Request header, truncated to 500 chars</td>
+            <td>Security investigations</td>
+            <td>Class-based retention (see "Audit retention")</td>
+          </tr>
+          <tr>
+            <td><code>user_policy_acceptance.*</code></td>
+            <td>13+ confirmation flow</td>
+            <td>Record of consent (<code>policy_kind</code>, <code>policy_version</code>, <code>accepted_at</code>)</td>
+            <td>Until account deletion</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section data-policy-segment="A">
+      <h2>Service providers we use</h2>
+      <ul>
+        <li><strong>Cloudflare, Inc.</strong> — hosting (Pages), API execution
+          (Pages Functions), database (D1), object storage (R2), and edge
+          security (WAF). All data described above is stored on Cloudflare
+          infrastructure.
+          Policy: <a href="https://www.cloudflare.com/privacypolicy/" rel="noopener noreferrer">cloudflare.com/privacypolicy</a>.</li>
+        <li><strong>Google LLC</strong> — OAuth 2.0 sign-in via "Continue with
+          Google". When you choose this path, Google receives your browser's
+          request to grant us your email address, display name, and a stable
+          account identifier.
+          Policy: <a href="https://policies.google.com/privacy" rel="noopener noreferrer">policies.google.com/privacy</a>.</li>
+        <li><strong>GitHub, Inc. (Microsoft)</strong> — OAuth 2.0 sign-in
+          via "Continue with GitHub". Same pattern as Google.
+          Policy: <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" rel="noopener noreferrer">GitHub privacy statement</a>.</li>
+      </ul>
+    </section>
+
+    <section data-policy-segment="A">
+      <h2>Public share links</h2>
+      <p>
+        Anyone with the share code or link can open a published capsule in
+        Watch without signing in, until the owner deletes it. Do not publish
+        anything you would not want a stranger to be able to view.
+      </p>
+    </section>
+
+    <section data-policy-segment="A">
+      <h2>Affirmative statements</h2>
+      <p>
+        <strong>We do not sell your personal information, and we do not share
+        your personal information for cross-context behavioral advertising.</strong>
+      </p>
+    </section>
+
+    <!-- Phase B: 13+ age gate enforced server-side -->
+    <section data-policy-segment="B">
+      <h2>Children under 13</h2>
+      <p>
+        This service is general-audience and not intended for children
+        under 13. We ask you to confirm you are at least 13 each time you
+        sign in, and the sign-in flow is enforced server-side: signing in
+        is not possible without that confirmation, and publishing is not
+        possible without an acceptance record on file. We do not knowingly
+        collect personal information from users under 13.
+      </p>
+      <p>
+        If you believe an account was created by a child under 13, contact
+        us through the privacy contact channel below and we will delete
+        the account and associated data within <strong>14 days</strong>.
+      </p>
+    </section>
+
+    <!-- Phase D: per-capsule deletion -->
+    <section data-policy-segment="D">
+      <h2>Deleting a single share</h2>
+      <p>
+        From <a href="/account/">Account → Uploads</a> you can delete any
+        capsule you have published. When you do:
+      </p>
+      <ul>
+        <li>The share record is <strong>tombstoned</strong> immediately —
+          the row keeps its share code, owner ID, and aggregate metrics
+          (size, atom count, frame count) for audit integrity, but its
+          status flips to <code>deleted</code>.</li>
+        <li>Content-identifying fields (<code>sha256</code>, preview
+          poster + motion keys) are nulled.</li>
+        <li>The R2 blob is removed.</li>
+        <li>The public share link starts returning <strong>404</strong>
+          on the next request — anyone who already had the link or code
+          loses access.</li>
+      </ul>
+    </section>
+
+    <!-- Phase E: bulk + account-wide deletion -->
+    <section data-policy-segment="E">
+      <h2>Deleting your account</h2>
+      <p>
+        From <a href="/account/">Account → Privacy &amp; Data</a> you can
+        delete every uploaded capsule in one action, or delete your
+        account entirely. Account deletion runs an authoritative cascade:
+      </p>
+      <ol>
+        <li>All active sessions are revoked.</li>
+        <li>Per-user publish quota records are removed.</li>
+        <li>Every capsule you own is tombstoned via the same flow as
+          single-share deletion (R2 blobs removed, public links return
+          404).</li>
+        <li>OAuth account links are deleted.</li>
+        <li>Your <code>users</code> row is tombstoned: display name nulled,
+          a deletion timestamp recorded. The row itself is retained as a
+          tombstone so audit references (<code>actor</code>,
+          <code>owner_user_id</code>) still resolve.</li>
+        <li>A single account-deletion audit event is recorded with the
+          per-capsule outcome summary.</li>
+      </ol>
+      <p>
+        After your account is deleted, signing in again with the same
+        provider creates a brand-new account with a new identity. No
+        prior content is restored.</p>
+      <h3>Your rights and our response timelines</h3>
+      <p>
+        Depending on where you live, you may have the right to access the
+        personal information we hold, request its deletion (GDPR Art. 17;
+        CCPA right to delete), object to or restrict processing, and
+        request portability where technically feasible. The in-product
+        flows above cover access (the Account page) and deletion. For
+        anything else, use the privacy contact channel below. We will
+        respond within <strong>30 days</strong> (EEA / UK requests) or
+        <strong>45 days</strong> (California requests), with one
+        extension where the request is complex (up to <strong>90 days</strong>
+        maximum in either jurisdiction).
+      </p>
+    </section>
+
+    <!-- Phase F: audit retention sweeper -->
+    <section data-policy-segment="F">
+      <h2>Audit retention</h2>
+      <p>
+        We keep an append-only audit log of operationally significant
+        events (publishes, deletions, abuse reports, sweeper runs). The
+        only PII-adjacent fields on those records are a hashed IP and a
+        truncated User-Agent string.
+      </p>
+      <p>
+        A weekly cron job scrubs those two fields on every audit row
+        older than <strong>180 days</strong>, and row-deletes
+        abuse-report rows past the same threshold. The event skeleton
+        (event type, share code, timestamp, severity) is retained
+        indefinitely for operational forensics — that skeleton contains
+        no personal information once the IP hash and User-Agent are
+        nulled.
+      </p>
+    </section>
+
+    <section data-policy-segment="A">
+      <h2>Contact</h2>
+      <p>
+        Use our <a href="/privacy-request/">privacy request form</a> to
+        ask about the personal information we hold, request its
+        deletion, correct an error, or report an under-13 account.
+        Requests filed through this form are retained for up to 180
+        days after resolution, then deleted by the audit-retention
+        sweeper.
+      </p>
+    </section>
+
+    <footer class="policy-footer">
+      <p><a href="/terms/">Terms</a> · <a href="/lab/">Lab</a> · <a href="/watch/">Watch</a></p>
+    </footer>
+  </main>
+  <!--POLICY_FEATURES-->
+</body>
+</html>

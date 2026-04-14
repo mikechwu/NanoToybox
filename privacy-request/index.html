@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Send a privacy request — atomdojo</title>
+  <link rel="stylesheet" href="/policy-layout.css">
+  <style>
+    .pr-field { display: grid; gap: 6px; margin-bottom: 14px; }
+    .pr-field label { font-weight: 500; }
+    .pr-field input,
+    .pr-field select,
+    .pr-field textarea {
+      font: inherit;
+      padding: 8px 10px;
+      background: var(--policy-bg);
+      color: var(--policy-fg);
+      border: 1px solid var(--policy-card-border);
+      border-radius: 6px;
+      width: 100%;
+    }
+    .pr-field textarea { resize: vertical; min-height: 140px; }
+    .pr-counter { color: var(--policy-muted); font-size: 0.85rem; text-align: right; }
+    .pr-counter--over { color: var(--policy-danger); }
+    .pr-honeypot { position: absolute; left: -10000px; top: auto; width: 1px; height: 1px; overflow: hidden; }
+    .pr-actions { margin-top: 16px; }
+    .pr-submit {
+      font: inherit;
+      padding: 10px 18px;
+      border-radius: 6px;
+      border: 1px solid var(--policy-card-border);
+      background: var(--policy-card);
+      color: var(--policy-fg);
+      cursor: pointer;
+    }
+    .pr-submit[disabled] { opacity: 0.5; cursor: not-allowed; }
+    .pr-status {
+      margin-top: 16px;
+      padding: 10px 14px;
+      border: 1px solid var(--policy-card-border);
+      border-radius: 6px;
+      background: var(--policy-card);
+    }
+    .pr-status--error { border-color: var(--policy-danger); }
+    .pr-status--ok { border-color: #2c7a4d; }
+  </style>
+</head>
+<body class="policy-page">
+  <main class="policy-shell">
+    <header class="policy-header">
+      <h1>Send a privacy request</h1>
+      <p>
+        Use this form to ask about the personal information we hold,
+        request its deletion, correct an error, or report an under-13
+        account. See our <a href="/privacy/">Privacy Policy</a> for the
+        scope of this channel and our response timelines.
+      </p>
+      <nav class="policy-nav" aria-label="Policy navigation">
+        <a href="/privacy/">Privacy</a>
+        <a href="/terms/">Terms</a>
+        <a href="/lab/">Lab</a>
+      </nav>
+    </header>
+
+    <section>
+      <form id="privacy-request-form" novalidate>
+        <div class="pr-field">
+          <label for="pr-contact">How should we reach you back?</label>
+          <input
+            id="pr-contact"
+            name="contact_value"
+            type="text"
+            required
+            maxlength="256"
+            autocomplete="email"
+            placeholder="email or handle"
+          >
+        </div>
+
+        <div class="pr-field">
+          <label for="pr-type">Request type</label>
+          <select id="pr-type" name="request_type" required>
+            <option value="access">Access — what do you hold about me?</option>
+            <option value="deletion" selected>Deletion — please remove my data</option>
+            <option value="correction">Correction — fix incorrect data</option>
+            <option value="under_13_remediation">Under-13 account — please delete</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+
+        <div class="pr-field">
+          <label for="pr-message">Message</label>
+          <textarea
+            id="pr-message"
+            name="message"
+            required
+            maxlength="2000"
+            placeholder="Briefly describe your request. Include any account identifier (display name, share code) that helps us find your data."
+          ></textarea>
+          <div class="pr-counter" id="pr-counter">0 / 2,000 characters</div>
+        </div>
+
+        <!-- Honeypot — legitimate users leave this blank. -->
+        <div class="pr-honeypot" aria-hidden="true">
+          <label for="pr-honeypot">Leave this field blank</label>
+          <input id="pr-honeypot" name="honeypot" type="text" tabindex="-1" autocomplete="off">
+        </div>
+
+        <div class="pr-actions">
+          <button type="submit" class="pr-submit" id="pr-submit" disabled>
+            Send request
+          </button>
+        </div>
+      </form>
+
+      <div id="pr-status" hidden></div>
+    </section>
+
+    <footer class="policy-footer">
+      <p><a href="/privacy/">Privacy</a> · <a href="/terms/">Terms</a> · <a href="/lab/">Lab</a></p>
+    </footer>
+  </main>
+  <script type="module" src="/privacy-request/main.ts"></script>
+</body>
+</html>

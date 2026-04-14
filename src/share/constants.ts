@@ -39,3 +39,56 @@ export interface PayloadTooLargeBody {
  * fallback client path share the exact wording.
  */
 export const PAYLOAD_TOO_LARGE_MESSAGE = 'This capsule is too large to publish.';
+
+/**
+ * Monotonic version label for the public Privacy Policy + Terms copy
+ * and the 13+ age-gate acknowledgment. The literal value lives in
+ * `src/policy/policy-config.ts` (single source of truth shared with
+ * the build-time HTML transform); we re-export here so server-side
+ * callers (publish endpoint, age-confirmation endpoint) and frontend
+ * callers (policy page, account UI) all read the same string and
+ * historical `user_policy_acceptance.policy_version` rows are
+ * verifiable against the rendered page.
+ */
+export { POLICY_VERSION } from '../policy/policy-config';
+
+/**
+ * Structured body returned on 428 Precondition Required from
+ * /api/capsules/publish when the authenticated user has not yet
+ * accepted the 13+ policy. The frontend catches this the same way it
+ * catches 413 and renders the inline retro-ack.
+ */
+export interface AgeConfirmationRequiredBody {
+  error: 'age_confirmation_required';
+  message: string;
+  policyVersion: string;
+}
+
+export const AGE_CONFIRMATION_REQUIRED_MESSAGE =
+  'Please confirm you are at least 13 to publish.';
+
+/**
+ * Maximum allowed length of the `message` field on a `/privacy-request`
+ * submission, in characters (not bytes — the field is decoded as a
+ * string and counted with `.length`).
+ *
+ * Deliberately distinct from `MAX_PUBLISH_BYTES` / the 413 envelope:
+ * the privacy-request flow uses a 400 `message_too_long` body whose
+ * shape and copy are local to that endpoint. See the 2026-04-14 plan,
+ * "Why message_too_long (400) and not payload_too_large (413)".
+ */
+export const MAX_PRIVACY_REQUEST_CHARS = 2000;
+
+export const MESSAGE_TOO_LONG_MESSAGE =
+  'Your request is too long to submit. Maximum allowed: 2,000 characters.';
+
+/** Allowed values for `privacy_requests.request_type`. */
+export const PRIVACY_REQUEST_TYPES = [
+  'access',
+  'deletion',
+  'correction',
+  'under_13_remediation',
+  'other',
+] as const;
+
+export type PrivacyRequestType = (typeof PRIVACY_REQUEST_TYPES)[number];

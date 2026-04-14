@@ -1,0 +1,15 @@
+-- Migration 0004 — capsule delete clears content metadata.
+--
+-- No ALTER needed: sha256, preview_poster_key, preview_motion_key, and
+-- object_key are already nullable in 0001. This migration is a
+-- schema-level sentinel confirming that the owner-delete / account-
+-- delete flows added in Phase D / Phase E are permitted to NULL those
+-- columns on the existing row when tombstoning a capsule_share row.
+--
+-- Retained fields (share_code, created_at, owner_user_id, size_bytes,
+-- frame_count, atom_count) stay for audit + aggregate metrics.
+--
+-- Kept as a numbered file so the migration ledger stays ordered with
+-- the plan's phase structure; wrangler `d1 migrations apply` will
+-- record it as applied with no schema diff.
+SELECT 1;

@@ -37,27 +37,33 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Verify build output (all 15 HTML entrypoints + assets)
+      - name: Verify build output (per-route checks + assets)
         run: |
-          # Root redirect (1)
+          # Root redirect
           test -f dist/index.html || (echo "MISSING: dist/index.html (root redirect)" && exit 1)
-          # Product pages (3)
+          # Product pages
           test -f dist/lab/index.html || (echo "MISSING: dist/lab/index.html" && exit 1)
           test -f dist/viewer/index.html || (echo "MISSING: dist/viewer/index.html" && exit 1)
           test -f dist/watch/index.html || (echo "MISSING: dist/watch/index.html" && exit 1)
-          # Dev/diagnostic pages (11)
+          # Policy + account pages (Phase 7 plan). Per-route checks, not a
+          # global TOTAL == N: every future route addition would otherwise
+          # churn this guard for no diagnostic benefit.
+          test -f dist/privacy/index.html || (echo "MISSING: dist/privacy/index.html" && exit 1)
+          test -f dist/terms/index.html || (echo "MISSING: dist/terms/index.html" && exit 1)
+          test -f dist/account/index.html || (echo "MISSING: dist/account/index.html" && exit 1)
+          test -f dist/privacy-request/index.html || (echo "MISSING: dist/privacy-request/index.html" && exit 1)
+          # Dev/diagnostic pages
           test -f dist/lab/test.html || (echo "MISSING: dist/lab/test.html" && exit 1)
           test -f dist/lab/test-rollback.html || (echo "MISSING: dist/lab/test-rollback.html" && exit 1)
           test -f dist/lab/test-worker.html || (echo "MISSING: dist/lab/test-worker.html" && exit 1)
+          # Bench cohort: the count IS diagnostic — the bench pages are a
+          # known set of 8.
           COUNT=$(ls dist/lab/bench/bench-*.html | wc -l | tr -d ' ')
           [ "$COUNT" -eq 8 ] || (echo "Expected 8 bench pages, found $COUNT" && exit 1)
-          # Total: 1 redirect + 3 product + 3 test + 8 bench = 15
-          TOTAL=$(find dist -name "*.html" | wc -l | tr -d ' ')
-          [ "$TOTAL" -eq 15 ] || (echo "Expected 15 HTML entrypoints, found $TOTAL" && exit 1)
           # Static assets
           test -f dist/structures/library/manifest.json || (echo "MISSING: manifest.json" && exit 1)
           ls dist/assets/tersoff-*.wasm >/dev/null 2>&1 || (echo "MISSING: Wasm binary" && exit 1)
-          echo "Build output verified: $TOTAL HTML entrypoints, manifest, wasm"
+          echo "Build output verified: per-route checks + bench cohort + assets"
 
       # See ci.yml for the rationale behind the cached / no-deps install.
       # Same pattern: cache the chromium binary by resolved @playwright/test

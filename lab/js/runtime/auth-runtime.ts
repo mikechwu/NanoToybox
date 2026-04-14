@@ -72,6 +72,22 @@ export class AuthRequiredError extends Error {
   }
 }
 
+/** Thrown by the publish fetch when the server returned 428 Precondition
+ *  Required — the authenticated user has no `age_13_plus` acceptance row.
+ *  The Transfer dialog catches this the same way it catches
+ *  AuthRequiredError and surfaces the inline retro-ack checkbox. The
+ *  `policyVersion` is preserved so the retro-ack call can record the
+ *  server's current policy version. */
+export class AgeConfirmationRequiredError extends Error {
+  readonly kind = 'age-confirmation-required' as const;
+  readonly policyVersion: string | null;
+  constructor(message = 'Age confirmation required', policyVersion: string | null = null) {
+    super(message);
+    this.name = 'AgeConfirmationRequiredError';
+    this.policyVersion = policyVersion;
+  }
+}
+
 /** Shapes returned by GET /api/auth/session. The endpoint always returns
  *  200 with a status discriminator; we branch on that field instead of
  *  HTTP status so "signed out" doesn't appear as a red network error in
@@ -419,7 +435,10 @@ async function handleAuthComplete(): Promise<void> {
  *  (same as "blocked") so the user sees the popup-blocked UX with a
  *  Continue-in-tab option instead of a silently-broken popup. A
  *  single-line console warning tells the developer why. */
-function tryBeginOAuthPopup(provider: 'google' | 'github'): boolean {
+function tryBeginOAuthPopup(
+  provider: 'google' | 'github',
+  ageIntent?: string | null,
+): boolean {
   if (isViteDevHost()) {
     console.warn(
       `[auth] OAuth popup skipped — running on Vite dev host (${window.location.origin}). ` +
@@ -431,7 +450,9 @@ function tryBeginOAuthPopup(provider: 'google' | 'github'): boolean {
   // Popup always uses the popup-complete landing as its returnTo — the
   // popup doesn't reload the Lab, so no `?authReturn=1` handshake.
   const popupReturnTo = '/auth/popup-complete';
-  const popupUrl = `${startPath}?returnTo=${encodeURIComponent(popupReturnTo)}`;
+  const params = new URLSearchParams({ returnTo: popupReturnTo });
+  if (ageIntent) params.set('ageIntent', ageIntent);
+  const popupUrl = `${startPath}?${params.toString()}`;
   return tryOpenAuthPopup(popupUrl);
 }
 
@@ -442,10 +463,16 @@ function tryBeginOAuthPopup(provider: 'google' | 'github'): boolean {
  *  sessionStorage intent) recovers the Transfer dialog + Share tab.
  *  Secondary sign-ins (top-bar) pass withAuthMarker=false so a returning
  *  page load won't auto-open the Transfer dialog unexpectedly. */
-function beginOAuthSameTab(provider: 'google' | 'github', withAuthMarker: boolean): void {
+function beginOAuthSameTab(
+  provider: 'google' | 'github',
+  withAuthMarker: boolean,
+  ageIntent?: string | null,
+): void {
   const startPath = provider === 'google' ? '/auth/google/start' : '/auth/github/start';
   const returnTo = withAuthMarker ? '/lab/?authReturn=1' : '/lab/';
-  const url = `${startPath}?returnTo=${encodeURIComponent(returnTo)}`;
+  const params = new URLSearchParams({ returnTo });
+  if (ageIntent) params.set('ageIntent', ageIntent);
+  const url = `${startPath}?${params.toString()}`;
   window.location.assign(url);
 }
 
@@ -531,18 +558,27 @@ export function createAuthRuntime(): { callbacks: AuthCallbacks; hydrate: () => 
   const callbacks: AuthCallbacks = {
     onSignIn: (provider, opts) => {
       const resume = Boolean(opts?.resumePublish);
+      const ageIntent = opts?.ageIntent ?? null;
+      const ageIntentMintedAt = opts?.ageIntentMintedAt ?? null;
       // Clear any prior popup-blocked prompt before attempting — if the
       // popup opens this turn, the stale prompt must not linger.
       useAppStore.getState().setAuthPopupBlocked(null);
       // Set the resume intent BEFORE any navigation attempt so both the
       // popup-complete handshake and the same-tab handshake see it.
       if (resume) setResumePublishIntent(provider);
-      if (tryBeginOAuthPopup(provider)) return;
+      if (tryBeginOAuthPopup(provider, ageIntent)) return;
       // Popup blocked — do NOT silently navigate. Surface the block via
       // the store so the UI can offer an explicit Retry / Continue-in-tab
       // choice. The pending descriptor preserves the original `resume`
-      // choice so the same-tab commit uses the right `authReturn` marker.
-      useAppStore.getState().setAuthPopupBlocked({ provider, resumePublish: resume });
+      // choice AND the age-intent + mintedAt so the same-tab commit uses
+      // the right `authReturn` marker and the React retry handlers can
+      // detect a stale token and reroute the user to a fresh mint.
+      useAppStore.getState().setAuthPopupBlocked({
+        provider,
+        resumePublish: resume,
+        ageIntent,
+        ageIntentMintedAt,
+      });
     },
     onSignInSameTab: () => {
       // User explicitly consented to the destructive redirect from the
@@ -552,7 +588,7 @@ export function createAuthRuntime(): { callbacks: AuthCallbacks; hydrate: () => 
       const pending = useAppStore.getState().authPopupBlocked;
       if (!pending) return;
       useAppStore.getState().setAuthPopupBlocked(null);
-      beginOAuthSameTab(pending.provider, pending.resumePublish);
+      beginOAuthSameTab(pending.provider, pending.resumePublish, pending.ageIntent ?? null);
     },
     onDismissPopupBlocked: () => {
       // User backed out of the popup-blocked prompt. Clear the pending

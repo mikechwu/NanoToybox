@@ -17,6 +17,7 @@
     "typecheck:cron": "tsc --noEmit -p workers/cron-sweeper/tsconfig.json",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:pages-dev": "npm run build && playwright test --config=playwright.pages-dev.config.ts",
     "lint:dock-contract": "grep -q \"const DOCK_ROOT_SELECTOR = '\\[data-dock-root\\]'\" lab/js/runtime/overlay-layout.ts && ! grep -q \"querySelector('.dock')\" lab/js/runtime/overlay-layout.ts && echo 'dock-contract: PASS' || (echo 'dock-contract: FAIL — overlay-layout.ts must use DOCK_ROOT_SELECTOR, not hardcoded .dock' && exit 1)",
     "seed:capsule": "sh scripts/seed-capsule.sh",
     "cf:d1:migrate": "wrangler d1 migrations apply atomdojo-capsules --local",

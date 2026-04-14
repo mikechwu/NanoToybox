@@ -105,7 +105,8 @@ NanoToybox/
 │   │   │   ├── SheetOverlay.tsx  # Sheet backdrop
 │   │   │   ├── StatusBar.tsx     # Scene status display
 │   │   │   ├── FPSDisplay.tsx    # FPS/simulation status
-│   │   │   ├── AccountControl.tsx # Top-right auth disclosure (loading / signed-in / signed-out / unverified + popup-blocked sub-menu)
+│   │   │   ├── AccountControl.tsx # Top-right auth disclosure (loading / signed-in / signed-out / unverified + popup-blocked sub-menu); Phase 7: signed-out menu embeds AgeGateCheckbox
+│   │   │   ├── AgeGateCheckbox.tsx # Phase 7 — 13+ age-confirmation checkbox; POSTs to /api/account/age-confirmation/intent for a 5-min HMAC nonce; refreshes every 4 min + on visibility change + on consumer-bumped `refreshNonce`. Shared by AccountControl signed-out menu + Transfer dialog signed-out panel
 │   │   │   ├── TopRightControls.tsx # Flex row wrapping AccountControl + FPSDisplay (replaces two absolutely-positioned surfaces)
 │   │   │   ├── CameraControls.tsx # Object View panel: Center + Follow buttons (default); mode toggle when Free-Look gate is on
 │   │   │   ├── OnboardingOverlay.tsx # Page-load welcome card with sink-to-Settings animation
@@ -901,28 +902,44 @@ NanoToybox/
 ├── functions/                        # Cloudflare Pages Functions (backend)
 │   ├── env.ts                        # Env type (D1, R2, secrets)
 │   ├── admin-gate.ts                 # Two-path admin gate (constant-time compare)
-│   ├── auth-middleware.ts            # Session cookie verification + dev bypass
+│   ├── auth-middleware.ts            # Session cookie verification + dev bypass; LEFT JOIN `ON u.deleted_at IS NULL` routes tombstoned users through orphan-session cleanup (Phase 7)
 │   ├── oauth-state.ts                # HMAC-signed state (10min TTL, provider-bound)
 │   ├── oauth-helpers.ts              # User + session creation after provider callback
+│   ├── signed-intents.ts             # HMAC-signed nonce primitives (5-min TTL) — Phase 7 age-confirmation intent
+│   ├── http-cache.ts                 # Shared no-cache helpers (Cache-Control: no-store, private; Vary: Cookie) — Phase 7
 │   ├── api/
 │   │   ├── capsules/
-│   │   │   ├── publish.ts            # POST — authenticated publish (quota + persist)
+│   │   │   ├── publish.ts            # POST — authenticated publish (quota + persist); 428 + structured body when no `age_13_plus` row (Phase 7)
 │   │   │   ├── [code].ts             # GET — metadata (gated by accessibility predicate)
 │   │   │   └── [code]/
 │   │   │       ├── blob.ts           # GET — capsule JSON blob with safe headers
 │   │   │       ├── preview/poster.ts # GET — poster image (404 until preview ready)
 │   │   │       └── report.ts         # POST — abuse report (IP-hash de-dup)
+│   │   ├── account/                  # Phase 7 — authenticated owner self-service
+│   │   │   ├── me.ts                         # GET /me (deterministic provider via ORDER BY)
+│   │   │   ├── delete.ts                     # POST /delete — authoritative cascade w/ re-scan + per-step audit + truthful `ok` flag
+│   │   │   ├── age-confirmation/
+│   │   │   │   ├── intent.ts                 # POST /intent — issue 5-min HMAC nonce (consumed by auth/{provider}/start.ts)
+│   │   │   │   └── index.ts                  # Age confirmation accept/read for `user_policy_acceptance`
+│   │   │   └── capsules/
+│   │   │       ├── index.ts                  # GET /capsules?cursor= — cursor-paginated, base64url `(created_at, share_code)`
+│   │   │       ├── delete-all.ts             # POST /delete-all — LIMIT 200 batch + `moreAvailable` flag
+│   │   │       └── [code]/index.ts           # DELETE /capsules/:code — 404 on cross-user (no existence disclosure)
+│   │   ├── privacy-request.ts         # Phase 7 — POST; CSRF nonce / honeypot / per-IP D1 quota / 24h body-dedup
+│   │   ├── privacy-request/
+│   │   │   └── nonce.ts               # GET — one-shot form nonce (paired w/ privacy-request.ts)
 │   │   ├── admin/
-│   │   │   ├── capsules/[code]/delete.ts  # Moderation delete (idempotent)
+│   │   │   ├── capsules/[code]/delete.ts  # Moderation delete (idempotent); wraps shared capsule-delete core (Phase 7)
 │   │   │   ├── sweep/orphans.ts           # R2 orphan sweep (24h threshold)
 │   │   │   ├── sweep/sessions.ts          # Expired/idle session + quota-bucket prune
+│   │   │   ├── sweep/audit.ts             # Phase 7 — POST ?mode=scrub|delete-abuse-reports; class-based PII scrub; row-delete abuse_report + privacy_requests past 180d
 │   │   │   └── seed.ts                    # Local-only admin seed
 │   │   └── auth/
 │   │       ├── session.ts            # Current-session probe
 │   │       └── logout.ts             # Clear session cookie
 │   ├── auth/                         # OAuth start/callback per provider
-│   │   ├── google/{start,callback}.ts
-│   │   ├── github/{start,callback}.ts
+│   │   ├── google/{start,callback}.ts # Phase 7: start.ts validates age-confirmation HMAC nonce; live-session bypass for already-signed-in users
+│   │   ├── github/{start,callback}.ts # Phase 7: same nonce validation as Google
 │   │   └── popup-complete.ts         # Static landing for popup flow: dual-channel notify (postMessage + BroadcastChannel) + DOM stuck-state fallback
 │   └── c/[code].ts                   # GET /c/:code — share-preview HTML (og: metadata)
 ├── src/share/                        # Shared modules (frontend + backend)
@@ -931,11 +948,26 @@ NanoToybox/
 │   ├── share-record.ts               # Status enums, accessibility predicates, metadata mapper
 │   ├── publish-core.ts               # Validation, metadata extraction, SHA-256, collision-safe persist
 │   ├── rate-limit.ts                 # Split quota API (check / consume / prune)
-│   └── audit.ts                      # Append-only audit log, IP hashing, usage counters
+│   ├── audit.ts                      # Append-only audit log, IP hashing, usage counters
+│   ├── capsule-delete.ts             # Phase 7 — shared delete core (admin moderation + owner self-service wrap it); tombstone semantics (status='deleted', NULL content fields, NULL object_key on R2 success)
+│   ├── b64url.ts                     # Phase 7 — base64url helpers (cursor encoding for /account/capsules)
+│   ├── error-message.ts              # Phase 7 — uniform error-shape helper
+│   └── constants.ts                  # Shared 20 MB publish size limit (also surfaced via structured 413)
+├── src/policy/                       # Phase 7 — policy source-of-truth + build-time injector
+│   ├── policy-config.ts              # Exports `POLICY_VERSION`, `ACTIVE_POLICY_SEGMENTS`, `POLICY_FEATURES`
+│   └── vite-policy-plugin.ts         # Injects `<meta name="policy-version">` + `<meta name="policy-active-segments">` into /privacy and /terms HTML at build; consumed by scripts/deploy-smoke.sh and tests/e2e/policy-routes.spec.ts
+├── privacy/index.html                # Phase 7 — /privacy static route (policy meta injected at build)
+├── terms/index.html                  # Phase 7 — /terms static route (policy meta injected at build)
+├── account/                          # Phase 7 — /account authenticated self-service (index.html + main.tsx)
+├── privacy-request/                  # Phase 7 — /privacy-request form (index.html + main.ts); CSRF nonce + honeypot
 ├── migrations/                       # D1 schema (sqlite)
 │   ├── 0001_capsule_share.sql
 │   ├── 0002_audit_quota_counters.sql
-│   └── 0003_capsule_object_key_index.sql
+│   ├── 0003_capsule_object_key_index.sql
+│   ├── 0004_capsule_delete_clears_body_metadata.sql  # Phase 7 — capsule_delete sentinel (tombstone content NULL-out)
+│   ├── 0005_user_tombstone.sql                        # Phase 7 — users.deleted_at (soft-delete tombstone)
+│   ├── 0006_user_policy_acceptance.sql                # Phase 7 — `user_policy_acceptance` (PK: user_id + policy_kind, UPSERT)
+│   └── 0007_privacy_requests.sql                      # Phase 7 — `privacy_requests` + `privacy_request_quota_window`
 ├── workers/cron-sweeper/             # Companion Worker (separate deploy)
 │   ├── wrangler.toml                 # Own config, two cron triggers
 │   ├── tsconfig.json                 # Own tsconfig
@@ -1012,6 +1044,14 @@ Cloudflare cron trigger (workers/cron-sweeper/wrangler.toml)
         → functions/api/admin/sweep/orphans.ts
         → list R2 keys older than 24h with no matching capsule_share row
         → delete orphans; audit 'orphan_swept' / 'orphan_sweep_failed'
+    → POST /api/admin/sweep/audit?mode=scrub               (weekly Sun 04:15 UTC)
+        → functions/api/admin/sweep/audit.ts
+        → NULL ip_hash / user_agent / reason on rows older than 180d
+        → audit 'audit_swept'
+    → POST /api/admin/sweep/audit?mode=delete-abuse-reports (weekly Sun 04:45 UTC)
+        → functions/api/admin/sweep/audit.ts
+        → row-delete abuse_report audit rows + privacy_requests past 180d
+        → audit 'audit_swept'
 ```
 
 #### Auth Architecture
@@ -1147,7 +1187,7 @@ Per-user publishing is bounded by a sliding-window quota backed by D1. Contract 
 
 `src/share/audit.ts` is the append-only observability layer for the control plane. Every consequential state change writes one row to `capsule_share_audit`.
 
-- **Event types:** `publish_success`, `publish_rejected_quota`, `publish_quota_accounting_failed`, `publish_rejected_size`, `publish_rejected_invalid`, `abuse_report`, `moderation_delete`, `orphan_swept`, `orphan_sweep_failed`, `session_swept`. Each state transition emits exactly one event type, so the stream is a reconciliation log: replaying it reproduces the count of each outcome per day.
+- **Event types:** `publish_success`, `publish_rejected_quota`, `publish_quota_accounting_failed`, `publish_rejected_size`, `publish_rejected_invalid`, `abuse_report`, `moderation_delete`, `orphan_swept`, `orphan_sweep_failed`, `session_swept`, `owner_delete`, `account_delete`, `age_confirmation_recorded`, `audit_swept` (last four added in Phase 7). Each state transition emits exactly one event type, so the stream is a reconciliation log: replaying it reproduces the count of each outcome per day.
 - **`recordAuditEvent()`** is the only writer. It defensively truncates `reason` fields to `MAX_AUDIT_REASON_LENGTH = 500` chars so a caller with a huge error message cannot bloat the table.
 - **`hasRecentAuditEvent(ipHash, eventType, windowSeconds)`** supports per-IP per-day de-duplication for abuse reports (prevents report spam from a single source).
 - **`hashIp(ip)`** is a SHA-256 over the IP plus `SESSION_SECRET` salt. The function **rejects an empty salt** to fail loudly if the secret is unset — an empty salt would make the hash trivially reversible.
@@ -1162,6 +1202,9 @@ Cloudflare Pages Functions do not support scheduled handlers, so the sweeps run 
 - **Schedule** (from `workers/cron-sweeper/wrangler.toml`):
   - `0 */6 * * *` — every 6 hours → `/api/admin/sweep/sessions`
   - `30 3 * * *` — daily 03:30 UTC → `/api/admin/sweep/orphans`
+  - `15 4 * * 0` — weekly Sun 04:15 UTC → `/api/admin/sweep/audit?mode=scrub`
+  - `45 4 * * 0` — weekly Sun 04:45 UTC → `/api/admin/sweep/audit?mode=delete-abuse-reports`
+- **Cron count:** 4 of the 5-trigger free-tier ceiling. Adding a fifth is fine; a sixth requires the paid plan (which raises the ceiling to 250 crons/account).
 - Both ends (`functions/admin-gate.ts` and `workers/cron-sweeper/src/index.ts`) compare the secret with the same constant-time routine — never string equality.
 - Deploy notes (secret setup, base URL override for local dev) live in `workers/cron-sweeper/README.md`. Keep cron counts within the active Workers plan's limits (free tier: 5 crons/account).
 
@@ -1192,9 +1235,96 @@ Narrow module ownership table — who owns what across the Phase 5 surface:
 | Auth gate (admin) | `functions/admin-gate.ts` | Two-path: localhost+`DEV_ADMIN_ENABLED`, or `X-Cron-Secret` constant-time. 404 on failure. |
 | Env binding type | `functions/env.ts` | D1, R2, secret typing shared by all handlers. |
 | Cron scheduling | `workers/cron-sweeper/` | Standalone Worker with its own `wrangler.toml` / `tsconfig.json` / `README.md`. Pure HTTP client to admin sweeps. |
-| Schema migrations | `migrations/0001_capsule_share.sql`, `0002_audit_quota_counters.sql`, `0003_capsule_object_key_index.sql` | Applied via `wrangler d1 migrations apply`. |
+| Schema migrations | `migrations/0001_capsule_share.sql`, `0002_audit_quota_counters.sql`, `0003_capsule_object_key_index.sql` (Phase 7 additions — `0004_capsule_delete_clears_body_metadata.sql`, `0005_user_tombstone.sql`, `0006_user_policy_acceptance.sql`, `0007_privacy_requests.sql` — are enumerated in the Phase 7 ownership table below) | Applied via `wrangler d1 migrations apply`. |
 | Lab integration | `lab/js/components/TimelineBar.tsx` + `timeline-transfer-dialog.tsx`, `lab/js/runtime/timeline-subsystem.ts` (`onPublishCapsule` on `TimelineCallbacks`) | Unified "Transfer" dialog: Download / Share tabs. Renders response `warnings[]` as a subtle note. |
 | Watch integration | `watch/js/watch-controller.ts` (`openSharedCapsule`), `watch/js/main.ts` | Normalize → metadata fetch → blob fetch → synthesize `File` → existing `openFile()` transactional pipeline. |
+
+### Phase 7 — Account Self-Service, Policy Surfaces, Age Gate, Privacy Channel
+
+Phase 7 adds four static route entrypoints, an authenticated owner-self-service account API, a server-authoritative 13+ age gate that is checked at both OAuth start and at capsule publish, a privacy-request intake channel, a weekly audit-retention sweeper, and a shared capsule-delete core that both moderation and self-service routes wrap. The design principle across the surface is **no existence disclosure** (cross-user reads return 404 rather than 403) and **authoritative cascade with truthful `ok`** (the self-service delete endpoint re-scans after each step and returns `ok=false` if any cascade step actually failed).
+
+**Routes (build entrypoints — see `vite.config.ts`):** `/privacy`, `/terms`, `/account`, `/privacy-request`. `/privacy` and `/terms` receive build-time `<meta name="policy-version">` + `<meta name="policy-active-segments">` injection from `src/policy/vite-policy-plugin.ts`, driven by `POLICY_VERSION` / `ACTIVE_POLICY_SEGMENTS` / `POLICY_FEATURES` in `src/policy/policy-config.ts`. The meta tags are consumed by `scripts/deploy-smoke.sh` and `tests/e2e/policy-routes.spec.ts` to assert deploy-and-test alignment without duplicating the policy version as a magic string.
+
+**13+ age gate (server-authoritative, two enforcement points):**
+
+```
+Signed-out user on Lab (signed-out AccountControl menu OR Transfer dialog signed-out panel)
+    ├── AgeGateCheckbox.tsx (shared component)
+    │     ├── POST /api/account/age-confirmation/intent
+    │     │     → functions/api/account/age-confirmation/intent.ts
+    │     │     → signed-intents.ts issues 5-min HMAC nonce
+    │     ├── Refresh policy: every 4 min + on visibilitychange + on consumer-bumped `refreshNonce`
+    │     └── Nonce carried into OAuth `state` payload
+    │
+    └── User clicks Sign-In with <Provider>
+          → GET /auth/{google,github}/start
+                → validates nonce (HMAC + TTL) before 302 to provider
+                → live-session bypass: already-signed-in users skip the check
+                → on successful callback, upserts `user_policy_acceptance` row
+                     (composite PK on user_id + policy_kind; UPSERT)
+
+Already-signed-in user publishes a capsule
+    → POST /api/capsules/publish
+          → if no `user_policy_acceptance` row for `age_13_plus`:
+                → 428 Precondition Required, structured body
+                → Lab catches via AgeConfirmationRequiredError
+                → Transfer dialog renders inline retro-ack (accept → re-post publish)
+```
+
+This two-point enforcement (OAuth start for new users; publish for pre-existing users who signed in before the gate shipped) means no user reaches a publish without either (a) consenting at sign-in or (b) consenting inline in the Transfer dialog.
+
+**Account API (`functions/api/account/*`, all behind `auth-middleware.ts`):**
+
+- `GET /me` — deterministic OAuth provider via `ORDER BY` so the displayed provider is stable across requests.
+- `GET /capsules?cursor=` — cursor-paginated; cursor is base64url-encoded `(created_at, share_code)` tuple via `src/share/b64url.ts`.
+- `DELETE /capsules/:code` — 404 on cross-user (no existence disclosure); wraps shared `src/share/capsule-delete.ts` core.
+- `POST /capsules/delete-all` — batch delete capped at `LIMIT 200`; response includes `moreAvailable` so the client can loop.
+- `POST /delete` — authoritative cascade: runs the delete steps (capsules, sessions, oauth_accounts, user tombstone) then **re-scans** and emits a per-step audit trail. Returns `ok: false` if any re-scan still finds live rows — the UI never shows a false-success.
+
+All five endpoints share `functions/http-cache.ts` no-cache helpers (`Cache-Control: no-store, private`, `Vary: Cookie`) so authenticated responses are never stored by intermediaries or browser caches.
+
+**Shared capsule-delete core (`src/share/capsule-delete.ts`):** Admin moderation (`functions/api/admin/capsules/[code]/delete.ts`) and owner self-service (`DELETE /api/account/capsules/:code`, `POST /api/account/capsules/delete-all`, `POST /api/account/delete`) **both wrap this module**. Delete semantics are **tombstone, not row-delete**: `status='deleted'`, content fields set to `NULL`, and `object_key` set to `NULL` only on successful R2 delete (preserving the pointer on R2 failure so a retry can still reach the blob). Migration `0004_capsule_delete_clears_body_metadata.sql` encodes the sentinel shape.
+
+**User tombstone (`migrations/0005_user_tombstone.sql`):** `users.deleted_at`. `auth-middleware.ts` was extended with `LEFT JOIN users ON u.deleted_at IS NULL` so any session whose user is tombstoned resolves to the same "orphan session" code path that already deletes the session row fire-and-forget. No new rejection path was added — tombstone reuses the existing invariant.
+
+**Audit retention sweeper (`functions/api/admin/sweep/audit.ts`, weekly cron):** `POST /api/admin/sweep/audit?mode=scrub|delete-abuse-reports`. The `scrub` mode performs **class-based PII scrub** — it NULLs `ip_hash`, `user_agent`, and `reason` on rows older than the retention window, without deleting the audit row itself (so reconciliation counts remain intact). The `delete-abuse-reports` mode is a **narrow row-delete** targeting `abuse_report` rows and `privacy_requests` rows past 180 days. Adding `audit.ts` is additive to the existing sweep cadence — the cron companion Worker gains a new HMAC-authenticated call.
+
+**Privacy-request channel (`/privacy-request`):**
+
+```
+User submits /privacy-request form
+    ├── GET /api/privacy-request/nonce          (CSRF single-use nonce)
+    ├── Honeypot hidden field (spam trap)
+    └── POST /api/privacy-request
+          → functions/api/privacy-request.ts
+            1. Validate nonce (single-use)
+            2. Honeypot must be empty
+            3. Per-IP D1 quota via privacy_request_quota_window
+            4. 24h body-hash dedup (same body → idempotent)
+            5. Insert into privacy_requests table
+    → Operator runbook lives in docs/operations.md ("Privacy contact channel")
+```
+
+`migrations/0007_privacy_requests.sql` creates both `privacy_requests` and `privacy_request_quota_window`.
+
+**Phase 7 module ownership (extension of the Phase 5 table):**
+
+| Area | Owner module(s) | Notes |
+|------|-----------------|-------|
+| Policy source-of-truth | `src/policy/policy-config.ts` | `POLICY_VERSION`, `ACTIVE_POLICY_SEGMENTS`, `POLICY_FEATURES`. Single string constant referenced everywhere (smoke script, E2E, injected meta). |
+| Policy build-time injection | `src/policy/vite-policy-plugin.ts` | Registered in `vite.config.ts`. Injects two meta tags into `privacy/index.html` and `terms/index.html` at build. |
+| Policy routes | `privacy/index.html`, `terms/index.html`, `account/` (`index.html` + `main.tsx`), `privacy-request/` (`index.html` + `main.ts`) | Registered in `vite.config.ts` `rollupOptions.input`. |
+| Age-gate checkbox | `lab/js/components/AgeGateCheckbox.tsx` | Shared by signed-out AccountControl menu + Transfer dialog signed-out panel. Refreshes every 4 min + on `visibilitychange` + on consumer-bumped `refreshNonce`. |
+| Age-gate intent | `functions/signed-intents.ts`, `functions/api/account/age-confirmation/intent.ts`, `.../age-confirmation/index.ts` | `signed-intents.ts` is the HMAC primitive (5-min TTL). `intent.ts` issues; the nonce is validated at `auth/{google,github}/start.ts`. |
+| Age-gate publish enforcement | `functions/api/capsules/publish.ts` | 428 with structured body when no `age_13_plus` row. Lab catches via `AgeConfirmationRequiredError` and renders inline retro-ack. |
+| Policy acceptance persistence | `migrations/0006_user_policy_acceptance.sql` | Composite PK `(user_id, policy_kind)`; UPSERT on accept. |
+| Account API | `functions/api/account/me.ts`, `.../delete.ts`, `.../capsules/index.ts`, `.../capsules/delete-all.ts`, `.../capsules/[code]/index.ts` | All no-cache (`http-cache.ts`). Cross-user → 404. Self-delete is re-scan-and-verify; `ok: false` on any residual row. |
+| Shared capsule-delete core | `src/share/capsule-delete.ts` | Wrapped by both admin moderation and owner self-service. Tombstone semantics (`status='deleted'`, NULL content fields, NULL `object_key` on R2 success). |
+| Tombstone middleware | `functions/auth-middleware.ts` | `LEFT JOIN ... ON u.deleted_at IS NULL` routes tombstoned users into the existing orphan-session cleanup path. |
+| Audit retention sweep | `functions/api/admin/sweep/audit.ts` | `?mode=scrub` class-based PII scrub (NULL `ip_hash`/`user_agent`/`reason`); `?mode=delete-abuse-reports` row-deletes `abuse_report` + `privacy_requests` rows past 180 days. Weekly cron. |
+| Privacy-request intake | `functions/api/privacy-request.ts`, `functions/api/privacy-request/nonce.ts`, `privacy-request/` | CSRF nonce + honeypot + per-IP D1 quota + 24h body-dedup. Runbook in `docs/operations.md`. |
+| Shared utils | `src/share/b64url.ts`, `src/share/error-message.ts`, `functions/http-cache.ts` | `b64url` encodes the `(created_at, share_code)` cursor. `error-message.ts` uniform error shape. `http-cache.ts` no-cache helpers shared by all account endpoints. |
+| Schema migrations | `migrations/0004_capsule_delete_clears_body_metadata.sql`, `0005_user_tombstone.sql`, `0006_user_policy_acceptance.sql`, `0007_privacy_requests.sql` | Applied via `wrangler d1 migrations apply`. |
 
 ### Deferred Phases
 

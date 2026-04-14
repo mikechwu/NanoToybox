@@ -1,0 +1,89 @@
+/* Account page specific layout — extends policy-layout.css. */
+
+.account-shell .btn {
+  font: inherit;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--policy-card-border);
+  background: var(--policy-card);
+  color: var(--policy-fg);
+  cursor: pointer;
+  margin-right: 8px;
+}
+.account-shell .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+.account-shell .btn:hover:not([disabled]) { border-color: var(--policy-accent); }
+.account-shell .btn-secondary { background: transparent; }
+.account-shell .btn-danger {
+  color: var(--policy-fg);
+  background: #3a0e12;
+  border-color: #6a1d23;
+}
+.account-shell .btn-danger:hover:not([disabled]) { background: #501017; border-color: var(--policy-danger); }
+
+.account-shell .banner {
+  padding: 10px 14px;
+  margin: 16px 0;
+  border: 1px solid var(--policy-card-border);
+  background: var(--policy-card);
+  border-radius: 6px;
+}
+
+.account-shell .uploads-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+.account-shell .uploads-load-more {
+  margin-top: 12px;
+  text-align: center;
+}
+.account-shell .upload-row {
+  display: flex;
+  gap: 16px;
+  padding: 12px 14px;
+  background: var(--policy-card);
+  border: 1px solid var(--policy-card-border);
+  border-radius: 8px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.account-shell .upload-meta { display: flex; flex-direction: column; gap: 2px; }
+.account-shell .upload-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.account-shell .muted { color: var(--policy-muted); font-size: 0.9em; }
+
+.account-shell .danger-zone {
+  border-left: 3px solid var(--policy-danger);
+  padding-left: 14px;
+}
+.account-shell .danger-actions { margin-top: 12px; }
+.account-shell .confirm-inline {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #6a1d23;
+  background: #1a0a0c;
+  border-radius: 6px;
+}
+.account-shell .confirm-input {
+  font: inherit;
+  padding: 8px 10px;
+  background: var(--policy-bg);
+  color: var(--policy-fg);
+  border: 1px solid var(--policy-card-border);
+  border-radius: 6px;
+  margin: 8px 8px 8px 0;
+  width: 100%;
+  max-width: 280px;
+}
+.account-shell .rule {
+  border: none;
+  border-top: 1px solid var(--policy-rule);
+  margin: 24px 0;
+}
+
+@media (max-width: 520px) {
+  .account-shell .upload-row { flex-direction: column; align-items: stretch; }
+  .account-shell .upload-actions { margin-top: 8px; }
+}

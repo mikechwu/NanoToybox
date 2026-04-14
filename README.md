@@ -51,7 +51,15 @@ Or visit the live demo at [atomdojo.pages.dev](https://atomdojo.pages.dev/lab/).
 - **Popup-first OAuth** — sign-in opens a provider popup and returns to a dedicated `/auth/popup-complete` landing page that notifies the opener via `postMessage` + `BroadcastChannel` and closes itself; Lab's in-memory state (loaded molecules, interaction mode, camera) is preserved across the flow
 - **Popup-blocked UX** — no silent same-tab fallback; the UI surfaces explicit Retry / Continue-in-tab / Back controls. Same-tab fallback uses a resume-publish intent (sessionStorage, 10-min TTL) plus a `?authReturn=1` query-marker handshake
 - **Never-401 session probe** — `GET /api/auth/session` always returns 200 with a `{ status: 'signed-in' | 'signed-out' }` discriminator and `Cache-Control: no-store, private` / `Vary: Cookie`; stale cookies are opportunistically cleared on signed-out responses so devtools no longer flags normal signed-out state as a failure
-- **Cloudflare-backed** — Pages Functions under `functions/` persist metadata in D1 and capsule bodies in R2; a companion cron Worker in `workers/cron-sweeper/` expires sessions and sweeps orphaned R2 objects
+- **Cloudflare-backed** — Pages Functions under `functions/` persist metadata in D1 and capsule bodies in R2; a companion cron Worker in `workers/cron-sweeper/` expires sessions, sweeps orphaned R2 objects, and runs audit retention (scrub + abuse-report deletion)
+
+### Account, privacy, and age gate
+
+- **Server-enforced 13+ age gate** — signed-intent nonce gates `auth/{provider}/start`; publish returns `428 Precondition Required` until the user confirms. Policy acceptance is tracked per user with a single source-of-truth version in `src/policy/policy-config.ts` (a Vite plugin injects matching meta tags into every entrypoint)
+- **Account self-service (`/account`)** — list your uploads (cursor-paginated), delete a single capsule, delete-all, sign out, or delete your account (cascades through R2 + D1 with a tombstone re-scan). All destructive actions are CSRF-protected
+- **First-class policy routes** — `/privacy`, `/terms`, and `/privacy-request` ship as standalone Vite entrypoints so they load instantly and stay linkable
+- **Privacy contact channel (`/privacy-request`)** — form with CSRF nonce, honeypot, per-IP D1 rate-limit, dedup, and 180-day retention for GDPR/CCPA-style requests
+- **Audit retention sweeper** — weekly cron modes `scrub` (redact PII from aged audit rows) and `delete-abuse-reports` (purge resolved reports past the retention window)
 
 ## How It Works
 
@@ -114,6 +122,10 @@ NanoToybox/
 │       ├── ui/                 # Coachmark definitions
 │       └── ...                 # See docs/architecture.md for full module map
 ├── watch/                      # Trajectory viewer app (smooth playback, interpolation, dock controls)
+├── account/                    # Account self-service entrypoint (uploads, delete, sign-out)
+├── privacy/                    # Privacy policy entrypoint
+├── terms/                      # Terms of service entrypoint
+├── privacy-request/            # Privacy-request form entrypoint (GDPR/CCPA contact)
 ├── viewer/                     # Minimal trajectory viewer (static)
 ├── sim/                        # Python simulation engine
 │   ├── potentials/             # Tersoff (Python + Numba)
@@ -128,6 +140,8 @@ NanoToybox/
 │   ├── config/                 # Playback speed constants, viewer defaults, bond defaults
 │   ├── appearance/             # Bonded-group color assignment logic
 │   ├── input/                  # Camera gesture constants
+│   ├── policy/                 # Single-source policy version + active segments, Vite plugin for meta-tag injection
+│   ├── share/                  # Capsule publish/delete, audit, rate-limit, b64url, error-message utilities
 │   └── types/                  # Shared TypeScript type definitions
 ├── structures/library/         # 15 relaxed 0K structures
 ├── scripts/                    # CLI tools, scaling research
@@ -135,11 +149,14 @@ NanoToybox/
 ├── functions/                  # Cloudflare Pages Functions (share-link backend)
 │   ├── api/capsules/           # Publish, read, report endpoints
 │   ├── api/auth/               # Session (200-contract probe) + logout
+│   ├── api/account/            # Uploads list, delete capsule, delete account, age-confirmation
 │   ├── api/admin/              # Moderation + sweeper endpoints (admin-gated)
+│   ├── api/privacy-request*    # Privacy-request form intake + CSRF nonce endpoint
 │   ├── auth/                   # Google + GitHub OAuth start/callback + popup-complete landing page
+│   ├── http-cache.ts           # Shared Cache-Control + Vary helpers
 │   └── c/[code].ts             # /c/:code share-preview route
-├── migrations/                 # D1 schema migrations (capsule_share, audit/quota, indexes)
-├── workers/cron-sweeper/       # Scheduled Worker — sessions + R2 orphan sweeps
+├── migrations/                 # D1 schema migrations (0001 capsule_share, 0002 audit/quota, 0003 object-key index, 0004 delete clears body, 0005 user tombstone, 0006 policy acceptance, 0007 privacy_requests)
+├── workers/cron-sweeper/       # Scheduled Worker — sessions, R2 orphan sweeps, audit retention (scrub + abuse-report deletion)
 └── docs/                       # Developer documentation
 ```
 
@@ -153,9 +170,12 @@ npm run dev          # Vite dev server with HMR (frontend only)
 npm run build        # production build → dist/
 npm run preview      # preview built output
 npm run typecheck    # TypeScript type-check (frontend + functions + cron)
-npm run test:unit    # Vitest unit tests
-npm run test:e2e     # Playwright E2E browser tests
+npm run test:unit    # Vitest unit tests (2130 tests across 120 files)
+npm run test:e2e     # Playwright E2E against Vite dev (frontend only)
+npm run test:e2e:pages-dev  # Playwright E2E against `wrangler pages dev` (Functions + D1/R2 bindings)
 ```
+
+Use `test:e2e:pages-dev` as a deployment-confidence layer when touching auth, capsule publish/read, account, or privacy-request flows — it exercises the Pages Functions runtime that the default E2E lane skips. Requires wrangler and a built `dist/`.
 
 `npm run typecheck` fans out to `typecheck:frontend`, `typecheck:functions`, and `typecheck:cron` — the repo has a split tsconfig (`tsconfig.json` for the Vite app, `tsconfig.functions.json` for Pages Functions, `workers/cron-sweeper/tsconfig.json` for the cron Worker).
 
@@ -216,7 +236,7 @@ make -C sim/wasm     # Rebuild tersoff.wasm + glue
 
 - **Frontend + Pages Functions** deploy together to Cloudflare Pages. Bindings (D1 `atomdojo-capsules`, R2 `atomdojo-capsules-prod`) and WAF rules are declared in `wrangler.toml`; secrets (`SESSION_SECRET`, OAuth credentials, `CRON_SECRET`) are set via `wrangler pages secret put ...` in the Cloudflare dashboard
 - **D1 migrations** live in `migrations/` and are applied with `wrangler d1 migrations apply atomdojo-capsules` (add `--local` for the dev SQLite shim, omit for production)
-- **Cron Worker** in `workers/cron-sweeper/` is a separate deployable. It calls admin sweep endpoints (`X-Cron-Secret` auth) on a schedule — `0 */6 * * *` expires sessions, `30 3 * * *` sweeps orphaned R2 objects. Deploy with `npm run cron:deploy`
+- **Cron Worker** in `workers/cron-sweeper/` is a separate deployable. It calls admin sweep endpoints (`X-Cron-Secret` auth) on a schedule — `0 */6 * * *` expires sessions, `30 3 * * *` sweeps orphaned R2 objects, and a weekly audit-retention pass runs `mode=scrub` and `mode=delete-abuse-reports`. Deploy with `npm run cron:deploy`
 
 ## Documentation
 

@@ -18,9 +18,13 @@ const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000; // 5 minutes
 
 /** Per-isolate dedupe for orphan-session DELETE attempts. Prevents a
  *  persistently-failing DELETE from hammering D1 on every request in a
- *  hot path. Entries are cleared automatically on successful delete
- *  (no further retry needed) or on error after logging (so the next
- *  request's retry can happen). */
+ *  hot path. Entries are added before the fire-and-forget DELETE and
+ *  are NOT removed on success or error — the row either stops being
+ *  orphaned (DELETE worked) or persists until the LRU trim at
+ *  ORPHAN_DEDUPE_LIMIT evicts it, OR until isolate churn resets the
+ *  Set. The DELETE itself is idempotent (D1 no-op on missing row), so
+ *  re-entry on a future request is harmless even if a stale entry
+ *  blocks it within this isolate. */
 const orphanDeleteDedupe = new Set<string>();
 /** Hard cap on the dedupe set so adversarial cookies can't cause
  *  unbounded memory growth in a long-lived isolate. */
@@ -116,16 +120,23 @@ export async function authenticateRequest(
   if (!sessionId) return null;
 
   // Look up session joined to users so we reject orphaned sessions in a
-  // single round-trip. `users.id IS NULL` via LEFT JOIN signals "session
-  // exists but user row is gone"; we distinguish that from "session row
+  // single round-trip. `user_row_id IS NULL` via LEFT JOIN signals "user
+  // row is missing OR tombstoned"; we distinguish that from "session row
   // itself missing" so we only delete the orphan in the former case.
+  //
+  // `u.deleted_at IS NULL` lives in the JOIN ON condition (NOT the WHERE
+  // clause) so a tombstoned user is absorbed by the existing orphan
+  // branch rather than requiring a separate code path. See plan
+  // "Account deletion — authoritative cascade order" for rationale.
   const row = await env.DB.prepare(
     `SELECT s.user_id     AS user_id,
             s.expires_at  AS expires_at,
             s.last_seen_at AS last_seen_at,
             u.id          AS user_row_id
        FROM sessions s
-       LEFT JOIN users u ON u.id = s.user_id
+       LEFT JOIN users u
+         ON u.id = s.user_id
+        AND u.deleted_at IS NULL
       WHERE s.id = ?`,
   )
     .bind(sessionId)

@@ -90,6 +90,8 @@ Pages admin endpoints with `X-Cron-Secret: $CRON_SECRET`.
 |---|---|---|
 | `0 */6 * * *` | `POST /api/admin/sweep/sessions` | Delete expired + idle sessions, prune stale quota buckets, clean up abandoned OAuth state records. Cheap, frequent. |
 | `30 3 * * *` | `POST /api/admin/sweep/orphans` | Delete R2 objects under `capsules/` older than 24h with no matching D1 row (the narrow window where R2 put succeeded but D1 persist + rollback both failed). |
+| `15 4 * * 0` | `POST /api/admin/sweep/audit?mode=scrub` | Weekly (Sun 04:15 UTC). NULL `ip_hash`, `user_agent`, and — for `abuse_report` + `moderation_delete` only — `reason` on `capsule_share_audit` rows older than 180 days. Event skeleton is retained for forensics. |
+| `45 4 * * 0` | `POST /api/admin/sweep/audit?mode=delete-abuse-reports` | Weekly (Sun 04:45 UTC). Row-delete `event_type='abuse_report'` audit rows older than 180 days; also row-deletes `privacy_requests` past the 180-day SLA window. |
 
 Stream live Worker logs during investigation:
 
@@ -290,14 +292,18 @@ audit-event rows in D1 (`capsule_share_audit.event_type`) or grep-able
 | `orphan_sweep_failed` | audit event | WARNING | R2 API contract drift (missing `uploaded`) or partial sweep failure. Storage may be growing without cleanup. Investigate within one business day. |
 | `REPORT_DEDUP_DISABLED` | log tag | WARNING | `SESSION_SECRET` not configured on the Pages project — abuse-report de-dup is off, spam risk elevated. Provision the secret. |
 | `R2_UPLOADED_MISSING` | log tag | INFO / aggregate | Per-object signal emitted during orphan sweep when `R2ObjectList` returns an entry without `uploaded`. One is noise; a sustained rate promotes to `orphan_sweep_failed`. |
+| `account_delete` with `severity='critical'` | audit event | WARNING | At least one step in the account-deletion cascade failed. `ok:false` was returned to the user. See *Account-deletion cascade incident response*. Filter by `severity='critical'` to distinguish from the normal `severity='warning'` events emitted on clean cascades. |
+| `[account.delete-failed]` | log tag | INFO / aggregate | Companion log for the above; carries the full `steps` map for quick grep. One-offs are normal (partial R2 failures self-heal via orphan sweep); a sustained rate indicates D1 or R2 trouble. |
 
-All five signals are referenced in code:
+All of the above signals are referenced in code:
 
 - `src/share/rate-limit.ts` — quota accounting and audit calls
 - `src/share/audit.ts` — event type enum
 - `functions/api/capsules/publish.ts` — publish pipeline
 - `functions/api/capsules/[code]/report.ts` — abuse reports
 - `functions/api/admin/sweep/orphans.ts` — orphan sweep
+- `functions/api/admin/sweep/audit.ts` — audit-retention sweeper
+- `functions/api/account/delete.ts` — account-delete cascade
 
 ---
 
@@ -396,6 +402,222 @@ and will re-attempt the R2 delete. Even if you never retry, the orphan
 sweeper will pick up the blob after 24h — the `capsule_share.status` flip
 happens first, so the capsule is immediately unreachable via the public
 endpoints regardless of R2 cleanup state.
+
+### Owner-delete vs moderation-delete (audit distinction)
+
+Capsule deletions flow through the same `deleteCapsule` core in
+`src/share/capsule-delete.ts` but fork at the audit-event layer:
+
+- `event_type='owner_delete'` — the user deleted their own capsule via
+  `DELETE /api/account/capsules/<code>` (or as part of an account-delete
+  cascade, with `reason='account_delete_cascade'`).
+- `event_type='moderation_delete'` — an admin deleted via
+  `POST /api/admin/capsules/<code>/delete`; `reason` carries the
+  operator-supplied moderation note and is PII-class (cleared after 180
+  days by the audit-scrub sweeper).
+
+When answering a user's "who deleted my capsule" question or preparing
+a legal response, query with the event_type filter — do NOT rely on
+`actor` alone, because the owner IS the actor for the cascade path.
+
+```sql
+SELECT event_type, actor, created_at, reason, details_json
+FROM capsule_share_audit
+WHERE share_code = ?
+  AND event_type IN ('owner_delete','moderation_delete')
+ORDER BY created_at ASC;
+```
+
+### Account-deletion cascade incident response
+
+`POST /api/account/delete` is a 6-step cascade (sessions → quota →
+capsules → capsules_rescan → oauth → user, plus a final `audit`
+emission). The response shape is:
+
+```json
+{
+  "ok": false,
+  "capsuleCount": 3,
+  "succeeded": 2,
+  "failed": [{ "code": "abc123", "reason": "r2_failed: ..." }],
+  "steps": {
+    "sessions": "ok",
+    "quota": "ok",
+    "capsules": "partial: 1 failed",
+    "capsules_rescan": "ok",
+    "oauth": "ok",
+    "user": "ok",
+    "audit": "ok"
+  }
+}
+```
+
+`ok:false` means **at least one step's value is not `'ok'`** OR
+`failed.length > 0`. Steps are independent — a later-step failure does
+NOT undo earlier steps — so the cascade is always resumable by the
+user re-hitting the endpoint (every step is idempotent).
+
+Triage when a user reports `ok:false`:
+
+1. Read the `steps` map. Any value other than `'ok'` is a verbatim
+   error message from that step (`runStep` in `functions/api/account/delete.ts`).
+2. Search for the log tag the handler emits on any failure:
+
+   ```
+   [account.delete-failed] user=<id> steps=... failed=<n>
+   ```
+
+3. If `steps.capsules` is `"partial: N failed"`, inspect
+   `failed[].reason` — `r2_failed: …` means the D1 `capsule_share`
+   row is already tombstoned but the R2 blob is still present; the
+   daily orphan sweep will pick it up within 24h (the public endpoints
+   already gate on `capsule_share.status`).
+4. If `steps.user !== 'ok'`, the user row was NOT tombstoned. The
+   client cookie is still valid. The user must re-hit the endpoint;
+   any outstanding audit event will still be emitted on the retry.
+5. The single `account_delete` audit event carries
+   `details_json = { capsuleCount, succeeded, failed, steps }` and its
+   severity is `critical` when any prior step failed (else `warning`
+   — this event is never `info`). Query:
+
+   ```sql
+   SELECT created_at, severity, details_json
+   FROM capsule_share_audit
+   WHERE event_type = 'account_delete' AND actor = ?
+   ORDER BY created_at DESC LIMIT 5;
+   ```
+
+**Tombstoned user that should not have been.** `users.deleted_at` is
+the tombstone column. If a user complains they're suddenly signed out
+and `/api/auth/session` returns `signed-out` for their re-login:
+
+```sql
+SELECT id, deleted_at FROM users WHERE id = ?;
+SELECT event_type, severity, created_at, details_json
+FROM capsule_share_audit
+WHERE actor = ? AND event_type = 'account_delete'
+ORDER BY created_at DESC LIMIT 1;
+```
+
+A non-null `deleted_at` paired with an `account_delete` event is a
+legitimate self-service delete. A non-null `deleted_at` with NO
+matching `account_delete` event is an incident — page immediately and
+do NOT clear `deleted_at` without root-causing first. Manual recovery
+(last resort, after RCA):
+
+```sql
+UPDATE users SET deleted_at = NULL WHERE id = ?;
+-- Note: oauth_accounts + sessions were already DELETEd; the user
+-- must re-OAuth. capsule_share rows tombstoned under
+-- reason='account_delete_cascade' are NOT revived — that flip was
+-- authoritative. Do not un-tombstone capsule_share manually without
+-- confirming the user wants them live again.
+```
+
+### Age-gate / policy acceptance ops
+
+`user_policy_acceptance` rows are written by
+`POST /api/account/age-confirmation` (see
+`functions/api/account/age-confirmation/index.ts`). Composite PK
+`(user_id, policy_kind)` — every acceptance is an UPSERT that updates
+`policy_version` + `accepted_at`. One `age_confirmation_recorded`
+audit event is emitted per UPSERT (fire-and-forget; a failed audit
+does NOT fail the request).
+
+The publish endpoint returns **428 Precondition Required** with body
+`{ error: 'age_confirmation_required', policyVersion, message }`
+when the authenticated user has no `age_13_plus` row. The Lab
+Transfer dialog catches this and renders the inline retro-ack
+checkbox; a user stuck in a loop (repeated 428s after clicking
+accept) is usually a client cache / extension issue, but to unblock
+manually:
+
+```sql
+-- Confirm whether the row exists.
+SELECT user_id, policy_version, accepted_at
+FROM user_policy_acceptance
+WHERE user_id = ? AND policy_kind = 'age_13_plus';
+```
+
+If the row is missing, either have the user retry the retro-ack
+(preferred — it emits the audit event), or insert the acceptance on
+their behalf **only when you have a support ticket documenting their
+confirmation**:
+
+```sql
+INSERT INTO user_policy_acceptance (user_id, policy_kind, policy_version, accepted_at)
+VALUES (?, 'age_13_plus', '<current POLICY_VERSION>', datetime('now'))
+ON CONFLICT(user_id, policy_kind)
+  DO UPDATE SET policy_version = excluded.policy_version,
+                accepted_at    = excluded.accepted_at;
+```
+
+`POLICY_VERSION` drift: the publish 428 only checks for the presence
+of any `age_13_plus` row — it does NOT currently compare
+`policy_version` against the live constant. An older stored
+`policy_version` does not by itself re-block publish. If a future
+change bumps the policy and the publish path grows a version check,
+update this section.
+
+### Audit retention sweeper
+
+The audit scrub + delete-abuse-reports sweepers are cron-driven
+weekly (see *Schedules*). To invoke manually (e.g. after a PII
+incident that requires an earlier scrub):
+
+```bash
+# Scrub — NULL ip_hash, user_agent, and report/moderation `reason` on
+# rows older than 180 days. Non-destructive: event skeleton survives.
+curl -X POST "https://atomdojo.pages.dev/api/admin/sweep/audit?mode=scrub" \
+  -H "X-Cron-Secret: $CRON_SECRET"
+
+# Delete-abuse-reports — row-delete event_type='abuse_report' rows
+# older than 180 days. Also row-deletes privacy_requests past 180d.
+curl -X POST "https://atomdojo.pages.dev/api/admin/sweep/audit?mode=delete-abuse-reports" \
+  -H "X-Cron-Secret: $CRON_SECRET"
+
+# Optional override (min 7 days, hard-clamped to 10 years):
+curl -X POST "https://atomdojo.pages.dev/api/admin/sweep/audit?mode=scrub&maxAgeDays=90" \
+  -H "X-Cron-Secret: $CRON_SECRET"
+```
+
+Response shape:
+
+```json
+{ "ok": true, "ranAt": "...", "mode": "scrub",
+  "maxAgeDays": 180, "scrubbed": 1234 }
+// or for mode=delete-abuse-reports:
+{ "ok": true, "ranAt": "...", "mode": "delete-abuse-reports",
+  "maxAgeDays": 180, "deleted": 42 }
+```
+
+One `audit_swept` event is emitted per run (NOT per row — per-row
+would self-inflate the audit table). `details_json` carries
+`{ mode, maxAgeDays, scrubbed?, deleted? }`. Query the last run:
+
+```sql
+SELECT created_at, reason, details_json
+FROM capsule_share_audit
+WHERE event_type = 'audit_swept'
+ORDER BY created_at DESC LIMIT 10;
+```
+
+**`warnings: ['audit_failed']` in the response.** The destructive
+UPDATE/DELETE already ran; only the `audit_swept` event emission
+failed (D1 write error). The data-class operation is complete and
+safe, but the audit-log has a gap for that run. Action:
+
+1. Grep `wrangler pages deployment tail` for
+   `[admin.sweep.audit] audit_swept event write failed` to see the
+   underlying D1 error.
+2. If it's a transient D1 issue, re-invoke the sweep manually — the
+   UPDATE/DELETE is effectively a no-op the second time (scrub
+   filter excludes already-NULL rows; delete filter excludes
+   already-deleted rows), but the `audit_swept` event will be
+   re-attempted and likely land.
+3. If D1 is healthy and the event keeps failing, check for a
+   migration drift on `capsule_share_audit` (a column-type mismatch
+   would surface here).
 
 ---
 
@@ -584,17 +806,111 @@ curl -I "https://atomdojo.pages.dev/c/<code>"
   user-initiated "link accounts" UI; until then, don't merge accounts
   manually in D1 without understanding the `sessions` and
   `capsule_share.user_id` implications.
-- **Pages Function body-size limit:** publish is capped at 10 MB in
-  `functions/api/capsules/publish.ts` (fast-reject on `Content-Length`,
-  plus authoritative size check after body read). Cloudflare's own request
-  body limit is higher, but the Pages Functions CPU budget is tighter;
-  capsules near 10 MB may still exceed CPU and return 500. If users report
-  this, check `wrangler tail` for `Exceeded CPU` errors and consider
-  compressing the capsule payload client-side.
+- **Pages Function body-size limit:** publish is capped at 20 MB
+  (`MAX_PUBLISH_BYTES` in `src/share/constants.ts`) and enforced in two
+  layers by `functions/api/capsules/publish.ts` (fast-reject on
+  `Content-Length`, plus authoritative size check after body read).
+  Cloudflare's own request body limit is higher, but the Pages Functions
+  CPU budget is tighter; capsules near 20 MB may still exceed CPU and
+  return 500. If users report this, check `wrangler tail` for
+  `Exceeded CPU` errors and consider compressing the capsule payload
+  client-side. Note: a 413 returned by the endpoint carries the
+  `payload_too_large` JSON envelope and an `X-Max-Publish-Bytes` header
+  for the client to surface the current ceiling — do not hard-code the
+  limit elsewhere; import from `src/share/constants.ts`.
 - **Private R2 bucket is load-bearing.** All capsule reads go through
   Pages Functions which consult `capsule_share.status` first. Making the
   bucket public (even for a "debug" window) would allow deleted /
   moderated capsules to continue serving via direct R2 URLs.
 - **Cron Worker free-tier ceiling:** the account can register up to 5 cron
-  triggers on the free tier (paid: 250). The sweeper currently uses 2. If
-  you add more schedules, verify the plan.
+  triggers on the free tier (paid: 250). The sweeper currently uses 4
+  (sessions every 6h; orphans daily 03:30 UTC; audit-scrub Sun 04:15 UTC;
+  audit-delete-abuse-reports Sun 04:45 UTC). Only one free-tier slot
+  remains — adding another schedule requires either collapsing an
+  existing trigger or moving the Worker to a paid plan.
+
+## Privacy contact channel — `/privacy-request`
+
+The published privacy contact channel is the `/privacy-request` form
+(Phase 7 Option B). Submissions land in the `privacy_requests` D1
+table. There is no admin UI today; operators read and act on rows via
+`wrangler d1 execute`.
+
+**Triage queue:**
+
+```
+wrangler d1 execute atomdojo-capsules --remote --command \
+  "SELECT id, datetime(created_at, 'unixepoch') AS at, request_type, \
+          contact_value, substr(message, 1, 200) AS preview, status \
+     FROM privacy_requests \
+    WHERE status IN ('pending','in_progress') \
+    ORDER BY created_at ASC LIMIT 50;"
+```
+
+**Read full message for one request:**
+
+```
+wrangler d1 execute atomdojo-capsules --remote --command \
+  "SELECT message FROM privacy_requests WHERE id = '<uuid>';"
+```
+
+**Mark resolved (or rejected) after acting:**
+
+```
+wrangler d1 execute atomdojo-capsules --remote --command \
+  "UPDATE privacy_requests \
+      SET status = 'resolved', resolved_at = unixepoch(), \
+          resolver_note = '<short note>' \
+    WHERE id = '<uuid>';"
+```
+
+**Per-IP debug (when investigating abuse):**
+
+```
+wrangler d1 execute atomdojo-capsules --remote --command \
+  "SELECT bucket_start, count FROM privacy_request_quota_window \
+    WHERE ip_hash = '<hash>' ORDER BY bucket_start DESC;"
+```
+
+**Operator SLA:**
+
+- Acknowledge within 5 business days.
+- Resolve within the regulatory windows documented in `/privacy`
+  (GDPR Art. 12(3): 30 days extendable to 90; CCPA: 45 days
+  extendable to 90; under-13 remediation: 14 days).
+- Rows are auto-deleted by the audit-retention sweeper 180 days
+  after `resolved_at` (or `created_at` if never resolved).
+
+**Acting on a deletion request through the existing endpoints:**
+
+For a deletion request, the operator can authenticate-as the user
+once their identity is verified, then invoke the existing
+`POST /api/account/delete` endpoint. There is no separate admin
+"delete this account" route — the user-facing endpoint is the
+authoritative cascade and the operator path runs the same code.
+
+## Pages-dev E2E lane
+
+The default `npm run test:e2e` runs against `vite preview` (a static
+file server) — fast, but cannot exercise Pages Functions. Before a
+release that touches the auth/share/account API surface, run the
+Pages-dev lane:
+
+```
+npm run test:e2e:pages-dev
+```
+
+This boots `wrangler pages dev dist` and runs the suite with
+`baseURL=http://127.0.0.1:8788`. Specs in
+`tests/e2e/pages-dev-flows.spec.ts` are gated to that lane and
+exercise:
+
+- `/api/privacy-request/nonce` issuance
+- `/api/privacy-request` POST (success, missing nonce, message-too-long)
+- Lab transfer dialog signed-out gating with the real
+  `/api/auth/session` resolution path
+
+Treated as a deployment-confidence layer — not wired to CI by default
+(it would require wrangler in every CI runner). Run it locally before
+tagging a release that touches account/, functions/api/account/*, or
+functions/api/privacy-request.ts.

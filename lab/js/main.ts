@@ -55,6 +55,7 @@ import {
   consumeResumePublishIntent,
   attachAuthCompleteListener,
   AuthRequiredError,
+  AgeConfirmationRequiredError,
 } from './runtime/auth-runtime';
 import { MAX_PUBLISH_BYTES } from '../../src/share/constants';
 import {
@@ -787,6 +788,22 @@ async function init() {
         // in-context auth prompt instead of a generic error.
         if (res.status === 401) {
           throw new AuthRequiredError('Your session expired. Sign in to publish again.');
+        }
+        // 428 Precondition Required — the user has not yet confirmed
+        // they are 13+. The Transfer dialog catches this like the 413
+        // branch and renders the inline retro-ack checkbox.
+        if (res.status === 428) {
+          let policyVersion: string | null = null;
+          try {
+            const body = await res.json();
+            if (body && typeof body.policyVersion === 'string') {
+              policyVersion = body.policyVersion;
+            }
+          } catch { /* fall through */ }
+          throw new AgeConfirmationRequiredError(
+            'Please confirm you are at least 13 to publish.',
+            policyVersion,
+          );
         }
         // 413 (payload too large). The server returns a structured JSON
         // body { error, message, maxBytes, actualBytes? } so the client

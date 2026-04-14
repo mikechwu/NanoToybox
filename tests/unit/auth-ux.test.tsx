@@ -116,25 +116,65 @@ describe('Transfer dialog — Share tab auth gating', () => {
     expect(document.querySelector('.timeline-transfer-dialog__confirm')).toBeNull();
   });
 
-  it('auth prompt button invokes authCallbacks.onSignIn with resumePublish: true', () => {
-    const onSignIn = vi.fn();
-    act(() => {
-      installPublishableTimeline();
-      setSession(null);
-      useAppStore.getState().setAuthCallbacks({ onSignIn, onSignInSameTab: vi.fn(), onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}) });
-    });
-    render(<TimelineBar />);
-    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+  it('auth prompt button invokes authCallbacks.onSignIn with resumePublish: true', async () => {
+    // Phase B — the buttons are gated on the 13+ age-gate checkbox + a
+    // server-issued ageIntent nonce. Stub the intent endpoint and go
+    // through the checkbox path.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url) => {
+      if (String(url).includes('/api/account/age-confirmation/intent')) {
+        return new Response(JSON.stringify({ ageIntent: 'test-token', ttlSeconds: 300 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('not mocked', { status: 500 });
+    }) as typeof fetch;
+    try {
+      const onSignIn = vi.fn();
+      act(() => {
+        installPublishableTimeline();
+        setSession(null);
+        useAppStore.getState().setAuthCallbacks({ onSignIn, onSignInSameTab: vi.fn(), onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}) });
+      });
+      render(<TimelineBar />);
+      act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
 
-    act(() => {
-      (document.querySelector('[data-testid="transfer-auth-google"]') as HTMLButtonElement).click();
-    });
-    expect(onSignIn).toHaveBeenCalledWith('google', { resumePublish: true });
+      // Check the 13+ checkbox and wait for the intent fetch to resolve.
+      const checkbox = document.querySelector('[data-testid="age-gate-checkbox-transfer"]') as HTMLInputElement;
+      act(() => { fireEvent.click(checkbox); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-    act(() => {
-      (document.querySelector('[data-testid="transfer-auth-github"]') as HTMLButtonElement).click();
-    });
-    expect(onSignIn).toHaveBeenCalledWith('github', { resumePublish: true });
+      act(() => {
+        (document.querySelector('[data-testid="transfer-auth-google"]') as HTMLButtonElement).click();
+      });
+      // Phase 7 freshness wiring: onSignIn now also carries the
+      // ageIntent's mintedAt timestamp so the popup-blocked retry
+      // path can detect a stale snapshot. We don't assert the exact
+      // number — only that it's a positive integer (Date.now() ms).
+      expect(onSignIn).toHaveBeenCalledWith(
+        'google',
+        expect.objectContaining({
+          resumePublish: true,
+          ageIntent: 'test-token',
+          ageIntentMintedAt: expect.any(Number),
+        }),
+      );
+
+      act(() => {
+        (document.querySelector('[data-testid="transfer-auth-github"]') as HTMLButtonElement).click();
+      });
+      expect(onSignIn).toHaveBeenCalledWith(
+        'github',
+        expect.objectContaining({
+          resumePublish: true,
+          ageIntent: 'test-token',
+          ageIntentMintedAt: expect.any(Number),
+        }),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('shows Publish button when signed in', () => {
@@ -207,30 +247,51 @@ describe('AccountControl top-bar', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('shows "Sign in" trigger when signed out, with Google + GitHub menu items', () => {
-    const onSignIn = vi.fn();
-    act(() => {
-      setSession(null);
-      useAppStore.getState().setAuthCallbacks({ onSignIn, onSignInSameTab: vi.fn(), onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}) });
-    });
-    render(<AccountControl />);
+  it('shows "Sign in" trigger when signed out, with Google + GitHub menu items', async () => {
+    // Phase B — provider buttons are gated on the 13+ checkbox + nonce.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url) => {
+      if (String(url).includes('/api/account/age-confirmation/intent')) {
+        return new Response(JSON.stringify({ ageIntent: 'ac-token', ttlSeconds: 300 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('not mocked', { status: 500 });
+    }) as typeof fetch;
+    try {
+      const onSignIn = vi.fn();
+      act(() => {
+        setSession(null);
+        useAppStore.getState().setAuthCallbacks({ onSignIn, onSignInSameTab: vi.fn(), onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}) });
+      });
+      render(<AccountControl />);
 
-    const trigger = document.querySelector('[data-testid="account-signin"]') as HTMLButtonElement;
-    expect(trigger).not.toBeNull();
-    expect(trigger.textContent).toContain('Sign in');
+      const trigger = document.querySelector('[data-testid="account-signin"]') as HTMLButtonElement;
+      expect(trigger).not.toBeNull();
+      expect(trigger.textContent).toContain('Sign in');
 
-    act(() => { trigger.click(); });
-    const google = document.querySelector('[data-testid="account-signin-google"]') as HTMLButtonElement;
-    const github = document.querySelector('[data-testid="account-signin-github"]') as HTMLButtonElement;
-    expect(google).not.toBeNull();
-    expect(github).not.toBeNull();
+      act(() => { trigger.click(); });
+      const google = document.querySelector('[data-testid="account-signin-google"]') as HTMLButtonElement;
+      const github = document.querySelector('[data-testid="account-signin-github"]') as HTMLButtonElement;
+      expect(google).not.toBeNull();
+      expect(github).not.toBeNull();
 
-    act(() => { google.click(); });
-    // Top-bar sign-in is secondary — should NOT set resumePublish intent.
-    expect(onSignIn).toHaveBeenCalledTimes(1);
-    const [provider, opts] = onSignIn.mock.calls[0];
-    expect(provider).toBe('google');
-    expect(opts).toBeUndefined();
+      // Check the age-gate checkbox + flush microtasks so the intent fetch resolves.
+      const checkbox = document.querySelector('[data-testid="age-gate-checkbox-accountcontrol"]') as HTMLInputElement;
+      act(() => { fireEvent.click(checkbox); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      act(() => { google.click(); });
+      // Top-bar sign-in is secondary — should NOT set resumePublish intent.
+      // After Phase B it forwards the ageIntent.
+      expect(onSignIn).toHaveBeenCalledTimes(1);
+      const [provider, opts] = onSignIn.mock.calls[0];
+      expect(provider).toBe('google');
+      expect(opts).toMatchObject({ ageIntent: 'ac-token', ageIntentMintedAt: expect.any(Number) });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('shows account chip with display name and Sign out when signed in', async () => {
@@ -678,11 +739,16 @@ describe('AccountControl — plain disclosure (no ARIA menu)', () => {
   beforeEach(() => { useAppStore.getState().resetTransientState(); });
   afterEach(() => { cleanup(); });
 
-  it('trigger uses aria-haspopup="true" not "menu"', () => {
+  it('trigger uses aria-haspopup="dialog" (matches the disclosure pattern, not an ARIA menu)', () => {
+    // Phase 7 a11y fix: `aria-haspopup="true"` resolves to `"menu"` per
+    // ARIA, which makes screen readers announce a menu and users
+    // expect arrow-key navigation that this disclosure does not
+    // implement. `"dialog"` matches the actual content (mixed
+    // <a>/<button> children, single Tab traversal).
     act(() => { setSession({ userId: 'u1', displayName: 'Alice' }); });
     render(<AccountControl />);
     const trigger = document.querySelector('[data-testid="account-chip"]');
-    expect(trigger?.getAttribute('aria-haspopup')).toBe('true');
+    expect(trigger?.getAttribute('aria-haspopup')).toBe('dialog');
   });
 
   it('no role=menu / role=menuitem on signed-in popover', () => {
@@ -1391,6 +1457,8 @@ describe('auth-runtime — popup OAuth flow', () => {
     expect(useAppStore.getState().authPopupBlocked).toEqual({
       provider: 'github',
       resumePublish: true,
+      ageIntent: null,
+      ageIntentMintedAt: null,
     });
   });
 
@@ -1567,7 +1635,65 @@ describe('Transfer dialog — popup-blocked Retry / Continue-in-tab prompt', () 
     act(() => { (document.querySelector('[data-testid="transfer-popup-retry"]') as HTMLButtonElement).click(); });
 
     expect(onSignIn).toHaveBeenCalledTimes(1);
-    expect(onSignIn).toHaveBeenCalledWith('github', { resumePublish: true });
+    // After Phase B age-gate, the Retry path also forwards an `ageIntent`
+    // (null when the abandoned popup-blocked attempt had no nonce).
+    expect(onSignIn).toHaveBeenCalledWith('github', { resumePublish: true, ageIntent: null, ageIntentMintedAt: null });
+  });
+
+  it('Retry with a stale age-intent snapshot reroutes to the picker (no onSignIn call, descriptor cleared)', () => {
+    // A user pauses at the popup-blocked prompt for >4 minutes.
+    // Reusing the stored token would land at /auth/{provider}/start
+    // with an expired nonce and immediately 400. The retry handler
+    // must detect the staleness and clear the descriptor so the
+    // dialog re-renders the provider picker (where the live
+    // AgeGateCheckbox state is independently fresh).
+    const onSignIn = vi.fn();
+    act(() => {
+      installPublishableTimeline();
+      setSession(null);
+      useAppStore.getState().setAuthCallbacks({
+        onSignIn, onSignInSameTab: vi.fn(), onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}),
+      });
+      // 30 minutes ago is well past the 4-min staleness threshold.
+      useAppStore.getState().setAuthPopupBlocked({
+        provider: 'google',
+        resumePublish: true,
+        ageIntent: 'old-token',
+        ageIntentMintedAt: Date.now() - 30 * 60 * 1000,
+      });
+    });
+    render(<TimelineBar />);
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    act(() => { (document.querySelector('[data-testid="transfer-popup-retry"]') as HTMLButtonElement).click(); });
+
+    expect(onSignIn).not.toHaveBeenCalled();
+    expect(useAppStore.getState().authPopupBlocked).toBeNull();
+  });
+
+  it('Continue-in-tab with a stale age-intent snapshot also reroutes (no onSignInSameTab call)', () => {
+    const onSignInSameTab = vi.fn();
+    act(() => {
+      installPublishableTimeline();
+      setSession(null);
+      useAppStore.getState().setAuthCallbacks({
+        onSignIn: vi.fn(),
+        onSignInSameTab,
+        onDismissPopupBlocked: vi.fn(),
+        onSignOut: vi.fn(async () => {}),
+      });
+      useAppStore.getState().setAuthPopupBlocked({
+        provider: 'google',
+        resumePublish: true,
+        ageIntent: 'old-token',
+        ageIntentMintedAt: Date.now() - 30 * 60 * 1000,
+      });
+    });
+    render(<TimelineBar />);
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    act(() => { (document.querySelector('[data-testid="transfer-popup-same-tab"]') as HTMLButtonElement).click(); });
+
+    expect(onSignInSameTab).not.toHaveBeenCalled();
+    expect(useAppStore.getState().authPopupBlocked).toBeNull();
   });
 
   it('Continue-in-tab button invokes onSignInSameTab', () => {
@@ -1668,7 +1794,11 @@ describe('AccountControl — popup-blocked Retry / Continue-in-tab prompt', () =
     act(() => { (document.querySelector('[data-testid="account-signin"]') as HTMLButtonElement).click(); });
     act(() => { (document.querySelector('[data-testid="account-popup-retry"]') as HTMLButtonElement).click(); });
 
-    expect(onSignIn).toHaveBeenCalledWith('github', { resumePublish: false });
+    // Phase 7: AccountControl now mirrors TimelineBar by carrying the
+    // pending ageIntent through the retry path. Without this, the
+    // second attempt would land at /auth/{provider}/start with no
+    // nonce and immediately 400.
+    expect(onSignIn).toHaveBeenCalledWith('github', { resumePublish: false, ageIntent: null, ageIntentMintedAt: null });
   });
 
   it('Back button invokes onDismissPopupBlocked and restores the provider picker', () => {
@@ -1755,7 +1885,7 @@ describe('Popup-blocked Back dismisses the resume-publish intent', () => {
     const { callbacks } = createAuthRuntime();
     callbacks.onSignIn('google', { resumePublish: true });
     expect(sessionStorage.getItem('atomdojo.resumePublish')).not.toBeNull();
-    expect(useAppStore.getState().authPopupBlocked).toEqual({ provider: 'google', resumePublish: true });
+    expect(useAppStore.getState().authPopupBlocked).toEqual({ provider: 'google', resumePublish: true, ageIntent: null, ageIntentMintedAt: null });
 
     // User clicks Back.
     callbacks.onDismissPopupBlocked();
@@ -1776,7 +1906,7 @@ describe('Popup-blocked Back dismisses the resume-publish intent', () => {
     (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
     const { callbacks } = createAuthRuntime();
     callbacks.onSignIn('github'); // defaults to resumePublish:false
-    expect(useAppStore.getState().authPopupBlocked).toEqual({ provider: 'github', resumePublish: false });
+    expect(useAppStore.getState().authPopupBlocked).toEqual({ provider: 'github', resumePublish: false, ageIntent: null, ageIntentMintedAt: null });
 
     callbacks.onDismissPopupBlocked();
     // Pending cleared, but the pre-existing intent (unrelated) is not
@@ -1914,7 +2044,7 @@ describe('auth-runtime — Vite dev host guard (H2)', () => {
     // The dev guard short-circuits BEFORE window.open — popup-blocked UI fires.
     expect(openSpy).not.toHaveBeenCalled();
     expect(useAppStore.getState().authPopupBlocked).toEqual({
-      provider: 'google', resumePublish: false,
+      provider: 'google', resumePublish: false, ageIntent: null, ageIntentMintedAt: null,
     });
     // Developer-facing diagnostic.
     const msg = warn.mock.calls.map((c) => String(c[0])).join('\n');

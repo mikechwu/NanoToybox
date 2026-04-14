@@ -3,6 +3,7 @@ import { defineConfig } from 'vite'
 import { resolve } from 'path'
 import copy from 'rollup-plugin-copy'
 import react from '@vitejs/plugin-react'
+import { policyConfigPlugin } from './src/policy/vite-policy-plugin'
 
 export default defineConfig({
   base: '/',
@@ -18,6 +19,10 @@ export default defineConfig({
         rollback: resolve(__dirname, 'lab/test-rollback.html'),
         viewer: resolve(__dirname, 'viewer/index.html'),
         watch: resolve(__dirname, 'watch/index.html'),
+        privacy: resolve(__dirname, 'privacy/index.html'),
+        terms: resolve(__dirname, 'terms/index.html'),
+        account: resolve(__dirname, 'account/index.html'),
+        'privacy-request': resolve(__dirname, 'privacy-request/index.html'),
         'bench-physics': resolve(__dirname, 'lab/bench/bench-physics.html'),
         'bench-render': resolve(__dirname, 'lab/bench/bench-render.html'),
         'bench-distance': resolve(__dirname, 'lab/bench/bench-distance.html'),
@@ -41,5 +46,6 @@ export default defineConfig({
       hook: 'writeBundle',
     }),
     react(),
+    policyConfigPlugin(),
   ],
 })

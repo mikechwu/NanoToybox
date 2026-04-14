@@ -29,6 +29,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store/app-store';
 import { hydrateAuthSession } from '../runtime/auth-runtime';
+import { AgeGateCheckbox, AGE_INTENT_STALE_AFTER_MS } from './AgeGateCheckbox';
 
 function useOnClickOutside(ref: React.RefObject<HTMLElement | null>, onOutside: () => void, active: boolean) {
   useEffect(() => {
@@ -68,6 +69,17 @@ export function AccountControl() {
 
   const [open, setOpen] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [ageIntent, setAgeIntent] = useState<string | null>(null);
+  const [ageMintedAt, setAgeMintedAt] = useState<number | null>(null);
+  const [ageStaleNote, setAgeStaleNote] = useState<string | null>(null);
+  const [ageRefreshNonce, setAgeRefreshNonce] = useState(0);
+  const [ageFetching, setAgeFetching] = useState(false);
+  const handleAgeIntent = useCallback((token: string | null, mintedAt: number | null) => {
+    setAgeIntent(token);
+    setAgeMintedAt(mintedAt);
+    if (token) setAgeStaleNote(null);
+  }, []);
   const rootRef = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
 
@@ -84,8 +96,52 @@ export function AccountControl() {
   }
 
   const handleSignIn = (provider: 'google' | 'github') => {
+    if (!ageConfirmed || !ageIntent || ageMintedAt === null) return;
+    // Click-time freshness check: if the prefetched token is older
+    // than the staleness threshold (background-throttle, sleep/resume,
+    // or a missed periodic refresh), refuse the click and show an
+    // inline note. The AgeGateCheckbox effect will re-mint within a
+    // few hundred ms; the user clicks again on the second tap. Doing
+    // an awaited fetch here would break popup-not-blocked semantics
+    // (window.open requires a synchronous user gesture).
+    if (Date.now() - ageMintedAt > AGE_INTENT_STALE_AFTER_MS) {
+      setAgeStaleNote('Refreshing sign-in… click again in a moment.');
+      // Drop the stale token AND increment the refresh nonce so the
+      // checkbox effect actually re-runs. Without the nonce bump the
+      // component would stay idle until the next 4-min tick or
+      // visibilitychange — leaving the user looking at a disabled
+      // button and a misleading "click again" note.
+      setAgeIntent(null);
+      setAgeMintedAt(null);
+      setAgeRefreshNonce((n) => n + 1);
+      return;
+    }
     // Secondary entry — user hasn't asked to publish, so no resume intent.
-    callbacks?.onSignIn(provider);
+    callbacks?.onSignIn(provider, { ageIntent, ageIntentMintedAt: ageMintedAt });
+  };
+
+  /** True when the popup-blocked descriptor's snapshot of the age
+   *  intent is older than the staleness threshold. The descriptor's
+   *  token would still arrive at /auth/{provider}/start as fresh from
+   *  the server's perspective until 5 minutes have elapsed, but
+   *  refusing reuse at the 4-minute mark mirrors the click-time guard
+   *  on the live AgeGateCheckbox so the user never hits a raw 400. */
+  const popupBlockedTokenIsStale = (): boolean => {
+    if (!popupBlocked?.ageIntent || popupBlocked.ageIntentMintedAt == null) return false;
+    return Date.now() - popupBlocked.ageIntentMintedAt > AGE_INTENT_STALE_AFTER_MS;
+  };
+
+  /** Stale-token recovery for popup-blocked retry / same-tab paths.
+   *  Clears the blocked descriptor (returning the user to the provider
+   *  picker), surfaces an inline note, AND bumps the AgeGateCheckbox
+   *  refresh nonce so a fresh intent is minted immediately rather than
+   *  waiting for the next 4-min interval. */
+  const recoverStalePopupBlocked = () => {
+    useAppStore.getState().setAuthPopupBlocked(null);
+    setAgeStaleNote('Refreshing sign-in… choose your provider again.');
+    setAgeIntent(null);
+    setAgeMintedAt(null);
+    setAgeRefreshNonce((n) => n + 1);
   };
 
   const handleSignOut = async () => {
@@ -100,10 +156,32 @@ export function AccountControl() {
 
   const handleRetryPopup = () => {
     if (!popupBlocked || !callbacks) return;
-    callbacks.onSignIn(popupBlocked.provider, { resumePublish: popupBlocked.resumePublish });
+    // Stale token? Reroute to the picker so a fresh nonce is minted.
+    // Reusing an expired token would land at /auth/{provider}/start
+    // and immediately 400 the user.
+    if (popupBlockedTokenIsStale()) {
+      recoverStalePopupBlocked();
+      return;
+    }
+    // Carry the original ageIntent + mintedAt through the retry —
+    // without ageIntent the second attempt would land at
+    // /auth/{provider}/start with no nonce and immediately 400.
+    // Mirrors TimelineBar.handleRetryPopup.
+    callbacks.onSignIn(popupBlocked.provider, {
+      resumePublish: popupBlocked.resumePublish,
+      ageIntent: popupBlocked.ageIntent ?? null,
+      ageIntentMintedAt: popupBlocked.ageIntentMintedAt ?? null,
+    });
   };
 
   const handleContinueInTab = () => {
+    // Same staleness guard as the popup retry — the same-tab redirect
+    // would otherwise reuse an expired snapshot and 400 the user
+    // mid-navigation.
+    if (popupBlockedTokenIsStale()) {
+      recoverStalePopupBlocked();
+      return;
+    }
     callbacks?.onSignInSameTab();
   };
 
@@ -123,7 +201,7 @@ export function AccountControl() {
       <div className="account-control" ref={rootRef} data-testid="account-control" data-auth-status={status}>
         <button
           className="account-control__trigger account-control__trigger--chip"
-          aria-haspopup="true"
+          aria-haspopup="dialog"
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
           data-testid="account-chip"
@@ -136,6 +214,18 @@ export function AccountControl() {
             <p className="account-control__identity" aria-label="Signed in as">
               {session.displayName ?? shortenUserId(session.userId)}
             </p>
+            {/* Task-oriented label — the destination is the page that
+              * lists the user's published share links and exposes the
+              * delete controls. Rendered as a real <a> so middle-click
+              * / cmd-click open in a new tab work as expected. */}
+            <a
+              className="account-control__menu-item"
+              href="/account/"
+              onClick={close}
+              data-testid="account-manage-uploads"
+            >
+              Manage uploads
+            </a>
             <button
               className="account-control__menu-item account-control__menu-item--destructive"
               onClick={handleSignOut}
@@ -154,7 +244,7 @@ export function AccountControl() {
       <div className="account-control" ref={rootRef} data-testid="account-control" data-auth-status={status}>
         <button
           className="account-control__trigger account-control__trigger--unverified"
-          aria-haspopup="true"
+          aria-haspopup="dialog"
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
           data-testid="account-unverified"
@@ -185,7 +275,7 @@ export function AccountControl() {
     <div className="account-control" ref={rootRef} data-testid="account-control" data-auth-status={status}>
       <button
         className="account-control__trigger"
-        aria-haspopup="true"
+        aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         data-testid="account-signin"
@@ -230,9 +320,24 @@ export function AccountControl() {
               <p className="account-control__hint">
                 Sign in to publish share links. Reading and downloading stay public.
               </p>
+              <AgeGateCheckbox
+                checked={ageConfirmed}
+                onCheckedChange={setAgeConfirmed}
+                onAgeIntent={handleAgeIntent}
+                onFetchingChange={setAgeFetching}
+                refreshNonce={ageRefreshNonce}
+                idSuffix="accountcontrol"
+                compact
+              />
+              {ageStaleNote && !ageIntent ? (
+                <p className="age-gate__note" role="status" aria-live="polite">
+                  {ageFetching ? 'Refreshing sign-in…' : ageStaleNote}
+                </p>
+              ) : null}
               <button
                 className="account-control__menu-item"
                 onClick={() => handleSignIn('google')}
+                disabled={!ageConfirmed || !ageIntent}
                 data-testid="account-signin-google"
               >
                 Continue with Google
@@ -240,6 +345,7 @@ export function AccountControl() {
               <button
                 className="account-control__menu-item"
                 onClick={() => handleSignIn('github')}
+                disabled={!ageConfirmed || !ageIntent}
                 data-testid="account-signin-github"
               >
                 Continue with GitHub

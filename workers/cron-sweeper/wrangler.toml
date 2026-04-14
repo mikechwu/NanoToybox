@@ -17,8 +17,12 @@ compatibility_date = "2025-01-01"
 PAGES_BASE_URL = "https://atomdojo.pages.dev"
 
 # Schedules:
-#   */60 minutes — sessions + quota buckets (cheap, frequent)
+#   every 6h — sessions + quota buckets (cheap, frequent)
 #   daily 03:30 UTC — R2 orphan sweep (moderate cost, rare-hit)
+#   weekly Sun 04:15 UTC — audit scrub (null ip_hash / user_agent / reason
+#                          on rows older than 180 days)
+#   weekly Sun 04:45 UTC — audit delete-abuse-reports (row-delete
+#                          abuse_report rows older than 180 days)
 #
 # Keep cron counts under Workers free-tier limits unless the project is
 # on a paid plan (free tier: 5 crons/account; paid: 250/account).
@@ -26,4 +30,6 @@ PAGES_BASE_URL = "https://atomdojo.pages.dev"
 crons = [
   "0 */6 * * *",    # every 6h — /api/admin/sweep/sessions
   "30 3 * * *",     # daily 03:30 UTC — /api/admin/sweep/orphans
+  "15 4 * * 0",     # weekly Sun 04:15 UTC — /api/admin/sweep/audit?mode=scrub
+  "45 4 * * 0",     # weekly Sun 04:45 UTC — /api/admin/sweep/audit?mode=delete-abuse-reports
 ]

@@ -10,10 +10,13 @@
  * Defaults match the plan's "max 10 publishes per day per owner_user_id"
  * guidance. Callers may tune via PublishQuotaConfig.
  *
- * Owns:        window-bucket math, quota check/increment, cleanup
+ * Owns:        window-bucket math, publish-quota check/increment,
+ *              privacy-request per-IP quota helpers, cleanup
  * Depends on:  src/share/d1-types.ts
- * Called by:   functions/api/capsules/publish.ts (hot path),
- *              functions/api/admin/sweep/* (periodic cleanup)
+ * Called by:   functions/api/capsules/publish.ts (publish hot path),
+ *              functions/api/privacy-request.ts (per-IP quota),
+ *              functions/api/admin/sweep/* (periodic cleanup, incl.
+ *              prunePrivacyRequestQuota from sweep/audit.ts)
  */
 
 import type { D1Database } from './d1-types';
@@ -31,6 +34,15 @@ export const DEFAULT_PUBLISH_QUOTA: PublishQuotaConfig = {
   maxPerWindow: 10,
   windowSeconds: 24 * 60 * 60, // 24 hours
   bucketSeconds: 60 * 60, // 1 hour buckets → 24 active buckets max
+};
+
+/** Per-IP rate-limit window for `/api/privacy-request` (Phase 7
+ *  Option B). 5 submissions per IP per 24h is the layer-2 D1
+ *  fallback; layer 1 is a Cloudflare WAF rule. */
+export const DEFAULT_PRIVACY_REQUEST_QUOTA: PublishQuotaConfig = {
+  maxPerWindow: 5,
+  windowSeconds: 24 * 60 * 60,
+  bucketSeconds: 60 * 60,
 };
 
 export interface QuotaCheckResult {
@@ -184,5 +196,74 @@ export async function pruneExpiredQuotaBuckets(
   await db
     .prepare('DELETE FROM publish_quota_window WHERE window_key < ?')
     .bind(oldest)
+    .run();
+}
+
+// ── Privacy-request per-IP rate limit (Phase 7 Option B) ──────────
+//
+// Mirrors the bucket math of publish quota, but keyed on a hashed IP
+// address (anonymous form submissions have no user_id) and writes to
+// a dedicated table (`privacy_request_quota_window`) so the two
+// flows' very different abuse profiles cannot collide in operator
+// debug queries.
+
+export async function checkPrivacyRequestQuota(
+  db: D1Database,
+  ipHash: string,
+  config: PublishQuotaConfig = DEFAULT_PRIVACY_REQUEST_QUOTA,
+  now: Date = new Date(),
+): Promise<QuotaCheckResult> {
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  const keys = activeBuckets(nowSeconds, config).map((k) => k * config.bucketSeconds);
+  const oldestStart = keys[keys.length - 1];
+  const placeholders = keys.map(() => '?').join(',');
+  const row = await db
+    .prepare(
+      `SELECT COALESCE(SUM(count), 0) AS total
+         FROM privacy_request_quota_window
+        WHERE ip_hash = ? AND bucket_start IN (${placeholders})`,
+    )
+    .bind(ipHash, ...keys)
+    .first<{ total: number }>();
+  const currentCount = row?.total ?? 0;
+  return {
+    allowed: currentCount < config.maxPerWindow,
+    currentCount,
+    limit: config.maxPerWindow,
+    retryAtSeconds: oldestStart + config.windowSeconds,
+  };
+}
+
+export async function consumePrivacyRequestQuota(
+  db: D1Database,
+  ipHash: string,
+  config: PublishQuotaConfig = DEFAULT_PRIVACY_REQUEST_QUOTA,
+  now: Date = new Date(),
+): Promise<void> {
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  const currentBucketStart = bucketKey(nowSeconds, config) * config.bucketSeconds;
+  await db
+    .prepare(
+      `INSERT INTO privacy_request_quota_window (ip_hash, bucket_start, count)
+       VALUES (?, ?, 1)
+       ON CONFLICT(ip_hash, bucket_start) DO UPDATE SET count = count + 1`,
+    )
+    .bind(ipHash, currentBucketStart)
+    .run();
+}
+
+export async function prunePrivacyRequestQuota(
+  db: D1Database,
+  config: PublishQuotaConfig = DEFAULT_PRIVACY_REQUEST_QUOTA,
+  now: Date = new Date(),
+): Promise<void> {
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  const oldestStart =
+    (bucketKey(nowSeconds, config) -
+      Math.ceil(config.windowSeconds / config.bucketSeconds)) *
+    config.bucketSeconds;
+  await db
+    .prepare('DELETE FROM privacy_request_quota_window WHERE bucket_start < ?')
+    .bind(oldestStart)
     .run();
 }

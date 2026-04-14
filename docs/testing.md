@@ -95,7 +95,10 @@ Each test writes results to `outputs/testN_*/`:
 
 ## Frontend Unit Tests
 
-Automated unit tests live in `tests/unit/` and run via Vitest (`npm run test:unit`). Playwright E2E tests live in `tests/e2e/` (`npm run test:e2e`).
+Automated unit tests live in `tests/unit/` and run via Vitest (`npm run test:unit`). Playwright E2E tests live in `tests/e2e/` and ship in two lanes:
+
+- **Default lane (`npm run test:e2e`)** — `playwright.config.ts`, webServer is `vite preview`. Static assets + mocked `page.route()` specs. Pages-dev-only specs self-skip here.
+- **Pages-dev lane (`npm run test:e2e:pages-dev`)** — `playwright.pages-dev.config.ts`, webServer is `wrangler pages dev dist`. Required for specs that hit real Pages Functions (auth, account, privacy). See [Pages-dev E2E lane](#pages-dev-e2e-lane).
 
 *Per-section test counts below are approximate guides. Contributor-facing docs (contributing.md) omit exact counts entirely to avoid maintenance churn. Run `npx vitest run` for the authoritative total.*
 
@@ -105,6 +108,12 @@ npx vitest run
 
 # Run a single file
 npx vitest run tests/unit/simulation-timeline.test.ts
+
+# Default E2E lane (fast, mocked backend)
+npm run test:e2e
+
+# Pages-dev E2E lane (requires `npm run build` + wrangler)
+npm run test:e2e:pages-dev
 ```
 
 ### Phase 5 Test Layout
@@ -139,11 +148,11 @@ Phase 5 tests ship across three tsconfigs because the frontend and the Pages Fun
 
 | Config | What it covers | Why |
 |--------|---------------|-----|
-| `tsconfig.json` (frontend) | `lab/`, `watch/`, `src/**`, `tests/unit/**/*.{ts,tsx}`, `vite.config.ts` | DOM + React + Three.js. Excludes the eight Workers-typed handler/middleware tests + `cron-sweeper.test.ts` because they import Workers-typed symbols that would fail the DOM-only typecheck. |
-| `tsconfig.functions.json` (Workers) | `functions/**`, `src/share/**`, selected `src/history/*-v1.ts`, the eight Workers-typed test files (`admin-gate`, `publish-endpoint`, `report-endpoint`, `admin-delete-endpoint`, `admin-orphans-endpoint`, `admin-sessions-endpoint`, `auth-middleware`, `session-endpoint`), `cron-sweeper.test.ts`, `workers/cron-sweeper/src/**` | `strict: true`, `types: ["@cloudflare/workers-types"]`. Gives the handlers and the auth middleware real `PagesFunction`, `R2Bucket`, `D1Database`, `ExecutionContext` types. |
+| `tsconfig.json` (frontend) | `lab/`, `watch/`, `src/**`, `tests/unit/**/*.{ts,tsx}`, `vite.config.ts` | DOM + React + Three.js. Excludes the 18 Workers-typed backend-handler/middleware tests (the exclude list in `tsconfig.json` is authoritative) because they import Workers-typed symbols that would fail the DOM-only typecheck. |
+| `tsconfig.functions.json` (Workers) | `functions/**`, `src/share/**`, selected `src/history/*-v1.ts`, the 18 Workers-typed test files (Phase 5/6 core: `admin-gate`, `publish-endpoint`, `report-endpoint`, `admin-delete-endpoint`, `admin-orphans-endpoint`, `admin-sessions-endpoint`, `auth-middleware`, `session-endpoint`, `cron-sweeper`; Phase 7 additions: `signed-intents`, `age-confirmation-endpoint`, `audit-sweep-endpoint`, `auth-start-age-intent`, `owner-delete-endpoint`, `publish-age-gate`, `account-delete-cascade`, `account-capsules-pagination`, `privacy-request-endpoint`), `workers/cron-sweeper/src/**` | `strict: true`, `types: ["@cloudflare/workers-types"]`. Gives the handlers and the auth middleware real `PagesFunction`, `R2Bucket`, `D1Database`, `ExecutionContext` types. |
 | `workers/cron-sweeper/tsconfig.json` | The cron Worker package itself | Worker has its own `wrangler.toml`/deploy pipeline; its tsconfig keeps deploy-time typechecking independent of the Pages build. |
 
-The partitioning is enforced by `tsconfig.json`'s explicit `exclude` list — the Workers-typed tests (`auth-middleware.test.ts` and `session-endpoint.test.ts` joined the list in Phase 6) are owned by the functions config, so they compile exactly once, under the lib set they actually need. Vitest still discovers and runs every file in `tests/unit/`; the split only affects `tsc`. `npm run typecheck` fans out across all three configs (frontend → functions → cron) so a Workers-typed test file will be typechecked even though `tsconfig.json` excludes it.
+The partitioning is enforced by `tsconfig.json`'s explicit `exclude` list — the Workers-typed tests are owned by the functions config, so they compile exactly once, under the lib set they actually need. The exclude list grew from 8 entries (Phase 5) → 10 (Phase 6, adding `auth-middleware` + `session-endpoint`) → 18 (Phase 7, adding the nine account-erasure / age-gate / signed-intent backend tests enumerated above; `tsconfig.json` is the authoritative source if this count drifts). Keep the list in sync whenever a new backend-handler test is introduced: the symptom of forgetting is a DOM-lib typecheck failure on Workers-typed symbols under `npm run typecheck:frontend`. Vitest still discovers and runs every file in `tests/unit/`; the split only affects `tsc`. `npm run typecheck` fans out across all three configs (frontend → functions → cron) so a Workers-typed test file will be typechecked even though `tsconfig.json` excludes it.
 
 ### Script Reference
 
@@ -154,8 +163,9 @@ The partitioning is enforced by `tsconfig.json`'s explicit `exclude` list — th
 | `npm run typecheck:functions` | `tsc --noEmit -p tsconfig.functions.json`. |
 | `npm run typecheck:cron` | `tsc --noEmit -p workers/cron-sweeper/tsconfig.json`. |
 | `npm run test:unit` | `vitest run` — all Vitest files under `tests/unit/`. |
-| `npm run test:e2e` | `playwright test` — all specs under `tests/e2e/`. |
-| `npm run build` | `vite build` — produces `dist/` consumed by `cf:dev`. |
+| `npm run test:e2e` | `playwright test` — all specs under `tests/e2e/` (default lane, `vite preview` webServer; Pages-dev-only specs self-skip here, see [Pages-dev E2E lane](#pages-dev-e2e-lane)). |
+| `npm run test:e2e:pages-dev` | Phase 7 lane: `playwright test` against `playwright.pages-dev.config.ts`, which boots `wrangler pages dev dist`. Runs specs that require real Pages Functions (static policy routes, age-gate UX, account delete-all). Requires `npm run build` first. |
+| `npm run build` | `vite build` — produces `dist/` consumed by `cf:dev` / pages-dev E2E lane. |
 | `npm run cf:dev` | `wrangler pages dev dist` — full local backend with Functions + D1 + R2 bindings. Use this when you need real `/api/capsules/*` responses. |
 | `npm run dev` | `vite` dev server — frontend only, no Functions. |
 | `npm run cf:d1:migrate` | Applies migrations to the local D1 (`atomdojo-capsules`). |
@@ -273,6 +283,66 @@ Grouped by describe block:
 - **Long display name** — truncates via ellipsis; chip and FPS do not collide.
 - **Signed-out** — "Sign in" trigger renders inside `.topbar-right`; the opened menu stays inside the viewport.
 - **Mobile viewport** — chip and FPS remain disjoint and inside the viewport.
+
+### Phase 7 Test Layout (Account-Erasure Surface)
+
+Phase 7 added the account-lifecycle / account-erasure surface: signed intents (HMAC + freshness + kind), a shared capsule-delete core used by both admin and owner paths, age confirmation, audit sweeps, the publish-time age precondition, cascaded account deletion, paginated capsule enumeration, and the privacy-request intake endpoint. Backend handlers follow the same tsconfig/mocking pattern as Phase 5/6 (hoisted `vi.fn`, SQL-dialect D1 mock, hand-built minimal context, real `Request` objects) and are typechecked under `tsconfig.functions.json`; the UI tests sit under the frontend tsconfig (jsdom + React + fetch stubs). A new Pages-dev-only E2E lane runs specs that need real Pages Functions.
+
+#### Account-Erasure Unit Tests (`tests/unit/`)
+
+| File | Purpose |
+|------|---------|
+| `signed-intents.test.ts` | HMAC signing + freshness window + kind-mismatch rejection for the signed-intent helper used by age-gate and privacy flows. Typechecked under functions tsconfig. |
+| `capsule-delete-core.test.ts` | Shared delete core: admin-actor vs owner-actor branches, R2-failure rollback, idempotent retry semantics, `object_key` set to NULL on success. |
+| `owner-delete-endpoint.test.ts` | Owner `DELETE /api/account/capsules/:code` returns 404 on cross-user access (no existence disclosure). Typechecked under functions tsconfig. |
+| `age-confirmation-endpoint.test.ts` | `POST /api/account/age-confirmation` UPSERT idempotency and the body-`user_id` vs session-`user_id` contract. Typechecked under functions tsconfig. |
+| `audit-sweep-endpoint.test.ts` | `audit-sweep` scrub mode vs delete-abuse-reports mode. Typechecked under functions tsconfig. |
+| `publish-age-gate.test.ts` | Publish endpoint returns `428 Precondition Required` when the caller has not accepted the current age policy (point-read against `user_policy_acceptance`). Typechecked under functions tsconfig. |
+| `auth-start-age-intent.test.ts` | `ageIntent` enforcement inside `functions/auth/{google,github}/start.ts`. Typechecked under functions tsconfig. |
+| `account-delete-cascade.test.ts` | Cascade order, partial-failure behavior, and the rule that an audit-log failure folds into `ok:false` rather than being silently swallowed. Typechecked under functions tsconfig. |
+| `account-capsules-pagination.test.ts` | Paginated capsule listing: cursor base64url encoding/decoding round-trip with correct padding. Typechecked under functions tsconfig. |
+| `account-delete-all-loop.test.tsx` | Bulk delete-all client loop: cap-hit reporting, per-item failure surfacing (jsdom + fetch stub). Runs under frontend tsconfig. |
+| `age-gate-checkbox-refresh.test.tsx` | Age-gate UI: `refreshNonce` trigger path and the uncheck-mid-fetch cancellation case. Runs under frontend tsconfig. |
+| `privacy-request-endpoint.test.ts` | 13 cases over `POST /api/privacy-request`: full request-body validation + the signed-nonce contract. Typechecked under functions tsconfig. |
+
+Existing fixtures updated for Phase 7 (called out because a fresh contributor will trip over them):
+
+- `publish-endpoint.test.ts` — the `makeContext()` mock D1 now returns `{ok: 1}` only when the prepared statement references `user_policy_acceptance`, so the publish endpoint's new age-gate point-read passes through without having to re-stub the whole D1 mock.
+- `admin-delete-endpoint.test.ts` — fixtures gained a `share_code` column because the shared delete core reads it.
+- `auth-ux.test.tsx` — assertions updated for the popup-blocked descriptor (`ageIntent` + `ageIntentMintedAt`), the `aria-haspopup="dialog"` change (was `"true"`), and the new AgeGate checkbox flow with a stubbed `fetch`.
+
+#### Account-Erasure E2E Specs (`tests/e2e/`)
+
+| File | Lane | Purpose |
+|------|------|---------|
+| `policy-routes.spec.ts` | static (default `vite preview`) | 5 tests + 1 skipped over the static policy routes served under `/legal/**` / privacy / terms. Does not need Pages Functions. |
+| `pages-dev-flows.spec.ts` | **Pages-dev-only** | Account-erasure happy paths that need real Pages Functions: age-gate bootstrap, signed-intent round-trip, delete-all loop against the dev backend. Self-skipped outside the `pages-dev` Playwright project (see below). |
+
+#### Pages-dev E2E Lane {#pages-dev-e2e-lane}
+
+Phase 7 introduced a second Playwright config — **`playwright.pages-dev.config.ts`** — for specs that require real Pages Functions (D1, R2, Workers bindings). The default `playwright.config.ts` boots `vite preview`, which serves static assets only; that is fine for mocked `page.route()` specs but cannot exercise `/api/auth/*`, `/api/account/*`, or `/api/privacy-request`.
+
+**How the gating works.** Specs that target the pages-dev lane guard themselves inside a `test.beforeEach` hook:
+
+```ts
+test.beforeEach(({}, testInfo) => {
+  test.skip(testInfo.project.name !== 'pages-dev', 'Requires wrangler pages dev');
+});
+```
+
+That means `pages-dev-flows.spec.ts` is harmless to `npm run test:e2e` (it self-skips under the default project name) but becomes live under `npm run test:e2e:pages-dev`, whose config defines a project named `pages-dev`.
+
+**Prerequisites.**
+
+- Run `npm run build` first so `dist/` is fresh — `playwright.pages-dev.config.ts`'s `webServer` runs `wrangler pages dev dist`, not `vite dev`.
+- Local D1 must already be migrated (`npm run cf:d1:migrate`).
+- `wrangler` must be on `PATH` and logged in for the bindings the config references; missing bindings will surface as startup failures from the webServer, not as spec failures.
+
+**When to run it.**
+
+- Before merging any change that touches `functions/auth/**`, `functions/account/**`, `functions/privacy-request/**`, the signed-intent helper, or the shared capsule-delete core.
+- Before merging changes to age-gate UX that depend on real `/api/account/age-confirmation` responses (mocked `page.route()` is not sufficient — the signed-nonce round-trip must hit the real endpoint).
+- Not required for pure lab/watch UI changes; the default lane remains the fast feedback loop for those.
 
 ### Known Pre-Existing Flake: `worker-integration.spec.ts`
 
@@ -500,7 +570,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **End-to-end pipeline:** load → import → playback → groups.
 
-*All 1700 tests pass across 91 test files, including existing lab tests.*
+*As of Phase 7, 2130 unit tests pass across 120 test files (lab + watch + share + auth + account-erasure). Run `npx vitest run` for the authoritative live total.*
 
 ### Bond Topology Parity (23 tests)
 

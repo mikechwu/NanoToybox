@@ -29,6 +29,7 @@ vi.mock('../../src/share/audit', async () => {
 
 interface Row {
   id: string;
+  share_code?: string;
   status: string;
   object_key: string;
 }
@@ -116,7 +117,7 @@ describe('admin delete endpoint', () => {
     const res = await onRequestPost(
       makeContext({
         code: '7M4K2D8Q9T1V',
-        row: { id: 'sh-1', status: 'ready', object_key: 'capsules/sh-1/capsule.atomdojo' },
+        row: { id: 'sh-1', share_code: '7M4K2D8Q9T1V', status: 'ready', object_key: 'capsules/sh-1/capsule.atomdojo' },
         env: { DEV_ADMIN_ENABLED: 'false' },
       }),
     );
@@ -136,7 +137,7 @@ describe('admin delete endpoint', () => {
     const r2 = makeR2();
     const ctx = makeContext({
       code: '7M4K2D8Q9T1V',
-      row: { id: 'sh-1', status: 'ready', object_key: 'capsules/sh-1/capsule.atomdojo' },
+      row: { id: 'sh-1', share_code: '7M4K2D8Q9T1V', status: 'ready', object_key: 'capsules/sh-1/capsule.atomdojo' },
       r2,
       body: JSON.stringify({ reason: 'spam' }),
     });
@@ -155,7 +156,7 @@ describe('admin delete endpoint', () => {
 
     // Status-flip UPDATE went through (one of the D1 updates contains the UPDATE)
     const updates = (ctx.env.DB as unknown as { _updates: Array<{ sql: string }> })._updates;
-    expect(updates.some((u) => u.sql.includes("UPDATE capsule_share SET status = 'deleted'"))).toBe(true);
+    expect(updates.some((u) => u.sql.includes("UPDATE capsule_share") && u.sql.includes("status             = 'deleted'"))).toBe(true);
 
     // Audit event written with the expected shape
     expect(recordMock).toHaveBeenCalledTimes(1);
@@ -172,7 +173,7 @@ describe('admin delete endpoint', () => {
     const r2 = makeR2();
     const ctx = makeContext({
       code: '7M4K2D8Q9T1V',
-      row: { id: 'sh-1', status: 'deleted', object_key: 'capsules/sh-1/capsule.atomdojo' },
+      row: { id: 'sh-1', share_code: '7M4K2D8Q9T1V', status: 'deleted', object_key: 'capsules/sh-1/capsule.atomdojo' },
       r2,
     });
     const res = await onRequestPost(ctx);
@@ -198,7 +199,7 @@ describe('admin delete endpoint', () => {
     const res = await onRequestPost(
       makeContext({
         code: '7M4K2D8Q9T1V',
-        row: { id: 'sh-1', status: 'ready', object_key: 'capsules/sh-1/capsule.atomdojo' },
+        row: { id: 'sh-1', share_code: '7M4K2D8Q9T1V', status: 'ready', object_key: 'capsules/sh-1/capsule.atomdojo' },
         r2,
       }),
     );
@@ -218,7 +219,7 @@ describe('admin delete endpoint', () => {
     const res = await onRequestPost(
       makeContext({
         code: '7M4K2D8Q9T1V',
-        row: { id: 'sh-1', status: 'ready', object_key: 'k' },
+        row: { id: 'sh-1', share_code: '7M4K2D8Q9T1V', status: 'ready', object_key: 'k' },
         body: '{not-json',
       }),
     );

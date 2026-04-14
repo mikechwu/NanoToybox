@@ -694,6 +694,7 @@ canvas { display: block; touch-action: none; }
   font-size: var(--font-sm); color: var(--color-text);
   text-align: left; cursor: pointer;
   transition: background 0.12s;
+  display: block; text-decoration: none;
 }
 .account-control__menu-item:hover,
 .account-control__menu-item:focus-visible {
@@ -703,6 +704,21 @@ canvas { display: block; touch-action: none; }
 .account-control__menu-item--destructive {
   color: var(--color-accent-text);
 }
+
+/* ── Shared 13+ age-gate checkbox (Phase B) ────────────────────────────
+ * Rendered above the provider buttons in BOTH the AccountControl menu
+ * and the Transfer dialog's signed-out panel — one component, one
+ * sentence, so the two consent points cannot drift. */
+.age-gate { margin: 8px 0 10px; font-size: 13px; }
+.age-gate--compact { margin: 4px 0 8px; font-size: 12px; }
+.age-gate__label {
+  display: grid; grid-template-columns: 20px 1fr; gap: 6px 8px;
+  align-items: start; cursor: pointer;
+}
+.age-gate__label input { margin-top: 2px; }
+.age-gate__note { color: var(--color-muted, #8792a8); margin: 4px 0 0; font-size: 11px; }
+.age-gate__error { color: #ff6b6b; margin: 4px 0 0; font-size: 12px; }
+
 /* On narrow viewports, shrink the max-width so long display names don't
  * crowd the FPS display; the flex container handles horizontal placement. */
 @media (max-width: 480px) {
@@ -1092,6 +1108,18 @@ canvas { display: block; touch-action: none; }
 }
 .timeline-transfer-dialog__code code {
   font-family: var(--font-family); letter-spacing: 0.05em;
+}
+/* Subtle "Manage uploads" link in the post-publish success state.
+ * Low-emphasis on purpose — it's a reinforcement, not a CTA.
+ */
+.timeline-transfer-dialog__manage {
+  font-size: var(--font-xs); margin-top: 8px;
+}
+.timeline-transfer-dialog__manage a {
+  color: var(--color-text-secondary); text-decoration: underline;
+}
+.timeline-transfer-dialog__manage a:hover {
+  color: var(--color-text);
 }
 /* Non-fatal publish warning — rendered alongside the share URL when the
    server returns warnings[] on a real success (e.g. quota-accounting

@@ -1,0 +1,117 @@
+/* Shared layout for /privacy, /terms, and the static chrome of /account. */
+
+:root {
+  --policy-bg: #0b0d12;
+  --policy-fg: #e8ecf4;
+  --policy-muted: #8792a8;
+  --policy-accent: #74a9ff;
+  --policy-danger: #ff6b6b;
+  --policy-rule: #1d2430;
+  --policy-card: #11151d;
+  --policy-card-border: #1c2230;
+  --policy-max: 720px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--policy-bg);
+  color: var(--policy-fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, sans-serif;
+  line-height: 1.55;
+  font-size: 16px;
+}
+
+.policy-page a {
+  color: var(--policy-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.policy-page a:hover { text-decoration-thickness: 2px; }
+
+.policy-shell {
+  max-width: var(--policy-max);
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+}
+
+.policy-header h1 {
+  font-size: 2rem;
+  margin: 0 0 8px;
+  letter-spacing: -0.01em;
+}
+
+.policy-effective {
+  color: var(--policy-muted);
+  margin: 0 0 16px;
+  font-size: 0.9rem;
+}
+
+.policy-nav {
+  display: flex;
+  gap: 16px;
+  font-size: 0.95rem;
+  border-bottom: 1px solid var(--policy-rule);
+  padding-bottom: 16px;
+  margin-bottom: 24px;
+}
+
+.policy-shell section {
+  margin: 32px 0;
+}
+
+.policy-shell h2 {
+  font-size: 1.25rem;
+  margin: 0 0 12px;
+}
+
+.policy-shell p { margin: 0 0 12px; }
+.policy-shell ul { padding-left: 24px; }
+.policy-shell code {
+  background: var(--policy-card);
+  border: 1px solid var(--policy-card-border);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: "SF Mono", "Roboto Mono", ui-monospace, monospace;
+  font-size: 0.85em;
+}
+
+.policy-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  margin: 12px 0 0;
+  display: block;
+  overflow-x: auto;
+}
+.policy-table thead th {
+  text-align: left;
+  border-bottom: 2px solid var(--policy-rule);
+  padding: 8px 10px;
+  background: var(--policy-card);
+}
+.policy-table tbody td {
+  vertical-align: top;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--policy-rule);
+}
+.policy-table tbody tr:nth-child(even) td {
+  background: rgba(255,255,255,0.02);
+}
+
+.policy-footer {
+  margin-top: 48px;
+  padding-top: 16px;
+  border-top: 1px solid var(--policy-rule);
+  font-size: 0.9rem;
+  color: var(--policy-muted);
+}
+
+@media (max-width: 520px) {
+  .policy-shell { padding: 20px 16px 48px; }
+  .policy-header h1 { font-size: 1.5rem; }
+  .policy-table { font-size: 0.82rem; }
+}

@@ -16,6 +16,8 @@
  * Schedule routing (cron pattern → target endpoint):
  *   "0 *\/6 * * *"  → /api/admin/sweep/sessions
  *   "30 3 * * *"    → /api/admin/sweep/orphans
+ *   "15 4 * * 0"    → /api/admin/sweep/audit?mode=scrub (weekly, Sunday)
+ *   "45 4 * * 0"    → /api/admin/sweep/audit?mode=delete-abuse-reports
  *
  * Each tick:
  *   1. POST to the target with X-Cron-Secret
@@ -33,6 +35,12 @@ export interface Env {
 const CRON_ROUTES: Record<string, string> = {
   '0 */6 * * *': '/api/admin/sweep/sessions',
   '30 3 * * *': '/api/admin/sweep/orphans',
+  // Weekly audit retention — scrub sensitive fields, then delete the
+  // narrow abuse_report class that offers no forensics value past 180d.
+  // Two separate ticks so a failure in one mode does not block the
+  // other and Cloudflare's per-tick retry stays meaningful.
+  '15 4 * * 0': '/api/admin/sweep/audit?mode=scrub',
+  '45 4 * * 0': '/api/admin/sweep/audit?mode=delete-abuse-reports',
 };
 
 export default {
@@ -68,12 +76,20 @@ export default {
     // (2) Operator input parse — only reachable after auth succeeds.
     const url = new URL(request.url);
     const target = url.searchParams.get('target');
-    if (!target || !['sessions', 'orphans'].includes(target)) {
-      return new Response('Usage: GET /?target=sessions|orphans', { status: 400 });
+    if (!target || !['sessions', 'orphans', 'audit-scrub', 'audit-delete'].includes(target)) {
+      return new Response(
+        'Usage: GET /?target=sessions|orphans|audit-scrub|audit-delete',
+        { status: 400 },
+      );
     }
 
-    const path = target === 'sessions' ? '/api/admin/sweep/sessions' : '/api/admin/sweep/orphans';
-    const result = await invokeSweep(path, env);
+    const pathByTarget: Record<string, string> = {
+      sessions: '/api/admin/sweep/sessions',
+      orphans: '/api/admin/sweep/orphans',
+      'audit-scrub': '/api/admin/sweep/audit?mode=scrub',
+      'audit-delete': '/api/admin/sweep/audit?mode=delete-abuse-reports',
+    };
+    const result = await invokeSweep(pathByTarget[target], env);
     return Response.json(result, { status: result.ok ? 200 : 502 });
   },
 };

@@ -126,6 +126,19 @@ export type AuthState =
 export interface AuthPopupBlockedPending {
   provider: 'google' | 'github';
   resumePublish: boolean;
+  /** Signed age-intent nonce carried forward so the user's eventual
+   *  Retry / Continue-in-tab choice lands at `/auth/{provider}/start`
+   *  with the server-required age-gate param intact. Null when the
+   *  user was already signed in (bypass path). */
+  ageIntent?: string | null;
+  /** Wall-clock ms when the carried `ageIntent` was minted. Read by
+   *  the React retry / continue-in-tab handlers to decide whether to
+   *  reuse the stored token or reroute the user to the provider
+   *  picker so a fresh nonce can be minted. Null when `ageIntent` is
+   *  null. Without this, a user who waits at the popup-blocked
+   *  prompt for a few minutes would silently reuse an expired token
+   *  and hit a raw 400 on `/auth/{provider}/start`. */
+  ageIntentMintedAt?: number | null;
 }
 
 /** Imperative callbacks registered by main.ts, invoked by AccountControl + Transfer dialog.
@@ -134,7 +147,17 @@ export interface AuthCallbacks {
   /** Start the OAuth flow. Prefers a popup; on block, sets
    *  `authPopupBlocked` on the store WITHOUT navigating — the UI then
    *  offers an explicit Retry / Continue-in-tab choice. */
-  onSignIn: (provider: 'google' | 'github', opts?: { resumePublish?: boolean }) => void;
+  onSignIn: (
+    provider: 'google' | 'github',
+    opts?: {
+      resumePublish?: boolean;
+      ageIntent?: string | null;
+      /** mintedAt timestamp paired with `ageIntent`. Carried into the
+       *  popup-blocked descriptor so a subsequent Retry / same-tab
+       *  click can detect a stale token and reroute to the picker. */
+      ageIntentMintedAt?: number | null;
+    },
+  ) => void;
   /** User has explicitly consented to the destructive same-tab redirect
    *  for the currently-pending blocked sign-in. Reads the pending
    *  descriptor from the store, performs `location.assign`, and clears
