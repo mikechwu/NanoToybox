@@ -99,12 +99,16 @@ test.describe('Phase 7 — policy routes', () => {
   });
 
   test('/account loads the shell (signed-out fallback under preview server)', async ({ page, baseURL }) => {
-    // The Account page always renders an `h1#Account` regardless of the
-    // load state — this is enough to confirm the route was emitted and
-    // the React module booted. Detailed UX (uploads list, danger zone)
-    // requires live /api/* endpoints which the static preview lacks.
+    // The redesigned page renders different headings per load state, so we
+    // assert against chrome that's present in every state: the top-bar
+    // wordmark + the "account" crumb. This is enough to confirm the route
+    // was emitted and the React module booted. Detailed UX (uploads,
+    // danger zone) requires live /api/* endpoints which the static preview
+    // lacks; the React module hits /api/account/me, gets a 404, and
+    // falls through to the signed-out view.
     await page.goto(`${baseURL}/account/`);
-    await expect(page.locator('h1', { hasText: 'Account' })).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.acct__wordmark')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.acct__crumbs')).toContainText(/account/i);
   });
 
   test('policy version meta tag is consistent with policy-config', async ({ page, baseURL }) => {

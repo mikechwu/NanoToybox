@@ -1,21 +1,26 @@
 /**
- * Account page (Phase C/D/E of 2026-04-14 plan).
+ * Account page — laboratory-editorial redesign.
  *
  * Single-file React page so the account route has no cross-dependency
  * on the Lab store. Fetches `/api/account/me` and `/api/account/capsules`
  * on mount; renders four sections:
  *
- *   - Profile        → display name + provider + sign out
- *   - Uploads        → paginated list w/ copy-link / open / delete
- *   - Privacy & Data → links out, delete-all, delete-account
- *   - Support & Policies → Privacy + Terms links
+ *   01 · Profile        → identity card + sign out
+ *   02 · Uploads        → cursor-paginated list, copy-link / open / delete
+ *   03 · Privacy & Data → delete-all (with cap-hit Continue), delete-account
+ *   04 · Support        → policy links
  *
  * Deletion flows call the corresponding /api/account/* endpoints; each
- * destructive action uses a confirm dialog (typed "DELETE ACCOUNT" for
- * account-wide deletion).
+ * destructive action uses an inline confirmation surface (typed
+ * "DELETE ACCOUNT" for account-wide deletion).
+ *
+ * Layout: asymmetric grid with a sticky section rail (desktop) /
+ * scrollable nav (mobile). Every state hook, callback, endpoint, and
+ * data-testid from the previous revision is preserved — the rewrite
+ * is markup + presentation, not behaviour.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 interface AccountMe {
@@ -57,6 +62,8 @@ type LoadState =
       nextCursor: string | null;
     };
 
+// ── Formatting helpers ──────────────────────────────────────────────
+
 function formatBytes(n: number): string {
   if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -65,11 +72,22 @@ function formatBytes(n: number): string {
 
 function formatDate(iso: string): string {
   try {
-    return new Date(iso).toLocaleDateString();
+    return new Date(iso).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
   } catch {
     return iso;
   }
 }
+
+function monogramOf(me: AccountMe): string {
+  const src = me.displayName?.trim() || me.userId;
+  return (src[0] ?? '·').toUpperCase();
+}
+
+// ── Data ────────────────────────────────────────────────────────────
 
 async function loadAll(): Promise<LoadState> {
   try {
@@ -78,12 +96,8 @@ async function loadAll(): Promise<LoadState> {
       fetch('/api/account/capsules', { credentials: 'include' }),
     ]);
     if (meRes.status === 401) return { status: 'signed-out' };
-    if (!meRes.ok) {
-      return { status: 'error', message: `me: ${meRes.status}` };
-    }
-    if (!capRes.ok) {
-      return { status: 'error', message: `capsules: ${capRes.status}` };
-    }
+    if (!meRes.ok) return { status: 'error', message: `me: ${meRes.status}` };
+    if (!capRes.ok) return { status: 'error', message: `capsules: ${capRes.status}` };
     const me = (await meRes.json()) as AccountMe;
     const capsData = (await capRes.json()) as CapsulesPage;
     return {
@@ -94,10 +108,7 @@ async function loadAll(): Promise<LoadState> {
       nextCursor: capsData.nextCursor ?? null,
     };
   } catch (err) {
-    return {
-      status: 'error',
-      message: err instanceof Error ? err.message : String(err),
-    };
+    return { status: 'error', message: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -109,24 +120,64 @@ async function loadMoreCapsules(cursor: string): Promise<CapsulesPage> {
   return (await res.json()) as CapsulesPage;
 }
 
+// ── Shared chrome ───────────────────────────────────────────────────
+
+function TopBar() {
+  return (
+    <header className="acct__topbar">
+      <a href="/lab/" className="acct__wordmark" aria-label="Back to Lab">atomdojo</a>
+      <div className="acct__crumbs"><span>Account</span></div>
+    </header>
+  );
+}
+
+function Footer() {
+  return (
+    <footer className="acct__footer">
+      <span>© atomdojo</span>
+      <span><a href="/privacy/">Privacy</a> · <a href="/terms/">Terms</a></span>
+    </footer>
+  );
+}
+
+function Toast({ text, onClose }: { text: string; onClose: () => void }) {
+  return (
+    <div role="status" aria-live="polite" className="acct__toast">
+      <span>{text}</span>
+      <button type="button" onClick={onClose} aria-label="Dismiss notice">×</button>
+    </div>
+  );
+}
+
+// ── State views ─────────────────────────────────────────────────────
+
+function LoadingView() {
+  return (
+    <>
+      <TopBar />
+      <main className="acct__shell" aria-busy="true">
+        <div className="acct__state">
+          <p className="acct__state-mark">Loading account…</p>
+        </div>
+      </main>
+    </>
+  );
+}
+
 function SignedOutView() {
   return (
     <>
-      <header className="policy-header">
-        <h1>Account</h1>
-        <nav className="policy-nav" aria-label="Policy navigation">
-          <a href="/privacy/">Privacy</a>
-          <a href="/terms/">Terms</a>
-          <a href="/lab/">Lab</a>
-        </nav>
-      </header>
-      <section>
-        <h2>Sign in required</h2>
-        <p>Please sign in from Lab to manage your account.</p>
-        <p>
-          <a href="/lab/">Go to Lab</a>
-        </p>
-      </section>
+      <TopBar />
+      <main className="acct__shell">
+        <div className="acct__state">
+          <h1>Sign in required</h1>
+          <p>Account management is only available when signed in. Head back to Lab to continue.</p>
+          <p>
+            <a className="acct-btn acct-btn--accent" href="/lab/">Go to Lab</a>
+          </p>
+        </div>
+        <Footer />
+      </main>
     </>
   );
 }
@@ -134,19 +185,51 @@ function SignedOutView() {
 function ErrorView({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <>
-      <header className="policy-header">
-        <h1>Account</h1>
-      </header>
-      <section>
-        <h2>Could not load</h2>
-        <p>{message}</p>
-        <button type="button" onClick={onRetry} className="btn btn-secondary">
-          Retry
-        </button>
-      </section>
+      <TopBar />
+      <main className="acct__shell">
+        <div className="acct__state">
+          <h1>Could not load account</h1>
+          <p>{message}</p>
+          <p>
+            <button type="button" onClick={onRetry} className="acct-btn">Retry</button>
+          </p>
+        </div>
+        <Footer />
+      </main>
     </>
   );
 }
+
+// ── Section rail ────────────────────────────────────────────────────
+
+const SECTIONS = [
+  { id: 'profile', label: 'Profile' },
+  { id: 'uploads', label: 'Uploads' },
+  { id: 'privacy', label: 'Privacy & Data' },
+  { id: 'support', label: 'Support' },
+] as const;
+
+function Rail({ active }: { active: string }) {
+  return (
+    <nav className="acct__rail" aria-label="Account sections">
+      <ul className="acct__rail-list">
+        {SECTIONS.map((s) => (
+          <li key={s.id}>
+            <a
+              href={`#${s.id}`}
+              className="acct__rail-link"
+              aria-current={active === s.id ? 'true' : undefined}
+            >
+              {s.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+// ── Main app ────────────────────────────────────────────────────────
 
 function AccountApp() {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
@@ -157,6 +240,8 @@ function AccountApp() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [deleteAccountConfirm, setDeleteAccountConfirm] = useState('');
   const [banner, setBanner] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<string>('profile');
 
   const reload = useCallback(() => {
     setState({ status: 'loading' });
@@ -166,6 +251,38 @@ function AccountApp() {
   useEffect(() => {
     reload();
   }, [reload]);
+
+  // Auto-dismiss the toast banner after 5s — keeps confirmations from
+  // lingering while still surfacing them long enough to read.
+  useEffect(() => {
+    if (!banner) return;
+    const handle = window.setTimeout(() => setBanner(null), 5000);
+    return () => window.clearTimeout(handle);
+  }, [banner]);
+
+  // Scroll-spy for the section rail. Uses IntersectionObserver against
+  // the section anchors; the most-visible section becomes active. The
+  // typeof guard keeps jsdom (no IntersectionObserver) happy in unit
+  // tests — degrades to a fixed active section, which is harmless.
+  useEffect(() => {
+    if (state.status !== 'ready') return;
+    if (typeof IntersectionObserver === 'undefined') return;
+    const targets = SECTIONS
+      .map((s) => document.getElementById(s.id))
+      .filter((el): el is HTMLElement => el !== null);
+    if (targets.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (visible?.target.id) setActiveSection(visible.target.id);
+      },
+      { rootMargin: '-30% 0px -55% 0px', threshold: [0, 0.25, 0.5, 0.75, 1] },
+    );
+    targets.forEach((t) => observer.observe(t));
+    return () => observer.disconnect();
+  }, [state.status]);
 
   const onDeleteCapsule = useCallback(
     async (code: string) => {
@@ -236,8 +353,6 @@ function AccountApp() {
           exitReason = 'drained';
           break;
         }
-        // Last allowed batch and server still says more remain →
-        // record cap-hit so the post-loop banner stays truthful.
         if (batchIndex >= MAX_BATCHES) {
           exitReason = 'cap-hit';
         }
@@ -250,9 +365,6 @@ function AccountApp() {
             (failedTotal > 0 ? ` (${failedTotal} failed)` : '') +
             '. More uploads remain — choose "Continue deleting" to remove the rest.',
         );
-        // Keep the confirmation surface open AND refresh the list so
-        // the new totals are visible while the user decides whether
-        // to continue.
         reload();
         return;
       }
@@ -267,9 +379,6 @@ function AccountApp() {
       setBanner(err instanceof Error ? err.message : String(err));
     } finally {
       setBulkDeleting(false);
-      // Only close the confirmation surface when the action genuinely
-      // finished (drained, errored, or threw). On cap-hit we leave it
-      // open so the Continue button stays in front of the user.
       if (exitReason !== 'cap-hit') setDeleteAllConfirm(false);
     }
   }, [reload]);
@@ -323,9 +432,7 @@ function AccountApp() {
       }
     } catch (err) {
       // Network failure: redirect anyway so the UX completes, but
-      // surface to ops + devtools so an outage isn't silent. The
-      // cookie may still authenticate the user on /lab/ — they'll see
-      // themselves still signed in until the session expires.
+      // surface to ops + devtools so an outage isn't silent.
       console.warn(
         `[account] logout failed; cookie may persist: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -333,221 +440,299 @@ function AccountApp() {
     window.location.href = '/lab/';
   }, []);
 
-  if (state.status === 'loading') {
-    return (
-      <>
-        <header className="policy-header">
-          <h1>Account</h1>
-        </header>
-        <section>
-          <p>Loading…</p>
-        </section>
-      </>
-    );
-  }
+  const copyTimerRef = useRef<number | null>(null);
+  const onCopyLink = useCallback((shareCode: string) => {
+    const url = `${window.location.origin}/c/${shareCode}`;
+    navigator.clipboard?.writeText(url);
+    setCopiedCode(shareCode);
+    setBanner('Link copied to clipboard.');
+    if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = window.setTimeout(() => setCopiedCode(null), 1500);
+  }, []);
+
+  const ageStatus = useMemo(() => {
+    if (state.status !== 'ready') return null;
+    return state.me.ageConfirmedAt
+      ? { label: '13+ confirmed', value: formatDate(state.me.ageConfirmedAt) }
+      : { label: '13+ confirmation', value: 'pending' };
+  }, [state]);
+
+  if (state.status === 'loading') return <LoadingView />;
   if (state.status === 'signed-out') return <SignedOutView />;
-  if (state.status === 'error')
-    return <ErrorView message={state.message} onRetry={reload} />;
+  if (state.status === 'error') return <ErrorView message={state.message} onRetry={reload} />;
 
   const { me, capsules, hasMore } = state;
+
   return (
     <>
-      <header className="policy-header">
-        <h1>Account</h1>
-        <nav className="policy-nav" aria-label="Policy navigation">
-          <a href="/privacy/">Privacy</a>
-          <a href="/terms/">Terms</a>
-          <a href="/lab/">Lab</a>
-        </nav>
-      </header>
+      <TopBar />
+      {banner ? <Toast text={banner} onClose={() => setBanner(null)} /> : null}
 
-      {banner ? (
-        <div role="status" aria-live="polite" className="banner">
-          {banner}
+      <main className="acct__shell">
+        {/* Header — the user's name IS the title. Provider + join date
+          * live inside the Profile section's metric grid where they're
+          * discoverable but don't shout on every visit. The user id
+          * is hidden everywhere — it's an opaque DB key, not user-
+          * facing information. */}
+        <div className="acct__head">
+          <h1 className="acct__title">{me.displayName ?? 'Account'}</h1>
         </div>
-      ) : null}
+        <hr className="acct__rule" />
 
-      <section aria-labelledby="profile-heading">
-        <h2 id="profile-heading">Profile</h2>
-        <p>
-          {me.displayName ?? '(no name)'}{' '}
-          <span className="muted">· {me.provider ?? 'unknown provider'}</span>
-        </p>
-        <button type="button" onClick={onSignOut} className="btn">
-          Sign out
-        </button>
-      </section>
+        <div className="acct__layout">
+          <Rail active={activeSection} />
 
-      <section aria-labelledby="uploads-heading">
-        <h2 id="uploads-heading">
-          Uploads ({capsules.length}
-          {hasMore ? '+' : ''})
-        </h2>
-        {capsules.length === 0 ? (
-          <p>
-            You have not published any capsules yet. Publish from{' '}
-            <a href="/lab/">Lab</a> to create a share link.
-          </p>
-        ) : (
-          <ul className="uploads-list">
-            {capsules.map((c) => (
-              <li key={c.shareCode} className="upload-row">
-                <div className="upload-meta">
-                  <strong>{c.title ?? c.shareCode}</strong>
-                  <span className="muted">
-                    {formatDate(c.createdAt)} · {formatBytes(c.sizeBytes)}
-                  </span>
-                </div>
-                <div className="upload-actions">
-                  <a
-                    className="btn btn-secondary"
-                    href={`/c/${c.shareCode}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Open
-                  </a>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      navigator.clipboard?.writeText(
-                        `${window.location.origin}/c/${c.shareCode}`,
-                      );
-                      setBanner('Link copied.');
-                    }}
-                  >
-                    Copy link
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger"
-                    disabled={deletingCode === c.shareCode}
-                    onClick={() => {
-                      if (
-                        confirm(
-                          `Delete ${c.title ?? c.shareCode}? The public link will stop working.`,
-                        )
-                      ) {
-                        onDeleteCapsule(c.shareCode);
-                      }
-                    }}
-                  >
-                    {deletingCode === c.shareCode ? 'Deleting…' : 'Delete'}
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-        {hasMore ? (
-          <div className="uploads-load-more">
-            <button
-              type="button"
-              className="btn"
-              onClick={onLoadMore}
-              disabled={loadingMore}
-              data-testid="account-uploads-load-more"
+          <div className="acct__main">
+            {/* Profile */}
+            <section
+              id="profile"
+              className="acct__section"
+              aria-labelledby="profile-heading"
             >
-              {loadingMore ? 'Loading…' : 'Load more'}
-            </button>
-          </div>
-        ) : null}
-      </section>
+              <h2 className="acct__h2" id="profile-heading">Profile</h2>
+              <div className="acct__identity">
+                <span className="acct__monogram" aria-hidden="true">{monogramOf(me)}</span>
+                <div className="acct__name-row">
+                  <span className="acct__name">{me.displayName ?? '(no display name)'}</span>
+                  <span className="acct__sub">Signed in via {me.provider ?? 'unknown'}</span>
+                </div>
+              </div>
 
-      <section aria-labelledby="privacy-heading" className="danger-zone">
-        <h2 id="privacy-heading">Privacy &amp; Data</h2>
-        <p>
-          Read the <a href="/privacy/">Privacy Policy</a>. Deletion takes
-          effect immediately — public links stop resolving.
-        </p>
-        <div className="danger-actions">
-          <button
-            type="button"
-            className="btn btn-danger"
-            onClick={() => setDeleteAllConfirm(true)}
-            disabled={capsules.length === 0 || bulkDeleting}
-          >
-            Delete all uploaded capsules
-          </button>
-          {deleteAllConfirm ? (
-            <div className="confirm-inline">
-              {batchCapHit ? (
-                <p>
-                  <strong>More uploads remain.</strong> The previous run
-                  removed as many as a single request can safely handle —
-                  click <em>Continue deleting</em> to remove the rest.
+              {/* User-id deliberately omitted — it's an opaque server key
+                * with no value to the person looking at this page. */}
+              <div className="acct__metric-row">
+                <div className="acct__metric">
+                  <span className="acct__metric-key">Joined</span>
+                  <span className="acct__metric-val">{formatDate(me.createdAt)}</span>
+                </div>
+                {ageStatus ? (
+                  <div className="acct__metric">
+                    <span className="acct__metric-key">{ageStatus.label}</span>
+                    <span className={`acct__metric-val${me.ageConfirmedAt ? ' acct__metric-val--ok' : ''}`}>
+                      {ageStatus.value}
+                    </span>
+                  </div>
+                ) : null}
+                {me.policyVersion ? (
+                  <div className="acct__metric">
+                    <span className="acct__metric-key">Policy version</span>
+                    <span className="acct__metric-val acct__metric-val--mono">{me.policyVersion}</span>
+                  </div>
+                ) : null}
+              </div>
+
+              <button type="button" onClick={onSignOut} className="acct-btn">
+                Sign out
+              </button>
+            </section>
+
+            {/* Uploads */}
+            <section
+              id="uploads"
+              className="acct__section"
+              aria-labelledby="uploads-heading"
+            >
+              <h2 className="acct__h2" id="uploads-heading">Uploads</h2>
+              <div className="acct__uploads-meta">
+                <span>
+                  <strong>{capsules.length}{hasMore ? '+' : ''}</strong>{' '}
+                  capsule{capsules.length === 1 ? '' : 's'} published
+                </span>
+                <span>Public links remain live until you delete them.</span>
+              </div>
+
+              {capsules.length === 0 ? (
+                <p className="acct__empty">
+                  No capsules yet. Publish from <a href="/lab/">Lab</a> to create a share link.
                 </p>
               ) : (
-                <p>
-                  <strong>This removes every capsule you have published.</strong>{' '}
-                  Your account remains.
-                </p>
+                <ul className="acct__uploads-list">
+                  {capsules.map((c) => (
+                    <li key={c.shareCode} className="acct__upload">
+                      <div className="acct__upload-meta">
+                        <div className="acct__upload-title">
+                          {c.title?.trim() || <em>Untitled</em>}
+                        </div>
+                        <code className="acct__upload-code">{c.shareCode}</code>
+                      </div>
+                      <div className="acct__upload-stats">
+                        <span><strong>{formatBytes(c.sizeBytes)}</strong></span>
+                        <span>{formatDate(c.createdAt)}</span>
+                      </div>
+                      <div className="acct__upload-actions">
+                        <a
+                          className="acct-btn acct-btn--ghost"
+                          href={`/c/${c.shareCode}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          Open
+                        </a>
+                        <button
+                          type="button"
+                          className="acct-btn acct-btn--ghost"
+                          onClick={() => onCopyLink(c.shareCode)}
+                        >
+                          {copiedCode === c.shareCode ? 'Copied' : 'Copy link'}
+                        </button>
+                        <button
+                          type="button"
+                          className="acct-btn acct-btn--danger"
+                          disabled={deletingCode === c.shareCode}
+                          onClick={() => {
+                            if (
+                              confirm(
+                                `Delete ${c.title ?? c.shareCode}? The public link will stop working.`,
+                              )
+                            ) {
+                              onDeleteCapsule(c.shareCode);
+                            }
+                          }}
+                        >
+                          {deletingCode === c.shareCode ? 'Deleting…' : 'Delete'}
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
               )}
-              <button
-                type="button"
-                className="btn btn-danger"
-                onClick={onDeleteAll}
-                disabled={bulkDeleting}
-                data-testid="account-delete-all-confirm"
-              >
-                {bulkDeleting
-                  ? 'Deleting…'
-                  : batchCapHit
-                    ? 'Continue deleting'
-                    : 'Yes, delete all'}
-              </button>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => {
-                  setDeleteAllConfirm(false);
-                  setBatchCapHit(false);
-                }}
-                disabled={bulkDeleting}
-              >
-                {batchCapHit ? 'Stop' : 'Cancel'}
-              </button>
-            </div>
-          ) : null}
+
+              {hasMore ? (
+                <div className="acct__load-more">
+                  <button
+                    type="button"
+                    className="acct-btn"
+                    onClick={onLoadMore}
+                    disabled={loadingMore}
+                    data-testid="account-uploads-load-more"
+                  >
+                    {loadingMore ? 'Loading…' : 'Load more'}
+                  </button>
+                </div>
+              ) : null}
+            </section>
+
+            {/* Privacy & Data */}
+            <section
+              id="privacy"
+              className="acct__section"
+              aria-labelledby="privacy-heading"
+            >
+              <h2 className="acct__h2" id="privacy-heading">Privacy &amp; Data</h2>
+              <p className="acct__p">
+                Read the <a href="/privacy/">Privacy Policy</a>. Deletion takes
+                effect immediately — public links stop resolving.
+              </p>
+
+              <div className="acct__danger">
+                <h3 className="acct__h3">Bulk delete</h3>
+                <p className="acct__p">
+                  Removes every capsule you have published. Your account remains.
+                </p>
+                <button
+                  type="button"
+                  className="acct-btn acct-btn--accent"
+                  onClick={() => setDeleteAllConfirm(true)}
+                  disabled={capsules.length === 0 || bulkDeleting}
+                >
+                  Delete all uploaded capsules
+                </button>
+
+                {deleteAllConfirm ? (
+                  <div className="acct__confirm">
+                    {batchCapHit ? (
+                      <p>
+                        <strong>More uploads remain.</strong> The previous run
+                        removed as many as a single request can safely handle —
+                        click <em>Continue deleting</em> to remove the rest.
+                      </p>
+                    ) : (
+                      <p>
+                        <strong>This removes every capsule you have published.</strong>{' '}
+                        Your account remains.
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      className="acct-btn acct-btn--danger"
+                      onClick={onDeleteAll}
+                      disabled={bulkDeleting}
+                      data-testid="account-delete-all-confirm"
+                    >
+                      {bulkDeleting
+                        ? 'Deleting…'
+                        : batchCapHit
+                          ? 'Continue deleting'
+                          : 'Yes, delete all'}
+                    </button>
+                    <button
+                      type="button"
+                      className="acct-btn acct-btn--ghost"
+                      onClick={() => {
+                        setDeleteAllConfirm(false);
+                        setBatchCapHit(false);
+                      }}
+                      disabled={bulkDeleting}
+                    >
+                      {batchCapHit ? 'Stop' : 'Cancel'}
+                    </button>
+                  </div>
+                ) : null}
+
+                <hr className="acct__danger-divider" />
+
+                <h3 className="acct__h3">Close account</h3>
+                <p className="acct__p">
+                  This deletes your account, revokes sessions, removes your uploaded
+                  capsules, and stops all public share links. Pseudonymous audit
+                  records (hashed IP, event type) may be retained for up to 180 days
+                  for abuse prevention.
+                </p>
+                <p className="acct__p">
+                  Type <code>DELETE ACCOUNT</code> to confirm:
+                </p>
+                <input
+                  type="text"
+                  value={deleteAccountConfirm}
+                  onChange={(e) => setDeleteAccountConfirm(e.target.value)}
+                  className="acct__input"
+                  aria-label="Type DELETE ACCOUNT to confirm"
+                  spellCheck={false}
+                  autoCapitalize="characters"
+                  autoComplete="off"
+                />
+                <div style={{ marginTop: 12 }}>
+                  <button
+                    type="button"
+                    className="acct-btn acct-btn--danger"
+                    disabled={deleteAccountConfirm !== 'DELETE ACCOUNT'}
+                    onClick={onDeleteAccount}
+                  >
+                    Delete account
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            {/* Support */}
+            <section
+              id="support"
+              className="acct__section"
+              aria-labelledby="support-heading"
+            >
+              <h2 className="acct__h2" id="support-heading">Support &amp; Policies</h2>
+              <div className="acct__links">
+                <a href="/privacy/">Privacy Policy</a>
+                <a href="/terms/">Terms</a>
+                <a href="/privacy-request/">Send a privacy request</a>
+                <a href="/lab/">Back to Lab</a>
+              </div>
+            </section>
+
+            <Footer />
+          </div>
         </div>
-
-        <hr className="rule" />
-
-        <h3>Delete account</h3>
-        <p>
-          This deletes your account, revokes sessions, removes your uploaded
-          capsules, and stops all public share links. Pseudonymous audit
-          records (hashed IP, event type) may be retained for up to 180 days
-          for abuse prevention.
-        </p>
-        <p>
-          Type <code>DELETE ACCOUNT</code> to confirm:
-        </p>
-        <input
-          type="text"
-          value={deleteAccountConfirm}
-          onChange={(e) => setDeleteAccountConfirm(e.target.value)}
-          className="confirm-input"
-          aria-label="Type DELETE ACCOUNT to confirm"
-        />
-        <button
-          type="button"
-          className="btn btn-danger"
-          disabled={deleteAccountConfirm !== 'DELETE ACCOUNT'}
-          onClick={onDeleteAccount}
-        >
-          Delete account
-        </button>
-      </section>
-
-      <section aria-labelledby="support-heading">
-        <h2 id="support-heading">Support &amp; Policies</h2>
-        <p>
-          <a href="/privacy/">Privacy Policy</a> ·{' '}
-          <a href="/terms/">Terms</a>
-        </p>
-      </section>
+      </main>
     </>
   );
 }

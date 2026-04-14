@@ -5,48 +5,97 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>Send a privacy request — atomdojo</title>
+  <!--
+    Theme bootstrap. Runs synchronously BEFORE the stylesheet so
+    `data-theme` is on <html> before first paint — no FOUC.
+    Reads the same `atomdojo.theme` key Lab writes via
+    `applyThemeSetting`, so a Lab choice carries here. Falls back
+    to the OS preference when unset.
+  -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('atomdojo.theme');
+        if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+      } catch (_) { /* private mode — fall back to media query */ }
+    })();
+  </script>
   <link rel="stylesheet" href="/policy-layout.css">
   <style>
+    /* Form controls — re-use the shared theme tokens so the form
+       repaints under Light/Dark with no per-rule overrides. */
     .pr-field { display: grid; gap: 6px; margin-bottom: 14px; }
-    .pr-field label { font-weight: 500; }
+    .pr-field label {
+      font-weight: 500;
+      font-size: 14px;
+      color: var(--color-text);
+    }
     .pr-field input,
     .pr-field select,
     .pr-field textarea {
       font: inherit;
       padding: 8px 10px;
-      background: var(--policy-bg);
-      color: var(--policy-fg);
-      border: 1px solid var(--policy-card-border);
-      border-radius: 6px;
+      background: var(--color-surface);
+      color: var(--color-text);
+      border: 1px solid var(--color-border-strong);
+      border-radius: 4px;
       width: 100%;
+      transition: border-color 140ms ease;
     }
-    .pr-field textarea { resize: vertical; min-height: 140px; }
-    .pr-counter { color: var(--policy-muted); font-size: 0.85rem; text-align: right; }
-    .pr-counter--over { color: var(--policy-danger); }
-    .pr-honeypot { position: absolute; left: -10000px; top: auto; width: 1px; height: 1px; overflow: hidden; }
-    .pr-actions { margin-top: 16px; }
+    .pr-field input:focus,
+    .pr-field select:focus,
+    .pr-field textarea:focus {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 1px;
+      border-color: var(--color-accent);
+    }
+    .pr-field textarea { resize: vertical; min-height: 140px; line-height: 1.5; }
+    .pr-counter {
+      color: var(--color-text-secondary);
+      font-size: 12.5px;
+      text-align: right;
+    }
+    .pr-counter--over { color: var(--color-danger); }
+    .pr-honeypot {
+      position: absolute; left: -10000px; top: auto;
+      width: 1px; height: 1px; overflow: hidden;
+    }
+    .pr-actions { margin-top: 18px; }
     .pr-submit {
       font: inherit;
-      padding: 10px 18px;
-      border-radius: 6px;
-      border: 1px solid var(--policy-card-border);
-      background: var(--policy-card);
-      color: var(--policy-fg);
+      font-weight: 500;
+      padding: 8px 18px;
+      border-radius: 4px;
+      border: 1px solid var(--color-accent);
+      background: var(--color-surface);
+      color: var(--color-accent-text);
       cursor: pointer;
+      transition: background 140ms ease;
     }
-    .pr-submit[disabled] { opacity: 0.5; cursor: not-allowed; }
+    .pr-submit:hover:not([disabled]) { background: var(--color-accent-soft); }
+    .pr-submit:focus-visible {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 2px;
+    }
+    .pr-submit[disabled] { opacity: 0.45; cursor: not-allowed; }
     .pr-status {
       margin-top: 16px;
       padding: 10px 14px;
-      border: 1px solid var(--policy-card-border);
-      border-radius: 6px;
-      background: var(--policy-card);
+      border: 1px solid var(--color-border-strong);
+      border-left: 3px solid var(--color-accent);
+      border-radius: 4px;
+      background: var(--color-surface);
+      font-size: 14px;
     }
-    .pr-status--error { border-color: var(--policy-danger); }
-    .pr-status--ok { border-color: #2c7a4d; }
+    .pr-status--error { border-left-color: var(--color-danger); }
+    .pr-status--ok    { border-left-color: var(--color-accent); }
   </style>
 </head>
 <body class="policy-page">
+  <header class="policy-topbar">
+    <a href="/lab/" class="policy-topbar__brand" aria-label="Back to Lab">atomdojo</a>
+    <div class="policy-topbar__crumbs"><span>Privacy request</span></div>
+  </header>
   <main class="policy-shell">
     <header class="policy-header">
       <h1>Send a privacy request</h1>

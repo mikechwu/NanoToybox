@@ -1,117 +1,286 @@
-/* Shared layout for /privacy, /terms, and the static chrome of /account. */
+/* =====================================================================
+ * atomdojo — Policy + privacy-request shared layout
+ * Mirrors the Account page's design system: Wikipedia-clean sans-serif,
+ * lab-aligned theme tokens (`--color-text`, `--color-bg`, …), light +
+ * dark themes via `data-theme` attribute (set by an inline bootstrap
+ * in each HTML page) with `prefers-color-scheme` as the OS fallback.
+ * ===================================================================== */
+
+/* ── Tokens — light is the default; dark overrides via data-theme or
+ *     OS preference. Values match `lab/js/themes.ts` so the whole
+ *     product surface (lab / watch / account / privacy / terms /
+ *     privacy-request) stays consistent. ─────────────────────────── */
 
 :root {
-  --policy-bg: #0b0d12;
-  --policy-fg: #e8ecf4;
-  --policy-muted: #8792a8;
-  --policy-accent: #74a9ff;
-  --policy-danger: #ff6b6b;
-  --policy-rule: #1d2430;
-  --policy-card: #11151d;
-  --policy-card-border: #1c2230;
-  --policy-max: 720px;
+  /* Light theme */
+  --color-bg:               #f2f2f0;
+  --color-surface:          #ffffff;
+  --color-surface-2:        #f7f6f3;
+  --color-surface-hover:    rgba(0, 0, 0, 0.04);
+  --color-text:             #444;
+  --color-text-secondary:   #777;
+  --color-text-faint:       #999;
+  --color-border:           rgba(0, 0, 0, 0.10);
+  --color-border-strong:    rgba(0, 0, 0, 0.18);
+  --color-accent:           #4a9a7a;
+  --color-accent-text:      #2a7a5a;
+  --color-accent-soft:      rgba(60, 140, 100, 0.15);
+  --color-danger:           #d04040;
+  --color-danger-soft:      rgba(208, 64, 64, 0.10);
+  --color-link:             #2a6db8;
+
+  --ff-body:  -apple-system, 'SF Pro Text', 'Segoe UI', system-ui,
+              Helvetica, Arial, sans-serif;
+  --ff-mono:  ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px;
+  --s-5: 24px; --s-6: 32px; --s-7: 48px; --s-8: 64px; --s-9: 96px;
+
+  --shell-max: 760px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  color-scheme: light;
 }
 
-* { box-sizing: border-box; }
-
-html, body {
-  margin: 0;
-  padding: 0;
-  background: var(--policy-bg);
-  color: var(--policy-fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
-    Ubuntu, Cantarell, sans-serif;
-  line-height: 1.55;
-  font-size: 16px;
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg:               #181820;
+    --color-surface:          #1f1f28;
+    --color-surface-2:        #242430;
+    --color-surface-hover:    rgba(255, 255, 255, 0.06);
+    --color-text:             #ccc;
+    --color-text-secondary:   #888;
+    --color-text-faint:       #666;
+    --color-border:           rgba(255, 255, 255, 0.12);
+    --color-border-strong:    rgba(255, 255, 255, 0.22);
+    --color-accent:           #6ab89a;
+    --color-accent-text:      #8fd8b0;
+    --color-accent-soft:      rgba(100, 180, 140, 0.20);
+    --color-danger:           #e05050;
+    --color-danger-soft:      rgba(224, 80, 80, 0.14);
+    --color-link:             #79b8ff;
+    color-scheme: dark;
+  }
 }
 
-.policy-page a {
-  color: var(--policy-accent);
-  text-decoration: underline;
-  text-underline-offset: 2px;
+:root[data-theme="dark"] {
+  --color-bg:               #181820;
+  --color-surface:          #1f1f28;
+  --color-surface-2:        #242430;
+  --color-surface-hover:    rgba(255, 255, 255, 0.06);
+  --color-text:             #ccc;
+  --color-text-secondary:   #888;
+  --color-text-faint:       #666;
+  --color-border:           rgba(255, 255, 255, 0.12);
+  --color-border-strong:    rgba(255, 255, 255, 0.22);
+  --color-accent:           #6ab89a;
+  --color-accent-text:      #8fd8b0;
+  --color-accent-soft:      rgba(100, 180, 140, 0.20);
+  --color-danger:           #e05050;
+  --color-danger-soft:      rgba(224, 80, 80, 0.14);
+  --color-link:             #79b8ff;
+  color-scheme: dark;
 }
-.policy-page a:hover { text-decoration-thickness: 2px; }
+
+/* ── Reset ──────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+html { background: var(--color-bg); }
+
+body.policy-page {
+  font-family: var(--ff-body);
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--color-text);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  min-height: 100vh;
+}
+
+a { color: var(--color-link); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+::selection { background: var(--color-accent-soft); color: var(--color-accent-text); }
+
+/* ── Top bar (matches the Account page's chrome) ─────────────────── */
+
+.policy-topbar {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: var(--s-3) var(--s-5);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+.policy-topbar__brand {
+  font-weight: 600; font-size: 16px;
+  color: var(--color-text);
+  letter-spacing: -0.005em;
+}
+.policy-topbar__brand:hover {
+  color: var(--color-accent-text); text-decoration: none;
+}
+.policy-topbar__crumbs {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  border-left: 1px solid var(--color-border);
+  padding-left: var(--s-3);
+}
+
+/* ── Shell ───────────────────────────────────────────────────────── */
 
 .policy-shell {
-  max-width: var(--policy-max);
+  max-width: var(--shell-max);
   margin: 0 auto;
-  padding: 32px 24px 64px;
+  padding: var(--s-7) var(--s-5) var(--s-9);
+  animation: policyFadeIn 240ms var(--ease) both;
 }
 
+.policy-header {
+  margin-bottom: var(--s-6);
+}
 .policy-header h1 {
-  font-size: 2rem;
-  margin: 0 0 8px;
-  letter-spacing: -0.01em;
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--color-text);
+  margin: 0 0 var(--s-2);
+  line-height: 1.15;
 }
-
 .policy-effective {
-  color: var(--policy-muted);
-  margin: 0 0 16px;
-  font-size: 0.9rem;
+  margin: 0 0 var(--s-3);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.policy-effective code,
+.policy-effective span {
+  font-family: var(--ff-mono);
+  font-size: 12.5px;
+  color: var(--color-text);
 }
 
 .policy-nav {
   display: flex;
-  gap: 16px;
-  font-size: 0.95rem;
-  border-bottom: 1px solid var(--policy-rule);
-  padding-bottom: 16px;
-  margin-bottom: 24px;
+  gap: var(--s-4);
+  font-size: 14px;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--color-border);
 }
+.policy-nav a { color: var(--color-link); }
+
+/* ── Sections + body type ────────────────────────────────────────── */
 
 .policy-shell section {
-  margin: 32px 0;
+  margin: var(--s-6) 0;
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--color-border);
+}
+.policy-shell section:first-of-type {
+  border-top: none;
+  padding-top: 0;
 }
 
 .policy-shell h2 {
-  font-size: 1.25rem;
-  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--color-text);
+  margin: 0 0 var(--s-3);
+}
+.policy-shell h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: var(--s-5) 0 var(--s-2);
+}
+.policy-shell p {
+  margin: 0 0 var(--s-3);
+  max-width: 64ch;
+}
+.policy-shell ul { padding-left: var(--s-5); margin: 0 0 var(--s-3); }
+.policy-shell ul li { margin-bottom: var(--s-2); }
+.policy-shell strong { color: var(--color-text); font-weight: 600; }
+.policy-shell em { font-style: italic; color: var(--color-text); }
+
+.policy-shell code {
+  font-family: var(--ff-mono);
+  font-size: 0.92em;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--color-text);
 }
 
-.policy-shell p { margin: 0 0 12px; }
-.policy-shell ul { padding-left: 24px; }
-.policy-shell code {
-  background: var(--policy-card);
-  border: 1px solid var(--policy-card-border);
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-family: "SF Mono", "Roboto Mono", ui-monospace, monospace;
-  font-size: 0.85em;
-}
+/* ── Data-collection table (privacy.html) ────────────────────────── */
 
 .policy-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.9rem;
-  margin: 12px 0 0;
+  font-size: 13.5px;
+  margin: var(--s-3) 0 0;
   display: block;
   overflow-x: auto;
 }
 .policy-table thead th {
   text-align: left;
-  border-bottom: 2px solid var(--policy-rule);
-  padding: 8px 10px;
-  background: var(--policy-card);
+  font-weight: 600;
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border-strong);
+  padding: var(--s-2) var(--s-3);
 }
 .policy-table tbody td {
   vertical-align: top;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--policy-rule);
+  padding: var(--s-3);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
 }
+.policy-table tbody tr:last-child td { border-bottom: none; }
 .policy-table tbody tr:nth-child(even) td {
-  background: rgba(255,255,255,0.02);
+  background: var(--color-surface-hover);
 }
+.policy-table code {
+  font-size: 12px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--color-accent-text);
+}
+
+/* ── Footer ──────────────────────────────────────────────────────── */
 
 .policy-footer {
-  margin-top: 48px;
-  padding-top: 16px;
-  border-top: 1px solid var(--policy-rule);
-  font-size: 0.9rem;
-  color: var(--policy-muted);
+  margin-top: var(--s-8);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--color-border);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.policy-footer p { margin: 0; }
+.policy-footer a { color: var(--color-link); }
+
+/* ── Responsive ──────────────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .policy-shell { padding: var(--s-5) var(--s-4) var(--s-8); }
+  .policy-header h1 { font-size: 26px; }
+  .policy-shell h2 { font-size: 18px; }
 }
 
-@media (max-width: 520px) {
-  .policy-shell { padding: 20px 16px 48px; }
-  .policy-header h1 { font-size: 1.5rem; }
-  .policy-table { font-size: 0.82rem; }
+/* ── Animations ──────────────────────────────────────────────────── */
+
+@keyframes policyFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

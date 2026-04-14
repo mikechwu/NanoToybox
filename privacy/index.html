@@ -5,18 +5,38 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="index, follow">
   <title>Privacy Policy — atomdojo</title>
+  <!--
+    Theme bootstrap. Runs synchronously BEFORE the stylesheet so
+    `data-theme` is on <html> before first paint — no FOUC.
+    Reads the same `atomdojo.theme` key Lab writes via
+    `applyThemeSetting`, so a Lab choice carries here. Falls back
+    to the OS preference when unset.
+  -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('atomdojo.theme');
+        if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+      } catch (_) { /* private mode — fall back to media query */ }
+    })();
+  </script>
   <link rel="stylesheet" href="/policy-layout.css">
   <!--POLICY_META-->
 </head>
 <body class="policy-page">
+  <header class="policy-topbar">
+    <a href="/lab/" class="policy-topbar__brand" aria-label="Back to Lab">atomdojo</a>
+    <div class="policy-topbar__crumbs"><span>Privacy</span></div>
+  </header>
   <main class="policy-shell">
     <header class="policy-header">
       <h1>Privacy Policy</h1>
       <p class="policy-effective" data-policy-segment="A">
-        Effective: 2026-04-14 · Version <span id="policy-version">__POLICY_VERSION__</span>
+        Effective 2026-04-14 · Version <span id="policy-version">__POLICY_VERSION__</span>
       </p>
       <nav class="policy-nav" aria-label="Policy navigation">
         <a href="/terms/">Terms</a>
+        <a href="/account/">Account</a>
         <a href="/lab/">Lab</a>
       </nav>
     </header>

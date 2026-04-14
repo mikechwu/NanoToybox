@@ -5,25 +5,37 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>Account — atomdojo</title>
-  <link rel="stylesheet" href="/policy-layout.css">
+
+  <!--
+    Theme bootstrap. Runs synchronously BEFORE the stylesheet so
+    `data-theme` is set on <html> before first paint — no FOUC of the
+    wrong theme. Reads the same `atomdojo.theme` key the Lab writes via
+    `applyThemeSetting`, so a user who picked Light/Dark in Lab sees
+    the same choice here. Falls back to the OS preference when unset.
+  -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('atomdojo.theme');
+        if (t === 'dark' || t === 'light') {
+          document.documentElement.dataset.theme = t;
+        }
+      } catch (_) { /* private mode — fall back to media query */ }
+    })();
+  </script>
+
   <link rel="stylesheet" href="/account-layout.css">
 </head>
-<body class="policy-page account-page">
-  <main class="policy-shell account-shell">
-    <div id="account-root" data-phase="initial">
-      <header class="policy-header">
-        <h1>Account</h1>
-        <nav class="policy-nav" aria-label="Policy navigation">
-          <a href="/privacy/">Privacy</a>
-          <a href="/terms/">Terms</a>
-          <a href="/lab/">Lab</a>
-        </nav>
-      </header>
-      <section>
-        <p>Loading account…</p>
-      </section>
-    </div>
-  </main>
+<body class="acct">
+  <div id="account-root" data-phase="initial">
+    <header class="acct__topbar">
+      <a href="/lab/" class="acct__wordmark" aria-label="Back to Lab">atomdojo</a>
+      <div class="acct__crumbs"><span>Account</span></div>
+    </header>
+    <main class="acct__shell" aria-busy="true">
+      <p class="acct__bootline">Loading account…</p>
+    </main>
+  </div>
   <script type="module" src="/account/main.tsx"></script>
 </body>
 </html>

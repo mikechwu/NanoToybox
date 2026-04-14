@@ -75,8 +75,20 @@ let _workerRuntime: WorkerRuntime | null = null;
 let _snapshotReconciler: SnapshotReconciler | null = null;
 let _scene: SceneRuntime | null = null;
 
+// Hydrate the initial theme from a previously-persisted choice so the
+// theme is consistent across the whole product surface (lab / watch /
+// account / privacy / terms / privacy-request). `applyThemeSetting`
+// writes back to the same key whenever the user toggles in Settings.
+function _initialTheme(): 'dark' | 'light' {
+  try {
+    const stored = localStorage.getItem('atomdojo.theme');
+    if (stored === 'dark' || stored === 'light') return stored;
+  } catch { /* private mode / disabled — fall through */ }
+  return DEFAULT_THEME;
+}
+
 const session = {
-  theme: DEFAULT_THEME,
+  theme: _initialTheme(),
   textSize: 'normal',
   isLoading: false,
   interactionMode: 'atom',  // 'atom' | 'move' | 'rotate'
@@ -977,6 +989,11 @@ async function init() {
     renderer.applyTheme(session.theme);
     applyThemeTokens(session.theme);
     useAppStore.getState().setTheme(theme);
+    // Persist so other product surfaces (account, privacy, terms,
+    // privacy-request) can inherit the same theme without a per-page
+    // toggle. Wrapped in try/catch because Safari ITP / private mode
+    // can throw on localStorage writes — the theme just won't carry.
+    try { localStorage.setItem('atomdojo.theme', theme); } catch { /* noop */ }
   }
 
   function applyTextSizeSetting(size: 'normal' | 'large') {
