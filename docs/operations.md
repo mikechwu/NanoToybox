@@ -34,24 +34,33 @@ Cloudflare dashboard for the `atomdojo` project.
 
 ## Required secrets
 
-All secrets live in Cloudflare (never in git). `.dev.vars` is for local
-development only and must never contain production values.
+Production values live in Cloudflare (never in git). `.dev.vars` is for
+local development only and must never contain production values. OAuth
+client IDs are public identifiers (not secrets); they live in
+`wrangler.toml` under `[vars]` alongside bindings. Only the `*_SECRET`
+values are stored as encrypted Pages Secrets.
 
-| Secret | Where | Purpose |
-|---|---|---|
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Pages | Google OAuth |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | Pages | GitHub OAuth |
-| `SESSION_SECRET` | Pages | Single key for OAuth signed-state HMAC, session cookie signing, and abuse-report IP hashing. One rotate point, three dependents — read the rotation section before touching it. |
-| `CRON_SECRET` | Pages **AND** cron Worker (IDENTICAL byte-for-byte) | Authorizes the production automation path to `/api/admin/*` endpoints (see `functions/admin-gate.ts`). |
-| `AUTH_DEV_USER_ID` / `DEV_ADMIN_ENABLED` | **NEVER in production** | Local dev bypass only. Setting either in the production Pages project breaks the admin gate (`DEV_ADMIN_ENABLED=true` would expose admin routes to any request with a spoofed `Host: localhost` header that survives Cloudflare normalization, and `AUTH_DEV_USER_ID` would attach a fixed identity to every unauthenticated request). |
+| Value | Kind | Where | Purpose |
+|---|---|---|---|
+| `GOOGLE_CLIENT_ID` | Public var | `wrangler.toml` `[vars]` | Google OAuth app identifier |
+| `GITHUB_CLIENT_ID` | Public var | `wrangler.toml` `[vars]` | GitHub OAuth app identifier |
+| `GOOGLE_CLIENT_SECRET` | Secret | Pages Secret | Google OAuth app secret |
+| `GITHUB_CLIENT_SECRET` | Secret | Pages Secret | GitHub OAuth app secret |
+| `SESSION_SECRET` | Secret | Pages Secret | Single key for OAuth signed-state HMAC, session cookie signing, and abuse-report IP hashing. One rotate point, three dependents — read the rotation section before touching it. |
+| `CRON_SECRET` | Secret | Pages Secret **AND** cron Worker secret (IDENTICAL byte-for-byte) | Authorizes the production automation path to `/api/admin/*` endpoints (see `functions/admin-gate.ts`). |
+| `AUTH_DEV_USER_ID` / `DEV_ADMIN_ENABLED` | **NEVER in production** | — | Local dev bypass only. Setting either in the production Pages project breaks the admin gate (`DEV_ADMIN_ENABLED=true` would expose admin routes to any request with a spoofed `Host: localhost` header that survives Cloudflare normalization, and `AUTH_DEV_USER_ID` would attach a fixed identity to every unauthenticated request). |
 
-Provision with `wrangler`:
+Cloudflare Pages treats `wrangler.toml` as the source of truth for public
+vars and bindings. Once `[vars]` is defined in source, the dashboard's
+plain-env-var editor is disabled (only Secrets remain editable in the
+dashboard). To change a client ID, edit `wrangler.toml` and redeploy.
+
+Provision secrets via `wrangler` (or paste-one-shot via the dashboard —
+either works for secrets):
 
 ```bash
 # Pages project secrets
-wrangler pages secret put GOOGLE_CLIENT_ID     --project-name=atomdojo
 wrangler pages secret put GOOGLE_CLIENT_SECRET --project-name=atomdojo
-wrangler pages secret put GITHUB_CLIENT_ID     --project-name=atomdojo
 wrangler pages secret put GITHUB_CLIENT_SECRET --project-name=atomdojo
 wrangler pages secret put SESSION_SECRET       --project-name=atomdojo
 wrangler pages secret put CRON_SECRET          --project-name=atomdojo
