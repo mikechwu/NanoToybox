@@ -33,8 +33,35 @@ import {
   incrementUsageCounter,
 } from '../../../src/share/audit';
 import type { AuditEventType } from '../../../src/share/audit';
+import {
+  MAX_PUBLISH_BYTES,
+  PAYLOAD_TOO_LARGE_MESSAGE,
+  type PayloadTooLargeBody,
+} from '../../../src/share/constants';
 
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
+/** Build a structured 413 body + Response. `actualBytes` is optional —
+ *  omitted when the preflight Content-Length reject decided before we
+ *  read the body (we only know the client's claim, not the measured
+ *  size). The client formatter degrades gracefully in that case.
+ *
+ *  The `X-Max-Publish-Bytes` response header duplicates `maxBytes` so a
+ *  client that cannot parse the JSON body (CDN error-page injection,
+ *  middleware rewrites, truncated chunked transfer) still has a
+ *  trustworthy numeric limit from THIS response. Without the header,
+ *  the client would have to either hardcode a stale limit or render a
+ *  non-specific message under partial-rollout / proxy-rewrite skew. */
+function payloadTooLargeResponse(actualBytes?: number): Response {
+  const body: PayloadTooLargeBody = {
+    error: 'payload_too_large',
+    message: PAYLOAD_TOO_LARGE_MESSAGE,
+    maxBytes: MAX_PUBLISH_BYTES,
+    ...(actualBytes !== undefined ? { actualBytes } : {}),
+  };
+  return Response.json(body, {
+    status: 413,
+    headers: { 'X-Max-Publish-Bytes': String(MAX_PUBLISH_BYTES) },
+  });
+}
 
 export const onRequestPost: PagesFunction<Env> = async (context) => {
   const { request, env } = context;
@@ -70,29 +97,37 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     });
   }
 
-  // Size enforcement layer 1: fast reject via Content-Length header
+  // Size enforcement layer 1: fast reject via Content-Length header.
+  // Client's claim; not authoritative (may lie or be missing). When it
+  // fires we haven't read the body yet, so actualBytes is unknown — the
+  // structured 413 body omits it rather than fabricating one. Same
+  // MAX_PUBLISH_BYTES as layer 2; enforcement is uniform across
+  // environments (no dev-mode bypass).
   const contentLength = request.headers.get('Content-Length');
-  if (contentLength && parseInt(contentLength, 10) > MAX_UPLOAD_BYTES) {
+  if (contentLength && parseInt(contentLength, 10) > MAX_PUBLISH_BYTES) {
     audit(context, userId, {
       eventType: 'publish_rejected_size',
       severity: 'warning',
       reason: `content-length ${contentLength}`,
     });
-    return new Response('Payload too large', { status: 413 });
+    return payloadTooLargeResponse();
   }
 
   // Read body
   const body = await request.text();
 
-  // Size enforcement layer 2: authoritative check on actual bytes
+  // Size enforcement layer 2: authoritative check on actual bytes. This
+  // is the one that matters — Content-Length can lie. Body has been
+  // fully read at this point, so actualBytes is exact and included in
+  // the structured 413 body.
   const actualSize = new TextEncoder().encode(body).byteLength;
-  if (actualSize > MAX_UPLOAD_BYTES) {
+  if (actualSize > MAX_PUBLISH_BYTES) {
     audit(context, userId, {
       eventType: 'publish_rejected_size',
       severity: 'warning',
       reason: `actual ${actualSize}`,
     });
-    return new Response('Payload too large', { status: 413 });
+    return payloadTooLargeResponse(actualSize);
   }
 
   // Validate and prepare

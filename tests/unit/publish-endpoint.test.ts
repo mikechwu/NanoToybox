@@ -280,13 +280,16 @@ describe('publish endpoint — quota-reject', () => {
     });
     auditMock.mockResolvedValue('audit-id');
 
-    // Force a huge body via Content-Length fast-reject path.
+    // Force a huge body via Content-Length fast-reject path. Must exceed
+    // the shared MAX_PUBLISH_BYTES (which the test at the bottom of this
+    // file asserts equals 20 MB).
+    const { MAX_PUBLISH_BYTES } = await import('../../src/share/constants');
     const req = new Request('http://localhost/api/capsules/publish', {
       method: 'POST',
       body: 'x',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': String(20 * 1024 * 1024), // 20MB
+        'Content-Length': String(MAX_PUBLISH_BYTES + 1),
       },
     });
 
@@ -402,5 +405,207 @@ describe('publish endpoint — quota-reject', () => {
     expect(res.status).toBe(201);
     const payload = (await res.json()) as Record<string, unknown>;
     expect(payload.warnings).toBeUndefined();
+  });
+});
+
+// ── Payload-too-large path (413) ─────────────────────────────────────────
+//
+// Locks the shared-constant + structured-JSON contract. The limit lives
+// in `src/share/constants.ts` — if these tests start failing after a
+// limit change, the constant is the single place to update, and the
+// server, client, and tests update together by construction.
+
+describe('publish endpoint — 413 payload-too-large', () => {
+  beforeEach(() => {
+    authMock.mockReset();
+    quotaMock.mockReset();
+    auditMock.mockReset();
+    consumeMock.mockReset();
+    authMock.mockResolvedValue('user-123');
+    // Quota must pass so the size check is the actual rejection reason.
+    quotaMock.mockResolvedValue({
+      allowed: true, currentCount: 0, limit: 10, retryAtSeconds: 0,
+    });
+    auditMock.mockResolvedValue('audit-id');
+  });
+
+  it('rejects on Content-Length preflight with structured JSON (no actualBytes)', async () => {
+    const { MAX_PUBLISH_BYTES } = await import('../../src/share/constants');
+    const { env } = makePermissiveEnv();
+    const oversize = MAX_PUBLISH_BYTES + 1;
+    // Send a harmless body; Content-Length header claims the oversize.
+    // The preflight should fire before body read.
+    const req = new Request('http://localhost/api/capsules/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': String(oversize),
+      },
+      body: JSON.stringify({ small: true }),
+    });
+    const res = await onRequestPost(
+      { request: req, env } as unknown as Parameters<typeof onRequestPost>[0],
+    );
+    expect(res.status).toBe(413);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.error).toBe('payload_too_large');
+    expect(typeof body.message).toBe('string');
+    expect(body.maxBytes).toBe(MAX_PUBLISH_BYTES);
+    // actualBytes is OMITTED on the preflight path — we haven't read the body.
+    expect('actualBytes' in body).toBe(false);
+  });
+
+  it('rejects on authoritative post-read size with structured JSON including actualBytes', async () => {
+    const { MAX_PUBLISH_BYTES } = await import('../../src/share/constants');
+    const { env } = makePermissiveEnv();
+    // Build a body that's over the limit by padding an opaque JSON field
+    // past MAX_PUBLISH_BYTES. Exact JSON wrapper is `{"pad":"..."}` (~10
+    // bytes), but we just pad past the limit by a comfortable margin so
+    // the post-read measurement is unambiguously >. Omit Content-Length
+    // so the preflight skips and the authoritative check fires.
+    const huge = JSON.stringify({ pad: 'x'.repeat(MAX_PUBLISH_BYTES + 1024) });
+    const actualBytes = new TextEncoder().encode(huge).byteLength;
+    expect(actualBytes).toBeGreaterThan(MAX_PUBLISH_BYTES);
+
+    const req = new Request('http://localhost/api/capsules/publish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, // no Content-Length
+      body: huge,
+    });
+    const res = await onRequestPost(
+      { request: req, env } as unknown as Parameters<typeof onRequestPost>[0],
+    );
+    expect(res.status).toBe(413);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body.error).toBe('payload_too_large');
+    expect(body.maxBytes).toBe(MAX_PUBLISH_BYTES);
+    // actualBytes is the measured body size (exact integer from TextEncoder).
+    expect(body.actualBytes).toBe(actualBytes);
+  });
+
+  it('does NOT 413 at exactly MAX_PUBLISH_BYTES (strict greater-than boundary)', async () => {
+    // Validation (publish-core) rejects most capsules, so we can't easily
+    // build a valid-but-max-sized capsule here. This boundary test asserts
+    // the status is NOT 413 at the boundary — any other rejection reason
+    // is acceptable (we're not asserting 201). The point is to lock the
+    // strictly-greater-than comparison.
+    const { MAX_PUBLISH_BYTES } = await import('../../src/share/constants');
+    const { env } = makePermissiveEnv();
+    const req = new Request('http://localhost/api/capsules/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': String(MAX_PUBLISH_BYTES), // exactly at the limit
+      },
+      body: JSON.stringify({ small: true }),
+    });
+    const res = await onRequestPost(
+      { request: req, env } as unknown as Parameters<typeof onRequestPost>[0],
+    );
+    expect(res.status).not.toBe(413);
+  });
+
+  it('preflight 413 includes X-Max-Publish-Bytes header matching MAX_PUBLISH_BYTES', async () => {
+    const { MAX_PUBLISH_BYTES } = await import('../../src/share/constants');
+    const { env } = makePermissiveEnv();
+    const req = new Request('http://localhost/api/capsules/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': String(MAX_PUBLISH_BYTES + 1),
+      },
+      body: JSON.stringify({ small: true }),
+    });
+    const res = await onRequestPost(
+      { request: req, env } as unknown as Parameters<typeof onRequestPost>[0],
+    );
+    expect(res.status).toBe(413);
+    // Header duplicates maxBytes so a client that can't parse the JSON
+    // body (CDN error-page injection / middleware rewrite) still has a
+    // trustworthy numeric limit from THIS response.
+    expect(res.headers.get('X-Max-Publish-Bytes')).toBe(String(MAX_PUBLISH_BYTES));
+  });
+
+  it('post-read 413 includes X-Max-Publish-Bytes header matching MAX_PUBLISH_BYTES', async () => {
+    const { MAX_PUBLISH_BYTES } = await import('../../src/share/constants');
+    const { env } = makePermissiveEnv();
+    const huge = JSON.stringify({ pad: 'x'.repeat(MAX_PUBLISH_BYTES + 1024) });
+    const req = new Request('http://localhost/api/capsules/publish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: huge,
+    });
+    const res = await onRequestPost(
+      { request: req, env } as unknown as Parameters<typeof onRequestPost>[0],
+    );
+    expect(res.status).toBe(413);
+    expect(res.headers.get('X-Max-Publish-Bytes')).toBe(String(MAX_PUBLISH_BYTES));
+  });
+
+  it('header and body maxBytes agree on both 413 paths (contract)', async () => {
+    const { MAX_PUBLISH_BYTES } = await import('../../src/share/constants');
+    const { env } = makePermissiveEnv();
+    // Preflight
+    const preflight = await onRequestPost({
+      request: new Request('http://localhost/api/capsules/publish', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': String(MAX_PUBLISH_BYTES + 1),
+        },
+        body: JSON.stringify({ small: true }),
+      }),
+      env,
+    } as unknown as Parameters<typeof onRequestPost>[0]);
+    const preflightHeader = Number(preflight.headers.get('X-Max-Publish-Bytes'));
+    const preflightBody = (await preflight.json()) as Record<string, unknown>;
+    expect(preflightHeader).toBe(preflightBody.maxBytes);
+    // Post-read
+    const huge = JSON.stringify({ pad: 'x'.repeat(MAX_PUBLISH_BYTES + 1024) });
+    const postRead = await onRequestPost({
+      request: new Request('http://localhost/api/capsules/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: huge,
+      }),
+      env,
+    } as unknown as Parameters<typeof onRequestPost>[0]);
+    const postReadHeader = Number(postRead.headers.get('X-Max-Publish-Bytes'));
+    const postReadBody = (await postRead.json()) as Record<string, unknown>;
+    expect(postReadHeader).toBe(postReadBody.maxBytes);
+  });
+
+  it('no dev-mode bypass — the 413 fires regardless of request host (no localhost special-case)', async () => {
+    const { MAX_PUBLISH_BYTES } = await import('../../src/share/constants');
+    const { env } = makePermissiveEnv();
+    // Both http://localhost and https://atomdojo.pages.dev should produce
+    // the same 413 for an oversize payload. No env variable, no host
+    // heuristic, no query-param knob relaxes the check.
+    const body = JSON.stringify({ pad: 'x'.repeat(MAX_PUBLISH_BYTES) });
+    const localReq = new Request('http://localhost/api/capsules/publish', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+    });
+    const prodReq = new Request('https://atomdojo.pages.dev/api/capsules/publish', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+    });
+    const [localRes, prodRes] = await Promise.all([
+      onRequestPost({ request: localReq, env } as unknown as Parameters<typeof onRequestPost>[0]),
+      onRequestPost({ request: prodReq, env } as unknown as Parameters<typeof onRequestPost>[0]),
+    ]);
+    expect(localRes.status).toBe(413);
+    expect(prodRes.status).toBe(413);
+    const localBody = await localRes.json() as Record<string, unknown>;
+    const prodBody = await prodRes.json() as Record<string, unknown>;
+    expect(localBody.maxBytes).toBe(MAX_PUBLISH_BYTES);
+    expect(prodBody.maxBytes).toBe(MAX_PUBLISH_BYTES);
+  });
+});
+
+// ── Shared-constant drift guard ──────────────────────────────────────────
+
+describe('shared publish-size constant', () => {
+  it('is 20 MB (the plan-mandated value; any drift would break server + client + tests together)', async () => {
+    const { MAX_PUBLISH_BYTES } = await import('../../src/share/constants');
+    expect(MAX_PUBLISH_BYTES).toBe(20 * 1024 * 1024);
   });
 });

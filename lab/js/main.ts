@@ -56,6 +56,11 @@ import {
   attachAuthCompleteListener,
   AuthRequiredError,
 } from './runtime/auth-runtime';
+import { MAX_PUBLISH_BYTES } from '../../src/share/constants';
+import {
+  formatPayloadTooLargeMessage,
+  parsePayloadTooLargeMessage,
+} from './runtime/publish-size';
 
 // --- Globals ---
 let renderer, physics, stateMachine;
@@ -754,6 +759,21 @@ async function init() {
       if (!artifact) throw new Error('No recorded history to publish.');
       const errors = validateCapsuleFile(artifact.file);
       if (errors.length > 0) throw new Error(`Validation failed: ${errors[0]}`);
+
+      // Advisory client-side preflight: measure the exact byte length the
+      // request body will have (TextEncoder gives real UTF-8 bytes, not
+      // UTF-16 code-unit count) and reject here if it's over the shared
+      // limit. Saves a round-trip for a payload that the server would
+      // reject anyway. Server stays authoritative — this is a UX shortcut,
+      // not a security boundary.
+      const artifactBytes = new TextEncoder().encode(artifact.json).byteLength;
+      if (artifactBytes > MAX_PUBLISH_BYTES) {
+        throw new Error(formatPayloadTooLargeMessage({
+          actualBytes: artifactBytes,
+          maxBytes: MAX_PUBLISH_BYTES,
+        }));
+      }
+
       const res = await fetch('/api/capsules/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -767,6 +787,17 @@ async function init() {
         // in-context auth prompt instead of a generic error.
         if (res.status === 401) {
           throw new AuthRequiredError('Your session expired. Sign in to publish again.');
+        }
+        // 413 (payload too large). The server returns a structured JSON
+        // body { error, message, maxBytes, actualBytes? } so the client
+        // can format a precise, size-specific message driven by server
+        // data — the limit only lives in src/share/constants.ts. Fall
+        // back to maxBytes-only copy if actualBytes is missing (server
+        // rejected on Content-Length before reading body), and to the
+        // shared client-side MAX_PUBLISH_BYTES as a last resort if the
+        // body isn't parseable.
+        if (res.status === 413) {
+          throw new Error(await parsePayloadTooLargeMessage(res));
         }
         // 429 is rate-limited; surface the Retry-After hint if present so
         // the UI can show a human-readable delay. Retry-After is officially

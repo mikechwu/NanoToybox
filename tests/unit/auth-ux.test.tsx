@@ -1141,6 +1141,119 @@ describe('Transfer dialog — 401 recovery flips Share back to auth prompt', () 
   });
 });
 
+// ── 413 payload-too-large integration: UI renders the size-specific copy ──
+//
+// Proves the full UI flow end-to-end:
+//   signed-in user → click Publish → onPublishCapsule throws the
+//   413-formatted Error → handleShareConfirm sets shareError with
+//   kind:'other' → signed-in Share panel renders it as a red error.
+// Formatter + parser are covered in tests/unit/publish-client-413.test.ts;
+// this locks the wire-through to the actual dialog render.
+
+describe('Transfer dialog — 413 payload-too-large renders in Share panel', () => {
+  beforeEach(() => { useAppStore.getState().resetTransientState(); });
+  afterEach(() => { cleanup(); });
+
+  function setupPublishThrows(err: Error) {
+    const onPublish = vi.fn(async () => { throw err; });
+    act(() => {
+      useAppStore.getState().installTimelineUI(
+        {
+          ...baseTimelineCallbacks,
+          onExportHistory: vi.fn(async () => 'saved' as const),
+          onPublishCapsule: onPublish,
+          onPauseForExport: vi.fn(() => true),
+          onResumeFromExport: vi.fn(),
+        },
+        'active',
+        { full: true, capsule: true },
+      );
+      useAppStore.getState().updateTimelineState({
+        mode: 'live', currentTimePs: 100, reviewTimePs: null,
+        rangePs: { start: 0, end: 200 },
+        canReturnToLive: false, canRestart: false, restartTargetPs: null,
+      });
+      setSession({ userId: 'u1', displayName: 'Alice' });
+    });
+  }
+
+  async function clickPublish() {
+    render(<TimelineBar />);
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    const publishBtn = document.querySelector('.timeline-transfer-dialog__confirm') as HTMLButtonElement;
+    expect(publishBtn).not.toBeNull();
+    await act(async () => { publishBtn.click(); });
+  }
+
+  it('renders "Current size + Maximum allowed" when both figures are known', async () => {
+    // Simulates main.ts's publishCapsule having parsed a server 413
+    // response with actualBytes+maxBytes, then thrown the formatted
+    // message as an Error. The dialog should route it into the
+    // signed-in branch's red error slot (kind:'other').
+    const message = 'This capsule is too large to publish. Current size: 23.5 MB. Maximum allowed: 20.0 MB.';
+    setupPublishThrows(new Error(message));
+    await clickPublish();
+
+    // Dialog is still open on Share tab, signed-in branch — publish
+    // failed but auth is unchanged.
+    expect(useAppStore.getState().auth.status).toBe('signed-in');
+    expect(document.querySelector('[data-testid="transfer-auth-prompt"]')).toBeNull();
+    const err = document.querySelector('.timeline-transfer-dialog__error');
+    expect(err).not.toBeNull();
+    const txt = err?.textContent ?? '';
+    expect(txt).toContain('This capsule is too large to publish');
+    expect(txt).toContain('Current size: 23.5 MB');
+    expect(txt).toContain('Maximum allowed: 20.0 MB');
+    // Publish button remains clickable (shareSubmitting is reset on
+    // failure) so the user can retry after reducing the capsule.
+    const publishBtn = document.querySelector('.timeline-transfer-dialog__confirm') as HTMLButtonElement;
+    expect(publishBtn).not.toBeNull();
+    expect(publishBtn.disabled).toBe(false);
+  });
+
+  it('renders "Maximum allowed" only when the server only supplied maxBytes (preflight path)', async () => {
+    const message = 'This capsule is too large to publish. Maximum allowed: 20.0 MB.';
+    setupPublishThrows(new Error(message));
+    await clickPublish();
+
+    const err = document.querySelector('.timeline-transfer-dialog__error');
+    const txt = err?.textContent ?? '';
+    expect(txt).toContain('Maximum allowed: 20.0 MB');
+    // No "Current size" leak into this branch.
+    expect(txt).not.toContain('Current size');
+  });
+
+  it('renders the generic copy when neither body nor header yielded a numeric limit', async () => {
+    // Malformed 413 path — parsePayloadTooLargeMessage falls all the way
+    // through to the trust-preserving generic. Honest under deploy skew.
+    const message = 'This capsule is too large to publish.';
+    setupPublishThrows(new Error(message));
+    await clickPublish();
+
+    const err = document.querySelector('.timeline-transfer-dialog__error');
+    const txt = err?.textContent ?? '';
+    expect(txt).toContain('This capsule is too large to publish');
+    // No numeric limit at all — we don't invent one.
+    expect(txt).not.toContain('MB');
+    expect(txt).not.toContain('Maximum allowed');
+    expect(txt).not.toContain('Current size');
+  });
+
+  it('does NOT flip auth state on 413 (unlike 401 recovery)', async () => {
+    // 413 is a size rejection, not an auth failure — the kind-tagged
+    // shareError mechanism routes it into the red-error slot, NOT the
+    // signed-out auth-note slot. Auth session must remain signed-in.
+    setupPublishThrows(new Error('This capsule is too large to publish. Current size: 21.0 MB. Maximum allowed: 20.0 MB.'));
+    await clickPublish();
+
+    expect(useAppStore.getState().auth.status).toBe('signed-in');
+    expect(useAppStore.getState().auth.session?.userId).toBe('u1');
+    // No auth-note, no auth-prompt.
+    expect(document.querySelector('[data-testid="transfer-auth-note"]')).toBeNull();
+    expect(document.querySelector('[data-testid="transfer-auth-prompt"]')).toBeNull();
+  });
+});
+
 // ── Top-right layout container ──
 
 describe('TopRightControls layout', () => {
