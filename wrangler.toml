@@ -9,11 +9,11 @@ compatibility_date = "2025-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "atomdojo-capsules"
-database_id = "<created-via-wrangler-d1-create>"
+database_id = "29c6b244-8dba-49b6-8883-fc490eb3e07d"
 
 [[r2_buckets]]
 binding = "R2_BUCKET"
-bucket_name = "atomdojo-capsule-store"
+bucket_name = "atomdojo-capsules-prod"
 
 # ── Scheduled cleanup (Phase 5) ──────────────────────────────────────────────
 # Pages Functions cannot register scheduled handlers directly. The companion

@@ -209,7 +209,7 @@ make -C sim/wasm     # Rebuild tersoff.wasm + glue
 
 ### Deployment
 
-- **Frontend + Pages Functions** deploy together to Cloudflare Pages. Bindings (D1 `atomdojo-capsules`, R2 `atomdojo-capsule-store`) and WAF rules are declared in `wrangler.toml`; secrets (`SESSION_SECRET`, OAuth credentials, `CRON_SECRET`) are set via `wrangler pages secret put ...` in the Cloudflare dashboard
+- **Frontend + Pages Functions** deploy together to Cloudflare Pages. Bindings (D1 `atomdojo-capsules`, R2 `atomdojo-capsules-prod`) and WAF rules are declared in `wrangler.toml`; secrets (`SESSION_SECRET`, OAuth credentials, `CRON_SECRET`) are set via `wrangler pages secret put ...` in the Cloudflare dashboard
 - **D1 migrations** live in `migrations/` and are applied with `wrangler d1 migrations apply atomdojo-capsules` (add `--local` for the dev SQLite shim, omit for production)
 - **Cron Worker** in `workers/cron-sweeper/` is a separate deployable. It calls admin sweep endpoints (`X-Cron-Secret` auth) on a schedule — `0 */6 * * *` expires sessions, `30 3 * * *` sweeps orphaned R2 objects. Deploy with `npm run cron:deploy`
 

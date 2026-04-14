@@ -17,7 +17,7 @@ Cloudflare dashboard for the `atomdojo` project.
   under `functions/` (auth, capsule publish/resolve, admin).
 - **D1 database** binding `DB` → `atomdojo-capsules`. Migrations live in
   `migrations/`, applied via `wrangler d1 migrations apply`.
-- **R2 bucket** binding `R2_BUCKET` → `atomdojo-capsule-store`. **Private —
+- **R2 bucket** binding `R2_BUCKET` → `atomdojo-capsules-prod`. **Private —
   never expose this bucket publicly.** Objects are served only via
   authenticated Pages Functions; direct R2 access would bypass the
   `capsule_share.status` gate (moderation deletes would be ineffective).
