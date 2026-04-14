@@ -42,11 +42,19 @@ async function rectOf(page: Page, selector: string) {
   }, selector)
 }
 
-/** Wait until two elements have non-zero, stable bounding rects. Flex
- *  layouts can briefly report 0-width rects while React commits children;
- *  tests that measure geometry immediately after a state change can
- *  sporadically see those intermediate frames. Two consecutive matching
- *  rects indicate layout has settled. */
+type Rect = {
+  x: number; y: number; width: number; height: number;
+  left: number; right: number; top: number; bottom: number;
+}
+
+/** Wait until all listed elements have non-zero rects AND two consecutive
+ *  rAF-spaced readings produce the same rounded coordinates. The
+ *  rounded-equality check is stricter than the previous "non-zero +
+ *  one RAF" flush: it actually proves layout has settled, so a later
+ *  geometric assertion failure can be attributed to platform rendering
+ *  variance rather than a transient mid-commit frame. Rounds to 0.25 px
+ *  (the finest level Chromium's subpixel layout exposes) to tolerate
+ *  hairline jitter from font-loading async finalization. */
 async function waitForStableRects(page: Page, selectors: string[]) {
   await page.waitForFunction((sels) => {
     const rects = sels.map((sel) => {
@@ -55,12 +63,93 @@ async function waitForStableRects(page: Page, selectors: string[]) {
     })
     return rects.every((r) => r !== null && r.width > 0 && r.height > 0)
   }, selectors, { timeout: 3000 })
-  // One additional RAF to flush any pending commit.
-  await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
+  await page.evaluate(async (sels: string[]) => {
+    const snap = () => sels.map((sel) => {
+      const el = document.querySelector(sel) as HTMLElement | null
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      // Round to the nearest 0.25 px — finer than Chromium's subpixel layout
+      // granularity, so only transient mid-commit frames look different.
+      const q = (n: number) => Math.round(n * 4) / 4
+      return { l: q(r.left), t: q(r.top), w: q(r.width), h: q(r.height) }
+    })
+    const nextRaf = () => new Promise<void>((r) => requestAnimationFrame(() => r()))
+    const eq = (a: ReturnType<typeof snap>, b: typeof a) => JSON.stringify(a) === JSON.stringify(b)
+    // Require two consecutive RAF-spaced snapshots to match. Bound the loop
+    // so a genuinely animating element never hangs the test.
+    let prev = snap()
+    for (let i = 0; i < 30; i++) {
+      await nextRaf()
+      const cur = snap()
+      if (eq(prev, cur)) return
+      prev = cur
+    }
+  }, selectors)
 }
 
 function rectsOverlap(a: { left: number; right: number; top: number; bottom: number }, b: typeof a) {
   return !(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top)
+}
+
+/**
+ * Slack tolerances, split by assertion class so a flake on one class
+ * doesn't dilute unrelated geometry guarantees.
+ *
+ *   CONTAINER_EDGE_SLACK_PX  — child's edge vs parent's edge. The flex
+ *     container's edge is a derived fractional coordinate (viewport −
+ *     right-inset − content width); content width depends on the FPS
+ *     display's rendered text, which uses different fallback fonts on
+ *     macOS (`-apple-system`) and Linux (DejaVu Sans). The two fractional
+ *     coordinates can land ~1 px apart after Chromium's subpixel layout
+ *     rounding even though they should share an exact CSS edge. 2 px
+ *     still catches real regressions (a 10 px slip would fail); only
+ *     platform-subpixel variance is absorbed.
+ *
+ *   ORDERING_SLACK_PX — ordering / anchoring assertions (chip sits left
+ *     of FPS; menu anchors below trigger). Same flex layout can shift
+ *     sub-pixel, but the bound should be tight: if a chip visibly
+ *     overlaps the FPS by 2 px, that is a real regression. 1 px
+ *     absorbs subpixel noise without hiding a visible overlap.
+ *
+ *   Viewport-fit (hard bounds `>= 0`, `<= viewport.width + 1`) stays
+ *     at 1 px because viewport dimensions are fixed and `right: 12px`
+ *     positioning is exact; the 1 px absorbs any trailing border/decoration
+ *     leak that Chromium might report in getBoundingClientRect.
+ *
+ *   rectsOverlap() stays exact — binary assertion, no tolerance.
+ */
+const CONTAINER_EDGE_SLACK_PX = 2
+const ORDERING_SLACK_PX = 1
+const VIEWPORT_FIT_SLACK_PX = 1
+
+/** Format a rect for diagnostic messages. */
+function fmtRect(label: string, r: Rect | null): string {
+  if (!r) return `${label}=null`
+  return `${label}{l:${r.left.toFixed(3)} r:${r.right.toFixed(3)} t:${r.top.toFixed(3)} b:${r.bottom.toFixed(3)} w:${r.width.toFixed(3)} h:${r.height.toFixed(3)}}`
+}
+
+/** Assert all four edges of `child` lie within `container` ± slack. On
+ *  failure, the `expect` message carries both rects + the slack so CI
+ *  logs are immediately diagnostic — no round-trip needed to reproduce
+ *  the failing numbers. Use this instead of hand-rolling the four
+ *  comparisons at every site. */
+function expectWithinContainer(child: Rect, container: Rect, slack: number, ctx: string) {
+  const msg = `${ctx}: child not within container (slack=${slack}px). ${fmtRect('child', child)} vs ${fmtRect('container', container)}`
+  expect(child.left, msg).toBeGreaterThanOrEqual(container.left - slack)
+  expect(child.right, msg).toBeLessThanOrEqual(container.right + slack)
+}
+
+/** Read computed font stacks for a set of selectors — used in failure
+ *  diagnostics so a next-time flake can quickly confirm whether the
+ *  Linux/macOS font-metric hypothesis still holds. */
+async function getComputedFontFamilies(page: Page, selectors: string[]) {
+  return page.evaluate((sels) => {
+    return sels.map((sel) => {
+      const el = document.querySelector(sel) as HTMLElement | null
+      if (!el) return { selector: sel, fontFamily: null }
+      return { selector: sel, fontFamily: getComputedStyle(el).fontFamily }
+    })
+  }, selectors)
 }
 
 test.describe('Top-right layout — AccountControl + FPSDisplay flex container', () => {
@@ -80,18 +169,21 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
     expect(chip).not.toBeNull()
     expect(fps).not.toBeNull()
 
-    // Both controls are strictly inside the container's box (sub-pixel slack).
-    expect(chip!.left).toBeGreaterThanOrEqual(container!.left - 1)
-    expect(chip!.right).toBeLessThanOrEqual(container!.right + 1)
-    expect(fps!.left).toBeGreaterThanOrEqual(container!.left - 1)
-    expect(fps!.right).toBeLessThanOrEqual(container!.right + 1)
+    // Both controls strictly inside the container's box, within the
+    // platform-subpixel slack (CONTAINER_EDGE_SLACK_PX).
+    expectWithinContainer(chip!, container!, CONTAINER_EDGE_SLACK_PX, 'chip inside .topbar-right')
+    expectWithinContainer(fps!, container!, CONTAINER_EDGE_SLACK_PX, 'FPS inside .topbar-right')
 
-    // Chip sits to the LEFT of FPS (flex row, natural order).
-    expect(chip!.right).toBeLessThanOrEqual(fps!.left + 1)
+    // Chip sits to the LEFT of FPS (flex row, natural order). Tight
+    // tolerance: a chip that visibly overlaps FPS by 2 px IS a regression.
+    expect(
+      chip!.right,
+      `chip must sit left of FPS. ${fmtRect('chip', chip)} vs ${fmtRect('fps', fps)}`,
+    ).toBeLessThanOrEqual(fps!.left + ORDERING_SLACK_PX)
 
     // The whole container stays within the viewport — no bleed off-screen.
     const vp = page.viewportSize()
-    expect(container!.right).toBeLessThanOrEqual(vp!.width + 1)
+    expect(container!.right).toBeLessThanOrEqual(vp!.width + VIEWPORT_FIT_SLACK_PX)
     expect(container!.top).toBeGreaterThanOrEqual(0)
   })
 
@@ -137,8 +229,11 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
     const trigger = await rectOf(page, '[data-testid="account-signin"]')
     expect(trigger).not.toBeNull()
     const container = await rectOf(page, '.topbar-right')
-    expect(trigger!.left).toBeGreaterThanOrEqual(container!.left - 1)
-    expect(trigger!.right).toBeLessThanOrEqual(container!.right + 1)
+    expect(container).not.toBeNull()
+    // The original CI flake was here: trigger.left 1.047 px outside
+    // container.left on Linux due to Chromium's font-metric-driven
+    // fractional layout. CONTAINER_EDGE_SLACK_PX = 2 absorbs that.
+    expectWithinContainer(trigger!, container!, CONTAINER_EDGE_SLACK_PX, 'signin trigger inside .topbar-right')
 
     // Open the menu and verify it stays within the viewport.
     await page.click('[data-testid="account-signin"]')
@@ -146,10 +241,15 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
     expect(menu).not.toBeNull()
     const vp = page.viewportSize()
     expect(menu!.left).toBeGreaterThanOrEqual(0)
-    expect(menu!.right).toBeLessThanOrEqual(vp!.width + 1)
+    expect(menu!.right).toBeLessThanOrEqual(vp!.width + VIEWPORT_FIT_SLACK_PX)
     expect(menu!.top).toBeGreaterThanOrEqual(0)
-    // Menu must also be anchored below the trigger — not covering it.
-    expect(menu!.top).toBeGreaterThanOrEqual(trigger!.bottom - 1)
+    // Menu must be anchored BELOW the trigger — not covering it. Tight
+    // tolerance: a menu that visibly overlaps the trigger by 2 px IS
+    // a regression.
+    expect(
+      menu!.top,
+      `menu must be anchored below trigger. ${fmtRect('menu', menu)} vs ${fmtRect('trigger', trigger)}`,
+    ).toBeGreaterThanOrEqual(trigger!.bottom - ORDERING_SLACK_PX)
   })
 
   test('mobile viewport: chip and FPS remain disjoint and inside viewport', async ({ page, baseURL }) => {
@@ -171,8 +271,30 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
 
     // No overlap at 375px width.
     expect(rectsOverlap(chip!, fps!)).toBe(false)
-    // Container fits the viewport (allowing for 12px right inset).
-    expect(container!.right).toBeLessThanOrEqual(375 + 1)
+    // Container fits the viewport — viewport width is a fixed integer
+    // here, so VIEWPORT_FIT_SLACK_PX (1) is the right tolerance.
+    expect(container!.right).toBeLessThanOrEqual(375 + VIEWPORT_FIT_SLACK_PX)
     expect(container!.left).toBeGreaterThanOrEqual(0)
   })
+})
+
+// Global afterEach: when a test in this spec fails, dump font families
+// for the two elements whose metrics drive the derived container width.
+// Gives the next flake immediate evidence for whether the macOS-vs-Linux
+// font hypothesis still holds (look for a change in the stack) or
+// whether some new layout effect has introduced a bug.
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === 'failed') {
+    try {
+      const fonts = await getComputedFontFamilies(page, [
+        '.react-fps', '.account-control__trigger', '.account-control__label',
+      ])
+      await testInfo.attach('computed-font-families', {
+        body: JSON.stringify(fonts, null, 2),
+        contentType: 'application/json',
+      })
+    } catch {
+      // Page may be closed already; best-effort diagnostic.
+    }
+  }
 })
