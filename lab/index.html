@@ -444,9 +444,11 @@ canvas { display: block; touch-action: none; }
 }
 /* Top-overlay layout contract:
  *   top-left primary:  .react-info (status)
- *   top-right primary: .react-fps (FPS display)
- *   top-left secondary: bonded-groups panel (offset below status)
- *   top-right secondary: bonded-groups panel (offset below FPS) */
+ *   top-right primary: .topbar-right — flex row containing:
+ *       .account-control  (Phase 6 Auth UX; sign-in / account chip)
+ *       .react-fps        (FPS + speed display; viewport-right edge)
+ *   top-left secondary:  bonded-groups panel (offset below status)
+ *   top-right secondary: bonded-groups panel (offset below .topbar-right) */
 .bonded-groups-panel.side-left { left: 12px; top: 48px; }
 .bonded-groups-panel.side-right { right: 12px; top: 48px; }
 
@@ -592,15 +594,164 @@ canvas { display: block; touch-action: none; }
 .react-info .title { display: none; }
 .react-info .status-text { color: var(--color-text-secondary); font-size: var(--font-xs); }
 .react-info .reconciliation-text { color: var(--color-accent-text); font-size: var(--font-xs); }
+/* Top-right flex container — holds AccountControl + FPSDisplay.
+ * One positioning ancestor replaces the previous two independently
+ * absolutely-positioned surfaces. Children align to the top so multi-line
+ * FPS (compact vs. expanded) does not shift the account chip vertically.
+ * z-index slightly higher than the default overlay layer so the account
+ * menu does not disappear behind side panels. */
+.topbar-right {
+  position: absolute; top: 12px; right: 12px; z-index: 11;
+  display: flex; align-items: flex-start; gap: 8px;
+}
 .react-fps {
-  position: absolute; top: 12px; right: 12px;
-  color: var(--color-fps-text); font-size: var(--font-sm); z-index: 10;
+  color: var(--color-fps-text); font-size: var(--font-sm);
   font-variant-numeric: tabular-nums;
   background: var(--color-surface);
   backdrop-filter: blur(var(--glass-blur));
   padding: 6px 12px; border-radius: var(--radius-sm);
   border: 1px solid var(--color-border);
   line-height: 1.4; cursor: pointer;
+}
+
+/* ── Account control (top-bar, Phase 6 Auth UX) ─────────────────────
+ * Compact sign-in affordance positioned to the immediate left of the
+ * FPS display (top:12px; right:12px). Two visual modes:
+ *   - Signed out: plain text-style "Sign in" button (low prominence).
+ *   - Signed in:  pill chip with avatar glyph + display name.
+ *
+ * The control opens a small popover menu on click. Menu width is clamped
+ * to keep it from overrunning narrow viewports. Uses the same glass-panel
+ * tokens as the settings sheet for visual consistency. */
+.account-control {
+  /* Child of .topbar-right flex container — no absolute positioning. The
+   * menu below still needs a positioned ancestor so it anchors to the
+   * control's right edge; `position: relative` gives it one without
+   * coupling to viewport coordinates. */
+  position: relative;
+  font-size: var(--font-xs);
+}
+.account-control__trigger {
+  background: transparent; border: 1px solid transparent;
+  color: var(--color-text-secondary);
+  padding: 6px 10px; border-radius: var(--radius-sm);
+  font-size: inherit; line-height: 1.3; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.account-control__trigger:hover,
+.account-control__trigger:focus-visible {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  color: var(--color-text);
+  outline: none;
+}
+.account-control__trigger--chip {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  color: var(--color-text);
+  padding: 4px 10px 4px 4px;
+}
+/* Unverified variant — subdued tone, italic label, no avatar. Communicates
+ * "we don't know" without provoking an unnecessary OAuth round-trip. */
+.account-control__trigger--unverified {
+  color: var(--color-text-secondary);
+  font-style: italic;
+  opacity: 0.85;
+}
+.account-control__avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--color-accent-text); color: var(--color-surface);
+  font-size: var(--font-xs); font-weight: 600; line-height: 1;
+}
+.account-control__label {
+  max-width: 120px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.account-control__menu {
+  position: absolute; right: 0; top: calc(100% + 4px);
+  min-width: 200px; max-width: 260px;
+  background: var(--color-surface);
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.account-control__hint {
+  margin: 4px 6px 8px;
+  color: var(--color-text-secondary); font-size: var(--font-xs); line-height: 1.4;
+}
+.account-control__identity {
+  margin: 2px 6px 8px;
+  color: var(--color-text); font-size: var(--font-sm); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.account-control__menu-item {
+  background: transparent; border: 1px solid transparent;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  font-size: var(--font-sm); color: var(--color-text);
+  text-align: left; cursor: pointer;
+  transition: background 0.12s;
+}
+.account-control__menu-item:hover,
+.account-control__menu-item:focus-visible {
+  background: var(--color-surface-hover, rgba(128,128,128,0.15));
+  outline: none;
+}
+.account-control__menu-item--destructive {
+  color: var(--color-accent-text);
+}
+/* On narrow viewports, shrink the max-width so long display names don't
+ * crowd the FPS display; the flex container handles horizontal placement. */
+@media (max-width: 480px) {
+  .account-control__label { max-width: 80px; }
+}
+
+/* ── Transfer dialog auth prompt (Phase 6 Auth UX) ───────────────────
+ * When the user opens the Transfer dialog's Share tab while signed out,
+ * the Publish button is replaced with a compact OAuth prompt. The prompt
+ * inherits the dialog's glass panel styling and uses the same confirm/
+ * cancel button visual rhythm so it feels like a first-class panel state,
+ * not a retrofitted modal. */
+.timeline-transfer-dialog__auth-prompt {
+  display: flex; flex-direction: column;
+}
+.timeline-transfer-dialog__auth-buttons {
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 12px 0 4px;
+}
+.timeline-transfer-dialog__auth-button {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  padding: 10px 14px; border-radius: var(--radius-sm);
+  font-size: var(--font-sm); cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.timeline-transfer-dialog__auth-button:hover:not(:disabled),
+.timeline-transfer-dialog__auth-button:focus-visible {
+  border-color: var(--color-accent-text);
+  outline: none;
+}
+.timeline-transfer-dialog__auth-button:disabled {
+  opacity: 0.5; cursor: not-allowed;
+}
+.timeline-transfer-dialog__auth-checking .timeline-transfer-dialog__description {
+  color: var(--color-text-secondary); font-style: italic;
+}
+/* Inline note for 401 recovery: "Your session expired. Sign in to publish
+ * again." Sits above the Continue-with buttons so the user understands
+ * why the Publish button disappeared. Neutral, not error-red — the state
+ * is recoverable by clicking a sign-in button. */
+.timeline-transfer-dialog__auth-note {
+  margin: 6px 0 0; padding: 8px 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs); line-height: 1.4;
 }
 
 /* ── Timeline bar (inside dock-region, normal flow above dock-bar) ── */

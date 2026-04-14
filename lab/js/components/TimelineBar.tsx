@@ -32,6 +32,7 @@ import {
   useTransferDialog,
   TransferTrigger,
 } from './timeline-transfer-dialog';
+import { hydrateAuthSession, AuthRequiredError } from '../runtime/auth-runtime';
 import { ActionHint } from './ActionHint';
 import { TIMELINE_HINTS } from './timeline-hints';
 
@@ -161,6 +162,16 @@ function TimelineBarActive() {
   const callbacks = useAppStore((s) => s.timelineCallbacks);
   const exportCaps = useAppStore((s) => s.timelineExportCapabilities);
 
+  // Auth UX (Phase 6) — drives the Share tab's auth gating. We pass the
+  // raw `status` through to the dialog so it can render the five ordered
+  // Share-panel states — success / checking / unverified / signed-out /
+  // signed-in — without re-deriving the discriminator on the rendering side.
+  // Keep this list in sync with the priority-ordered branches in
+  // timeline-transfer-dialog.tsx's Share panel.
+  const authStatus = useAppStore((s) => s.auth.status);
+  const authCallbacks = useAppStore((s) => s.authCallbacks);
+  const shareTabOpenRequested = useAppStore((s) => s.shareTabOpenRequested);
+
   const trackRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
 
@@ -215,7 +226,19 @@ function TimelineBarActive() {
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [estimates, setEstimates] = useState<{ capsule?: string | null; full?: string | null }>({});
   const [shareSubmitting, setShareSubmitting] = useState(false);
-  const [shareError, setShareError] = useState<string | null>(null);
+  // shareError is kind-tagged so the dialog can render each error class in
+  // the correct branch without cross-bleed:
+  //   - kind: 'auth'  → AuthRequiredError (401 recovery); rendered as the
+  //                     signed-out panel's auth-note alongside the OAuth
+  //                     buttons.
+  //   - kind: 'other' → rate-limit (429), generic publish failures; rendered
+  //                     as a red error above the Publish button in the
+  //                     signed-in panel.
+  // An auth-kind error must NOT render as a generic red error; an other-kind
+  // error must NOT render as an auth-note (misleads the user about why
+  // sign-in is being asked for). The dialog reads these as two separate
+  // props rather than one field + a conditional clear effect.
+  const [shareError, setShareError] = useState<{ kind: 'auth' | 'other'; message: string } | null>(null);
   const [shareResult, setShareResult] = useState<{
     shareCode: string;
     shareUrl: string;
@@ -284,14 +307,50 @@ function TimelineBarActive() {
     setShareError(null);
     setShareResult(null);
     transferDidPause.current = callbacks?.onPauseForExport?.() ?? false;
-    // Default to Download tab, but land on Share if download is not actionable.
-    transferDialog.request(downloadActionAvailable ? 'download' : 'share');
-  }, [clear, preferredKind, callbacks, transferDialog, downloadActionAvailable]);
+    // Default to Share tab (Phase 6 Auth UX contract) — the cross-session,
+    // higher-value path. Fall back to Download only when Share is not
+    // actionable (no publishCapsule callback or no recorded range).
+    transferDialog.request(shareAvailable ? 'share' : 'download');
+  }, [clear, preferredKind, callbacks, transferDialog, shareAvailable]);
 
   const openClear = useCallback(() => {
     closeTransferSession();
     clear.request();
   }, [clear, closeTransferSession]);
+
+  // Sign-in handler for the Share tab's auth prompt. Always sets the
+  // resume-publish intent so the user lands back on the Share tab after the
+  // OAuth round-trip — the store's requestShareTabOpen() will then flip the
+  // nonce and the effect below will re-open this dialog.
+  const handleAuthSignIn = useCallback((provider: 'google' | 'github') => {
+    authCallbacks?.onSignIn(provider, { resumePublish: true });
+  }, [authCallbacks]);
+
+  // Resume-publish intent bridge: main.ts sets `shareTabOpenRequested` to
+  // true after a successful OAuth return that carried the `?authReturn=1`
+  // marker. When the flag is true and Share is actionable, we consume it
+  // (atomically clearing it via the store action) and open the Transfer
+  // dialog on the Share tab.
+  //
+  // Why a one-shot boolean (not a monotonic counter): a counter compared
+  // against a captured-on-mount ref silently dropped the intent if
+  // TimelineBarActive remounted between the producer write and the
+  // consumer's first effect run. The store-side consume is idempotent
+  // across remounts — the flag stays set until explicitly consumed.
+  useEffect(() => {
+    if (!shareTabOpenRequested || !shareAvailable) return;
+    if (!useAppStore.getState().consumeShareTabOpen()) return;
+    setDownloadKind(preferredKind);
+    setDownloadSubmitting(false);
+    setDownloadError(null);
+    setEstimates({});
+    setShareSubmitting(false);
+    setShareError(null);
+    setShareResult(null);
+    transferDidPause.current = callbacks?.onPauseForExport?.() ?? false;
+    transferDialog.request('share');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shareTabOpenRequested, shareAvailable]);
 
   // Async estimate computation — only runs when the Download tab can
   // actually be used. Share-only flows skip the artifact build + stringify
@@ -353,7 +412,7 @@ function TimelineBarActive() {
 
   const handleShareConfirm = useCallback(async () => {
     if (!callbacks?.onPublishCapsule) {
-      setShareError('Share is not available right now.');
+      setShareError({ kind: 'other', message: 'Share is not available right now.' });
       return;
     }
     // Capture the generation at submit time. If closeTransferSession
@@ -368,11 +427,23 @@ function TimelineBarActive() {
       setShareResult(result);
       setShareSubmitting(false);
     } catch (e) {
-      console.error('[TimelineBar] share failed:', e);
-      if (mountedRef.current && shareRunIdRef.current === runId) {
-        setShareError(e instanceof Error ? e.message : 'Share failed.');
+      if (!mountedRef.current || shareRunIdRef.current !== runId) return;
+      if (e instanceof AuthRequiredError) {
+        // 401 from publish is an authoritative signed-out answer — flip
+        // the store so the Share panel re-renders the in-context prompt.
+        // The message is tagged as 'auth' so the dialog routes it into the
+        // signed-out auth-note slot (not the red-error slot).
+        useAppStore.getState().setAuthSignedOut();
+        setShareError({ kind: 'auth', message: e.message });
         setShareSubmitting(false);
+        return;
       }
+      console.error('[TimelineBar] share failed:', e);
+      setShareError({
+        kind: 'other',
+        message: e instanceof Error ? e.message : 'Share failed.',
+      });
+      setShareSubmitting(false);
     }
   }, [callbacks]);
 
@@ -389,6 +460,31 @@ function TimelineBarActive() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showTransfer]);
+
+  // Opportunistic session revalidation.
+  //
+  // The Lab hydrates `auth.session` once at boot. If the session expires
+  // or is revoked during the tab's lifetime, the Share tab would still
+  // render the Publish button from stale store state and the user's first
+  // click would hit a 401. hydrateAuthSession() never sets `loading: true`,
+  // so this refresh is transparent — the UI only changes if the server
+  // actually reports signed-out. Defensive .catch keeps a future regression
+  // (if hydrate were ever to throw) out of the unhandled-rejection bucket.
+  useEffect(() => {
+    if (!transferDialog.open || transferDialog.tab !== 'share') return;
+    hydrateAuthSession().catch((err) => {
+      console.warn('[TimelineBar] opportunistic auth refresh failed:', err);
+    });
+  }, [transferDialog.open, transferDialog.tab]);
+
+  // No cross-status shareError clear is needed here. Cross-bleed is
+  // prevented structurally by the `shareError.kind` discriminator: the
+  // dialog's signed-out branch only reads `kind === 'auth'` messages (auth
+  // note), and the signed-in branch only reads `kind === 'other'` messages
+  // (red error). An earlier conditional `if (authStatus === 'signed-in')`
+  // effect lived here — it was replaced by the kind-tagged state, which
+  // also covers the 429-into-signed-out bleed that the conditional clear
+  // missed.
 
   // Guard: revalidate selected download kind if capability changes while dialog is open
   useEffect(() => {
@@ -532,13 +628,17 @@ function TimelineBarActive() {
         capsuleEstimate={estimates.capsule}
 
         shareTabAvailable={shareAvailable}
-        shareConfirmEnabled={shareAvailable}
+        shareConfirmEnabled={shareAvailable && authStatus === 'signed-in'}
         onConfirmShare={handleShareConfirm}
         shareSubmitting={shareSubmitting}
-        shareError={shareError}
+        shareError={shareError?.kind === 'other' ? shareError.message : null}
+        authNote={shareError?.kind === 'auth' ? shareError.message : null}
         shareUrl={shareResult?.shareUrl ?? null}
         shareCode={shareResult?.shareCode ?? null}
         shareWarnings={shareResult?.warnings ?? null}
+
+        authStatus={authStatus}
+        onSignIn={handleAuthSignIn}
       />
     </>
   );

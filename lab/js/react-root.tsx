@@ -10,7 +10,6 @@
 import React from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { StatusBar } from './components/StatusBar';
-import { FPSDisplay } from './components/FPSDisplay';
 import { DockLayout } from './components/DockLayout';
 import { DockBar } from './components/DockBar';
 import { CameraControls } from './components/CameraControls';
@@ -20,6 +19,7 @@ import { StructureChooser } from './components/StructureChooser';
 import { BondedGroupsPanel } from './components/BondedGroupsPanel';
 import { TimelineBar } from './components/TimelineBar';
 import { OnboardingOverlay } from './components/OnboardingOverlay';
+import { TopRightControls } from './components/TopRightControls';
 
 /**
  * Lightweight error boundary — prevents a crash in one optional surface
@@ -53,7 +53,7 @@ export function mountReactUI() {
   root.render(
     <React.StrictMode>
       <StatusBar />
-      <FPSDisplay />
+      <TopRightControls />
       <BondedGroupsPanel />
       <CameraControls />
       <DockLayout>

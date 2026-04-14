@@ -83,6 +83,52 @@ export interface TimelineCallbacks {
   onPublishCapsule?: () => Promise<{ shareCode: string; shareUrl: string; warnings?: string[] }>;
 }
 
+/** Authenticated user summary, or null when signed out.
+ *  Source: GET /api/auth/session (Phase 6 Auth UX). */
+export interface AuthSessionState {
+  userId: string;
+  /** Display name from the identity provider; may be null. */
+  displayName: string | null;
+}
+
+/** Discriminator for the Lab-side auth-UX state machine.
+ *
+ *   - `loading`    — initial /api/auth/session fetch is in flight.
+ *   - `signed-in`  — server returned 200 with a valid session payload.
+ *   - `signed-out` — server returned 401 (authoritative "you are not
+ *                    authenticated"). UI may prompt for OAuth sign-in.
+ *   - `unverified` — we could NOT reach a definitive answer. Covers
+ *                    network failure, 5xx, or malformed response with
+ *                    no prior session to preserve. UI should render a
+ *                    neutral retry affordance, NOT an OAuth prompt —
+ *                    falsely asserting signed-out during a transport
+ *                    blip would mislead the user.
+ */
+export type AuthStatus = 'loading' | 'signed-in' | 'signed-out' | 'unverified';
+
+/** Discriminated union — makes impossible states unrepresentable.
+ *  Previously `AuthState = { status; session: AuthSessionState | null }`
+ *  allowed e.g. `{ status: 'signed-in', session: null }` or
+ *  `{ status: 'signed-out', session: {...} }`. The union below enforces by
+ *  type what the UI rendering logic has always assumed: a non-null session
+ *  exists *only* in the signed-in branch. */
+export type AuthState =
+  | { status: 'loading'; session: null }
+  | { status: 'signed-in'; session: AuthSessionState }
+  | { status: 'signed-out'; session: null }
+  | { status: 'unverified'; session: null };
+
+/** Imperative callbacks registered by main.ts, invoked by AccountControl + Transfer dialog.
+ *  Kept on the store so React components get them without prop drilling. */
+export interface AuthCallbacks {
+  /** Redirect the browser to the provider's OAuth start URL. Should also
+   *  stash a "resume publish" intent before leaving if invoked from the
+   *  Transfer dialog's Share tab. */
+  onSignIn: (provider: 'google' | 'github', opts?: { resumePublish?: boolean }) => void;
+  /** POST /api/auth/logout and clear the store session. */
+  onSignOut: () => Promise<void>;
+}
+
 /** Imperative callbacks for the bonded-group panel, registered by main.ts. */
 export interface BondedGroupCallbacks {
   // ── Active shipped actions ──
@@ -311,6 +357,40 @@ export interface AppStore {
   dockCallbacks: DockCallbacks | null;
   settingsCallbacks: SettingsCallbacks | null;
   chooserCallbacks: ChooserCallbacks | null;
+  authCallbacks: AuthCallbacks | null;
+
+  // Auth UX (Phase 6). Starts in `loading`; transitions per auth-runtime.
+  auth: AuthState;
+  /** Atomic set — used by the Lab boot session fetch and by sign-in/out callbacks.
+   *  Prefer the narrow helpers below in new call sites; they make the
+   *  intended transition explicit and avoid repeating the literal shape. */
+  setAuthState: (state: AuthState) => void;
+  /** Narrow transition helpers. Each enforces the AuthState invariant by
+   *  construction — there is no way to build an impossible state like
+   *  `{ status: 'signed-out', session: {...} }` through these. */
+  setAuthLoading: () => void;
+  setAuthSignedIn: (session: AuthSessionState) => void;
+  setAuthSignedOut: () => void;
+  setAuthUnverified: () => void;
+  setAuthCallbacks: (cbs: AuthCallbacks | null) => void;
+  /** One-shot resume-publish trigger.
+   *
+   *  Producer: main.ts boot, after a successful OAuth round-trip with a
+   *  matching `?authReturn=1` marker, calls `requestShareTabOpen()` which
+   *  sets this flag to true.
+   *
+   *  Consumer: TimelineBar reads it and, when true, opens the Transfer
+   *  dialog on the Share tab. The consumer MUST call `consumeShareTabOpen()`
+   *  to flip the flag back to false — this makes the trigger idempotent
+   *  across remounts. (A previous design used a monotonic counter compared
+   *  against a captured-on-mount ref; that silently dropped the intent if
+   *  TimelineBarActive remounted between the producer write and the
+   *  consumer's first effect run.) */
+  shareTabOpenRequested: boolean;
+  requestShareTabOpen: () => void;
+  /** Returns the current request flag and atomically clears it. Returns
+   *  false when there is no pending request. */
+  consumeShareTabOpen: () => boolean;
 
   // Actions
   setTheme: (theme: 'dark' | 'light') => void;
@@ -386,7 +466,7 @@ export interface AppStore {
   resetTransientState: () => void;
 }
 
-export const useAppStore = create<AppStore>((set) => ({
+export const useAppStore = create<AppStore>((set, get) => ({
   // Initial state
   theme: DEFAULT_THEME,
   textSize: 'normal',
@@ -454,6 +534,9 @@ export const useAppStore = create<AppStore>((set) => ({
   dockCallbacks: null,
   settingsCallbacks: null,
   chooserCallbacks: null,
+  authCallbacks: null,
+  auth: { status: 'loading', session: null },
+  shareTabOpenRequested: false,
   bondedGroupCallbacks: null,
   bondedGroupColorAssignments: [],
   bondedGroupColorOverrides: {},
@@ -587,6 +670,18 @@ export const useAppStore = create<AppStore>((set) => ({
   setDockCallbacks: (cbs) => set({ dockCallbacks: cbs }),
   setSettingsCallbacks: (cbs) => set({ settingsCallbacks: cbs }),
   setChooserCallbacks: (cbs) => set({ chooserCallbacks: cbs }),
+  setAuthState: (state) => set({ auth: state }),
+  setAuthLoading: () => set({ auth: { status: 'loading', session: null } }),
+  setAuthSignedIn: (session) => set({ auth: { status: 'signed-in', session } }),
+  setAuthSignedOut: () => set({ auth: { status: 'signed-out', session: null } }),
+  setAuthUnverified: () => set({ auth: { status: 'unverified', session: null } }),
+  setAuthCallbacks: (cbs) => set({ authCallbacks: cbs }),
+  requestShareTabOpen: () => set({ shareTabOpenRequested: true }),
+  consumeShareTabOpen: () => {
+    const pending = get().shareTabOpenRequested;
+    if (pending) set({ shareTabOpenRequested: false });
+    return pending;
+  },
   setBondedGroupCallbacks: (cbs) => set({ bondedGroupCallbacks: cbs }),
   resetTransientState: () => set({
     // Callbacks

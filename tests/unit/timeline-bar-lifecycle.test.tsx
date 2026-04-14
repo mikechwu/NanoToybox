@@ -1070,6 +1070,10 @@ describe('TimelineBar unified shell', () => {
     onPublish?: () => Promise<{ shareCode: string; shareUrl: string }>;
     onPause?: () => boolean;
     onResume?: () => void;
+    /** Phase 6 Auth UX: the Share tab shows a sign-in prompt when auth is
+     *  loading or the session is null, hiding the Publish button. Tests
+     *  that exercise the publish path must seed a signed-in session. */
+    signedIn?: boolean;
   } = {}) {
     const mode = opts.mode ?? 'active';
     const onPublish = opts.onPublish ?? vi.fn(async () => ({ shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' }));
@@ -1086,6 +1090,9 @@ describe('TimelineBar unified shell', () => {
       mode,
       opts.caps ?? { full: true, capsule: true },
     );
+    if (opts.signedIn !== false) {
+      useAppStore.getState().setAuthSignedIn({ userId: 'test-user', displayName: 'Test User' });
+    }
   }
 
   function setActiveRange() {

@@ -50,6 +50,7 @@ import { validateCapsuleFile, type AtomDojoPlaybackCapsuleFileV1 } from '../../s
 import { executeFrame, type FrameRuntimeSurface } from './app/frame-runtime';
 import { teardownAllSubsystems, resetSchedulerState, resetSessionState, resetEffectsGate, type TeardownSurface } from './app/app-lifecycle';
 import { serializeForWorkerRestore } from './runtime/restart-state-adapter';
+import { createAuthRuntime, consumeResumePublishIntent, AuthRequiredError } from './runtime/auth-runtime';
 
 // --- Globals ---
 let renderer, physics, stateMachine;
@@ -755,18 +756,34 @@ async function init() {
         body: artifact.json,
       });
       if (!res.ok) {
+        // 401 means the session expired or was revoked between boot and
+        // click. Throw a typed error so the caller can flip the store's
+        // auth state to signed-out and the Share panel re-renders the
+        // in-context auth prompt instead of a generic error.
+        if (res.status === 401) {
+          throw new AuthRequiredError('Your session expired. Sign in to publish again.');
+        }
         // 429 is rate-limited; surface the Retry-After hint if present so
-        // the UI can show a human-readable delay instead of the generic
-        // server message.
+        // the UI can show a human-readable delay. Retry-After is officially
+        // either delta-seconds OR an HTTP-date — only honor a positive
+        // finite numeric value; anything else falls back to the generic
+        // copy so we never render nonsense like "try again in abcs.".
         if (res.status === 429) {
-          const retryAfter = res.headers.get('Retry-After');
+          const retryAfterRaw = res.headers.get('Retry-After');
+          const retrySecs = retryAfterRaw === null ? NaN : Number(retryAfterRaw);
           throw new Error(
-            retryAfter
-              ? `Publish quota exceeded — try again in ${retryAfter}s.`
+            Number.isFinite(retrySecs) && retrySecs > 0
+              ? `Publish quota exceeded — try again in ${Math.ceil(retrySecs)}s.`
               : 'Publish quota exceeded. Try again later.',
           );
         }
-        throw new Error(`Publish failed: ${await res.text()}`);
+        // Body read can itself fail on flaky connections (chunked transfer
+        // interrupted, body already consumed by middleware). Fall back to
+        // the status code so the user always sees a "Publish failed:" prefix
+        // instead of a bare browser-level error message.
+        let detail = `status ${res.status}`;
+        try { detail = (await res.text()) || detail; } catch { /* keep status */ }
+        throw new Error(`Publish failed: ${detail}`);
       }
       // Typed payload + shape check — res.json() returns any, which
       // would silently propagate malformed responses (CDN error page,
@@ -797,6 +814,29 @@ async function init() {
     },
   });
   _timelineSub.installAndEnable(); // Atomic: install callbacks + enter ready state (no transient off flash)
+
+  // ── Auth UX (Phase 6) ──
+  // Register sign-in / sign-out callbacks and kick off a session fetch. The
+  // Lab stays usable for anonymous users; the Transfer dialog's Share tab
+  // and the AccountControl read `auth.session` via the store and gate on it.
+  //
+  // If the user is returning from an OAuth round-trip and we previously
+  // stashed a "resume publish" intent in sessionStorage, set the one-shot
+  // shareTabOpenRequested flag after the session hydrates so TimelineBar
+  // auto-opens the Transfer dialog on the Share tab. We only honor the
+  // intent when the session lands signed-in — a failed callback leaves the
+  // user unauthed, and auto-opening the dialog would just re-prompt them
+  // confusingly.
+  {
+    const { callbacks: authCallbacks, hydrate } = createAuthRuntime();
+    useAppStore.getState().setAuthCallbacks(authCallbacks);
+    const resumeRequested = consumeResumePublishIntent();
+    void hydrate().then((state) => {
+      if (resumeRequested && state.status === 'signed-in') {
+        useAppStore.getState().requestShareTabOpen();
+      }
+    });
+  }
 
   // E2E-only hook — exposes the app store for tests that need to drive
   // timeline state directly (e.g. layout regression tests for restart/action

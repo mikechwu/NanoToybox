@@ -16,18 +16,24 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ActionHint } from './ActionHint';
 import type { TimelineExportKind } from './timeline-export-dialog';
+import type { AuthStatus } from '../store/app-store';
+import { hydrateAuthSession } from '../runtime/auth-runtime';
 
 // ── Trigger hook + icon ──
 
 export function useTransferDialog() {
+  // Default tab is Share — when both destinations are available the dialog
+  // opens on Share (the higher-value, cross-session path). `request()` still
+  // accepts an explicit tab, so callers with download-only ranges pass
+  // 'download' directly.
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<TransferTab>('download');
-  const request = useCallback((initial: TransferTab = 'download') => {
+  const [tab, setTab] = useState<TransferTab>('share');
+  const request = useCallback((initial: TransferTab = 'share') => {
     setTab(initial);
     setOpen(true);
   }, []);
   const cancel = useCallback(() => { setOpen(false); }, []);
-  const reset = useCallback(() => { setOpen(false); setTab('download'); }, []);
+  const reset = useCallback(() => { setOpen(false); setTab('share'); }, []);
   return { open, tab, request, cancel, reset, setTab };
 }
 
@@ -114,13 +120,65 @@ interface TimelineTransferDialogProps {
   shareConfirmEnabled: boolean;
   onConfirmShare: () => void;
   shareSubmitting: boolean;
+  /** Red in-branch error rendered only in the signed-in panel (above the
+   *  Publish button). For 429 rate-limit, generic publish failures, etc. —
+   *  NEVER for AuthRequiredError messages (those flow through `authNote`
+   *  into the signed-out panel instead). */
   shareError: string | null;
+  /** Contextual sign-in note rendered only in the signed-out auth-prompt
+   *  panel, alongside the OAuth buttons. Explains why sign-in is being
+   *  asked for (e.g. "Your session expired…"). Sourced only from
+   *  AuthRequiredError — other error classes MUST NOT reach this slot,
+   *  as doing so would misattribute the reason for the prompt. */
+  authNote: string | null;
   shareUrl: string | null;
   shareCode: string | null;
   /** Non-fatal server warnings for a real successful publish (e.g.
    *  'quota_accounting_failed'). Rendered as a subtle note alongside
    *  the share URL — never blocks or hides the URL. Keep null when none. */
   shareWarnings: string[] | null;
+
+  // ── Auth UX (Phase 6) ──
+  /** Discriminator for the Share panel's four auth-facing states:
+   *    loading    → neutral "Checking sign-in…" row
+   *    signed-in  → Publish button
+   *    signed-out → auth prompt (Continue with Google/GitHub)
+   *    unverified → neutral "Can't verify sign-in" row with a Retry button;
+   *                 the OAuth prompt is deliberately withheld here so a
+   *                 transport blip can't push a signed-in user into an
+   *                 unnecessary round-trip. */
+  authStatus: AuthStatus;
+  /** Invoked when the user clicks one of the auth-prompt buttons. The host
+   *  wires this to the store's `authCallbacks.onSignIn(provider, { resumePublish: true })`
+   *  so we round-trip back into this dialog after OAuth. */
+  onSignIn: (provider: 'google' | 'github') => void;
+}
+
+/** Cancel-row pattern shared by 4 of the 5 Share-panel branches. The
+ *  signed-in branch adds a Publish button as a child; the unverified branch
+ *  adds a Retry button; success/loading/signed-out have no extra child.
+ *  Keeping the wrapper inline (not in its own file) preserves locality and
+ *  the per-branch class/disabled semantics. */
+function ShareActions({
+  onCancel, transferBusy, cancelLabel = 'Cancel', children,
+}: {
+  onCancel: () => void;
+  transferBusy: boolean;
+  cancelLabel?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="timeline-transfer-dialog__actions">
+      <button
+        className="timeline-transfer-dialog__cancel"
+        onClick={onCancel}
+        disabled={transferBusy}
+      >
+        {cancelLabel}
+      </button>
+      {children}
+    </div>
+  );
 }
 
 export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
@@ -129,8 +187,10 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
     downloadTabAvailable, availableKinds, downloadKind, onSelectDownloadKind, onConfirmDownload,
     downloadSubmitting, downloadError, downloadConfirmEnabled, fullEstimate, capsuleEstimate,
     shareTabAvailable, shareConfirmEnabled, onConfirmShare,
-    shareSubmitting, shareError, shareUrl, shareCode, shareWarnings,
+    shareSubmitting, shareError, authNote, shareUrl, shareCode, shareWarnings,
+    authStatus, onSignIn,
   } = props;
+  const [retryingAuth, setRetryingAuth] = useState(false);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const prevOpen = useRef(false);
@@ -308,7 +368,15 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
           </div>
         )}
 
-        {/* Share panel — only rendered when tab is share AND share is available */}
+        {/* Share panel — only rendered when tab is share AND share is available.
+         *  Five distinct states, picked in priority order:
+         *    1. shareSuccess    → we already published; show link + copy
+         *    2. loading         → neutral "Checking sign-in…" row
+         *    3. unverified      → "Can't verify" with Retry (no OAuth prompt)
+         *    4. signed-out      → auth prompt (Continue with Google/GitHub)
+         *    5. signed-in       → description + Publish button
+         *  States (2), (3), (4) render their own Cancel-only action row.
+         *  State (5) shows Cancel + Publish; state (1) shows Close. */}
         {tab === 'share' && shareTabAvailable && (
           <div role="tabpanel" aria-label="Share">
             {shareSuccess ? (
@@ -341,31 +409,98 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                     {formatShareWarning(shareWarnings)}
                   </p>
                 )}
+                {/* No shareError render here — handleShareConfirm clears
+                 *  shareError before setting shareResult, and the auth-status
+                 *  effect in TimelineBar clears it on any status transition
+                 *  that could repaint this branch. */}
+                <ShareActions onCancel={handleCancel} transferBusy={transferBusy} cancelLabel="Close" />
+              </div>
+            ) : authStatus === 'loading' ? (
+              <div className="timeline-transfer-dialog__auth-checking" aria-live="polite">
+                <p className="timeline-transfer-dialog__description">Checking sign-in…</p>
+                <ShareActions onCancel={handleCancel} transferBusy={transferBusy} />
+              </div>
+            ) : authStatus === 'unverified' ? (
+              <div className="timeline-transfer-dialog__auth-unverified" data-testid="transfer-auth-unverified">
+                <p className="timeline-transfer-dialog__description">
+                  Can't verify sign-in right now. Retry or continue later.
+                </p>
+                <ShareActions onCancel={handleCancel} transferBusy={transferBusy}>
+                  <button
+                    className="timeline-transfer-dialog__confirm"
+                    onClick={async () => {
+                      setRetryingAuth(true);
+                      try { await hydrateAuthSession(); }
+                      finally { setRetryingAuth(false); }
+                    }}
+                    disabled={transferBusy || retryingAuth}
+                    data-testid="transfer-auth-retry"
+                  >
+                    {retryingAuth ? 'Checking\u2026' : 'Retry'}
+                  </button>
+                </ShareActions>
+              </div>
+            ) : authStatus === 'signed-out' ? (
+              <div className="timeline-transfer-dialog__auth-prompt" data-testid="transfer-auth-prompt">
+                <p className="timeline-transfer-dialog__description">
+                  Sign in to publish a share link. Anyone with the link can open it
+                  in Watch without signing in.
+                </p>
+                {/* authNote is set ONLY from AuthRequiredError.message — other
+                 *  error classes (429, generic publish failure) never reach
+                 *  this slot because the host component splits shareError
+                 *  by kind before passing it down. This prevents the
+                 *  "Publish quota exceeded…" bleed that an earlier
+                 *  string-only `shareError` allowed when opportunistic
+                 *  hydrate flipped signed-in → signed-out. */}
+                {authNote && (
+                  <p
+                    className="timeline-transfer-dialog__auth-note"
+                    role="status"
+                    aria-live="polite"
+                    data-testid="transfer-auth-note"
+                  >
+                    {authNote}
+                  </p>
+                )}
+                <div className="timeline-transfer-dialog__auth-buttons">
+                  <button
+                    className="timeline-transfer-dialog__auth-button"
+                    onClick={() => onSignIn('google')}
+                    disabled={transferBusy}
+                    data-testid="transfer-auth-google"
+                  >
+                    Continue with Google
+                  </button>
+                  <button
+                    className="timeline-transfer-dialog__auth-button"
+                    onClick={() => onSignIn('github')}
+                    disabled={transferBusy}
+                    data-testid="transfer-auth-github"
+                  >
+                    Continue with GitHub
+                  </button>
+                </div>
+                <ShareActions onCancel={handleCancel} transferBusy={transferBusy} />
               </div>
             ) : (
-              <p className="timeline-transfer-dialog__description">
-                Publish this capsule to get a share link that anyone can open in Watch.
-              </p>
+              /* signed-in */
+              <>
+                <p className="timeline-transfer-dialog__description">
+                  Publish this capsule to get a share link that anyone can open in Watch.
+                </p>
+                {shareError && <p className="timeline-transfer-dialog__error">{shareError}</p>}
+                <ShareActions onCancel={handleCancel} transferBusy={transferBusy}>
+                  <button
+                    className="timeline-transfer-dialog__confirm"
+                    onClick={onConfirmShare}
+                    disabled={transferBusy || !shareConfirmEnabled}
+                  >
+                    {shareSubmitting ? 'Publishing\u2026' : 'Publish'}
+                  </button>
+                </ShareActions>
+              </>
             )}
-            {shareError && <p className="timeline-transfer-dialog__error">{shareError}</p>}
-            <div className="timeline-transfer-dialog__actions">
-              <button
-                className="timeline-transfer-dialog__cancel"
-                onClick={handleCancel}
-                disabled={transferBusy}
-              >
-                {shareSuccess ? 'Close' : 'Cancel'}
-              </button>
-              {!shareSuccess && (
-                <button
-                  className="timeline-transfer-dialog__confirm"
-                  onClick={onConfirmShare}
-                  disabled={transferBusy || !shareConfirmEnabled}
-                >
-                  {shareSubmitting ? 'Publishing\u2026' : 'Publish'}
-                </button>
-              )}
-            </div>
           </div>
         )}
       </div>
