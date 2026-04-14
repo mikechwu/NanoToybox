@@ -48,6 +48,7 @@ function makeSnapshot(overrides: Partial<WatchControllerSnapshot> = {}): WatchCo
     activeInterpolationMethod: 'linear',
     lastFallbackReason: 'none',
     importDiagnostics: [],
+    loadingShareCode: null,
     ...overrides,
   };
 }
@@ -94,6 +95,7 @@ function createMockController(initialSnapshot?: Partial<WatchControllerSnapshot>
     setInterpolationMode: vi.fn(),
     getRegisteredInterpolationMethods: vi.fn(() => []),
     getInterpolationRuntime: vi.fn(() => null),
+    openSharedCapsule: vi.fn(async () => {}),
     dispose: vi.fn(),
     // Test helper
     setSnapshot(overrides: Partial<WatchControllerSnapshot>) {

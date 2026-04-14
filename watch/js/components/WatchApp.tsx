@@ -64,6 +64,12 @@ export function WatchApp({ controller }: WatchAppProps) {
     });
   }, [controller]);
 
+  const handleOpenShareCode = useCallback((input: string) => {
+    controller.openSharedCapsule(input).catch(e => {
+      console.error('[watch] share open error:', e);
+    });
+  }, [controller]);
+
   // Global error banner (visible in both states)
   const errorBanner = snapshot.error ? (
     <div className="watch-error-banner">
@@ -75,7 +81,12 @@ export function WatchApp({ controller }: WatchAppProps) {
     return (
       <>
         {errorBanner}
-        <WatchLanding onOpenFile={handleOpenFile} onDrop={handleDrop} />
+        <WatchLanding
+          onOpenFile={handleOpenFile}
+          onDrop={handleDrop}
+          onOpenShareCode={handleOpenShareCode}
+          loadingShareCode={snapshot.loadingShareCode}
+        />
       </>
     );
   }
@@ -88,6 +99,7 @@ export function WatchApp({ controller }: WatchAppProps) {
           fileKind={snapshot.fileKind}
           fileName={snapshot.fileName}
           onOpenFile={handleOpenFile}
+          onOpenShareCode={handleOpenShareCode}
         />
         <div className="watch-canvas-area">
           <WatchCanvas controller={controller} />

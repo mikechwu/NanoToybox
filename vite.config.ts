@@ -34,6 +34,7 @@ export default defineConfig({
     copy({
       targets: [
         { src: 'structures/library', dest: 'dist/structures' },
+        { src: '_routes.json', dest: 'dist' },
         // Wasm assets are handled by Vite ?url imports in tersoff-wasm.js
         // (emitted as hashed assets under dist/assets/). No manual copy needed.
       ],

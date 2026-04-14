@@ -35,6 +35,15 @@ const controller = createWatchController();
 // Mount React UI
 mountWatchUI(controller);
 
+// Share-code auto-open: if ?c= is present, load the shared capsule.
+// Runs after mount so the UI can show the loading state.
+const shareCode = new URLSearchParams(window.location.search).get('c');
+if (shareCode) {
+  controller.openSharedCapsule(shareCode).catch((err) => {
+    console.error('[watch] failed to open shared capsule:', err);
+  });
+}
+
 // Test hooks — only wired when the page is loaded with ?e2e=1 (same
 // convention as /lab/). Exposes a narrow surface for Playwright.
 const qp = new URLSearchParams(window.location.search);

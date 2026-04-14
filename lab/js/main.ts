@@ -743,8 +743,30 @@ async function init() {
       return { capsule, full };
     },
     exportCapabilities: { full: true, capsule: true },
+    publishCapsule: async () => {
+      const artifact = buildExportArtifact('capsule');
+      if (!artifact) throw new Error('No recorded history to publish.');
+      const errors = validateCapsuleFile(artifact.file);
+      if (errors.length > 0) throw new Error(`Validation failed: ${errors[0]}`);
+      const res = await fetch('/api/capsules/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: artifact.json,
+      });
+      if (!res.ok) throw new Error(`Publish failed: ${await res.text()}`);
+      return res.json();
+    },
   });
   _timelineSub.installAndEnable(); // Atomic: install callbacks + enter ready state (no transient off flash)
+
+  // E2E-only hook — exposes the app store for tests that need to drive
+  // timeline state directly (e.g. layout regression tests for restart/action
+  // overlap, which would otherwise require a real recording setup).
+  // Gated behind ?e2e=1 so it is never part of the production runtime surface.
+  if (new URLSearchParams(window.location.search).get('e2e') === '1') {
+    (window as unknown as Record<string, unknown>).__useAppStore = useAppStore;
+  }
 
   // Narrow test hook — returns only the specific observable E2E tests need.
   (window as unknown as Record<string, unknown>)._getUIState = () => {

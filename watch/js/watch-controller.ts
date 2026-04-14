@@ -43,6 +43,7 @@ import type { LoadedFullHistory, ImportDiagnostic } from './full-history-import'
 import type { LoadedWatchHistory } from './watch-playback-model';
 import { VIEWER_DEFAULTS } from '../../src/config/viewer-defaults';
 import type { BondedGroupSummary } from './watch-bonded-groups';
+import { normalizeShareInput } from '../../src/share/share-code';
 
 export interface WatchControllerSnapshot {
   loaded: boolean;
@@ -78,12 +79,14 @@ export interface WatchControllerSnapshot {
   activeInterpolationMethod: InterpolationMethodId;
   lastFallbackReason: FallbackReason;
   importDiagnostics: readonly ImportDiagnostic[];
+  loadingShareCode: string | null;
 }
 
 export interface WatchController {
   getSnapshot(): WatchControllerSnapshot;
   subscribe(callback: () => void): () => void;
   openFile(file: File): Promise<void>;
+  openSharedCapsule(input: string): Promise<void>;
   togglePlay(): void;
   scrub(timePs: number): void;
   // ── Round 2: interaction commands ──
@@ -132,6 +135,7 @@ const EMPTY_SNAPSHOT: WatchControllerSnapshot = {
   smoothPlayback: true, interpolationMode: 'linear',
   activeInterpolationMethod: 'linear', lastFallbackReason: 'none',
   importDiagnostics: EMPTY_DIAGNOSTICS,
+  loadingShareCode: null,
 };
 
 export function createWatchController(): WatchController {
@@ -259,6 +263,7 @@ export function createWatchController(): WatchController {
       activeInterpolationMethod: _lastActiveMethod,
       lastFallbackReason: _lastFallbackReason,
       importDiagnostics: _lastImportDiagnostics,
+      loadingShareCode: null,
     };
   }
 
@@ -295,6 +300,7 @@ export function createWatchController(): WatchController {
       activeInterpolationMethod: _lastActiveMethod,
       lastFallbackReason: _lastFallbackReason,
       importDiagnostics: _lastImportDiagnostics,
+      loadingShareCode: _snapshot.loadingShareCode,
     };
   }
 
@@ -506,6 +512,53 @@ export function createWatchController(): WatchController {
           teardownInterpolationRuntime();
         }
         setErrorKeepingCurrentState(`Failed to initialize playback: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+
+    async openSharedCapsule(input) {
+      const code = normalizeShareInput(input);
+      if (!code) {
+        setErrorKeepingCurrentState('Invalid share code or URL');
+        return;
+      }
+
+      _snapshot = { ..._snapshot, loadingShareCode: code, error: null };
+      publishSnapshot();
+
+      try {
+        // Fetch metadata first — validates existence and accessibility
+        const metaRes = await fetch(`/api/capsules/${code}`);
+        if (!metaRes.ok) {
+          setErrorKeepingCurrentState(
+            metaRes.status === 404 ? 'Shared capsule not found' : `Failed to load shared capsule (${metaRes.status})`,
+          );
+          _snapshot = { ..._snapshot, loadingShareCode: null };
+          publishSnapshot();
+          return;
+        }
+
+        // Fetch blob as Blob (not text — identity-preserving for future binary transport)
+        const blobRes = await fetch(`/api/capsules/${code}/blob`);
+        if (!blobRes.ok) {
+          setErrorKeepingCurrentState('Failed to download shared capsule');
+          _snapshot = { ..._snapshot, loadingShareCode: null };
+          publishSnapshot();
+          return;
+        }
+
+        const blob = await blobRes.blob();
+        const contentType = blobRes.headers.get('Content-Type') ?? 'application/json';
+        const file = new File([blob], `atomdojo-capsule-${code}.atomdojo`, { type: contentType });
+
+        // Route through existing transactional open pipeline
+        await this.openFile(file);
+      } catch (err) {
+        setErrorKeepingCurrentState(
+          `Network error loading shared capsule: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        _snapshot = { ..._snapshot, loadingShareCode: null };
+        publishSnapshot();
       }
     },
 

@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": [
+    "functions/**/*.ts",
+    "src/share/**/*.ts",
+    "src/history/history-file-v1.ts",
+    "src/history/bond-policy-v1.ts"
+  ]
+}

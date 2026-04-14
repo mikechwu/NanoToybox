@@ -6,6 +6,23 @@ import { gotoApp } from './helpers'
  *
  * Uses the _getWorkerDebugState() hook exposed by main.ts to inspect
  * worker integration state directly from the running app.
+ *
+ * Known flakiness (pre-existing, classified 2026-04-13):
+ *   These tests use tight timing windows — the stall-detection test waits
+ *   800ms for a 500ms threshold callback. When the browser context is under
+ *   cumulative CPU/GC pressure from prior heavy tests (notably smoke.spec's
+ *   bench-wasm and the 20+ React UI tests), worker startup and timer
+ *   callbacks can drift past these windows, producing intermittent failures
+ *   in full-suite runs (~1-2 failures per full run).
+ *
+ *   Reproduction: `playwright test tests/e2e/smoke.spec.ts tests/e2e/worker-integration.spec.ts`
+ *     fails roughly 1 in 3 runs with NO other test files present.
+ *   Isolation: `playwright test tests/e2e/worker-integration.spec.ts` passes 5/5.
+ *
+ *   Not caused by capsule share/publish (Phase 2) changes — bisection on
+ *   2026-04-13 confirmed the flake is triggered by smoke.spec's CPU load,
+ *   not by any newly added test file. Safe to retry in CI; do not treat as
+ *   a regression signal for Phase 2 or later work.
  */
 
 interface WorkerDebugState {

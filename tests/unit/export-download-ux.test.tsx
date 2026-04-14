@@ -215,7 +215,7 @@ describe('TimelineBar export pause lifecycle', () => {
     act(() => { setupActiveTimeline(cbs); });
     const { container } = render(<TimelineBar />);
 
-    const trigger = container.querySelector('.timeline-export-trigger');
+    const trigger = container.querySelector('.timeline-transfer-trigger');
     expect(trigger).not.toBeNull();
     act(() => { fireEvent.click(trigger!); });
 
@@ -231,7 +231,7 @@ describe('TimelineBar export pause lifecycle', () => {
     act(() => { setupActiveTimeline(cbs); });
     render(<TimelineBar />);
 
-    const trigger = document.querySelector('.timeline-export-trigger');
+    const trigger = document.querySelector('.timeline-transfer-trigger');
     act(() => { fireEvent.click(trigger!); });
 
     expect(onPause).toHaveBeenCalledTimes(1);
@@ -249,9 +249,9 @@ describe('TimelineBar export pause lifecycle', () => {
     render(<TimelineBar />);
 
     // Open
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-trigger')!); });
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
     // Cancel
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-dialog__cancel')!); });
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-dialog__cancel')!); });
 
     expect(onResume).toHaveBeenCalledTimes(1);
   });
@@ -266,8 +266,8 @@ describe('TimelineBar export pause lifecycle', () => {
     act(() => { setupActiveTimeline(cbs); });
     render(<TimelineBar />);
 
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-trigger')!); });
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-dialog__cancel')!); });
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-dialog__cancel')!); });
 
     expect(onResume).not.toHaveBeenCalled();
   });
@@ -285,15 +285,15 @@ describe('TimelineBar export pause lifecycle', () => {
     render(<TimelineBar />);
 
     // Open
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-trigger')!); });
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
     // Confirm
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-dialog__confirm')!); });
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-dialog__confirm')!); });
     // Resolve export
     await act(async () => { resolveExport!('saved'); });
 
     expect(onResume).toHaveBeenCalledTimes(1);
     // Dialog should be closed
-    expect(document.querySelector('.timeline-export-dialog')).toBeNull();
+    expect(document.querySelector('.timeline-transfer-dialog')).toBeNull();
   });
 
   it('keeps dialog open on picker-cancelled, no resume', async () => {
@@ -308,13 +308,13 @@ describe('TimelineBar export pause lifecycle', () => {
     act(() => { setupActiveTimeline(cbs); });
     render(<TimelineBar />);
 
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-trigger')!); });
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-dialog__confirm')!); });
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-dialog__confirm')!); });
     await act(async () => { resolveExport!('picker-cancelled'); });
 
     expect(onResume).not.toHaveBeenCalled();
     // Dialog should remain open
-    expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
   });
 
   it('keeps dialog open on error, no resume', async () => {
@@ -327,12 +327,12 @@ describe('TimelineBar export pause lifecycle', () => {
     act(() => { setupActiveTimeline(cbs); });
     render(<TimelineBar />);
 
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-trigger')!); });
-    await act(async () => { fireEvent.click(document.querySelector('.timeline-export-dialog__confirm')!); });
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
+    await act(async () => { fireEvent.click(document.querySelector('.timeline-transfer-dialog__confirm')!); });
 
     expect(onResume).not.toHaveBeenCalled();
-    expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
-    expect(document.querySelector('.timeline-export-dialog__error')?.textContent).toBe('Export failed');
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
+    expect(document.querySelector('.timeline-transfer-dialog__error')?.textContent).toBe('Export failed');
   });
 
   it('resumes when capability loss closes the dialog', () => {
@@ -346,8 +346,8 @@ describe('TimelineBar export pause lifecycle', () => {
     render(<TimelineBar />);
 
     // Open
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-trigger')!); });
-    expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
 
     // Simulate capability loss
     act(() => {
@@ -368,15 +368,15 @@ describe('TimelineBar export pause lifecycle', () => {
     render(<TimelineBar />);
 
     // Open
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-trigger')!); });
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
 
     // Before microtask: should show Estimating
-    expect(document.querySelectorAll('.timeline-export-dialog__estimate--muted').length).toBeGreaterThan(0);
+    expect(document.querySelectorAll('.timeline-transfer-dialog__estimate--muted').length).toBeGreaterThan(0);
 
     // After microtask: estimates should populate
     await act(async () => { await Promise.resolve(); });
 
-    const slots = document.querySelectorAll('.timeline-export-dialog__estimate');
+    const slots = document.querySelectorAll('.timeline-transfer-dialog__estimate');
     const texts = Array.from(slots).map((s) => s.textContent);
     expect(texts).toContain('256 KB');
     expect(texts).toContain('1.2 MB');
@@ -393,13 +393,13 @@ describe('TimelineBar export pause lifecycle', () => {
     render(<TimelineBar />);
 
     // Open and let estimates populate
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-trigger')!); });
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
     await act(async () => { await Promise.resolve(); });
-    expect(document.querySelectorAll('.timeline-export-dialog__estimate').length).toBeGreaterThan(0);
+    expect(document.querySelectorAll('.timeline-transfer-dialog__estimate').length).toBeGreaterThan(0);
 
     // Cancel
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-dialog__cancel')!); });
-    expect(document.querySelector('.timeline-export-dialog')).toBeNull();
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-dialog__cancel')!); });
+    expect(document.querySelector('.timeline-transfer-dialog')).toBeNull();
   });
 
   it('resumes on component unmount if export caused pause', () => {
@@ -413,8 +413,8 @@ describe('TimelineBar export pause lifecycle', () => {
     const { unmount } = render(<TimelineBar />);
 
     // Open export dialog (causes pause)
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-trigger')!); });
-    expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
 
     // Unmount while dialog is open
     unmount();
@@ -431,10 +431,10 @@ describe('TimelineBar export pause lifecycle', () => {
     act(() => { setupActiveTimeline(cbs); });
     render(<TimelineBar />);
 
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-trigger')!); });
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
     await act(async () => { await Promise.resolve(); });
 
-    const slots = document.querySelectorAll('.timeline-export-dialog__estimate');
+    const slots = document.querySelectorAll('.timeline-transfer-dialog__estimate');
     const texts = Array.from(slots).map((s) => s.textContent);
     expect(texts).toContain('Unavailable');
     expect(texts.every((t) => t === 'Unavailable')).toBe(true);
@@ -456,8 +456,8 @@ describe('TimelineBar export pause lifecycle', () => {
     rerender(<TimelineBar />);
 
     // Open export dialog
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-trigger')!); });
-    expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
 
     // Unmount — should call the latest onResumeFromExport, not the stale null
     unmount();
@@ -474,11 +474,11 @@ describe('TimelineBar export pause lifecycle', () => {
     act(() => { setupActiveTimeline(cbs); });
     render(<TimelineBar />);
 
-    act(() => { fireEvent.click(document.querySelector('.timeline-export-trigger')!); });
+    act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
     // Let the microtask with .catch() settle
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-    const slots = document.querySelectorAll('.timeline-export-dialog__estimate');
+    const slots = document.querySelectorAll('.timeline-transfer-dialog__estimate');
     const texts = Array.from(slots).map((s) => s.textContent);
     expect(texts).toContain('Unavailable');
     expect(texts.every((t) => t === 'Unavailable')).toBe(true);

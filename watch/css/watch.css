@@ -42,7 +42,27 @@ body {
   padding: 10px 24px; font-size: 0.95rem; font-weight: 600; cursor: pointer;
 }
 .watch-btn:hover { filter: brightness(1.1); }
-.watch-support-note { font-size: 0.8rem; opacity: 0.4; margin-top: 16px; }
+
+/* ── Share input (landing page) ── */
+.watch-share-input-section { margin-top: 24px; text-align: center; }
+.watch-share-input-label { font-size: 0.85rem; opacity: 0.6; margin-bottom: 8px; }
+.watch-share-input-form { display: flex; gap: 8px; justify-content: center; align-items: center; }
+.watch-share-input {
+  background: rgba(255,255,255,0.06); border: 1px solid var(--color-border, rgba(255,255,255,0.12));
+  border-radius: 6px; padding: 8px 12px; font-size: 0.9rem; color: var(--color-text, #ccc);
+  width: 280px; outline: none;
+}
+.watch-share-input:focus { border-color: var(--color-accent, #6dc); }
+.watch-share-input:disabled { opacity: 0.5; }
+
+/* ── Share input (top bar inline) ── */
+.review-topbar__share-form { display: flex; gap: 4px; align-items: center; }
+.review-topbar__share-input {
+  background: rgba(255,255,255,0.06); border: 1px solid var(--color-border, rgba(255,255,255,0.12));
+  border-radius: 4px; padding: 4px 8px; font-size: 0.8rem; color: var(--color-text, #ccc);
+  width: 180px; outline: none;
+}
+.review-topbar__share-input:focus { border-color: var(--color-accent, #6dc); }
 
 /* ── Global error banner ──
    Centered fixed banner. max-width 500px keeps it readable on desktop.

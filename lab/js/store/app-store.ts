@@ -80,6 +80,7 @@ export interface TimelineCallbacks {
   onPauseForExport?: () => boolean;
   onResumeFromExport?: () => void;
   getExportEstimates?: () => { capsule: string | null; full: string | null };
+  onPublishCapsule?: () => Promise<{ shareCode: string; shareUrl: string }>;
 }
 
 /** Imperative callbacks for the bonded-group panel, registered by main.ts. */

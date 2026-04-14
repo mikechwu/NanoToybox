@@ -67,6 +67,8 @@ export interface TimelineSubsystemDeps {
   /** Estimate dependency — returns formatted size strings for both export kinds. */
   getExportEstimates?: () => { capsule: string | null; full: string | null };
   exportCapabilities?: { full: boolean; capsule: boolean };
+  /** Publish dependency — publishes a capsule to cloud storage and returns share info. */
+  publishCapsule?: () => Promise<{ shareCode: string; shareUrl: string }>;
 }
 
 /** High-level subsystem handle — main.ts should only use these methods. */
@@ -362,6 +364,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
         },
         onResumeFromExport: () => { deps.resume(); },
         ...(deps.getExportEstimates ? { getExportEstimates: () => deps.getExportEstimates!() } : {}),
+        ...(deps.publishCapsule ? { onPublishCapsule: () => deps.publishCapsule!() } : {}),
       }, 'ready', currentExportCapability());
     },
     getReviewBondedGroupComponents: (timePs) => timeline.getReviewBondedGroupComponents(timePs),

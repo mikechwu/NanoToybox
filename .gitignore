@@ -20,6 +20,12 @@
 *.pem
 *.key
 
+# --- Cloudflare / Wrangler local state (contains local D1 + R2 + cache,
+#     may include seeded/test user data from OAuth or publish flows) ---
+.wrangler/
+wrangler.local.toml
+.mf/
+
 # --- Python ---
 __pycache__/
 *.py[cod]
@@ -33,6 +39,16 @@ build/
 
 # --- Numba cache ---
 __numba_cache__/
+
+# --- Python tool caches ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
 
 # --- Virtual environments ---
 env/

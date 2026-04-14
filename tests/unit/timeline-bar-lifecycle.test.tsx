@@ -34,6 +34,19 @@ function installSubsystemWithCallbacks(mode: 'off' | 'ready' | 'active', callbac
   useAppStore.getState().installTimelineUI({ ...defaultCallbacks, ...callbacks }, mode);
 }
 
+// jsdom has no ResizeObserver. TimelineBar's width-aware restart clamp
+// instantiates one in a layout effect, so we install a global no-op stub
+// for this file. Individual tests can replace it to capture callbacks.
+beforeEach(() => {
+  if (!(globalThis as any).ResizeObserver) {
+    (globalThis as any).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+  }
+});
+
 describe('TimelineBar unified shell', () => {
   beforeEach(() => { useAppStore.getState().resetTransientState(); });
   afterEach(() => { cleanup(); });
@@ -688,7 +701,7 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-export-trigger')).not.toBeNull();
+    expect(container.querySelector('.timeline-transfer-trigger')).not.toBeNull();
   });
 
   it('export trigger hidden when capability is null', () => {
@@ -701,7 +714,7 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-export-trigger')).toBeNull();
+    expect(container.querySelector('.timeline-transfer-trigger')).toBeNull();
   });
 
   it('export trigger hidden when callback exists but capability is null', () => {
@@ -715,19 +728,19 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-export-trigger')).toBeNull();
+    expect(container.querySelector('.timeline-transfer-trigger')).toBeNull();
   });
 
   it('export trigger hidden in off state', () => {
     act(() => { installWithExport('off'); });
     const { container } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-export-trigger')).toBeNull();
+    expect(container.querySelector('.timeline-transfer-trigger')).toBeNull();
   });
 
   it('export trigger hidden in ready state', () => {
     act(() => { installWithExport('ready'); });
     const { container } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-export-trigger')).toBeNull();
+    expect(container.querySelector('.timeline-transfer-trigger')).toBeNull();
   });
 
   it('clear trigger present alongside export trigger', () => {
@@ -740,7 +753,7 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    expect(container.querySelector('.timeline-export-trigger')).not.toBeNull();
+    expect(container.querySelector('.timeline-transfer-trigger')).not.toBeNull();
     expect(container.querySelector('.timeline-clear-trigger')).not.toBeNull();
   });
 
@@ -757,7 +770,7 @@ describe('TimelineBar unified shell', () => {
         });
       }
       const { container } = render(<TimelineBar />);
-      expect(container.querySelector('.timeline-action-slot--export')).not.toBeNull();
+      expect(container.querySelector('.timeline-action-slot--transfer')).not.toBeNull();
       expect(container.querySelector('.timeline-action-slot--clear')).not.toBeNull();
       cleanup();
     }
@@ -773,8 +786,8 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
-    expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
+    act(() => { (container.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
   });
 
   it('export dialog defaults to capsule when both available', () => {
@@ -787,7 +800,7 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    act(() => { (container.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
     const capsuleRadio = document.querySelector('input[value="capsule"]') as HTMLInputElement;
     expect(capsuleRadio.checked).toBe(true);
   });
@@ -802,7 +815,7 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    act(() => { (container.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
     const fullRadio = document.querySelector('input[value="full"]') as HTMLInputElement;
     expect(fullRadio.disabled).toBe(true);
   });
@@ -822,8 +835,8 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
-    const confirmBtn = document.querySelector('.timeline-export-dialog__confirm') as HTMLButtonElement;
+    act(() => { (container.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    const confirmBtn = document.querySelector('.timeline-transfer-dialog__confirm') as HTMLButtonElement;
     act(() => { confirmBtn.click(); });
     expect(onExport).toHaveBeenCalledWith('capsule');
   });
@@ -842,9 +855,9 @@ describe('TimelineBar unified shell', () => {
     act(() => { (container.querySelector('.timeline-clear-trigger') as HTMLButtonElement).click(); });
     expect(document.querySelector('.timeline-clear-dialog')).not.toBeNull();
     // Now open export — clear should close
-    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    act(() => { (container.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
     expect(document.querySelector('.timeline-clear-dialog')).toBeNull();
-    expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
   });
 
   it('opening clear closes export dialog', () => {
@@ -858,11 +871,11 @@ describe('TimelineBar unified shell', () => {
     });
     const { container } = render(<TimelineBar />);
     // Open export dialog first
-    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
-    expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
+    act(() => { (container.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
     // Now open clear — export should close
     act(() => { (container.querySelector('.timeline-clear-trigger') as HTMLButtonElement).click(); });
-    expect(document.querySelector('.timeline-export-dialog')).toBeNull();
+    expect(document.querySelector('.timeline-transfer-dialog')).toBeNull();
     expect(document.querySelector('.timeline-clear-dialog')).not.toBeNull();
   });
 
@@ -876,14 +889,14 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    const exportSlot = container.querySelector('.timeline-action-slot--export');
-    const spacer = exportSlot?.querySelector('.timeline-action-spacer');
+    const shareSlot = container.querySelector('.timeline-action-slot--transfer');
+    const spacer = shareSlot?.querySelector('.timeline-action-spacer');
     expect(spacer).not.toBeNull();
     expect(spacer!.getAttribute('aria-hidden')).toBe('true');
     expect(spacer!.getAttribute('tabindex')).toBeNull();
   });
 
-  it('export trigger tooltip visible on hover after delay', () => {
+  it('transfer trigger tooltip visible on hover after delay', () => {
     vi.useFakeTimers();
     act(() => {
       installWithExport('active');
@@ -894,12 +907,12 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    const anchor = container.querySelector('.timeline-export-trigger')!.closest('.timeline-hint-anchor')! as HTMLElement;
+    const anchor = container.querySelector('.timeline-transfer-trigger')!.closest('.timeline-hint-anchor')! as HTMLElement;
     const tooltip = anchor.querySelector('[role="tooltip"]')!;
     act(() => { fireEvent.mouseEnter(anchor); });
     act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
     expect(tooltip.classList.contains('timeline-hint--visible')).toBe(true);
-    expect(tooltip.textContent).toContain('Export timeline history.');
+    expect(tooltip.textContent).toContain('Transfer history');
     vi.useRealTimers();
   });
 
@@ -913,12 +926,12 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    act(() => { (container.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
     // Dialog should be in document.body, not inside the timeline container
-    expect(document.body.querySelector('.timeline-export-dialog')).not.toBeNull();
+    expect(document.body.querySelector('.timeline-transfer-dialog')).not.toBeNull();
     expect(document.body.querySelector('.timeline-dialog-backdrop')).not.toBeNull();
     // The timeline container itself should NOT contain the dialog
-    expect(container.querySelector('.timeline-export-dialog')).toBeNull();
+    expect(container.querySelector('.timeline-transfer-dialog')).toBeNull();
     expect(container.querySelector('.timeline-dialog-backdrop')).toBeNull();
   });
 
@@ -935,11 +948,11 @@ describe('TimelineBar unified shell', () => {
     });
     const { container } = render(<TimelineBar />);
     // Open export dialog
-    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
-    expect(document.querySelector('.timeline-export-dialog')).not.toBeNull();
+    act(() => { (container.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
     // Remove capability
     act(() => { useAppStore.getState().setTimelineExportCapabilities(null); });
-    expect(document.querySelector('.timeline-export-dialog')).toBeNull();
+    expect(document.querySelector('.timeline-transfer-dialog')).toBeNull();
   });
 
   it('selected full falls back to capsule when full becomes unavailable', () => {
@@ -952,7 +965,7 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
+    act(() => { (container.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
     // Select full
     const fullRadio = document.querySelector('input[value="full"]') as HTMLInputElement;
     act(() => { fireEvent.click(fullRadio); });
@@ -979,9 +992,13 @@ describe('TimelineBar unified shell', () => {
     expect(useAppStore.getState().timelineRecordingMode).toBe('off');
   });
 
-  it('export confirm disabled when callback is missing but capability exists', () => {
+  it('transfer trigger hidden when caps exist but neither callback is wired', () => {
+    // Under the action-availability contract, stored capabilities alone are
+    // not enough — the corresponding callback must also be wired. If neither
+    // onExportHistory nor onPublishCapsule is provided, the transfer trigger
+    // must not render at all (the old "disabled confirm inside an empty
+    // dialog" UX is gone, because the dialog can no longer open).
     act(() => {
-      // Install with capability but WITHOUT onExportHistory callback
       useAppStore.getState().installTimelineUI(defaultCallbacks, 'active', { full: true, capsule: true });
       useAppStore.getState().updateTimelineState({
         mode: 'live', currentTimePs: 100, reviewTimePs: null,
@@ -990,11 +1007,7 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    // Export trigger should be visible (capability exists)
-    act(() => { (container.querySelector('.timeline-export-trigger') as HTMLButtonElement).click(); });
-    // Confirm should be disabled since callback is missing
-    const confirmBtn = document.querySelector('.timeline-export-dialog__confirm') as HTMLButtonElement;
-    expect(confirmBtn.disabled).toBe(true);
+    expect(container.querySelector('.timeline-transfer-trigger')).toBeNull();
   });
 
   it('export trigger reappears after stop → restart recording cycle', () => {
@@ -1011,14 +1024,14 @@ describe('TimelineBar unified shell', () => {
       });
     });
     rerender(<TimelineBar />);
-    expect(container.querySelector('.timeline-export-trigger')).not.toBeNull();
+    expect(container.querySelector('.timeline-transfer-trigger')).not.toBeNull();
 
     // 2. Simulate stop/off — publishTimelineOffState clears capability + range
     act(() => {
       useAppStore.getState().publishTimelineOffState();
     });
     rerender(<TimelineBar />);
-    expect(container.querySelector('.timeline-export-trigger')).toBeNull();
+    expect(container.querySelector('.timeline-transfer-trigger')).toBeNull();
 
     // 3. Simulate start recording again — restore mode + capability + range
     act(() => {
@@ -1031,7 +1044,7 @@ describe('TimelineBar unified shell', () => {
       });
     });
     rerender(<TimelineBar />);
-    expect(container.querySelector('.timeline-export-trigger')).not.toBeNull();
+    expect(container.querySelector('.timeline-transfer-trigger')).not.toBeNull();
   });
 
   it('uninstallTimelineUI clears export capability atomically', () => {
@@ -1047,5 +1060,488 @@ describe('TimelineBar unified shell', () => {
     act(() => { useAppStore.getState().uninstallTimelineUI(); });
     expect(useAppStore.getState().timelineExportCapabilities).toBeNull();
     expect(useAppStore.getState().timelineInstalled).toBe(false);
+  });
+
+  // ── Publish UI ──
+
+  function installWithPublish(opts: {
+    mode?: 'off' | 'ready' | 'active';
+    caps?: { full: boolean; capsule: boolean };
+    onPublish?: () => Promise<{ shareCode: string; shareUrl: string }>;
+    onPause?: () => boolean;
+    onResume?: () => void;
+  } = {}) {
+    const mode = opts.mode ?? 'active';
+    const onPublish = opts.onPublish ?? vi.fn(async () => ({ shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' }));
+    const onPause = opts.onPause ?? vi.fn(() => true);
+    const onResume = opts.onResume ?? vi.fn();
+    useAppStore.getState().installTimelineUI(
+      {
+        ...defaultCallbacks,
+        onExportHistory: vi.fn(async () => 'saved' as const),
+        onPublishCapsule: onPublish,
+        onPauseForExport: onPause,
+        onResumeFromExport: onResume,
+      },
+      mode,
+      opts.caps ?? { full: true, capsule: true },
+    );
+  }
+
+  function setActiveRange() {
+    useAppStore.getState().updateTimelineState({
+      mode: 'live', currentTimePs: 100, reviewTimePs: null,
+      rangePs: { start: 0, end: 200 },
+      canReturnToLive: false, canRestart: false, restartTargetPs: null,
+    });
+  }
+
+  it('publish trigger visible when onPublishCapsule and range exist', () => {
+    act(() => { installWithPublish(); setActiveRange(); });
+    const { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-transfer-trigger')).not.toBeNull();
+  });
+
+  it('transfer trigger still visible when only export is provided (no publish)', () => {
+    // Under the unified transfer model, the trigger shows when either
+    // export OR publish is available. When only export is provided,
+    // clicking the trigger opens the Download tab only.
+    act(() => {
+      installWithExport('active');
+      setActiveRange();
+    });
+    const { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-transfer-trigger')).not.toBeNull();
+  });
+
+  it('transfer trigger hidden when no range exists', () => {
+    act(() => { installWithPublish(); });
+    // No setActiveRange — rangePs stays null
+    const { container } = render(<TimelineBar />);
+    expect(container.querySelector('.timeline-transfer-trigger')).toBeNull();
+  });
+
+  it('clicking publish trigger opens publish dialog and pauses', () => {
+    const onPause = vi.fn(() => true);
+    act(() => { installWithPublish({ onPause }); setActiveRange(); });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
+    expect(onPause).toHaveBeenCalled();
+  });
+
+  // Helper: transfer dialog defaults to Download tab; switch to Share tab.
+  function switchToShareTab() {
+    const shareTab = Array.from(
+      document.querySelectorAll('.timeline-transfer-dialog__tab'),
+    ).find((el) => el.textContent?.trim() === 'Share') as HTMLButtonElement | undefined;
+    if (shareTab) act(() => { shareTab.click(); });
+  }
+
+  it('successful publish shows share URL and code', async () => {
+    const onPublish = vi.fn(async () => ({
+      shareCode: 'TEST12345678',
+      shareUrl: 'https://atomdojo.pages.dev/c/TEST12345678',
+    }));
+    act(() => { installWithPublish({ onPublish }); setActiveRange(); });
+    render(<TimelineBar />);
+
+    // Open dialog (defaults to Download tab)
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    // Switch to Share tab
+    switchToShareTab();
+
+    // Click Publish confirm
+    const confirmBtn = document.querySelector('.timeline-transfer-dialog__confirm') as HTMLButtonElement;
+    await act(async () => { confirmBtn.click(); });
+
+    // Should show success state with URL
+    const urlInput = document.querySelector('.timeline-transfer-dialog__url-input') as HTMLInputElement;
+    expect(urlInput).not.toBeNull();
+    expect(urlInput.value).toBe('https://atomdojo.pages.dev/c/TEST12345678');
+
+    // Should show share code
+    expect(document.querySelector('.timeline-transfer-dialog__code')?.textContent).toContain('TEST12345678');
+  });
+
+  it('cancel/close resumes simulation when publish caused pause', () => {
+    const onResume = vi.fn();
+    act(() => { installWithPublish({ onResume }); setActiveRange(); });
+    render(<TimelineBar />);
+
+    // Open dialog (which pauses)
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
+
+    // Click Cancel
+    act(() => { (document.querySelector('.timeline-transfer-dialog__cancel') as HTMLButtonElement).click(); });
+    expect(document.querySelector('.timeline-transfer-dialog')).toBeNull();
+    expect(onResume).toHaveBeenCalled();
+  });
+
+  it('cancel does not resume if pause was not needed', () => {
+    const onPause = vi.fn(() => false); // already paused
+    const onResume = vi.fn();
+    act(() => { installWithPublish({ onPause, onResume }); setActiveRange(); });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    act(() => { (document.querySelector('.timeline-transfer-dialog__cancel') as HTMLButtonElement).click(); });
+    expect(onResume).not.toHaveBeenCalled();
+  });
+
+  it('publish failure keeps dialog open and shows inline error', async () => {
+    const onPublish = vi.fn(async () => { throw new Error('Auth required'); });
+    act(() => { installWithPublish({ onPublish }); setActiveRange(); });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    switchToShareTab();
+
+    const confirmBtn = document.querySelector('.timeline-transfer-dialog__confirm') as HTMLButtonElement;
+    await act(async () => { confirmBtn.click(); });
+
+    // Dialog still open
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
+    // Error shown
+    expect(document.querySelector('.timeline-transfer-dialog__error')?.textContent).toContain('Auth required');
+    // Confirm button re-enabled (not stuck in submitting state)
+    expect(confirmBtn.disabled).toBe(false);
+  });
+
+  it('unmount while publish dialog is open resumes simulation', () => {
+    const onResume = vi.fn();
+    act(() => { installWithPublish({ onResume }); setActiveRange(); });
+    const { unmount } = render(<TimelineBar />);
+
+    // Open dialog (pauses)
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
+
+    // Unmount while dialog is open
+    unmount();
+    expect(onResume).toHaveBeenCalled();
+  });
+
+  // ── Transfer dialog busy-guard ──
+
+  it('in-flight share disables tab switching and cancel', async () => {
+    // Return a promise that we control — share stays "in flight" until we resolve.
+    let resolveShare: (v: { shareCode: string; shareUrl: string }) => void;
+    const sharePromise = new Promise<{ shareCode: string; shareUrl: string }>((r) => { resolveShare = r; });
+    const onPublish = vi.fn(() => sharePromise);
+
+    act(() => { installWithPublish({ onPublish }); setActiveRange(); });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    switchToShareTab();
+
+    // Start share — stays in flight
+    const confirmBtn = document.querySelector('.timeline-transfer-dialog__confirm') as HTMLButtonElement;
+    act(() => { confirmBtn.click(); });
+
+    // While busy: both tabs, cancel, and inactive confirm must be disabled
+    const tabs = document.querySelectorAll('.timeline-transfer-dialog__tab');
+    const cancelBtn = document.querySelector('.timeline-transfer-dialog__cancel') as HTMLButtonElement;
+    expect(cancelBtn.disabled).toBe(true);
+    // The inactive (Download) tab is disabled; the active (Share) tab stays enabled so focus-trap works
+    const inactiveTab = Array.from(tabs).find(t => t.getAttribute('aria-selected') === 'false') as HTMLButtonElement;
+    expect(inactiveTab.disabled).toBe(true);
+
+    // Aria-busy is set on the dialog
+    const dialog = document.querySelector('.timeline-transfer-dialog') as HTMLElement;
+    expect(dialog.getAttribute('aria-busy')).toBe('true');
+
+    // Resolve so the component unmounts cleanly
+    await act(async () => { resolveShare!({ shareCode: 'OK0000000000', shareUrl: 'https://x/c/OK0000000000' }); });
+  });
+
+  it('in-flight share ignores Escape so the flow cannot be hidden', async () => {
+    let resolveShare: (v: { shareCode: string; shareUrl: string }) => void;
+    const sharePromise = new Promise<{ shareCode: string; shareUrl: string }>((r) => { resolveShare = r; });
+    const onPublish = vi.fn(() => sharePromise);
+
+    act(() => { installWithPublish({ onPublish }); setActiveRange(); });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    switchToShareTab();
+
+    // Start share
+    const confirmBtn = document.querySelector('.timeline-transfer-dialog__confirm') as HTMLButtonElement;
+    act(() => { confirmBtn.click(); });
+
+    // Press Escape — should be suppressed while busy
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
+
+    await act(async () => { resolveShare!({ shareCode: 'OK0000000000', shareUrl: 'https://x/c/OK0000000000' }); });
+  });
+
+  it('tab bar is hidden when only one destination is available (share only)', () => {
+    // Install publish callback but NO export callback — Share is the only tab.
+    act(() => {
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          onPublishCapsule: vi.fn(async () => ({ shareCode: 'AB1234567890', shareUrl: 'https://x/c/AB1234567890' })),
+          onPauseForExport: vi.fn(() => true),
+          onResumeFromExport: vi.fn(),
+        },
+        'active',
+        // No export capabilities
+      );
+      setActiveRange();
+    });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+
+    // Tab bar should be hidden — only one destination available
+    expect(document.querySelector('.timeline-transfer-dialog__tabs')).toBeNull();
+    // Share panel should be the one rendered
+    expect(document.querySelector('[role="tabpanel"][aria-label="Share"]')).not.toBeNull();
+  });
+
+  it('tab bar is hidden when only download is available (no publish callback)', () => {
+    act(() => {
+      installWithExport('active');
+      setActiveRange();
+    });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+
+    expect(document.querySelector('.timeline-transfer-dialog__tabs')).toBeNull();
+    expect(document.querySelector('[role="tabpanel"][aria-label="Download"]')).not.toBeNull();
+  });
+
+  it('tab bar shows both tabs when both destinations are available', () => {
+    act(() => { installWithPublish(); setActiveRange(); });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+
+    const tabs = document.querySelectorAll('.timeline-transfer-dialog__tab');
+    expect(tabs.length).toBe(2);
+  });
+
+  // Regression: stored export capability must NOT make Download "available"
+  // unless the onExportHistory callback is also wired. This covers the
+  // callback-wiring transition window where caps are installed before the
+  // handler, and prevents a dead Download tab from rendering.
+  it('caps present but onExportHistory missing → transfer opens to Share only, no Download tab', () => {
+    const onPublish = vi.fn(async () => ({
+      shareCode: 'CAPONLY00000',
+      shareUrl: 'https://atomdojo.pages.dev/c/CAPONLY00000',
+    }));
+    act(() => {
+      // Install export capability but NO onExportHistory callback. Publish is wired.
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          // onExportHistory intentionally omitted
+          onPublishCapsule: onPublish,
+          onPauseForExport: vi.fn(() => true),
+          onResumeFromExport: vi.fn(),
+        },
+        'active',
+        { full: true, capsule: true }, // caps present
+      );
+      setActiveRange();
+    });
+    const { container } = render(<TimelineBar />);
+
+    // Trigger still visible — share makes transfer useful
+    expect(container.querySelector('.timeline-transfer-trigger')).not.toBeNull();
+
+    // Open dialog
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+
+    // Tab bar should be hidden (only one destination is actually actionable)
+    expect(document.querySelector('.timeline-transfer-dialog__tabs')).toBeNull();
+    // The Share panel should be the one rendered
+    expect(document.querySelector('[role="tabpanel"][aria-label="Share"]')).not.toBeNull();
+    // No Download panel — the dead tab must not render
+    expect(document.querySelector('[role="tabpanel"][aria-label="Download"]')).toBeNull();
+    // And no per-kind radio options exist (they belong to the Download panel)
+    expect(document.querySelector('.timeline-transfer-dialog__options')).toBeNull();
+  });
+
+  // Regression: estimate computation must be gated on Download being
+  // actionable. In Share-only flows the artifact build + stringify cost
+  // should not run at all — the estimate effect is for the Download panel
+  // which is not rendered.
+  it('getExportEstimates is NOT called when only Share is actionable', async () => {
+    const getExportEstimates = vi.fn(() => ({ capsule: '100 KB', full: '1 MB' }));
+    const onPublish = vi.fn(async () => ({
+      shareCode: 'SHAREONLY111',
+      shareUrl: 'https://atomdojo.pages.dev/c/SHAREONLY111',
+    }));
+    act(() => {
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          // onExportHistory intentionally omitted — Download is not actionable
+          onPublishCapsule: onPublish,
+          onPauseForExport: vi.fn(() => true),
+          onResumeFromExport: vi.fn(),
+          getExportEstimates, // wired but must not be invoked
+        },
+        'active',
+        { full: true, capsule: true }, // caps present to tempt the old logic
+      );
+      setActiveRange();
+    });
+    render(<TimelineBar />);
+
+    // Open the transfer dialog — Share-only flow
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    // Let the microtask queue drain
+    await act(async () => { await Promise.resolve(); });
+
+    // The estimate function must never have been invoked in this flow.
+    expect(getExportEstimates).not.toHaveBeenCalled();
+  });
+
+  it('getExportEstimates IS called when Download is actionable', async () => {
+    const getExportEstimates = vi.fn(() => ({ capsule: '100 KB', full: '1 MB' }));
+    act(() => {
+      installWithPublish({}); // provides both onExportHistory and onPublishCapsule
+      // Overwrite the callbacks to add the estimate spy
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          onExportHistory: vi.fn(async () => 'saved' as const),
+          onPublishCapsule: vi.fn(async () => ({ shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPauseForExport: vi.fn(() => true),
+          onResumeFromExport: vi.fn(),
+          getExportEstimates,
+        },
+        'active',
+        { full: true, capsule: true },
+      );
+      setActiveRange();
+    });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(getExportEstimates).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Restart anchor layout regression ──
+  //
+  // Guards against the collision where the restart-here overlay extends past
+  // the track-zone boundary (into the action-zone sibling) when the target
+  // is near the right edge. The fix is a width-aware pixel clamp to
+  // [halfBtn, trackWidth - halfBtn].
+
+  // Helper: stub jsdom layout APIs so TimelineBar's restart-anchor clamp can
+  // measure overlay/button widths. Returns a cleanup function.
+  function withMockedLayout(overlayWidth: number, buttonWidth: number): () => void {
+    const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
+    const originalOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (this.classList.contains('timeline-overlay-zone')) return overlayWidth;
+        return 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (this.classList.contains('timeline-restart-button')) return buttonWidth;
+        return 0;
+      },
+    });
+    return () => {
+      if (originalClientWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', originalClientWidth);
+      else delete (HTMLElement.prototype as any).clientWidth;
+      if (originalOffsetWidth) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', originalOffsetWidth);
+      else delete (HTMLElement.prototype as any).offsetWidth;
+    };
+  }
+
+  it('restart anchor clamps to trackWidth - halfBtn when target near right edge', () => {
+    // Overlay 600px, button 120px, target at 95% → center at 570,
+    // right edge would reach 630 (overflow). Clamp center to 540.
+    const cleanup = withMockedLayout(600, 120);
+    try {
+      act(() => {
+        installWithPublish();
+        useAppStore.getState().updateTimelineState({
+          mode: 'review', currentTimePs: 950, reviewTimePs: 950,
+          rangePs: { start: 0, end: 1000 },
+          canReturnToLive: true, canRestart: true, restartTargetPs: 950,
+        });
+      });
+
+      const { container } = render(<TimelineBar />);
+      const anchor = container.querySelector('.timeline-restart-anchor') as HTMLElement | null;
+      expect(anchor).not.toBeNull();
+
+      const left = anchor!.style.left;
+      expect(left).toMatch(/px$/);
+      const leftPx = parseFloat(left);
+      // 0.95 * 600 = 570 → clamp to trackWidth - halfBtn = 540
+      expect(leftPx).toBe(540);
+      // Button edges stay inside the track:
+      //   left edge: 540 - 60 = 480 (>= 0) ✓
+      //   right edge: 540 + 60 = 600 (<= 600) ✓
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('restart anchor clamps to halfBtn when target near left edge', () => {
+    const cleanup = withMockedLayout(600, 120);
+    try {
+      act(() => {
+        installWithPublish();
+        useAppStore.getState().updateTimelineState({
+          mode: 'review', currentTimePs: 10, reviewTimePs: 10,
+          rangePs: { start: 0, end: 1000 },
+          canReturnToLive: true, canRestart: true, restartTargetPs: 10,
+        });
+      });
+
+      const { container } = render(<TimelineBar />);
+      const anchor = container.querySelector('.timeline-restart-anchor') as HTMLElement | null;
+      expect(anchor).not.toBeNull();
+
+      const leftPx = parseFloat(anchor!.style.left);
+      // 0.01 * 600 = 6, below halfBtn=60 → clamp to 60
+      expect(leftPx).toBe(60);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('restart anchor pins to center when button wider than track (pathological)', () => {
+    const cleanup = withMockedLayout(100, 150);
+    try {
+      act(() => {
+        installWithPublish();
+        useAppStore.getState().updateTimelineState({
+          mode: 'review', currentTimePs: 500, reviewTimePs: 500,
+          rangePs: { start: 0, end: 1000 },
+          canReturnToLive: true, canRestart: true, restartTargetPs: 500,
+        });
+      });
+
+      const { container } = render(<TimelineBar />);
+      const anchor = container.querySelector('.timeline-restart-anchor') as HTMLElement | null;
+      // Pins to center of track: 100 / 2 = 50
+      expect(parseFloat(anchor!.style.left)).toBe(50);
+    } finally {
+      cleanup();
+    }
   });
 });

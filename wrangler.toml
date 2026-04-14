@@ -5,3 +5,12 @@
 name = "atomdojo"
 pages_build_output_dir = "dist"
 compatibility_date = "2025-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "atomdojo-capsules"
+database_id = "<created-via-wrangler-d1-create>"
+
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "atomdojo-capsule-store"

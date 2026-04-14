@@ -4,7 +4,7 @@
  * Layout contract (CSS variables defined on .timeline-bar):
  *   --tl-rail-width   Mode rail width (96px desktop, 84px mobile)
  *   --tl-time-width   Time column width (56px desktop, 48px mobile)
- *   --tl-action-width Action column width (64px, two-slot: export + clear)
+ *   --tl-action-width Action column width (64px, two-slot: clear + unified transfer)
  *   --tl-shell-height Shell row height (44px desktop, 38px mobile)
  *   --tl-mode-height  Mode switch height (36px desktop, 32px mobile)
  *
@@ -17,15 +17,21 @@
  *   timeline-format.ts        — formatTime, getTimelineProgress, getRestartAnchorStyle
  *   timeline-mode-switch.tsx  — TimelineModeSwitch, buildModeSlots, ModeSegment
  *   timeline-clear-dialog.tsx — TimelineClearDialog, useClearConfirm, ClearTrigger
- *   timeline-export-dialog.tsx — TimelineExportDialog, useExportDialog, ExportTrigger
+ *   timeline-transfer-dialog.tsx — unified Download + Share dialog (single trigger)
+ *   timeline-export-dialog.tsx — TimelineExportKind, useExportDialog (kind state only; legacy dialog no longer mounted)
  */
 
-import React, { useCallback, useRef, useState, useEffect } from 'react';
+import React, { useCallback, useRef, useState, useEffect, useLayoutEffect } from 'react';
 import { useAppStore } from '../store/app-store';
 import { formatTime, getTimelineProgress, getRestartAnchorStyle } from './timeline-format';
 import { TimelineModeSwitch } from './timeline-mode-switch';
 import { TimelineClearDialog, useClearConfirm, ClearTrigger } from './timeline-clear-dialog';
-import { TimelineExportDialog, useExportDialog, ExportTrigger } from './timeline-export-dialog';
+import type { TimelineExportKind } from './timeline-export-dialog';
+import {
+  TimelineTransferDialog,
+  useTransferDialog,
+  TransferTrigger,
+} from './timeline-transfer-dialog';
 import { ActionHint } from './ActionHint';
 import { TIMELINE_HINTS } from './timeline-hints';
 
@@ -56,29 +62,34 @@ function TimelineShell({ modeRail, time, overlay, track, action, className = '' 
   );
 }
 
-// ── Action zone (two-slot: export + clear) ──
+// ── Action zone (two-slot: clear + unified transfer) ──
+//
+// Layout: slot A (clear, nearest to track) + slot B (unified transfer trigger).
+// Fits within the invariant --tl-action-width (64px) column.
+// The transfer trigger opens a tabbed dialog with Download and Share sections —
+// one entry point replaces the former stacked publish+export pair.
 
-/** Renders triggers only. Dialogs are siblings rendered by the parent.
- *  Always produces two slot wrappers for invariant 64px layout.
- *  Callers must pair showExport/showClear=true with their corresponding handler. */
-function TimelineActionZone({ showExport, onExport, showClear, onClear }: {
-  showExport: boolean;
-  onExport?: () => void;
+/** Renders triggers only. Dialogs are siblings rendered by the parent. */
+function TimelineActionZone({ showTransfer, onTransfer, showClear, onClear }: {
+  showTransfer: boolean;
+  onTransfer?: () => void;
   showClear: boolean;
   onClear?: () => void;
 }) {
   return (
     <>
-      <span className="timeline-action-slot timeline-action-slot--export">
-        {showExport && onExport ? (
-          <ExportTrigger onClick={onExport} />
+      {/* Slot A: clear (nearest to track) */}
+      <span className="timeline-action-slot timeline-action-slot--clear">
+        {showClear && onClear ? (
+          <ClearTrigger onClick={onClear} />
         ) : (
           <span className="timeline-action-spacer" aria-hidden="true" />
         )}
       </span>
-      <span className="timeline-action-slot timeline-action-slot--clear">
-        {showClear && onClear ? (
-          <ClearTrigger onClick={onClear} />
+      {/* Slot B: unified transfer (download + share) */}
+      <span className="timeline-action-slot timeline-action-slot--transfer">
+        {showTransfer && onTransfer ? (
+          <TransferTrigger onClick={onTransfer} />
         ) : (
           <span className="timeline-action-spacer" aria-hidden="true" />
         )}
@@ -115,7 +126,7 @@ function TimelineBarOff() {
         </ActionHint>
       }
       track={<div className="timeline-track timeline-track--thick timeline-track--disabled" />}
-      action={<TimelineActionZone showExport={false} showClear={false} />}
+      action={<TimelineActionZone showTransfer={false} showClear={false} />}
     />
   );
 }
@@ -133,7 +144,7 @@ function TimelineBarReady() {
         time="0.0 fs"
         overlay={<span />}
         track={<div className="timeline-track timeline-track--thick timeline-track--disabled" />}
-        action={<TimelineActionZone showExport={false} showClear onClear={clear.request} />}
+        action={<TimelineActionZone showTransfer={false} showClear onClear={clear.request} />}
       />
       <TimelineClearDialog open={clear.open} onCancel={clear.cancel} onConfirm={clear.confirm} />
     </>
@@ -157,9 +168,9 @@ function TimelineBarActive() {
   const restartProgress = getTimelineProgress(rangePs, restartTargetPs ?? 0);
   const hasRange = rangePs != null && (rangePs.end - rangePs.start) > 0;
 
-  // Export visibility — sole render gate (store capability, not callback presence)
+  // Export visibility — sole render gate (store capability, not callback presence).
+  // Feeds into the unified transfer dialog's Download tab availability.
   const exportAvailable = !!(exportCaps?.full || exportCaps?.capsule);
-  const showExport = hasRange && exportAvailable;
 
   const scrubFromEvent = useCallback((clientX: number) => {
     const track = trackRef.current;
@@ -192,12 +203,21 @@ function TimelineBarActive() {
   // Clear confirmation
   const clear = useClearConfirm(handleTurnOff);
 
-  // Export dialog
-  const exportDialog = useExportDialog();
-  const [exportSubmitting, setExportSubmitting] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
+  // ── Unified transfer dialog (download + share) ──
+  //
+  // One dialog + one trigger replaces the former separate export and publish
+  // dialogs. Both tabs share the pause lifecycle but maintain independent
+  // submitting/error/result state so switching tabs does not reset progress.
+
+  const transferDialog = useTransferDialog();
+  const [downloadKind, setDownloadKind] = useState<TimelineExportKind>('capsule');
+  const [downloadSubmitting, setDownloadSubmitting] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [estimates, setEstimates] = useState<{ capsule?: string | null; full?: string | null }>({});
-  const exportDidPause = useRef(false);
+  const [shareSubmitting, setShareSubmitting] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [shareResult, setShareResult] = useState<{ shareCode: string; shareUrl: string } | null>(null);
+  const transferDidPause = useRef(false);
 
   // Latest callbacks ref — keeps unmount cleanup current even when callbacks
   // are installed after mount or reinstalled by the subsystem.
@@ -207,38 +227,60 @@ function TimelineBarActive() {
   // Preferred default kind — computed at open time, not hook init
   const preferredKind = exportCaps?.capsule ? 'capsule' as const : 'full' as const;
 
-  // Canonical close helper — all close paths converge here
-  const closeExportSession = useCallback(() => {
-    if (exportDidPause.current) {
-      callbacks?.onResumeFromExport?.();
-      exportDidPause.current = false;
-    }
-    exportDialog.reset();
-    setEstimates({});
-    setExportSubmitting(false);
-    setExportError(null);
-  }, [callbacks, exportDialog]);
+  // Guards — action availability is the single source of truth for
+  // "can the user actually do this?". A stored capability (exportCaps) is
+  // not enough on its own — the corresponding callback must also be wired.
+  // This keeps the dialog honest during callback-wiring transitions and
+  // prevents dead tabs (stored artifact exists but no runtime handler).
+  const downloadActionAvailable = !!callbacks?.onExportHistory && exportAvailable;
+  const shareAvailable = !!callbacks?.onPublishCapsule && hasRange;
+  const showTransfer = hasRange && (downloadActionAvailable || shareAvailable);
 
-  // Dialog mutual exclusion
-  const openExport = useCallback(() => {
-    clear.reset();
-    setExportSubmitting(false);
-    setExportError(null);
+  // Mounted ref for safe async state updates after dialog close or unmount
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
+  // Canonical close helper — resets pause, dialog, and all transient state.
+  const closeTransferSession = useCallback(() => {
+    if (transferDidPause.current) {
+      callbacks?.onResumeFromExport?.();
+      transferDidPause.current = false;
+    }
+    transferDialog.reset();
     setEstimates({});
-    exportDialog.setKind(preferredKind);
-    exportDidPause.current = callbacks?.onPauseForExport?.() ?? false;
-    exportDialog.request();
-  }, [clear, exportDialog, preferredKind, callbacks]);
+    setDownloadSubmitting(false);
+    setDownloadError(null);
+    setShareSubmitting(false);
+    setShareError(null);
+    setShareResult(null);
+  }, [callbacks, transferDialog]);
+
+  const openTransfer = useCallback(() => {
+    clear.reset();
+    setDownloadKind(preferredKind);
+    setDownloadSubmitting(false);
+    setDownloadError(null);
+    setEstimates({});
+    setShareSubmitting(false);
+    setShareError(null);
+    setShareResult(null);
+    transferDidPause.current = callbacks?.onPauseForExport?.() ?? false;
+    // Default to Download tab, but land on Share if download is not actionable.
+    transferDialog.request(downloadActionAvailable ? 'download' : 'share');
+  }, [clear, preferredKind, callbacks, transferDialog, downloadActionAvailable]);
 
   const openClear = useCallback(() => {
-    closeExportSession();
+    closeTransferSession();
     clear.request();
-  }, [clear, closeExportSession]);
+  }, [clear, closeTransferSession]);
 
-  // Async estimate computation when dialog opens
+  // Async estimate computation — only runs when the Download tab can
+  // actually be used. Share-only flows skip the artifact build + stringify
+  // cost entirely. If download becomes actionable mid-session (e.g. the
+  // user switches tabs and Download becomes available), the effect re-runs
+  // because downloadActionAvailable is in the dep list.
   useEffect(() => {
-    if (!exportDialog.open) return;
-    // Defer to microtask so dialog renders with "Estimating…" immediately
+    if (!transferDialog.open || !downloadActionAvailable) return;
     let cancelled = false;
     Promise.resolve()
       .then(() => {
@@ -252,50 +294,64 @@ function TimelineBarActive() {
       });
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [exportDialog.open]);
+  }, [transferDialog.open, downloadActionAvailable]);
 
-  // Export action guard — defend against impossible state
-  const exportActionAvailable = !!callbacks?.onExportHistory && exportAvailable;
-
-  // Mounted ref for safe async state updates after dialog close or unmount
-  const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
-
-  // Cleanup: resume simulation on unmount if export caused pause.
-  // Uses latestCallbacksRef so the cleanup always calls the current handler,
-  // even if callbacks were installed after mount or reinstalled.
+  // Cleanup: resume on unmount if transfer caused pause.
+  // Uses latestCallbacksRef so cleanup calls the current handler even if
+  // callbacks were installed after mount or reinstalled.
   useEffect(() => {
     return () => {
-      if (exportDidPause.current) {
+      if (transferDidPause.current) {
         latestCallbacksRef.current?.onResumeFromExport?.();
       }
     };
   }, []);
 
-  const handleExportConfirm = useCallback(async () => {
+  const handleDownloadConfirm = useCallback(async () => {
     if (!callbacks?.onExportHistory) {
-      setExportError('Export is not available right now.');
+      setDownloadError('Download is not available right now.');
       return;
     }
-    setExportSubmitting(true);
-    setExportError(null);
+    setDownloadSubmitting(true);
+    setDownloadError(null);
     try {
-      const result = await callbacks.onExportHistory(exportDialog.kind);
+      const result = await callbacks.onExportHistory(downloadKind);
       if (!mountedRef.current) return;
       if (result === 'saved') {
-        closeExportSession();
+        closeTransferSession();
       } else if (result === 'picker-cancelled') {
-        setExportSubmitting(false);
+        setDownloadSubmitting(false);
         // keep dialog open, keep paused, keep estimates
       }
     } catch (e) {
-      console.error('[TimelineBar] export failed:', e);
+      console.error('[TimelineBar] download failed:', e);
       if (mountedRef.current) {
-        setExportError(e instanceof Error ? e.message : 'Export failed.');
-        setExportSubmitting(false);
+        setDownloadError(e instanceof Error ? e.message : 'Download failed.');
+        setDownloadSubmitting(false);
       }
     }
-  }, [callbacks, exportDialog, closeExportSession]);
+  }, [callbacks, downloadKind, closeTransferSession]);
+
+  const handleShareConfirm = useCallback(async () => {
+    if (!callbacks?.onPublishCapsule) {
+      setShareError('Share is not available right now.');
+      return;
+    }
+    setShareSubmitting(true);
+    setShareError(null);
+    try {
+      const result = await callbacks.onPublishCapsule();
+      if (!mountedRef.current) return;
+      setShareResult(result);
+      setShareSubmitting(false);
+    } catch (e) {
+      console.error('[TimelineBar] share failed:', e);
+      if (mountedRef.current) {
+        setShareError(e instanceof Error ? e.message : 'Share failed.');
+        setShareSubmitting(false);
+      }
+    }
+  }, [callbacks]);
 
   const isReview = mode === 'review';
 
@@ -303,29 +359,97 @@ function TimelineBarActive() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (!isReview) clear.reset(); }, [isReview]);
 
-  // Guard: close export dialog when showExport becomes false (capability loss)
+  // Guard: close transfer dialog when both download and share are unavailable
   useEffect(() => {
-    if (!showExport) {
-      closeExportSession();
+    if (!showTransfer) {
+      closeTransferSession();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showExport]);
+  }, [showTransfer]);
 
-  // Guard: revalidate selected kind if capability changes while dialog is open
+  // Guard: revalidate selected download kind if capability changes while dialog is open
   useEffect(() => {
-    if (!exportDialog.open) return;
-    if (exportDialog.kind === 'full' && !exportCaps?.full && exportCaps?.capsule) exportDialog.setKind('capsule');
-    if (exportDialog.kind === 'capsule' && !exportCaps?.capsule && exportCaps?.full) exportDialog.setKind('full');
+    if (!transferDialog.open) return;
+    if (downloadKind === 'full' && !exportCaps?.full && exportCaps?.capsule) setDownloadKind('capsule');
+    if (downloadKind === 'capsule' && !exportCaps?.capsule && exportCaps?.full) setDownloadKind('full');
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [exportDialog.open, exportDialog.kind, exportCaps]);
+  }, [transferDialog.open, downloadKind, exportCaps]);
 
-  const overlayContent = isReview && canRestart && restartTargetPs !== null ? (
+  // Guard: if the user opened on a tab that then becomes unavailable, switch tabs.
+  // Uses action availability (callback + capability) rather than stored-artifact
+  // capability alone, so a callback being torn down mid-session also triggers
+  // the switch.
+  useEffect(() => {
+    if (!transferDialog.open) return;
+    if (transferDialog.tab === 'download' && !downloadActionAvailable && shareAvailable) {
+      transferDialog.setTab('share');
+    } else if (transferDialog.tab === 'share' && !shareAvailable && downloadActionAvailable) {
+      transferDialog.setTab('download');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transferDialog.open, transferDialog.tab, downloadActionAvailable, shareAvailable]);
+
+  // Width-aware restart anchor clamp.
+  //
+  // Problem: the percentage-based clamp (5%..95%) in getRestartAnchorStyle()
+  // only clamps the button *center*, not its edges. Near the right of the
+  // track, the button extends past the track-zone boundary and overlaps the
+  // sibling action-zone. Wider copy or larger text size makes this worse.
+  //
+  // Fix: after render, measure the button width and the overlay-zone width,
+  // and clamp `left` in pixels to [halfBtn, trackWidth - halfBtn]. This keeps
+  // the button's edges strictly inside the track-zone regardless of copy,
+  // font, or viewport.
+  const restartButtonRef = useRef<HTMLButtonElement>(null);
+  const [restartClampedLeftPx, setRestartClampedLeftPx] = useState<number | null>(null);
+  const showRestart = isReview && canRestart && restartTargetPs !== null;
+
+  useLayoutEffect(() => {
+    if (!showRestart) {
+      setRestartClampedLeftPx(null);
+      return;
+    }
+    const btn = restartButtonRef.current;
+    if (!btn) return;
+    const overlay = btn.closest<HTMLElement>('.timeline-overlay-zone');
+    if (!overlay) return;
+
+    const compute = () => {
+      const trackWidth = overlay.clientWidth;
+      const btnWidth = btn.offsetWidth;
+      if (trackWidth <= 0 || btnWidth <= 0) return;
+      const halfBtn = btnWidth / 2;
+      // If the button is wider than the track (pathological), pin to center.
+      if (btnWidth >= trackWidth) {
+        setRestartClampedLeftPx(trackWidth / 2);
+        return;
+      }
+      const targetPx = restartProgress * trackWidth;
+      const clampedPx = Math.max(halfBtn, Math.min(trackWidth - halfBtn, targetPx));
+      setRestartClampedLeftPx(clampedPx);
+    };
+
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(overlay);
+    ro.observe(btn);
+    return () => ro.disconnect();
+  }, [showRestart, restartProgress]);
+
+  // First render falls back to percentage clamp; useLayoutEffect swaps in the
+  // pixel-based clamp before the browser paints, so there is no visible flicker.
+  const restartAnchorStyle = restartClampedLeftPx !== null
+    ? { left: `${restartClampedLeftPx}px` }
+    : getRestartAnchorStyle(restartProgress);
+
+  const overlayContent = showRestart ? (
     <ActionHint
       text={TIMELINE_HINTS.restartFromHere}
       anchorClassName="timeline-restart-anchor"
-      anchorStyle={getRestartAnchorStyle(restartProgress)}
+      anchorStyle={restartAnchorStyle}
     >
       <button
+        ref={restartButtonRef}
         className="timeline-restart-button"
         onClick={handleRestart}
         aria-label={`Restart simulation at ${formatTime(restartTargetPs)}`}
@@ -364,21 +488,33 @@ function TimelineBarActive() {
         time={formatTime(currentTimePs)}
         overlay={overlayContent}
         track={trackContent}
-        action={<TimelineActionZone showExport={showExport} onExport={openExport} showClear onClear={openClear} />}
+        action={<TimelineActionZone showTransfer={showTransfer} onTransfer={openTransfer} showClear onClear={openClear} />}
       />
       <TimelineClearDialog open={clear.open} onCancel={clear.cancel} onConfirm={clear.confirm} />
-      <TimelineExportDialog
-        open={exportDialog.open}
+      <TimelineTransferDialog
+        open={transferDialog.open}
+        tab={transferDialog.tab}
+        onTabChange={transferDialog.setTab}
+        onCancel={closeTransferSession}
+
+        downloadTabAvailable={downloadActionAvailable}
         availableKinds={exportCaps ?? { full: false, capsule: false }}
-        kind={exportDialog.kind}
-        submitting={exportSubmitting}
-        confirmEnabled={exportActionAvailable && !exportSubmitting}
-        error={exportError}
+        downloadKind={downloadKind}
+        onSelectDownloadKind={setDownloadKind}
+        onConfirmDownload={handleDownloadConfirm}
+        downloadSubmitting={downloadSubmitting}
+        downloadError={downloadError}
+        downloadConfirmEnabled={downloadActionAvailable}
         fullEstimate={estimates.full}
         capsuleEstimate={estimates.capsule}
-        onSelectKind={exportDialog.setKind}
-        onCancel={closeExportSession}
-        onConfirm={handleExportConfirm}
+
+        shareTabAvailable={shareAvailable}
+        shareConfirmEnabled={shareAvailable}
+        onConfirmShare={handleShareConfirm}
+        shareSubmitting={shareSubmitting}
+        shareError={shareError}
+        shareUrl={shareResult?.shareUrl ?? null}
+        shareCode={shareResult?.shareCode ?? null}
       />
     </>
   );

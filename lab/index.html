@@ -783,7 +783,9 @@ canvas { display: block; touch-action: none; }
   position: absolute; bottom: 0; margin-bottom: 4px;
   left: 50%; transform: translateX(-50%);
 }
-/* Action zone — two-slot layout (export + clear). Width from --tl-action-width (64px). */
+/* Action zone — two-slot layout (clear + unified transfer).
+   Width from --tl-action-width (64px). Slot A is clear (nearest to track);
+   slot B is the unified transfer trigger (cloud up/down). */
 .timeline-action-zone {
   display: flex; align-items: center; justify-content: flex-end; gap: 4px;
 }
@@ -793,110 +795,162 @@ canvas { display: block; touch-action: none; }
 .timeline-action-spacer {
   width: 28px; height: 28px; flex-shrink: 0;
 }
-.timeline-export-trigger {
+/* Unified transfer trigger — single cloud up/down icon */
+.timeline-transfer-trigger {
   display: flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
   background: none; border: 1px solid var(--color-border);
   color: var(--color-text-secondary); cursor: pointer;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.timeline-export-trigger:hover {
+.timeline-transfer-trigger:hover {
   background: var(--color-surface-hover);
   border-color: var(--color-text-secondary);
   color: var(--color-text);
 }
-/* Export dialog — extends shared .timeline-modal-card */
-.timeline-export-dialog {
+/* Transfer dialog — unified Download + Share. Extends shared .timeline-modal-card */
+.timeline-transfer-dialog {
   border-radius: var(--radius-md);
-  width: min(320px, calc(100vw - 32px));
+  width: min(360px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
 }
-.timeline-export-dialog__title {
+.timeline-transfer-dialog__title {
   font-size: var(--font-sm); font-weight: 600; margin: 0 0 12px;
   padding-bottom: 12px; border-bottom: 1px solid var(--color-border);
 }
-.timeline-export-dialog__options {
+/* Tab bar */
+.timeline-transfer-dialog__tabs {
+  display: flex; gap: 4px; margin-bottom: 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+.timeline-transfer-dialog__tab {
+  flex: 1; padding: 8px 12px;
+  background: none; border: none; border-bottom: 2px solid transparent;
+  color: var(--color-text-secondary); cursor: pointer;
+  font-family: var(--font-family); font-size: var(--font-xs); font-weight: 500;
+  transition: color 0.15s, border-color 0.15s;
+}
+.timeline-transfer-dialog__tab:hover:not(:disabled) { color: var(--color-text); }
+.timeline-transfer-dialog__tab:disabled {
+  opacity: 0.4; cursor: not-allowed;
+}
+.timeline-transfer-dialog__tab--active {
+  color: var(--color-text); border-bottom-color: var(--color-accent-text);
+  font-weight: 600;
+}
+/* Radio options (Download tab) */
+.timeline-transfer-dialog__options {
   display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px;
 }
-.timeline-export-dialog__option {
+.timeline-transfer-dialog__option {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; border-radius: var(--radius-sm);
   cursor: pointer; transition: background 0.1s;
   border: 1px solid transparent;
 }
-.timeline-export-dialog__option:hover { background: var(--color-surface-hover); }
-/* Selected option — subtle border + tint, custom radio carries the state */
-.timeline-export-dialog__option:has(input:checked) {
+.timeline-transfer-dialog__option:hover { background: var(--color-surface-hover); }
+.timeline-transfer-dialog__option:has(input:checked) {
   border-color: var(--color-accent-text);
   background: color-mix(in srgb, var(--color-accent-text) 4%, transparent);
 }
-/* Focus-visible on the option row, not the native radio */
-.timeline-export-dialog__option:has(input:focus-visible) {
+.timeline-transfer-dialog__option:has(input:focus-visible) {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent-text) 24%, transparent);
 }
-/* Disabled option — readable but clearly unavailable */
-.timeline-export-dialog__option--disabled {
+.timeline-transfer-dialog__option--disabled {
   opacity: 1; cursor: not-allowed; pointer-events: none;
 }
-.timeline-export-dialog__option--disabled .timeline-export-dialog__radio-ui { opacity: 0.4; }
-.timeline-export-dialog__option--disabled .timeline-export-dialog__option-text strong {
+.timeline-transfer-dialog__option--disabled .timeline-transfer-dialog__radio-ui { opacity: 0.4; }
+.timeline-transfer-dialog__option--disabled .timeline-transfer-dialog__option-text strong {
   color: var(--color-text-secondary);
 }
-.timeline-export-dialog__option--disabled .timeline-export-dialog__option-text span {
+.timeline-transfer-dialog__option--disabled .timeline-transfer-dialog__option-text span {
   opacity: 0.7;
 }
-/* Visually hidden native radio — keeps semantics, removes browser styling */
-.timeline-export-dialog__radio-native {
+.timeline-transfer-dialog__radio-native {
   position: absolute; opacity: 0; pointer-events: none;
 }
-/* Custom radio indicator */
-.timeline-export-dialog__radio-ui {
+.timeline-transfer-dialog__radio-ui {
   width: 16px; height: 16px; border-radius: 50%;
   border: 1.5px solid var(--color-border);
   display: inline-flex; align-items: center; justify-content: center;
   flex-shrink: 0; transition: border-color 0.15s;
 }
-.timeline-export-dialog__radio-ui::after {
+.timeline-transfer-dialog__radio-ui::after {
   content: ''; width: 8px; height: 8px; border-radius: 50%;
   background: transparent; transition: background 0.15s;
 }
-.timeline-export-dialog__option:has(input:checked) .timeline-export-dialog__radio-ui {
+.timeline-transfer-dialog__option:has(input:checked) .timeline-transfer-dialog__radio-ui {
   border-color: var(--color-accent-text);
 }
-.timeline-export-dialog__option:has(input:checked) .timeline-export-dialog__radio-ui::after {
+.timeline-transfer-dialog__option:has(input:checked) .timeline-transfer-dialog__radio-ui::after {
   background: var(--color-accent-text);
 }
-.timeline-export-dialog__option-text {
+.timeline-transfer-dialog__option-text {
   display: flex; flex-direction: column; gap: 1px;
   font-size: var(--font-xs); line-height: 1.35;
 }
-.timeline-export-dialog__option-text strong {
+.timeline-transfer-dialog__option-text strong {
   font-size: var(--font-xs); font-weight: 600;
 }
-.timeline-export-dialog__option-text span { color: var(--color-text-secondary); }
-.timeline-export-dialog__estimate { font-variant-numeric: tabular-nums; }
-.timeline-export-dialog__estimate--muted { opacity: 0.5; font-style: italic; }
-.timeline-export-dialog__error {
+.timeline-transfer-dialog__option-text span { color: var(--color-text-secondary); }
+.timeline-transfer-dialog__estimate { font-variant-numeric: tabular-nums; }
+.timeline-transfer-dialog__estimate--muted { opacity: 0.5; font-style: italic; }
+/* Share tab */
+.timeline-transfer-dialog__description {
+  font-size: var(--font-xs); color: var(--color-text-secondary);
+  margin-bottom: 16px; line-height: 1.4;
+}
+.timeline-transfer-dialog__success { margin-bottom: 16px; }
+.timeline-transfer-dialog__url-label {
+  font-size: var(--font-xs); color: var(--color-text-secondary);
+  margin-bottom: 6px;
+}
+.timeline-transfer-dialog__url-row {
+  display: flex; gap: 6px; align-items: center;
+}
+.timeline-transfer-dialog__url-input {
+  flex: 1; padding: 6px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border); background: var(--panel-bg);
+  color: var(--color-text); font-family: var(--font-family);
+  font-size: var(--font-xs); outline: none;
+}
+.timeline-transfer-dialog__url-input:focus { border-color: var(--color-accent-text); }
+.timeline-transfer-dialog__copy {
+  padding: 6px 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border); background: none;
+  color: var(--color-text); font-family: var(--font-family);
+  font-size: var(--font-xs); cursor: pointer; white-space: nowrap;
+}
+.timeline-transfer-dialog__copy:hover { background: var(--color-surface-hover); }
+.timeline-transfer-dialog__code {
+  font-size: var(--font-xs); color: var(--color-text-secondary);
+  margin-top: 8px;
+}
+.timeline-transfer-dialog__code code {
+  font-family: var(--font-family); letter-spacing: 0.05em;
+}
+/* Shared: errors + actions */
+.timeline-transfer-dialog__error {
   color: rgba(220, 80, 60, 0.9); font-size: var(--font-xs); margin-bottom: 8px;
 }
-.timeline-export-dialog__actions {
+.timeline-transfer-dialog__actions {
   display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px;
   border-top: 1px solid var(--color-border);
 }
-.timeline-export-dialog__cancel,
-.timeline-export-dialog__confirm {
+.timeline-transfer-dialog__cancel,
+.timeline-transfer-dialog__confirm {
   padding: 7px 16px; border-radius: var(--radius-sm);
   font-family: var(--font-family); font-size: var(--font-xs);
   cursor: pointer; border: 1px solid var(--color-border);
   background: none; color: var(--color-text);
 }
-.timeline-export-dialog__confirm {
+.timeline-transfer-dialog__confirm {
   background: var(--color-accent-text); color: var(--panel-bg);
   border-color: var(--color-accent-text); font-weight: 600;
 }
-.timeline-export-dialog__confirm:disabled { opacity: 0.5; cursor: default; }
-.timeline-export-dialog__confirm:not(:disabled):hover { opacity: 0.9; }
+.timeline-transfer-dialog__confirm:disabled { opacity: 0.5; cursor: default; }
+.timeline-transfer-dialog__confirm:not(:disabled):hover { opacity: 0.9; }
 /* Restart positioning — applied to the ActionHint wrapper via anchorClassName/anchorStyle */
 .timeline-restart-anchor {
   display: block;

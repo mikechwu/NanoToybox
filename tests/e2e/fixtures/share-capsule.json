@@ -1,0 +1,23 @@
+{
+  "format": "atomdojo-history",
+  "version": 1,
+  "kind": "capsule",
+  "producer": { "app": "lab", "appVersion": "0.1.0", "exportedAt": "2026-04-13T00:00:00Z" },
+  "simulation": {
+    "units": { "time": "ps", "length": "angstrom" },
+    "maxAtomCount": 2, "durationPs": 50, "frameCount": 3,
+    "indexingModel": "dense-prefix"
+  },
+  "atoms": { "atoms": [
+    { "id": 0, "element": "C" },
+    { "id": 1, "element": "C" }
+  ] },
+  "bondPolicy": { "policyId": "default-carbon-v1", "cutoff": 1.85, "minDist": 0.5 },
+  "timeline": {
+    "denseFrames": [
+      { "frameId": 0, "timePs": 0, "n": 2, "atomIds": [0, 1], "positions": [0, 0, 0, 1.42, 0, 0] },
+      { "frameId": 1, "timePs": 25, "n": 2, "atomIds": [0, 1], "positions": [0.1, 0, 0, 1.52, 0, 0] },
+      { "frameId": 2, "timePs": 50, "n": 2, "atomIds": [0, 1], "positions": [0.2, 0, 0, 1.62, 0, 0] }
+    ]
+  }
+}
