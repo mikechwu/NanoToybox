@@ -122,8 +122,11 @@ const CONTAINER_EDGE_SLACK_PX = 2
 const ORDERING_SLACK_PX = 1
 const VIEWPORT_FIT_SLACK_PX = 1
 
-/** Format a rect for diagnostic messages. */
-function fmtRect(label: string, r: Rect | null): string {
+/** Format a rect for diagnostic messages. Accepts the narrower
+ *  `BoundsRect` so the layout-diagnostics helper (which omits the
+ *  redundant `x`/`y` aliases) can reuse the same formatter. */
+type RectLike = Pick<Rect, 'left' | 'right' | 'top' | 'bottom' | 'width' | 'height'>
+function fmtRect(label: string, r: RectLike | null): string {
   if (!r) return `${label}=null`
   return `${label}{l:${r.left.toFixed(3)} r:${r.right.toFixed(3)} t:${r.top.toFixed(3)} b:${r.bottom.toFixed(3)} w:${r.width.toFixed(3)} h:${r.height.toFixed(3)}}`
 }
@@ -152,6 +155,73 @@ async function getComputedFontFamilies(page: Page, selectors: string[]) {
   }, selectors)
 }
 
+/** Read the layout-shaping computed properties for a set of selectors.
+ *  Cross-platform layout drift in this top-right row is almost always
+ *  caused by a difference in how Linux Chromium resolves intrinsic
+ *  sizing for `display`/`width`/`min-width`/`max-width`/`box-sizing`/
+ *  `flex` — capturing the four together turns "the rect was wrong"
+ *  into "this property differs from local". Stringified into the
+ *  failure message so the CI log alone is enough to triage. */
+/** Subset of `Rect` actually returned by the diagnostics helper. We
+ *  don't read `x`/`y` (DOMRect's redundant aliases for left/top), so
+ *  declaring the narrower shape lets us drop the previous cast and
+ *  catch any future drift between the producer and consumer.
+ *  `RectLike` (defined alongside `fmtRect` above) is the same shape. */
+type LayoutDiag = {
+  selector: string
+  display: string | null
+  width: string | null
+  minWidth: string | null
+  maxWidth: string | null
+  boxSizing: string | null
+  flex: string | null
+  rect: RectLike | null
+}
+async function getLayoutDiagnostics(
+  page: Page,
+  selectors: string[],
+): Promise<LayoutDiag[]> {
+  return page.evaluate((sels) => {
+    return sels.map((sel): LayoutDiag => {
+      const el = document.querySelector(sel) as HTMLElement | null
+      if (!el) {
+        return {
+          selector: sel,
+          display: null, width: null, minWidth: null, maxWidth: null,
+          boxSizing: null, flex: null, rect: null,
+        }
+      }
+      const cs = getComputedStyle(el)
+      const r = el.getBoundingClientRect()
+      return {
+        selector: sel,
+        display: cs.display,
+        width: cs.width,
+        minWidth: cs.minWidth,
+        maxWidth: cs.maxWidth,
+        boxSizing: cs.boxSizing,
+        flex: cs.flex,
+        rect: {
+          left: r.left, right: r.right, top: r.top, bottom: r.bottom,
+          width: r.width, height: r.height,
+        },
+      }
+    })
+  }, selectors)
+}
+
+/** One-line summary per element for failure messages. */
+function fmtDiag(d: LayoutDiag): string {
+  if (!d.display) return `${d.selector}=<missing>`
+  return (
+    `${d.selector}` +
+    `[display:${d.display}` +
+    ` w:${d.width} min-w:${d.minWidth} max-w:${d.maxWidth}` +
+    ` box-sizing:${d.boxSizing} flex:${d.flex}]` +
+    ` ${fmtRect('rect', d.rect)}`
+  )
+}
+
 test.describe('Top-right layout — AccountControl + FPSDisplay flex container', () => {
   test('signed-in chip and FPS display sit inside one .topbar-right container and do not overlap', async ({ page, baseURL }) => {
     await gotoApp(page, baseURL!, '/lab/')
@@ -161,18 +231,47 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
       session: { userId: 'u1', displayName: 'Alice Smith' },
     })
 
-    await waitForStableRects(page, ['[data-testid="account-chip"]', '.react-fps', '.topbar-right'])
+    // Wait on every link in the wrapper chain — without `.account-control`
+    // here the wrapper-vs-trigger boundary slipped silently in CI.
+    await waitForStableRects(page, [
+      '[data-testid="account-chip"]',
+      '.account-control',
+      '.react-fps',
+      '.topbar-right',
+    ])
+
+    // Capture computed styles + rects up front. Stitched into every
+    // assertion message below so a CI failure tells us WHY in one log
+    // (display / width / min-width / max-width / box-sizing / flex)
+    // instead of just the offending rect.
+    const diag = await getLayoutDiagnostics(page, [
+      '[data-testid="account-chip"]',
+      '.account-control',
+      '.topbar-right',
+      '.react-fps',
+    ])
+    const diagSummary = diag.map(fmtDiag).join('\n  ')
+
     const container = await rectOf(page, '.topbar-right')
+    const wrapper = await rectOf(page, '.account-control')
     const chip = await rectOf(page, '[data-testid="account-chip"]')
     const fps = await rectOf(page, '.react-fps')
-    expect(container).not.toBeNull()
-    expect(chip).not.toBeNull()
-    expect(fps).not.toBeNull()
+    expect(container, `container missing. diag:\n  ${diagSummary}`).not.toBeNull()
+    expect(wrapper, `wrapper missing. diag:\n  ${diagSummary}`).not.toBeNull()
+    expect(chip, `chip missing. diag:\n  ${diagSummary}`).not.toBeNull()
+    expect(fps, `fps missing. diag:\n  ${diagSummary}`).not.toBeNull()
 
-    // Both controls strictly inside the container's box, within the
-    // platform-subpixel slack (CONTAINER_EDGE_SLACK_PX).
-    expectWithinContainer(chip!, container!, CONTAINER_EDGE_SLACK_PX, 'chip inside .topbar-right')
-    expectWithinContainer(fps!, container!, CONTAINER_EDGE_SLACK_PX, 'FPS inside .topbar-right')
+    // Three-step chain mirroring the signed-out spec — pinpoints which
+    // boundary slipped if the layout regresses again. Diagnostics
+    // appended so the CI message is self-contained.
+    expectWithinContainer(chip!, wrapper!, CONTAINER_EDGE_SLACK_PX,
+      `chip inside .account-control [diag]\n  ${diagSummary}`)
+    expectWithinContainer(wrapper!, container!, CONTAINER_EDGE_SLACK_PX,
+      `.account-control inside .topbar-right [diag]\n  ${diagSummary}`)
+    expectWithinContainer(chip!, container!, CONTAINER_EDGE_SLACK_PX,
+      `chip inside .topbar-right [diag]\n  ${diagSummary}`)
+    expectWithinContainer(fps!, container!, CONTAINER_EDGE_SLACK_PX,
+      `FPS inside .topbar-right [diag]\n  ${diagSummary}`)
 
     // Chip sits to the LEFT of FPS (flex row, natural order). Tight
     // tolerance: a chip that visibly overlaps FPS by 2 px IS a regression.
@@ -233,13 +332,24 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
     const container = await rectOf(page, '.topbar-right')
     expect(container).not.toBeNull()
     // History: a previous Linux-Chromium flake had trigger.left ~1 px
-    // outside container.left. After it grew to ~9 px in CI, the root
-    // cause was tracked to shrink-to-fit ambiguity inside an absolute-
-    // positioned auto-width flex container — the AccountControl wrapper
-    // wasn't being measured at the trigger's intrinsic width. Fix:
-    // `width: max-content` on .topbar-right + `display: inline-flex;
-    // flex: 0 0 auto; width: max-content` on .account-control +
-    // `appearance: none` on the trigger.
+    // outside container.left. After it grew to ~9 px (signed-out) and
+    // then ~8 px (signed-in chip variant) in CI, the root cause was
+    // tracked to shrink-to-fit ambiguity inside an absolute-positioned
+    // auto-width row — both the wrapper AND the trigger had implicit
+    // intrinsic-sizing behaviour that Linux Chromium resolved
+    // narrower than other engines. Current contract:
+    //   .topbar-right            display: inline-flex
+    //                            max-width: calc(100vw - 24px)
+    //   .account-control         display: inline-flex
+    //                            flex: 0 0 auto
+    //                            width: max-content
+    //   .account-control__trigger appearance: none
+    //                            flex: 0 0 auto
+    //                            width: max-content
+    //                            box-sizing: border-box
+    //   .account-control__trigger--chip min-width: max-content
+    // The chain is asserted three steps below so a future regression
+    // names the offending boundary in the failure message.
     //
     // Asserting the chain in three steps — trigger ⊂ wrapper ⊂ container
     // — pinpoints which boundary slipped if the layout regresses again,

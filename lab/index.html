@@ -602,14 +602,18 @@ canvas { display: block; touch-action: none; }
  * menu does not disappear behind side panels. */
 .topbar-right {
   position: absolute; top: 12px; right: 12px; z-index: 11;
-  display: flex; align-items: flex-start; gap: 8px;
-  /* Explicit shrink-to-fit width. Without this Linux Chromium
-   * intermittently under-measures the first flex slot inside an
-   * absolute-positioned auto-width container, leaving the
-   * AccountControl trigger overhanging the container's left edge
-   * (CI failure: trigger.left ~9 px left of container.left). The
-   * computed visual layout is the same in every browser; this just
-   * makes the width contract deterministic.
+  /* `inline-flex` is the directly shrink-to-fit row contract — it
+   * IS a content-sized horizontal box, no intrinsic-size negotiation
+   * required. The earlier `flex + width: max-content` combo worked
+   * for the signed-out trigger but Linux Chromium still
+   * under-measured the first flex slot when the chip variant
+   * (heavier intrinsic content: avatar disc + label) was the first
+   * child. Removing one browser-sensitive intrinsic-sizing path
+   * (`max-content` on a flex container) eliminates the residual
+   * cross-platform gap. */
+  display: inline-flex; align-items: flex-start; gap: 8px;
+  /* Visual layout is identical in every browser; the rules here
+   * just make the width contract deterministic.
    *
    * `max-width` is the row's only safety against viewport overrun.
    * It caps the row but does NOT define how children compress —
@@ -630,7 +634,6 @@ canvas { display: block; touch-action: none; }
    *    with the trigger ⊂ wrapper ⊂ .topbar-right chain so a
    *    future cross-platform drift names the offending boundary.
    */
-  width: max-content;
   max-width: calc(100vw - 24px);
 }
 .react-fps {
@@ -681,9 +684,18 @@ canvas { display: block; touch-action: none; }
 .account-control__trigger {
   /* `appearance: none` removes UA button intrinsic-sizing differences
    * (Linux Chromium vs. macOS Chromium can disagree by several pixels
-   * on a native <button>); the trigger is now a pure CSS box. */
+   * on a native <button>); the trigger is now a pure CSS box.
+   *
+   * `flex: 0 0 auto; width: max-content; box-sizing: border-box`
+   * pins the trigger's contribution to the wrapper at its intrinsic
+   * width — no more residual UA/inline-formatting heuristics. The
+   * wrapper above already pins itself to its content; pinning the
+   * trigger as well closes the chain. */
   appearance: none;
   -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: max-content;
+  box-sizing: border-box;
   background: transparent; border: 1px solid transparent;
   color: var(--color-text-secondary);
   padding: 6px 10px; border-radius: var(--radius-sm);
@@ -703,6 +715,12 @@ canvas { display: block; touch-action: none; }
   border-color: var(--color-border);
   color: var(--color-text);
   padding: 4px 10px 4px 4px;
+  /* Chip variant carries heavier intrinsic content (avatar disc +
+   * label + padding) than the signed-out trigger — the previous CI
+   * failure surfaced specifically here. `min-width: max-content`
+   * floors the chip at its intrinsic width even if a parent ever
+   * passes through a smaller flex basis. */
+  min-width: max-content;
 }
 /* Unverified variant — subdued tone, italic label, no avatar. Communicates
  * "we don't know" without provoking an unnecessary OAuth round-trip. */
