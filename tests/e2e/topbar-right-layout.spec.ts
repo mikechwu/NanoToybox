@@ -225,14 +225,28 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
     await waitForUIState(page)
     await setAuthState(page, { status: 'signed-out', session: null })
 
-    await waitForStableRects(page, ['[data-testid="account-signin"]', '.topbar-right'])
+    await waitForStableRects(page, ['[data-testid="account-signin"]', '.topbar-right', '.account-control'])
     const trigger = await rectOf(page, '[data-testid="account-signin"]')
     expect(trigger).not.toBeNull()
+    const wrapper = await rectOf(page, '.account-control')
+    expect(wrapper).not.toBeNull()
     const container = await rectOf(page, '.topbar-right')
     expect(container).not.toBeNull()
-    // The original CI flake was here: trigger.left 1.047 px outside
-    // container.left on Linux due to Chromium's font-metric-driven
-    // fractional layout. CONTAINER_EDGE_SLACK_PX = 2 absorbs that.
+    // History: a previous Linux-Chromium flake had trigger.left ~1 px
+    // outside container.left. After it grew to ~9 px in CI, the root
+    // cause was tracked to shrink-to-fit ambiguity inside an absolute-
+    // positioned auto-width flex container — the AccountControl wrapper
+    // wasn't being measured at the trigger's intrinsic width. Fix:
+    // `width: max-content` on .topbar-right + `display: inline-flex;
+    // flex: 0 0 auto; width: max-content` on .account-control +
+    // `appearance: none` on the trigger.
+    //
+    // Asserting the chain in three steps — trigger ⊂ wrapper ⊂ container
+    // — pinpoints which boundary slipped if the layout regresses again,
+    // instead of leaving us guessing whether the flex item or the
+    // container miscomputed.
+    expectWithinContainer(trigger!, wrapper!, CONTAINER_EDGE_SLACK_PX, 'signin trigger inside .account-control')
+    expectWithinContainer(wrapper!, container!, CONTAINER_EDGE_SLACK_PX, '.account-control inside .topbar-right')
     expectWithinContainer(trigger!, container!, CONTAINER_EDGE_SLACK_PX, 'signin trigger inside .topbar-right')
 
     // Open the menu and verify it stays within the viewport.

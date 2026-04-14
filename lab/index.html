@@ -603,6 +603,35 @@ canvas { display: block; touch-action: none; }
 .topbar-right {
   position: absolute; top: 12px; right: 12px; z-index: 11;
   display: flex; align-items: flex-start; gap: 8px;
+  /* Explicit shrink-to-fit width. Without this Linux Chromium
+   * intermittently under-measures the first flex slot inside an
+   * absolute-positioned auto-width container, leaving the
+   * AccountControl trigger overhanging the container's left edge
+   * (CI failure: trigger.left ~9 px left of container.left). The
+   * computed visual layout is the same in every browser; this just
+   * makes the width contract deterministic.
+   *
+   * `max-width` is the row's only safety against viewport overrun.
+   * It caps the row but does NOT define how children compress —
+   * each child owns its own width policy.
+   *
+   * ── Contract for adding a new top-right child ──
+   * 1. Define your own width behaviour. Either pin to intrinsic
+   *    (`flex: 0 0 auto; width: max-content`, like .account-control)
+   *    or be shrink-safe (`min-width: 0` + your own truncation, like
+   *    .react-fps).
+   * 2. Text-bearing children MUST cap or truncate (max-width +
+   *    `overflow: hidden; text-overflow: ellipsis`). Never assume
+   *    label length; localized strings can double in width.
+   * 3. If a third top-right control lands, prefer collapsing one
+   *    of them at narrow viewports (e.g. hide FPS on mobile) over
+   *    expecting the row to keep absorbing content.
+   * 4. Cover the new child in tests/e2e/topbar-right-layout.spec.ts
+   *    with the trigger ⊂ wrapper ⊂ .topbar-right chain so a
+   *    future cross-platform drift names the offending boundary.
+   */
+  width: max-content;
+  max-width: calc(100vw - 24px);
 }
 .react-fps {
   color: var(--color-fps-text); font-size: var(--font-sm);
@@ -612,6 +641,16 @@ canvas { display: block; touch-action: none; }
   padding: 6px 12px; border-radius: var(--radius-sm);
   border: 1px solid var(--color-border);
   line-height: 1.4; cursor: pointer;
+  /* Shrink-safe sibling under .topbar-right's max-width cap. The
+   * default `min-width: auto` on a flex item refuses to shrink below
+   * the content's intrinsic width — under a narrow viewport that
+   * would push .account-control out of the row before the FPS
+   * counter gave up any space. `min-width: 0` lets the algorithm
+   * compress this side instead, since its content (numeric stats) is
+   * truncation-tolerant. .account-control deliberately stays
+   * `flex: 0 0 auto` — its label has its own ellipsis cap and we
+   * don't want the chip clipped. */
+  min-width: 0;
 }
 
 /* ── Account control (top-bar, Phase 6 Auth UX) ─────────────────────
@@ -627,11 +666,24 @@ canvas { display: block; touch-action: none; }
   /* Child of .topbar-right flex container — no absolute positioning. The
    * menu below still needs a positioned ancestor so it anchors to the
    * control's right edge; `position: relative` gives it one without
-   * coupling to viewport coordinates. */
+   * coupling to viewport coordinates.
+   *
+   * `display: inline-flex` + `flex: 0 0 auto` + `width: max-content`
+   * pins the slot to the trigger's intrinsic width. This pairs with
+   * `width: max-content` on .topbar-right above to remove the cross-
+   * platform shrink-to-fit ambiguity that produced the CI flake. */
   position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: max-content;
   font-size: var(--font-xs);
 }
 .account-control__trigger {
+  /* `appearance: none` removes UA button intrinsic-sizing differences
+   * (Linux Chromium vs. macOS Chromium can disagree by several pixels
+   * on a native <button>); the trigger is now a pure CSS box. */
+  appearance: none;
+  -webkit-appearance: none;
   background: transparent; border: 1px solid transparent;
   color: var(--color-text-secondary);
   padding: 6px 10px; border-radius: var(--radius-sm);
