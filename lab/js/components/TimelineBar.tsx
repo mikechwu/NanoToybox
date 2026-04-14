@@ -170,6 +170,7 @@ function TimelineBarActive() {
   // timeline-transfer-dialog.tsx's Share panel.
   const authStatus = useAppStore((s) => s.auth.status);
   const authCallbacks = useAppStore((s) => s.authCallbacks);
+  const authPopupBlocked = useAppStore((s) => s.authPopupBlocked);
   const shareTabOpenRequested = useAppStore((s) => s.shareTabOpenRequested);
 
   const trackRef = useRef<HTMLDivElement>(null);
@@ -321,9 +322,34 @@ function TimelineBarActive() {
   // Sign-in handler for the Share tab's auth prompt. Always sets the
   // resume-publish intent so the user lands back on the Share tab after the
   // OAuth round-trip — the store's requestShareTabOpen() will then flip the
-  // nonce and the effect below will re-open this dialog.
+  // flag and the effect below will re-open this dialog.
   const handleAuthSignIn = useCallback((provider: 'google' | 'github') => {
     authCallbacks?.onSignIn(provider, { resumePublish: true });
+  }, [authCallbacks]);
+
+  // Popup-blocked Retry button: re-issues the same sign-in call that was
+  // blocked. The runtime clears the popup-blocked flag at the start of
+  // each onSignIn attempt, so the UI hides the prompt and tries fresh.
+  const handleRetryPopup = useCallback(() => {
+    const pending = authPopupBlocked;
+    if (!pending) return;
+    authCallbacks?.onSignIn(pending.provider, { resumePublish: pending.resumePublish });
+  }, [authPopupBlocked, authCallbacks]);
+
+  // Popup-blocked Continue-in-tab button: explicit user consent to the
+  // destructive same-tab redirect. Wired to the runtime's dedicated
+  // commit callback rather than re-invoking onSignIn.
+  const handleContinueInTab = useCallback(() => {
+    authCallbacks?.onSignInSameTab();
+  }, [authCallbacks]);
+
+  // Popup-blocked Back button: dismiss the pending descriptor so the
+  // provider picker re-renders and the user can try a different provider
+  // without being forced through Retry or the destructive same-tab path.
+  // Delegates to the runtime so the resume-publish sentinel is also
+  // cleared when the abandoned flow was a publish-initiated sign-in.
+  const handleDismissPopupBlocked = useCallback(() => {
+    authCallbacks?.onDismissPopupBlocked();
   }, [authCallbacks]);
 
   // Resume-publish intent bridge: main.ts sets `shareTabOpenRequested` to
@@ -639,6 +665,10 @@ function TimelineBarActive() {
 
         authStatus={authStatus}
         onSignIn={handleAuthSignIn}
+        popupBlocked={authPopupBlocked}
+        onRetryPopup={handleRetryPopup}
+        onSignInSameTab={handleContinueInTab}
+        onDismissPopupBlocked={handleDismissPopupBlocked}
       />
     </>
   );

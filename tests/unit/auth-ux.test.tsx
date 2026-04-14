@@ -28,7 +28,9 @@ import {
   createAuthRuntime,
   hydrateAuthSession,
   consumeResumePublishIntent,
+  attachAuthCompleteListener,
   AuthRequiredError,
+  _resetAuthRuntimeForTest,
 } from '../../lab/js/runtime/auth-runtime';
 import { TopRightControls } from '../../lab/js/components/TopRightControls';
 
@@ -119,7 +121,7 @@ describe('Transfer dialog — Share tab auth gating', () => {
     act(() => {
       installPublishableTimeline();
       setSession(null);
-      useAppStore.getState().setAuthCallbacks({ onSignIn, onSignOut: vi.fn(async () => {}) });
+      useAppStore.getState().setAuthCallbacks({ onSignIn, onSignInSameTab: vi.fn(), onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}) });
     });
     render(<TimelineBar />);
     act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
@@ -209,7 +211,7 @@ describe('AccountControl top-bar', () => {
     const onSignIn = vi.fn();
     act(() => {
       setSession(null);
-      useAppStore.getState().setAuthCallbacks({ onSignIn, onSignOut: vi.fn(async () => {}) });
+      useAppStore.getState().setAuthCallbacks({ onSignIn, onSignInSameTab: vi.fn(), onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}) });
     });
     render(<AccountControl />);
 
@@ -235,7 +237,7 @@ describe('AccountControl top-bar', () => {
     const onSignOut = vi.fn(async () => {});
     act(() => {
       setSession({ userId: 'user-12345678', displayName: 'Alice Smith' });
-      useAppStore.getState().setAuthCallbacks({ onSignIn: vi.fn(), onSignOut });
+      useAppStore.getState().setAuthCallbacks({ onSignIn: vi.fn(), onSignInSameTab: vi.fn(), onDismissPopupBlocked: vi.fn(), onSignOut });
     });
     render(<AccountControl />);
 
@@ -274,9 +276,9 @@ describe('hydrateAuthSession', () => {
     cleanup();
   });
 
-  it('settles to signed-in on 200 with valid payload', async () => {
+  it('settles to signed-in on 200 { status: signed-in, ... }', async () => {
     globalThis.fetch = vi.fn(async () => new Response(
-      JSON.stringify({ userId: 'u1', displayName: 'Alice', createdAt: '2026-01-01' }),
+      JSON.stringify({ status: 'signed-in', userId: 'u1', displayName: 'Alice', createdAt: '2026-01-01' }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     )) as typeof fetch;
 
@@ -285,10 +287,47 @@ describe('hydrateAuthSession', () => {
     expect(state.session?.userId).toBe('u1');
   });
 
-  it('settles to signed-out on 401', async () => {
-    globalThis.fetch = vi.fn(async () => new Response('Unauthorized', { status: 401 })) as typeof fetch;
+  it('sends cache:no-store and credentials:same-origin on the session probe', async () => {
+    const fetchSpy = vi.fn(async () => new Response(
+      JSON.stringify({ status: 'signed-out' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )) as unknown as typeof fetch;
+    globalThis.fetch = fetchSpy;
+    await hydrateAuthSession();
+    // Verify the request options — important enough to guard against a
+    // future regression that lets a browser cache a stale signed-in/out
+    // response across logout/popup-login transitions.
+    const [, init] = (fetchSpy as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(init).toMatchObject({
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+    });
+  });
+
+  it('settles to signed-out on 200 { status: signed-out } (NOT 401)', async () => {
+    // New contract: signed-out is a normal state, not a 401. The endpoint
+    // always returns 200 with a discriminator so a routine Lab boot does
+    // not emit a red network entry.
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ status: 'signed-out' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )) as typeof fetch;
     const state = await hydrateAuthSession();
     expect(state).toEqual({ status: 'signed-out', session: null });
+  });
+
+  it('treats an unexpected 401 as a server error, not an authoritative signed-out', async () => {
+    // Under the new contract, 401 on /api/auth/session means "server/proxy
+    // misconfiguration" (the endpoint should never return it). Route
+    // through the indeterminate path so we don't weaken a signed-in prior.
+    useAppStore.getState().setAuthSignedIn({ userId: 'alice', displayName: 'Alice' });
+    globalThis.fetch = vi.fn(async () => new Response('Unauthorized', { status: 401 })) as typeof fetch;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const state = await hydrateAuthSession();
+    // Prior signed-in preserved because 401 now goes through resolveIndeterminate.
+    expect(state.status).toBe('signed-in');
+    warn.mockRestore();
   });
 
   it('preserves the current session on network failure (never flips signed-in → signed-out)', async () => {
@@ -349,30 +388,33 @@ describe('hydrateAuthSession', () => {
 
   it('drops late fetch writes if a newer authoritative state lands first (Reviewer #1 race)', async () => {
     // Two concurrent hydrates. The FIRST issues fetch, the SECOND also issues
-    // fetch. The SECOND resolves first (401 → signed-out). The FIRST resolves
-    // later (200 → would-set signed-in). The sequence token must drop the
-    // late 200, preserving the authoritative signed-out.
+    // fetch. The SECOND resolves first (200 status=signed-out). The FIRST
+    // resolves later (200 status=signed-in). The sequence token must drop
+    // the late signed-in, preserving the authoritative signed-out.
     let resolveFirst!: (r: Response) => void;
     const firstPromise = new Promise<Response>((r) => { resolveFirst = r; });
     const responses = [
       () => firstPromise,
-      () => Promise.resolve(new Response('Unauthorized', { status: 401 })),
+      () => Promise.resolve(new Response(
+        JSON.stringify({ status: 'signed-out' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )),
     ];
     let callIdx = 0;
     globalThis.fetch = vi.fn(() => responses[callIdx++]()) as typeof fetch;
 
     const inFlight = hydrateAuthSession(); // increments seq to N
-    const second = await hydrateAuthSession(); // increments seq to N+1, resolves 401
+    const second = await hydrateAuthSession(); // increments seq to N+1, resolves signed-out
     expect(second.status).toBe('signed-out');
     expect(useAppStore.getState().auth.status).toBe('signed-out');
 
-    // Now the first resolves with 200 — the sequence token should drop its write.
+    // Now the first resolves with signed-in — the sequence token should drop its write.
     resolveFirst(new Response(
-      JSON.stringify({ userId: 'late', displayName: 'Late', createdAt: 'x' }),
+      JSON.stringify({ status: 'signed-in', userId: 'late', displayName: 'Late', createdAt: 'x' }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     ));
     await inFlight;
-    // Authoritative signed-out must still be in the store — the stale 200
+    // Authoritative signed-out must still be in the store — the stale signed-in
     // did not clobber it.
     expect(useAppStore.getState().auth.status).toBe('signed-out');
   });
@@ -700,8 +742,16 @@ describe('resume-publish intent (structured payload + query-marker handshake)', 
   const originalLocation = window.location;
   function setLocation(search: string) {
     delete (window as unknown as { location?: Location }).location;
+    // Explicit protocol + port so isViteDevHost() (guard added April 2026)
+    // correctly treats this as a production-shaped location, not a Vite
+    // dev host that would short-circuit the popup path.
     (window as unknown as { location: Partial<Location> }).location = {
       ...originalLocation,
+      protocol: 'https:',
+      host: 'example.test',
+      hostname: 'example.test',
+      port: '',
+      origin: 'https://example.test',
       href: `https://example.test/lab/${search}`,
       pathname: '/lab/',
       search,
@@ -723,6 +773,11 @@ describe('resume-publish intent (structured payload + query-marker handshake)', 
   });
 
   it('onSignIn with resumePublish stores a structured JSON payload with iat + provider', () => {
+    // Stub window.open so the popup path succeeds — otherwise the call
+    // would bail to the popup-blocked branch and not even attempt a URL.
+    (window as unknown as { open: typeof window.open }).open = vi.fn(
+      () => ({ focus: vi.fn(), closed: false } as unknown as Window),
+    ) as typeof window.open;
     const now = 1_700_000_000_000;
     vi.spyOn(Date, 'now').mockReturnValue(now);
     const { callbacks } = createAuthRuntime();
@@ -733,20 +788,24 @@ describe('resume-publish intent (structured payload + query-marker handshake)', 
     const payload = JSON.parse(raw!);
     expect(payload).toEqual({ kind: 'resumePublish', provider: 'google', iat: now });
 
-    // The returnTo URL must carry the `authReturn=1` marker so the callback
-    // handshake is provable on return.
-    const assignSpy = window.location.assign as unknown as ReturnType<typeof vi.fn>;
-    const target = assignSpy.mock.calls[0][0] as string;
+    // Popup path uses /auth/popup-complete as its returnTo — the same-tab
+    // `?authReturn=1` marker is only applied on explicit Continue-in-tab.
+    const openSpy = window.open as unknown as ReturnType<typeof vi.fn>;
+    const target = openSpy.mock.calls[0][0] as string;
     expect(target).toContain('/auth/google/start');
-    expect(target).toContain(encodeURIComponent('/lab/?authReturn=1'));
+    expect(target).toContain(encodeURIComponent('/auth/popup-complete'));
+    // No auto same-tab navigation.
+    expect(window.location.assign).not.toHaveBeenCalled();
   });
 
-  it('onSignIn without resumePublish does NOT store a payload and does NOT add the marker', () => {
+  it('onSignIn without resumePublish does NOT store a payload', () => {
+    (window as unknown as { open: typeof window.open }).open = vi.fn(
+      () => ({ focus: vi.fn(), closed: false } as unknown as Window),
+    ) as typeof window.open;
     const { callbacks } = createAuthRuntime();
     callbacks.onSignIn('github');
     expect(sessionStorage.getItem('atomdojo.resumePublish')).toBeNull();
-    const target = (window.location.assign as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(target).not.toContain('authReturn');
+    expect(window.location.assign).not.toHaveBeenCalled();
   });
 
   it('consumeResumePublishIntent returns false without the authReturn marker even with a fresh payload', () => {
@@ -857,7 +916,7 @@ describe('onSignOut — reconciliation after server failure', () => {
       if (callIdx === 1) return new Response('', { status: 500 });
       // Reconciliation /session returns 200 signed-in (cookie still live).
       return new Response(
-        JSON.stringify({ userId: 'u1', displayName: 'Alice', createdAt: 'x' }),
+        JSON.stringify({ status: 'signed-in', userId: 'u1', displayName: 'Alice', createdAt: 'x' }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
     }) as typeof fetch;
@@ -879,7 +938,11 @@ describe('onSignOut — reconciliation after server failure', () => {
     globalThis.fetch = vi.fn(async () => {
       callIdx++;
       if (callIdx === 1) throw new Error('network down');
-      return new Response('Unauthorized', { status: 401 });
+      // Reconciliation /session returns 200 signed-out — UI stays signed-out (consistent).
+      return new Response(
+        JSON.stringify({ status: 'signed-out' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
     }) as typeof fetch;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -887,7 +950,7 @@ describe('onSignOut — reconciliation after server failure', () => {
     await callbacks.onSignOut();
     expect(useAppStore.getState().auth.status).toBe('signed-out');
 
-    // Reconciliation /session returns 401 — UI stays signed-out (consistent).
+    // Reconciliation confirms signed-out — UI stays signed-out (consistent).
     await vi.advanceTimersByTimeAsync(3500);
     expect(useAppStore.getState().auth.status).toBe('signed-out');
     warn.mockRestore();
@@ -984,6 +1047,47 @@ describe('AuthState narrow helpers enforce the invariant', () => {
     useAppStore.getState().setAuthSignedIn({ userId: 'a', displayName: 'A' });
     act(() => { useAppStore.getState().setAuthUnverified(); });
     expect(useAppStore.getState().auth).toEqual({ status: 'unverified', session: null });
+  });
+});
+
+// ── resetTransientState boundary for one-shot auth flags ──
+//
+// Ephemeral control-flow flags (authPopupBlocked, shareTabOpenRequested)
+// must be cleared on scene/runtime teardown. Identity state
+// (auth.status, auth.session) is a cross-session concern and MUST
+// survive the reset — signing out should be the only thing that clears
+// it.
+
+describe('resetTransientState — clears one-shot auth flags, preserves identity', () => {
+  it('clears authPopupBlocked and shareTabOpenRequested', () => {
+    act(() => {
+      useAppStore.getState().setAuthPopupBlocked({ provider: 'google', resumePublish: true });
+      useAppStore.getState().requestShareTabOpen();
+    });
+    expect(useAppStore.getState().authPopupBlocked).not.toBeNull();
+    expect(useAppStore.getState().shareTabOpenRequested).toBe(true);
+
+    act(() => { useAppStore.getState().resetTransientState(); });
+    expect(useAppStore.getState().authPopupBlocked).toBeNull();
+    expect(useAppStore.getState().shareTabOpenRequested).toBe(false);
+  });
+
+  it('preserves auth identity (auth.status / auth.session) across the reset', () => {
+    act(() => {
+      useAppStore.getState().setAuthSignedIn({ userId: 'u1', displayName: 'Alice' });
+    });
+    expect(useAppStore.getState().auth.status).toBe('signed-in');
+
+    act(() => { useAppStore.getState().resetTransientState(); });
+    // Sign-in survives — only the transient UI/control-flow state clears.
+    expect(useAppStore.getState().auth.status).toBe('signed-in');
+    expect(useAppStore.getState().auth.session?.userId).toBe('u1');
+  });
+
+  it('also preserves the auth.status=signed-out identity (not re-initialized to loading)', () => {
+    act(() => { useAppStore.getState().setAuthSignedOut(); });
+    act(() => { useAppStore.getState().resetTransientState(); });
+    expect(useAppStore.getState().auth.status).toBe('signed-out');
   });
 });
 
@@ -1089,5 +1193,840 @@ describe('TopRightControls layout', () => {
     expect(accountRoot).not.toBeNull();
     // The immediate flex parent of .account-control is .topbar-right — not body.
     expect(accountRoot?.parentElement?.classList.contains('topbar-right')).toBe(true);
+  });
+});
+
+// ── Popup OAuth flow (Fix 1) ──
+//
+// These tests lock in the contract:
+//   - onSignIn prefers window.open. When the popup is blocked, it DOES
+//     NOT silently navigate same-tab — it sets `authPopupBlocked` on the
+//     store so the UI can offer explicit Retry / Continue-in-tab.
+//   - Each onSignIn attempt tries the popup fresh — no sticky "blocker
+//     active" hint that suppresses later attempts.
+//   - onSignInSameTab performs the destructive redirect ONLY when the
+//     user has explicitly committed via the popup-blocked prompt.
+//   - attachAuthCompleteListener handles same-origin postMessage of
+//     `{ type: 'atomdojo-auth-complete' }` by re-hydrating, and opens the
+//     Share tab if the resume-publish intent was fresh.
+//   - Cross-origin or malformed messages are ignored.
+
+describe('auth-runtime — popup OAuth flow', () => {
+  const originalLocation = window.location;
+  const originalOpen = window.open;
+  const originalFetch = globalThis.fetch;
+  let attachedTeardown: (() => void) | null = null;
+
+  beforeEach(() => {
+    // resetTransientState clears both authPopupBlocked and
+    // shareTabOpenRequested — the one-shot auth flags are now part of the
+    // reset boundary (fixed April 2026; previously tests patched them up
+    // manually). Identity state (auth.status/session) still persists
+    // across scene resets and must be explicitly re-set below.
+    useAppStore.getState().resetTransientState();
+    sessionStorage.clear();
+    useAppStore.getState().setAuthLoading();
+    _resetAuthRuntimeForTest();
+    // Stub window.location so we can observe fallback assign(). Explicit
+    // protocol + port keep isViteDevHost() (guard added April 2026) from
+    // treating the stub as a Vite dev host, which would short-circuit
+    // `tryBeginOAuthPopup` and cause the popup-flow tests to bypass
+    // `window.open` entirely.
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Partial<Location> }).location = {
+      ...originalLocation,
+      protocol: 'https:',
+      host: 'atomdojo.test',
+      hostname: 'atomdojo.test',
+      port: '',
+      origin: 'https://atomdojo.test',
+      href: 'https://atomdojo.test/lab/',
+      assign: vi.fn(),
+    } as Location;
+  });
+  afterEach(() => {
+    if (attachedTeardown) { attachedTeardown(); attachedTeardown = null; }
+    (window as unknown as { open: typeof window.open }).open = originalOpen;
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Location }).location = originalLocation;
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('tries window.open first; does NOT fall back to location.assign when popup succeeds', () => {
+    const fakePopup = { focus: vi.fn(), closed: false } as unknown as Window;
+    (window as unknown as { open: typeof window.open }).open = vi.fn(() => fakePopup) as typeof window.open;
+    const { callbacks } = createAuthRuntime();
+    callbacks.onSignIn('google', { resumePublish: true });
+    expect(window.open).toHaveBeenCalledTimes(1);
+    const openedUrl = (window.open as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    // Popup uses the popup-complete landing as its returnTo, not /lab/.
+    expect(openedUrl).toContain('/auth/google/start');
+    expect(openedUrl).toContain(encodeURIComponent('/auth/popup-complete'));
+    expect(window.location.assign).not.toHaveBeenCalled();
+  });
+
+  it('popup blocked: sets authPopupBlocked on the store and does NOT navigate', () => {
+    (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
+    const { callbacks } = createAuthRuntime();
+    callbacks.onSignIn('github', { resumePublish: true });
+    // No silent same-tab redirect.
+    expect(window.location.assign).not.toHaveBeenCalled();
+    // Store flag captures the pending descriptor so the UI can surface
+    // the Retry / Continue-in-tab choice and we can resume the original
+    // resumePublish intent if the user commits to same-tab.
+    expect(useAppStore.getState().authPopupBlocked).toEqual({
+      provider: 'github',
+      resumePublish: true,
+    });
+  });
+
+  it('popup blocked: each onSignIn attempt tries window.open fresh (no sticky hint)', () => {
+    const openSpy = vi.fn(() => null) as unknown as typeof window.open;
+    (window as unknown as { open: typeof window.open }).open = openSpy;
+    const { callbacks } = createAuthRuntime();
+    callbacks.onSignIn('google');
+    callbacks.onSignIn('google');
+    callbacks.onSignIn('google');
+    // Every call reaches window.open — no permanent suppression after one block.
+    expect(openSpy).toHaveBeenCalledTimes(3);
+    // No auto-navigation — the UI must drive any same-tab fallback.
+    expect(window.location.assign).not.toHaveBeenCalled();
+  });
+
+  it('onSignInSameTab commits the destructive redirect for the pending descriptor', () => {
+    (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
+    const { callbacks } = createAuthRuntime();
+    callbacks.onSignIn('github', { resumePublish: true });
+    expect(useAppStore.getState().authPopupBlocked).not.toBeNull();
+
+    callbacks.onSignInSameTab();
+    // Now the same-tab navigation happens, with the resume marker preserved.
+    expect(window.location.assign).toHaveBeenCalledTimes(1);
+    const target = (window.location.assign as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(target).toContain('/auth/github/start');
+    expect(target).toContain(encodeURIComponent('/lab/?authReturn=1'));
+    // Pending descriptor cleared so a second click can't re-fire.
+    expect(useAppStore.getState().authPopupBlocked).toBeNull();
+  });
+
+  it('onSignInSameTab is a no-op when no pending descriptor is set', () => {
+    (window as unknown as { open: typeof window.open }).open = vi.fn(() => ({ focus: vi.fn(), closed: false } as unknown as Window)) as typeof window.open;
+    const { callbacks } = createAuthRuntime();
+    callbacks.onSignInSameTab();
+    expect(window.location.assign).not.toHaveBeenCalled();
+  });
+
+  it('successful popup on retry clears the popup-blocked flag', () => {
+    // First call: popup blocked → flag set. Second call: popup opens → flag cleared.
+    const openSpy = vi.fn()
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce({ focus: vi.fn(), closed: false }) as unknown as typeof window.open;
+    (window as unknown as { open: typeof window.open }).open = openSpy;
+    const { callbacks } = createAuthRuntime();
+    callbacks.onSignIn('google', { resumePublish: true });
+    expect(useAppStore.getState().authPopupBlocked).not.toBeNull();
+
+    callbacks.onSignIn('google', { resumePublish: true });
+    // onSignIn always clears the flag up front; a successful popup leaves
+    // it null (the store flag only turns back on if window.open returns null).
+    expect(useAppStore.getState().authPopupBlocked).toBeNull();
+  });
+
+  it('same-origin postMessage triggers hydrate + opens Share tab when resume intent was set', async () => {
+    // Set up a signed-in /session response and a live resume-publish intent.
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ status: 'signed-in', userId: 'u1', displayName: 'Alice' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )) as typeof fetch;
+    sessionStorage.setItem(
+      'atomdojo.resumePublish',
+      JSON.stringify({ kind: 'resumePublish', provider: 'google', iat: Date.now() }),
+    );
+
+    attachedTeardown = attachAuthCompleteListener();
+    expect(useAppStore.getState().shareTabOpenRequested).toBe(false);
+
+    // Simulate the popup's postMessage landing in the opener.
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'atomdojo-auth-complete' },
+      origin: window.location.origin,
+    }));
+    // Drain microtasks so hydrate + follow-up store write resolve.
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(useAppStore.getState().auth.status).toBe('signed-in');
+    expect(useAppStore.getState().shareTabOpenRequested).toBe(true);
+    // Sentinel consumed.
+    expect(sessionStorage.getItem('atomdojo.resumePublish')).toBeNull();
+  });
+
+  it('ignores cross-origin postMessage', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ status: 'signed-in', userId: 'u1', displayName: 'Alice' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )) as typeof fetch;
+    attachedTeardown = attachAuthCompleteListener();
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'atomdojo-auth-complete' },
+      origin: 'https://evil.example',
+    }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(useAppStore.getState().auth.status).toBe('loading');
+  });
+
+  it('ignores malformed postMessage payload', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ status: 'signed-in', userId: 'u1', displayName: 'Alice' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )) as typeof fetch;
+    attachedTeardown = attachAuthCompleteListener();
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'something-else' },
+      origin: window.location.origin,
+    }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('does NOT open Share tab when resume intent is absent or stale (>TTL)', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ status: 'signed-in', userId: 'u1', displayName: 'Alice' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )) as typeof fetch;
+
+    // Stale intent.
+    sessionStorage.setItem(
+      'atomdojo.resumePublish',
+      JSON.stringify({ kind: 'resumePublish', provider: 'google', iat: Date.now() - (11 * 60 * 1000) }),
+    );
+    attachedTeardown = attachAuthCompleteListener();
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'atomdojo-auth-complete' },
+      origin: window.location.origin,
+    }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(useAppStore.getState().shareTabOpenRequested).toBe(false);
+    // Sentinel cleared regardless of freshness.
+    expect(sessionStorage.getItem('atomdojo.resumePublish')).toBeNull();
+  });
+});
+
+// ── Popup-blocked UX surface (Fix 2) ──
+
+describe('Transfer dialog — popup-blocked Retry / Continue-in-tab prompt', () => {
+  beforeEach(() => { useAppStore.getState().resetTransientState(); });
+  afterEach(() => { cleanup(); });
+
+  it('renders Retry / Continue-in-tab buttons when authPopupBlocked is set; hides OAuth provider buttons', () => {
+    act(() => {
+      installPublishableTimeline();
+      setSession(null);
+      useAppStore.getState().setAuthPopupBlocked({ provider: 'google', resumePublish: true });
+    });
+    render(<TimelineBar />);
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+
+    expect(document.querySelector('[data-testid="transfer-popup-blocked"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="transfer-popup-retry"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="transfer-popup-same-tab"]')).not.toBeNull();
+    // Provider buttons are NOT rendered while the popup-blocked prompt is up.
+    expect(document.querySelector('[data-testid="transfer-auth-google"]')).toBeNull();
+    expect(document.querySelector('[data-testid="transfer-auth-github"]')).toBeNull();
+  });
+
+  it('Retry button re-invokes onSignIn with the pending descriptor', () => {
+    const onSignIn = vi.fn();
+    act(() => {
+      installPublishableTimeline();
+      setSession(null);
+      useAppStore.getState().setAuthCallbacks({
+        onSignIn, onSignInSameTab: vi.fn(), onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}),
+      });
+      useAppStore.getState().setAuthPopupBlocked({ provider: 'github', resumePublish: true });
+    });
+    render(<TimelineBar />);
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    act(() => { (document.querySelector('[data-testid="transfer-popup-retry"]') as HTMLButtonElement).click(); });
+
+    expect(onSignIn).toHaveBeenCalledTimes(1);
+    expect(onSignIn).toHaveBeenCalledWith('github', { resumePublish: true });
+  });
+
+  it('Continue-in-tab button invokes onSignInSameTab', () => {
+    const onSignInSameTab = vi.fn();
+    act(() => {
+      installPublishableTimeline();
+      setSession(null);
+      useAppStore.getState().setAuthCallbacks({
+        onSignIn: vi.fn(), onSignInSameTab, onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}),
+      });
+      useAppStore.getState().setAuthPopupBlocked({ provider: 'google', resumePublish: true });
+    });
+    render(<TimelineBar />);
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    act(() => { (document.querySelector('[data-testid="transfer-popup-same-tab"]') as HTMLButtonElement).click(); });
+
+    expect(onSignInSameTab).toHaveBeenCalledTimes(1);
+  });
+
+  it('Back button invokes onDismissPopupBlocked and restores provider buttons', () => {
+    // The host component delegates Back to the auth runtime's callback so
+    // the runtime can also clear the resume-publish sentinel when the
+    // abandoned flow was publish-initiated. Stub the callback with a
+    // behavior-faithful mock that just clears the store flag so the UI
+    // assertions exercise the full render path.
+    const onDismissPopupBlocked = vi.fn(() => {
+      useAppStore.getState().setAuthPopupBlocked(null);
+    });
+    act(() => {
+      installPublishableTimeline();
+      setSession(null);
+      useAppStore.getState().setAuthCallbacks({
+        onSignIn: vi.fn(), onSignInSameTab: vi.fn(), onDismissPopupBlocked, onSignOut: vi.fn(async () => {}),
+      });
+      useAppStore.getState().setAuthPopupBlocked({ provider: 'google', resumePublish: true });
+    });
+    render(<TimelineBar />);
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    expect(document.querySelector('[data-testid="transfer-popup-blocked"]')).not.toBeNull();
+
+    act(() => { (document.querySelector('[data-testid="transfer-popup-back"]') as HTMLButtonElement).click(); });
+    expect(onDismissPopupBlocked).toHaveBeenCalledTimes(1);
+    // Flag cleared via the stub, provider picker restored.
+    expect(useAppStore.getState().authPopupBlocked).toBeNull();
+    expect(document.querySelector('[data-testid="transfer-popup-blocked"]')).toBeNull();
+    expect(document.querySelector('[data-testid="transfer-auth-google"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="transfer-auth-github"]')).not.toBeNull();
+  });
+
+  it('popup-blocked copy names the blocked provider', () => {
+    act(() => {
+      installPublishableTimeline();
+      setSession(null);
+      useAppStore.getState().setAuthPopupBlocked({ provider: 'github', resumePublish: true });
+    });
+    render(<TimelineBar />);
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    const copy = document.querySelector('[data-testid="transfer-popup-blocked"]')?.textContent ?? '';
+    expect(copy).toContain('GitHub popup was blocked');
+    // Retry button is provider-specific too.
+    const retryLabel = document.querySelector('[data-testid="transfer-popup-retry"]')?.textContent ?? '';
+    expect(retryLabel).toContain('Retry GitHub popup');
+  });
+});
+
+describe('AccountControl — popup-blocked Retry / Continue-in-tab prompt', () => {
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+    useAppStore.setState({ authPopupBlocked: null });
+  });
+  afterEach(() => { cleanup(); });
+
+  it('replaces provider buttons with Retry / Continue-in-tab when flag is set', () => {
+    act(() => {
+      setSession(null);
+      useAppStore.getState().setAuthPopupBlocked({ provider: 'google', resumePublish: false });
+    });
+    render(<AccountControl />);
+    act(() => { (document.querySelector('[data-testid="account-signin"]') as HTMLButtonElement).click(); });
+
+    expect(document.querySelector('[data-testid="account-popup-blocked"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="account-popup-retry"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="account-popup-same-tab"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="account-signin-google"]')).toBeNull();
+    expect(document.querySelector('[data-testid="account-signin-github"]')).toBeNull();
+  });
+
+  it('Retry re-invokes onSignIn with the pending descriptor from the store', () => {
+    const onSignIn = vi.fn();
+    act(() => {
+      setSession(null);
+      useAppStore.getState().setAuthCallbacks({
+        onSignIn, onSignInSameTab: vi.fn(), onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}),
+      });
+      useAppStore.getState().setAuthPopupBlocked({ provider: 'github', resumePublish: false });
+    });
+    render(<AccountControl />);
+    act(() => { (document.querySelector('[data-testid="account-signin"]') as HTMLButtonElement).click(); });
+    act(() => { (document.querySelector('[data-testid="account-popup-retry"]') as HTMLButtonElement).click(); });
+
+    expect(onSignIn).toHaveBeenCalledWith('github', { resumePublish: false });
+  });
+
+  it('Back button invokes onDismissPopupBlocked and restores the provider picker', () => {
+    const onDismissPopupBlocked = vi.fn(() => {
+      useAppStore.getState().setAuthPopupBlocked(null);
+    });
+    act(() => {
+      setSession(null);
+      useAppStore.getState().setAuthCallbacks({
+        onSignIn: vi.fn(), onSignInSameTab: vi.fn(), onDismissPopupBlocked, onSignOut: vi.fn(async () => {}),
+      });
+      useAppStore.getState().setAuthPopupBlocked({ provider: 'google', resumePublish: false });
+    });
+    render(<AccountControl />);
+    act(() => { (document.querySelector('[data-testid="account-signin"]') as HTMLButtonElement).click(); });
+    expect(document.querySelector('[data-testid="account-popup-blocked"]')).not.toBeNull();
+
+    act(() => { (document.querySelector('[data-testid="account-popup-back"]') as HTMLButtonElement).click(); });
+    expect(onDismissPopupBlocked).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().authPopupBlocked).toBeNull();
+    expect(document.querySelector('[data-testid="account-popup-blocked"]')).toBeNull();
+    expect(document.querySelector('[data-testid="account-signin-google"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="account-signin-github"]')).not.toBeNull();
+  });
+
+  it('AccountControl popup-blocked copy names the blocked provider', () => {
+    act(() => {
+      setSession(null);
+      useAppStore.getState().setAuthPopupBlocked({ provider: 'google', resumePublish: false });
+    });
+    render(<AccountControl />);
+    act(() => { (document.querySelector('[data-testid="account-signin"]') as HTMLButtonElement).click(); });
+    const copy = document.querySelector('[data-testid="account-popup-blocked"]')?.textContent ?? '';
+    expect(copy).toContain('Google popup was blocked');
+    const retryLabel = document.querySelector('[data-testid="account-popup-retry"]')?.textContent ?? '';
+    expect(retryLabel).toContain('Retry Google popup');
+  });
+});
+
+// ── Back clears the resume-publish sentinel when the abandoned flow
+// was a publish-initiated sign-in (regression for the last leak in the
+// popup-blocked UX). Concrete path exercised:
+//
+//   1. User clicks Publish → popup blocked (resumePublish:true stored).
+//   2. User clicks Back → pending descriptor cleared + sentinel cleared.
+//   3. User later clicks top-bar Sign in → popup-complete handshake runs.
+//   4. Share tab must NOT auto-open because the stale intent is gone.
+
+describe('Popup-blocked Back dismisses the resume-publish intent', () => {
+  const originalLocation = window.location;
+  const originalOpen = window.open;
+  const originalFetch = globalThis.fetch;
+  let attachedTeardown: (() => void) | null = null;
+
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+    useAppStore.getState().setAuthLoading();
+    sessionStorage.clear();
+    _resetAuthRuntimeForTest();
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Partial<Location> }).location = {
+      ...originalLocation,
+      protocol: 'https:',
+      host: 'atomdojo.test',
+      hostname: 'atomdojo.test',
+      port: '',
+      origin: 'https://atomdojo.test',
+      href: 'https://atomdojo.test/lab/',
+      assign: vi.fn(),
+    } as Location;
+  });
+  afterEach(() => {
+    if (attachedTeardown) { attachedTeardown(); attachedTeardown = null; }
+    (window as unknown as { open: typeof window.open }).open = originalOpen;
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Location }).location = originalLocation;
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('Back after publish-initiated popup-block clears the sessionStorage sentinel', () => {
+    // Simulate a blocked publish sign-in.
+    (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
+    const { callbacks } = createAuthRuntime();
+    callbacks.onSignIn('google', { resumePublish: true });
+    expect(sessionStorage.getItem('atomdojo.resumePublish')).not.toBeNull();
+    expect(useAppStore.getState().authPopupBlocked).toEqual({ provider: 'google', resumePublish: true });
+
+    // User clicks Back.
+    callbacks.onDismissPopupBlocked();
+    expect(useAppStore.getState().authPopupBlocked).toBeNull();
+    // Sentinel cleared so a later unrelated sign-in cannot auto-open Share.
+    expect(sessionStorage.getItem('atomdojo.resumePublish')).toBeNull();
+  });
+
+  it('Back after top-bar (non-publish) popup-block leaves the sentinel untouched', () => {
+    // Simulate a stale resume-publish intent from a different flow that
+    // the user has NOT abandoned — e.g. an in-flight popup in another tab.
+    const livePayload = JSON.stringify({
+      kind: 'resumePublish', provider: 'google', iat: Date.now(),
+    });
+    sessionStorage.setItem('atomdojo.resumePublish', livePayload);
+
+    // Now block a secondary top-bar sign-in (resumePublish:false).
+    (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
+    const { callbacks } = createAuthRuntime();
+    callbacks.onSignIn('github'); // defaults to resumePublish:false
+    expect(useAppStore.getState().authPopupBlocked).toEqual({ provider: 'github', resumePublish: false });
+
+    callbacks.onDismissPopupBlocked();
+    // Pending cleared, but the pre-existing intent (unrelated) is not
+    // touched — abandoning a top-bar sign-in has no semantic bearing on
+    // a separate publish flow's intent.
+    expect(useAppStore.getState().authPopupBlocked).toBeNull();
+    expect(sessionStorage.getItem('atomdojo.resumePublish')).toBe(livePayload);
+  });
+
+  it('end-to-end: Back after publish-block → unrelated top-bar sign-in → Share does NOT auto-open', async () => {
+    // Step 1: blocked publish sign-in stashes the sentinel.
+    (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
+    const { callbacks } = createAuthRuntime();
+    callbacks.onSignIn('google', { resumePublish: true });
+    expect(sessionStorage.getItem('atomdojo.resumePublish')).not.toBeNull();
+
+    // Step 2: user clicks Back — sentinel cleared by the runtime.
+    callbacks.onDismissPopupBlocked();
+    expect(sessionStorage.getItem('atomdojo.resumePublish')).toBeNull();
+
+    // Step 3: unrelated top-bar sign-in. Popup succeeds; completion handshake fires.
+    (window as unknown as { open: typeof window.open }).open = vi.fn(
+      () => ({ focus: vi.fn(), closed: false } as unknown as Window),
+    ) as typeof window.open;
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ status: 'signed-in', userId: 'u1', displayName: 'Alice' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )) as typeof fetch;
+    attachedTeardown = attachAuthCompleteListener();
+    callbacks.onSignIn('github'); // no resumePublish — top-bar default
+
+    // Simulate the popup-complete postMessage arriving.
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'atomdojo-auth-complete' },
+      origin: window.location.origin,
+    }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Session hydrated, but Share MUST NOT auto-open — there's no live
+    // intent that should fire it.
+    expect(useAppStore.getState().auth.status).toBe('signed-in');
+    expect(useAppStore.getState().shareTabOpenRequested).toBe(false);
+  });
+});
+
+// ── Onboarding dismissal persistence (Fix 3) ──
+//
+// Dismissal is sessionStorage-scoped: a same-tab OAuth redirect that lands
+// back on /lab/ must not re-show the overlay. Browser restart resets.
+
+describe('onboarding — dismissal persistence across same-tab OAuth bounce', () => {
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+    sessionStorage.clear();
+  });
+
+  it('markOnboardingDismissed writes the session sentinel', async () => {
+    const { markOnboardingDismissed } = await import('../../lab/js/runtime/onboarding');
+    markOnboardingDismissed();
+    expect(sessionStorage.getItem('atomdojo.onboardingDismissed')).toBe('1');
+  });
+
+  it('isOnboardingEligible returns false when the session sentinel is set', async () => {
+    const { isOnboardingEligible } = await import('../../lab/js/runtime/onboarding');
+    // Seed the app state that would otherwise make the overlay eligible.
+    useAppStore.getState().updateAtomCount(60);
+    expect(isOnboardingEligible()).toBe(true);
+
+    sessionStorage.setItem('atomdojo.onboardingDismissed', '1');
+    expect(isOnboardingEligible()).toBe(false);
+  });
+
+  it('eligibility returns to true after sessionStorage is cleared (full browser restart analogue)', async () => {
+    const { isOnboardingEligible } = await import('../../lab/js/runtime/onboarding');
+    useAppStore.getState().updateAtomCount(60);
+    sessionStorage.setItem('atomdojo.onboardingDismissed', '1');
+    expect(isOnboardingEligible()).toBe(false);
+    sessionStorage.clear();
+    expect(isOnboardingEligible()).toBe(true);
+  });
+
+  it('markOnboardingDismissed logs a warning when sessionStorage.setItem throws (private browsing)', async () => {
+    const { markOnboardingDismissed } = await import('../../lab/js/runtime/onboarding');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Simulate a Safari ITP / private-browsing setItem throw.
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => { throw new Error('QuotaExceededError'); });
+    markOnboardingDismissed();
+    expect(warn).toHaveBeenCalled();
+    const msg = warn.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(msg).toMatch(/onboarding/i);
+    expect(msg).toMatch(/private browsing/i);
+    setItemSpy.mockRestore();
+    warn.mockRestore();
+  });
+});
+
+// ── Audit fix H2: Vite dev host heuristic skips the popup path ──
+
+describe('auth-runtime — Vite dev host guard (H2)', () => {
+  const originalLocation = window.location;
+  const originalOpen = window.open;
+
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+    useAppStore.getState().setAuthLoading();
+    sessionStorage.clear();
+    _resetAuthRuntimeForTest();
+  });
+  afterEach(() => {
+    (window as unknown as { open: typeof window.open }).open = originalOpen;
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Location }).location = originalLocation;
+    vi.restoreAllMocks();
+  });
+
+  function stubLocation(partial: Partial<Location>) {
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Partial<Location> }).location = {
+      ...originalLocation, ...partial,
+    } as Location;
+  }
+
+  it('http://localhost:5173 (Vite dev) skips window.open and sets authPopupBlocked', () => {
+    stubLocation({
+      protocol: 'http:', host: 'localhost:5173', hostname: 'localhost', port: '5173',
+      origin: 'http://localhost:5173', href: 'http://localhost:5173/lab/', assign: vi.fn(),
+    });
+    const openSpy = vi.fn();
+    (window as unknown as { open: typeof window.open }).open = openSpy as typeof window.open;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { callbacks } = createAuthRuntime();
+    callbacks.onSignIn('google');
+    // The dev guard short-circuits BEFORE window.open — popup-blocked UI fires.
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(useAppStore.getState().authPopupBlocked).toEqual({
+      provider: 'google', resumePublish: false,
+    });
+    // Developer-facing diagnostic.
+    const msg = warn.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(msg).toMatch(/wrangler pages dev/i);
+    warn.mockRestore();
+  });
+
+  it('http://localhost:8788 (wrangler pages dev) DOES attempt window.open', () => {
+    stubLocation({
+      protocol: 'http:', host: 'localhost:8788', hostname: 'localhost', port: '8788',
+      origin: 'http://localhost:8788', href: 'http://localhost:8788/lab/', assign: vi.fn(),
+    });
+    const openSpy = vi.fn(() => ({ focus: vi.fn(), closed: false } as unknown as Window));
+    (window as unknown as { open: typeof window.open }).open = openSpy as unknown as typeof window.open;
+
+    const { callbacks } = createAuthRuntime();
+    callbacks.onSignIn('google');
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().authPopupBlocked).toBeNull();
+  });
+
+  it('production HTTPS DOES attempt window.open', () => {
+    stubLocation({
+      protocol: 'https:', host: 'atomdojo.pages.dev', hostname: 'atomdojo.pages.dev', port: '',
+      origin: 'https://atomdojo.pages.dev', href: 'https://atomdojo.pages.dev/lab/', assign: vi.fn(),
+    });
+    const openSpy = vi.fn(() => ({ focus: vi.fn(), closed: false } as unknown as Window));
+    (window as unknown as { open: typeof window.open }).open = openSpy as unknown as typeof window.open;
+
+    const { callbacks } = createAuthRuntime();
+    callbacks.onSignIn('google');
+    expect(openSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Audit fix M2: detachAuthCompleteListener truly removes the listener ──
+
+describe('auth-runtime — detachAuthCompleteListener singleton semantics (M2)', () => {
+  const originalLocation = window.location;
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+    useAppStore.getState().setAuthLoading();
+    _resetAuthRuntimeForTest();
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Partial<Location> }).location = {
+      ...originalLocation,
+      protocol: 'https:', host: 'atomdojo.test', hostname: 'atomdojo.test', port: '',
+      origin: 'https://atomdojo.test', href: 'https://atomdojo.test/lab/', assign: vi.fn(),
+    } as Location;
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ status: 'signed-in', userId: 'u1', displayName: 'Alice' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )) as typeof fetch;
+  });
+  afterEach(() => {
+    _resetAuthRuntimeForTest();
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Location }).location = originalLocation;
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('second attach returns the SAME detach reference as the first', () => {
+    const d1 = attachAuthCompleteListener();
+    const d2 = attachAuthCompleteListener();
+    // Both references point at the same detach function — so a second
+    // caller's teardown genuinely cleans up (not a silent no-op).
+    expect(d1).toBe(d2);
+  });
+
+  it('detach truly removes the listener — a subsequent postMessage fires no handler', async () => {
+    const detach = attachAuthCompleteListener();
+    // Dispatch a message BEFORE detach — handler runs, store becomes signed-in.
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'atomdojo-auth-complete' },
+      origin: window.location.origin,
+    }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(useAppStore.getState().auth.status).toBe('signed-in');
+
+    // Reset auth to signed-out baseline, then detach, then dispatch.
+    act(() => { useAppStore.getState().setAuthSignedOut(); });
+    detach();
+
+    // After detach, a fresh message must NOT trigger another hydrate.
+    const fetchCallsBefore = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'atomdojo-auth-complete' },
+      origin: window.location.origin,
+    }));
+    await new Promise((r) => setTimeout(r, 0));
+    // No new fetch → no handler fired.
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(fetchCallsBefore);
+    expect(useAppStore.getState().auth.status).toBe('signed-out');
+  });
+
+  it('logs a dev diagnostic when a cross-origin postMessage is dropped on a Vite dev host', async () => {
+    // Re-stub location as Vite dev so the diagnostic branch fires.
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Partial<Location> }).location = {
+      ...originalLocation,
+      protocol: 'http:', host: 'localhost:5173', hostname: 'localhost', port: '5173',
+      origin: 'http://localhost:5173', href: 'http://localhost:5173/lab/', assign: vi.fn(),
+    } as Location;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    attachAuthCompleteListener();
+    // Dispatch from a different origin (simulates a wrangler popup on 8788).
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'atomdojo-auth-complete' },
+      origin: 'http://localhost:8788',
+    }));
+    // Message is dropped for security, but the dev-mode diagnostic fires.
+    const msg = warn.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(msg).toMatch(/unexpected origin/i);
+    warn.mockRestore();
+  });
+});
+
+// ── Audit fix H3 + H4: handleAuthComplete .catch + clearResumeIntent persistence warning ──
+
+describe('auth-runtime — resilience under store / storage failures (H3, H4)', () => {
+  const originalLocation = window.location;
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+    useAppStore.getState().setAuthLoading();
+    sessionStorage.clear();
+    _resetAuthRuntimeForTest();
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Partial<Location> }).location = {
+      ...originalLocation,
+      protocol: 'https:', host: 'atomdojo.test', hostname: 'atomdojo.test', port: '',
+      origin: 'https://atomdojo.test', href: 'https://atomdojo.test/lab/', assign: vi.fn(),
+    } as Location;
+  });
+  afterEach(() => {
+    _resetAuthRuntimeForTest();
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Location }).location = originalLocation;
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('H3: message handler catches errors from handleAuthComplete (no unhandled rejection)', async () => {
+    // Force hydrateAuthSession's first write to throw by making
+    // setAuthSignedIn blow up — simulates a future regression in a store
+    // setter that used to be safe.
+    const setAuthSignedIn = useAppStore.getState().setAuthSignedIn;
+    const spy = vi.spyOn(useAppStore.getState(), 'setAuthSignedIn')
+      .mockImplementation(() => { throw new Error('store setter boom'); });
+    // Need fresh authCallbacks context: just dispatch message directly.
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ status: 'signed-in', userId: 'u1', displayName: 'Alice' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )) as typeof fetch;
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    attachAuthCompleteListener();
+    // Should NOT raise unhandled rejection.
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'atomdojo-auth-complete' },
+      origin: window.location.origin,
+    }));
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(err).toHaveBeenCalled();
+    const msg = err.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(msg).toMatch(/popup-complete handler failed/i);
+
+    spy.mockRestore();
+    err.mockRestore();
+    // Re-install original so other tests aren't affected.
+    useAppStore.setState({ setAuthSignedIn });
+  });
+
+  it('H4: onDismissPopupBlocked logs an error if sessionStorage.removeItem silently fails', () => {
+    // Seed a publish-initiated blocked descriptor.
+    (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
+    const { callbacks } = createAuthRuntime();
+    callbacks.onSignIn('google', { resumePublish: true });
+    expect(sessionStorage.getItem('atomdojo.resumePublish')).not.toBeNull();
+
+    // Simulate removeItem silently failing (no throw but no effect).
+    const removeSpy = vi.spyOn(Storage.prototype, 'removeItem')
+      .mockImplementation(() => { /* silent no-op */ });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    callbacks.onDismissPopupBlocked();
+    // The sentinel persists because removeItem is mocked — we must log.
+    expect(err).toHaveBeenCalled();
+    const msg = err.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(msg).toMatch(/resume-intent sentinel persists/i);
+
+    removeSpy.mockRestore();
+    err.mockRestore();
+  });
+});
+
+// ── Audit fix H1: popup-complete HTML carries the fallback channels + stuck-state copy ──
+
+describe('popup-complete HTML contract (H1)', () => {
+  it('includes postMessage, BroadcastChannel fallback, stuck-state DOM, and strict CSP', async () => {
+    // Read the source of the Pages Function and grep for the contract hooks.
+    // Running the actual function would require a wrangler environment; the
+    // HTML is a static string so a source-level check is enough to guard
+    // against regressions that silently drop one of the three channels.
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    const src = await fs.readFile(
+      path.resolve(process.cwd(), 'functions/auth/popup-complete.ts'),
+      'utf-8',
+    );
+    // Primary channel.
+    expect(src).toContain('window.opener.postMessage');
+    expect(src).toContain("window.location.origin");
+    // Fallback channel (for COOP-severed openers).
+    expect(src).toContain("new BroadcastChannel('atomdojo-auth')");
+    // Stuck-state recovery copy surfaces in the DOM when neither channel
+    // delivers AND close() doesn't close the popup.
+    expect(src).toMatch(/showStuck/);
+    expect(src).toMatch(/Close this tab/i);
+    // CSP is still strict.
+    expect(src).toContain("default-src 'none'");
   });
 });

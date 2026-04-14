@@ -118,13 +118,34 @@ export type AuthState =
   | { status: 'signed-out'; session: null }
   | { status: 'unverified'; session: null };
 
+/** Snapshot of the last sign-in attempt that was blocked by a popup
+ *  blocker. Surfaced in the Share panel and AccountControl so the user
+ *  can explicitly retry the popup OR opt into the destructive same-tab
+ *  redirect (which loses in-memory Lab state). Null when no block is
+ *  pending. */
+export interface AuthPopupBlockedPending {
+  provider: 'google' | 'github';
+  resumePublish: boolean;
+}
+
 /** Imperative callbacks registered by main.ts, invoked by AccountControl + Transfer dialog.
  *  Kept on the store so React components get them without prop drilling. */
 export interface AuthCallbacks {
-  /** Redirect the browser to the provider's OAuth start URL. Should also
-   *  stash a "resume publish" intent before leaving if invoked from the
-   *  Transfer dialog's Share tab. */
+  /** Start the OAuth flow. Prefers a popup; on block, sets
+   *  `authPopupBlocked` on the store WITHOUT navigating — the UI then
+   *  offers an explicit Retry / Continue-in-tab choice. */
   onSignIn: (provider: 'google' | 'github', opts?: { resumePublish?: boolean }) => void;
+  /** User has explicitly consented to the destructive same-tab redirect
+   *  for the currently-pending blocked sign-in. Reads the pending
+   *  descriptor from the store, performs `location.assign`, and clears
+   *  the pending flag. No-op when nothing is pending. */
+  onSignInSameTab: () => void;
+  /** User clicked Back from the popup-blocked prompt. Clears the pending
+   *  descriptor AND — when the abandoned flow was a publish-initiated
+   *  sign-in — also clears the sessionStorage resume-publish sentinel,
+   *  so a later unrelated sign-in can't auto-open Share. No-op when
+   *  nothing is pending. */
+  onDismissPopupBlocked: () => void;
   /** POST /api/auth/logout and clear the store session. */
   onSignOut: () => Promise<void>;
 }
@@ -373,6 +394,12 @@ export interface AppStore {
   setAuthSignedOut: () => void;
   setAuthUnverified: () => void;
   setAuthCallbacks: (cbs: AuthCallbacks | null) => void;
+  /** Non-null when the most recent sign-in attempt was blocked by a popup
+   *  blocker. The UI shows a Retry / Continue-in-tab prompt and clears
+   *  this on either choice. See AuthPopupBlockedPending. */
+  authPopupBlocked: AuthPopupBlockedPending | null;
+  setAuthPopupBlocked: (pending: AuthPopupBlockedPending | null) => void;
+
   /** One-shot resume-publish trigger.
    *
    *  Producer: main.ts boot, after a successful OAuth round-trip with a
@@ -536,6 +563,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   chooserCallbacks: null,
   authCallbacks: null,
   auth: { status: 'loading', session: null },
+  authPopupBlocked: null,
   shareTabOpenRequested: false,
   bondedGroupCallbacks: null,
   bondedGroupColorAssignments: [],
@@ -676,6 +704,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setAuthSignedOut: () => set({ auth: { status: 'signed-out', session: null } }),
   setAuthUnverified: () => set({ auth: { status: 'unverified', session: null } }),
   setAuthCallbacks: (cbs) => set({ authCallbacks: cbs }),
+  setAuthPopupBlocked: (pending) => set({ authPopupBlocked: pending }),
   requestShareTabOpen: () => set({ shareTabOpenRequested: true }),
   consumeShareTabOpen: () => {
     const pending = get().shareTabOpenRequested;
@@ -759,5 +788,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
     // Status channels
     statusText: null,
     statusError: null,
+    // Auth UX ephemeral flags (Phase 6). These are one-shot control-flow
+    // state — NOT durable identity. Auth.status + auth.session live
+    // outside the reset so a signed-in user stays signed-in across
+    // scene/runtime teardown-and-reinit cycles.
+    //   - authPopupBlocked: last-sign-in-attempt's blocked descriptor.
+    //     Stale after a teardown/reinit; showing it against the new
+    //     session would be meaningless.
+    //   - shareTabOpenRequested: one-shot OAuth-return trigger.
+    //     Already consumed once; carrying it across a teardown/reinit
+    //     would either re-open the Transfer dialog in a fresh scene or
+    //     permanently sit pending.
+    authPopupBlocked: null,
+    shareTabOpenRequested: false,
   }),
 }));

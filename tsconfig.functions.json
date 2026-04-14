@@ -19,6 +19,8 @@
     "tests/unit/admin-delete-endpoint.test.ts",
     "tests/unit/admin-orphans-endpoint.test.ts",
     "tests/unit/admin-sessions-endpoint.test.ts",
+    "tests/unit/auth-middleware.test.ts",
+    "tests/unit/session-endpoint.test.ts",
     "tests/unit/cron-sweeper.test.ts",
     "workers/cron-sweeper/src/**/*.ts"
   ]

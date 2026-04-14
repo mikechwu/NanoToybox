@@ -771,3 +771,89 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Rationale:** Per-IP is an anonymous, identity-free signal best handled at the edge where it can short-circuit before reaching our Functions. Per-user quota is identity-aware and requires looking up a session and a window row — it must run in code where auth is already resolved.
 
 **Alternatives rejected:** In-code per-IP limiting (adds DB round-trips to every request, worse-than-edge latency); WAF-only (can't express per-user quotas).
+
+## D98: Popup-Primary OAuth with Explicit Same-Tab Fallback
+
+**Decision:** Lab-side sign-in opens OAuth in a popup window first (`tryBeginOAuthPopup`). If the popup is blocked or fails to complete, the UI surfaces a blocker dialog with three explicit choices — Retry popup, Continue in this tab (destructive), or Back — rather than silently redirecting. Popup completion posts a `message` back to the opener which runs `hydrateAuthSession()` without a navigation; the opener's in-memory state (scene, timeline, dismissed onboarding) is preserved. The same-tab path is reserved for when the user explicitly opts in.
+
+**Rationale:** A full-page redirect destroys every piece of Lab state that lives outside the session cookie — the live scene, the recorded timeline, the onboarding-dismissed flag — because those are all in-memory. Popups preserve that state end-to-end. When popups are unavailable, having the runtime silently fall back to a destructive redirect would make the Lab "randomly" lose state depending on the user's browser popup policy. A user-driven choice keeps the destructive action explicit and recoverable (Back returns to the prior Lab state untouched).
+
+**Alternatives rejected:** Silent same-tab fallback on popup block (destroys Lab state with no warning); popup-only with no fallback (users with aggressive popup blockers cannot sign in at all); full-page redirect as primary (every sign-in drops in-memory work).
+
+**Evidence:** `lab/js/runtime/auth-runtime.ts` (`tryBeginOAuthPopup`, `onSignInSameTab`, `onDismissPopupBlocked`, `AUTH_RETURN_QUERY`), `functions/auth/popup-complete.ts`
+
+## D99: `/api/auth/session` Returns 200 With Status Discriminator, Never 401
+
+**Decision:** The session-discovery endpoint always responds 200 with a JSON body carrying a `status` discriminator (`'signed-in' | 'signed-out'`). HTTP 401 is reserved for protected actions (publish). The endpoint also sets `Cache-Control: no-store` and `Vary: Cookie`, and opportunistically clears stale session cookies on signed-out responses.
+
+**Rationale:** `/api/auth/session` is state discovery, not a protected action. Returning 401 on every Lab boot for signed-out users filled devtools with red network errors on a nominal code path, making genuine auth failures harder to spot during development and noisy for users who opened devtools. Using a body discriminator keeps the network tab clean and lets the client branch on semantics rather than HTTP status. `no-store` + `Vary: Cookie` prevent intermediate caches from serving another user's session; opportunistic cookie clearing keeps client and server in sync without a round-trip.
+
+**Alternatives rejected:** 401 for signed-out (confuses state discovery with access denial, dirties devtools); cache-friendly 200 without `Vary: Cookie` (cross-user cache poisoning).
+
+**Evidence:** `functions/api/auth/session.ts`, `lab/js/runtime/auth-runtime.ts` (`hydrateAuthSession` branches on body `status`, not HTTP status)
+
+## D100: Discriminated `AuthState` Union With Narrow Setter Helpers
+
+**Decision:** The store models auth as a discriminated union where each branch carries an explicit `session` field — `{ status: 'signed-in', session: AuthSessionState } | { status: 'loading' | 'signed-out' | 'unverified', session: null }`. The non-signed-in branches all carry `session: null` (not `session?`); the discriminator is `status`, and consumers always have a defined property to read. The canonical transition API is a set of narrow setters — `setAuthSignedIn`, `setAuthSignedOut`, `setAuthUnverified`, `setAuthLoading` — rather than a generic `setAuth(partial)`.
+
+**Rationale:** A flat shape (`{ status, session: Session | null }`) allows impossible combinations such as `{ status: 'signed-in', session: null }` to compile and silently break consumers. A discriminated union makes those states type errors. Narrow setters encode the valid transitions at the API level: callers cannot accidentally write `signed-in` without supplying a session, and they cannot leave stale session data attached to a signed-out status. The set of setters is also the complete transition vocabulary, which pairs with the state machine in D101.
+
+**Evidence:** `lab/js/store/app-store.ts` (`AuthState` union, `setAuthSignedIn`, `setAuthSignedOut`, `setAuthUnverified`, `setAuthLoading`)
+
+## D101: Four-State Auth Machine Including `unverified`
+
+**Decision:** The auth state machine has four states: `loading`, `signed-in`, `signed-out`, `unverified`. `unverified` is entered when the session probe fails in an indeterminate way (network error, 5xx, malformed response) AND there is no prior authoritative answer to preserve. The UI renders a neutral Retry affordance for `unverified` — NOT the OAuth prompt. If a transport blip happens after an authoritative answer, the prior state is kept instead of being clobbered.
+
+**Rationale:** Collapsing "can't verify" into "signed-out" would push signed-in users whose cookie is still valid server-side into an unnecessary OAuth round-trip every time the network hiccups. A separate `unverified` state lets the UI say "couldn't reach the server" without implying the user was logged out. The preservation rule (keep prior authoritative state on indeterminate outcomes) ensures that a late or transient failure during normal operation does not silently downgrade the UI.
+
+**Evidence:** `lab/js/runtime/auth-runtime.ts` (transition table in the module header, `hydrateAuthSession` implementation)
+
+## D102: Orphan-Session LEFT JOIN in Auth Middleware
+
+**Decision:** The auth middleware's session lookup uses a `LEFT JOIN` from `sessions` to `users` and treats a session whose user row is missing as signed-out. Orphan sessions are fire-and-forget deleted from D1 with a per-isolate dedupe set to bound load during a storm.
+
+**Rationale:** Prior middleware trusted the `sessions` table alone, so a deleted user's row could leave cookies that the session-discovery endpoint correctly reported as signed-out while the protected-action middleware still accepted them — a real correctness gap where a user could publish after account deletion. The LEFT JOIN makes the middleware's single source of truth the same as the discovery endpoint's. Per-isolate dedupe prevents a single orphan cookie in a hot path from issuing a delete on every request.
+
+**Evidence:** `functions/auth-middleware.ts`
+
+## D103: Sequence-Token Gating in `hydrateAuthSession`
+
+**Decision:** `hydrateAuthSession` increments a monotonic `hydrateSeq` counter at function entry and captures the value locally. Before every authoritative store write (`setAuthSignedIn`, `setAuthSignedOut`, `setAuthUnverified`), it checks `isLatest()` — if a newer call has started, the current call's result is dropped.
+
+**Rationale:** Multiple hydrate calls can be in flight simultaneously — the initial boot probe, a post-OAuth-popup refresh, a manual retry after an `unverified` blip. Without sequence gating, a slow stale fetch (e.g., the boot probe held up by cold-start) could land after a fresh signed-in answer and overwrite it with `unverified` or stale-signed-out, flipping the UI back to a sign-in prompt moments after a successful sign-in. A monotonic token plus a pre-write staleness check makes late writes a no-op by construction.
+
+**Evidence:** `lab/js/runtime/auth-runtime.ts` (`hydrateSeq`, `isLatest()` guard before every authoritative setter call)
+
+## D104: Kind-Tagged `shareError` for Transfer Dialog
+
+**Decision:** `shareError` in the store is a discriminated object `{ kind: 'auth' | 'other'; message: string } | null` rather than a plain `string | null`. UI branches that render auth-prompt copy read only `kind === 'auth'`; generic error chrome reads `kind === 'other'`.
+
+**Rationale:** With a single `string | null` field, a 429 rate-limit message could leak into the auth-prompt UI after an opportunistic signed-out flip happened between the error being set and the component re-rendering, because both branches shared the same string slot. A discriminator makes cross-branch bleed a type error: a rate-limit message cannot be stored under `kind: 'auth'` and therefore cannot render as an auth note. The same structure also prevents the reverse (auth messages appearing as generic red error pills).
+
+**Evidence:** `lab/js/components/TimelineBar.tsx`, `lab/js/components/timeline-transfer-dialog.tsx`, `lab/js/store/app-store.ts` (`ShareError` type)
+
+## D105: `TopRightControls` Flex Container for Account + FPS
+
+**Decision:** The top-right surface is a single flex container (`TopRightControls`) that owns layout for `AccountControl` and `ReactFPS`. Neither child is independently absolutely positioned — they flow inside the flex parent.
+
+**Rationale:** Previously, both surfaces were absolutely positioned relative to the viewport with hand-tuned offsets. Long display names and narrow viewports caused them to overlap (the account menu grew leftward under the FPS counter) with no self-correction. A single flex container provides a stable placement contract: the children are siblings with gap-based spacing, so changes in either child's width push the other predictably and safely.
+
+**Evidence:** `lab/js/components/TopRightControls.tsx`, `lab/index.html`
+
+## D106: Plain-Disclosure Popover Semantics for `AccountControl`
+
+**Decision:** `AccountControl` is rendered as a plain disclosure (a button that toggles a popover containing native `<button>` items) rather than with ARIA `role="menu"` / `role="menuitem"`. Arrow-key navigation, typeahead, and managed initial focus are not implemented.
+
+**Rationale:** `role="menu"` commits to a full menubar-style keyboard model — arrow keys, Home/End, typeahead, and initial-focus management — because screen readers stop treating child elements as individual buttons once the parent is a menu. For a 1–3 item account popover (View, Sign out), that complexity adds no accessibility value. Native buttons inside a plain disclosure are already fully keyboard and screen-reader accessible (Tab, Enter/Space, labels) without additional ARIA commitments.
+
+**Alternatives rejected:** `role="menu"` with partial keyboard model (worse than native buttons — screen readers announce as menu but keyboard doesn't behave like one); full menubar implementation (disproportionate for two actions).
+
+**Evidence:** `lab/js/components/AccountControl.tsx`
+
+## D107: sessionStorage Onboarding Sentinel
+
+**Decision:** The onboarding-dismissed flag uses `sessionStorage`, not `localStorage`. A same-tab OAuth round-trip preserves the flag (same browser session); a full tab restart or new window does not.
+
+**Rationale:** Without any sentinel, a same-tab OAuth bounce reshows the onboarding overlay on return to Lab, which is disorienting for a user who already dismissed it moments ago. `localStorage` would overcorrect by remembering the dismissal forever, making users who return days later miss the intended fresh-load welcome. `sessionStorage` scopes dismissal to the current browser session, matching the implicit contract users expect from "I dismissed this on this visit."
+
+**Evidence:** `lab/js/runtime/onboarding.ts`

@@ -64,6 +64,7 @@ export function AccountControl() {
   const status = useAppStore((s) => s.auth.status);
   const session = useAppStore((s) => s.auth.session);
   const callbacks = useAppStore((s) => s.authCallbacks);
+  const popupBlocked = useAppStore((s) => s.authPopupBlocked);
 
   const [open, setOpen] = useState(false);
   const [retrying, setRetrying] = useState(false);
@@ -96,6 +97,25 @@ export function AccountControl() {
     setRetrying(true);
     try { await hydrateAuthSession(); } finally { setRetrying(false); setOpen(false); }
   };
+
+  const handleRetryPopup = () => {
+    if (!popupBlocked || !callbacks) return;
+    callbacks.onSignIn(popupBlocked.provider, { resumePublish: popupBlocked.resumePublish });
+  };
+
+  const handleContinueInTab = () => {
+    callbacks?.onSignInSameTab();
+  };
+
+  /** Dismiss the popup-blocked sub-menu so the provider picker re-renders
+   *  — lets the user switch providers without first committing to either
+   *  Retry or the destructive same-tab path. Delegates to the runtime so
+   *  the resume-publish sentinel is cleared for abandoned publish flows. */
+  const handleDismissPopupBlocked = () => {
+    callbacks?.onDismissPopupBlocked();
+  };
+
+  const providerLabel = (p: 'google' | 'github') => (p === 'google' ? 'Google' : 'GitHub');
 
   if (status === 'signed-in' && session) {
     const label = session.displayName?.trim() || shortenUserId(session.userId);
@@ -174,23 +194,58 @@ export function AccountControl() {
       </button>
       {open && (
         <div className="account-control__menu" aria-label="Sign in">
-          <p className="account-control__hint">
-            Sign in to publish share links. Reading and downloading stay public.
-          </p>
-          <button
-            className="account-control__menu-item"
-            onClick={() => handleSignIn('google')}
-            data-testid="account-signin-google"
-          >
-            Continue with Google
-          </button>
-          <button
-            className="account-control__menu-item"
-            onClick={() => handleSignIn('github')}
-            data-testid="account-signin-github"
-          >
-            Continue with GitHub
-          </button>
+          {popupBlocked ? (
+            /* Popup-blocked sub-menu — Retry / Continue-in-tab / Back.
+             *  The Back option lets the user switch providers without
+             *  committing to either of the other paths. */
+            <div data-testid="account-popup-blocked">
+              <p className="account-control__hint">
+                {providerLabel(popupBlocked.provider)} popup was blocked. Retry, continue in this tab,
+                or go back to pick another sign-in method. Unsaved Lab state may be lost on same-tab sign-in.
+              </p>
+              <button
+                className="account-control__menu-item"
+                onClick={handleRetryPopup}
+                data-testid="account-popup-retry"
+              >
+                Retry {providerLabel(popupBlocked.provider)} popup
+              </button>
+              <button
+                className="account-control__menu-item"
+                onClick={handleContinueInTab}
+                data-testid="account-popup-same-tab"
+              >
+                Continue in this tab
+              </button>
+              <button
+                className="account-control__menu-item"
+                onClick={handleDismissPopupBlocked}
+                data-testid="account-popup-back"
+              >
+                Back
+              </button>
+            </div>
+          ) : (
+            <>
+              <p className="account-control__hint">
+                Sign in to publish share links. Reading and downloading stay public.
+              </p>
+              <button
+                className="account-control__menu-item"
+                onClick={() => handleSignIn('google')}
+                data-testid="account-signin-google"
+              >
+                Continue with Google
+              </button>
+              <button
+                className="account-control__menu-item"
+                onClick={() => handleSignIn('github')}
+                data-testid="account-signin-github"
+              >
+                Continue with GitHub
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

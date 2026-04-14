@@ -12,6 +12,14 @@ this Worker deploys separately.
 | `0 */6 * * *` | `POST /api/admin/sweep/sessions` | Clean expired + idle sessions, prune stale quota buckets |
 | `30 3 * * *` | `POST /api/admin/sweep/orphans` | Delete R2 blobs older than 24h with no matching D1 row |
 
+The sessions sweep is a safety net, not the primary orphan-session
+collector. `functions/auth-middleware.ts` deletes orphan sessions
+in-band: any request whose cookie references a deleted-user row
+triggers a fire-and-forget `DELETE FROM sessions WHERE id = ?` (with
+per-isolate dedupe). The cron still catches expired/idle sessions and
+orphan sessions that never receive another auth-checked request, so
+orphan counts in the sweep summary should be small in practice.
+
 ## One-time setup
 
 ```bash

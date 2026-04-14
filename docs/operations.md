@@ -14,7 +14,13 @@ Cloudflare dashboard for the `atomdojo` project.
 
 - **Cloudflare Pages** project `atomdojo` — serves Lab (`/lab/`), Watch
   (`/watch/`), Viewer (`/viewer/`) static assets plus all Pages Functions
-  under `functions/` (auth, capsule publish/resolve, admin).
+  under `functions/` (auth, capsule publish/resolve, admin). The auth
+  surface includes the OAuth start/callback endpoints, the session /
+  logout endpoints, and `GET /auth/popup-complete` — a static-HTML Pages
+  Function that runs inside the OAuth popup after the callback, notifies
+  the opener via `postMessage` + `BroadcastChannel`, and closes itself.
+  It enforces a strict CSP and is whitelisted by `validateReturnTo` in
+  `functions/oauth-state.ts`.
 - **D1 database** binding `DB` → `atomdojo-capsules`. Migrations live in
   `migrations/`, applied via `wrangler d1 migrations apply`.
 - **R2 bucket** binding `R2_BUCKET` → `atomdojo-capsules-prod`. **Private —
@@ -92,6 +98,162 @@ cd workers/cron-sweeper
 wrangler tail
 # or, from repo root: npm run cron:tail
 ```
+
+---
+
+## Auth session endpoint & cookies
+
+### `GET /api/auth/session` contract
+
+Always responds **200 OK**. The body discriminates on `status`:
+
+```json
+{ "status": "signed-in",  "userId": "...", "displayName": "...", "createdAt": "2026-04-13T12:34:56.000Z" }
+// or
+{ "status": "signed-out" }
+```
+
+(`createdAt` is the `users.created_at` ISO-8601 string from D1, not a numeric epoch.)
+
+401 is **reserved for protected-action endpoints** (e.g. `POST
+/api/capsules/publish`). A 401 from `/api/auth/session` itself is a
+regression and should be paged — clients treat non-200 as "unverified"
+and leave any existing local session state untouched, which would mask a
+real signed-out state.
+
+Response headers (set on every response, including signed-out):
+
+- `Cache-Control: no-store, private`
+- `Pragma: no-cache`
+- `Vary: Cookie`
+
+The client-side hydrate at `/lab/` and `/watch/` passes
+`cache: 'no-store'` to `fetch('/api/auth/session')` — defense in depth
+with the server headers. Both layers must be in place; if an operator
+ever adds an edge cache rule over `/api/auth/*`, the `Vary: Cookie` +
+`Cache-Control: no-store` must be preserved or sessions will be served
+to the wrong users.
+
+**Opportunistic cookie clear.** If the request carries a session cookie
+but the resolved auth is null (session row missing, expired, or points
+at a deleted user), the endpoint appends a `Set-Cookie` that clears the
+stale cookie. The browser converges to a clean signed-out state without
+a separate logout round-trip. This is the same branch that emits
+`[auth.session.user-missing]` when the orphan is a dangling user FK (see
+*Operational signals* below).
+
+### Cookie variants
+
+The cookie name is protocol-scoped so the HTTPS cookie retains
+`__Host-` prefix guarantees (host-only, Secure, path=/) while local
+development over plain HTTP still gets a working session.
+
+| Environment | Cookie name | Attributes |
+|---|---|---|
+| Production / any HTTPS deployment | `__Host-atomdojo_session` | `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, host-only (no `Domain`) |
+| Local dev over plain HTTP (`http://localhost:*`) | `atomdojo_session_dev` | `HttpOnly`, `SameSite=Lax`, `Path=/` (no `Secure`, no `__Host-` prefix) |
+
+The client-side `hasSessionCookie` helper scopes by
+`location.protocol`: on `https:` it looks only for
+`__Host-atomdojo_session`; on `http:` it looks only for
+`atomdojo_session_dev`. This prevents a stale dev cookie on a
+deployed-over-HTTP test rig from being mistaken for a real production
+session, and vice-versa.
+
+### `authenticateRequest` middleware
+
+`functions/auth-middleware.ts` resolves the session cookie to a
+`(session, user)` pair via a single `LEFT JOIN sessions → users` query.
+Orphan handling:
+
+- **Orphan session (user row deleted):** the JOIN returns a session row
+  with null user columns. Middleware returns null auth AND fires a
+  fire-and-forget `DELETE FROM sessions WHERE id = ?` so the row doesn't
+  keep triggering the branch.
+- **Dedupe:** a per-isolate `Set<string>` of session IDs under active
+  delete attempt prevents hammering D1 if the delete keeps failing. The
+  set is **hard-capped at 256** entries (re-initialized when the ceiling
+  is hit) so a pathological cascade can't leak memory.
+- **Delete failure logging:** `[auth.orphan-delete-failed]` with a short
+  session-id prefix only (never the full session id — those are bearer
+  tokens). Persistent volume here indicates D1 unavailability rather
+  than an auth logic bug.
+
+This in-band cleanup is a **secondary net** to the cron sweeper's
+session sweep (`POST /api/admin/sweep/sessions`, every 6h), which
+already catches expired sessions and orphan session rows referencing
+deleted users. Middleware cleanup shortens the window between user
+delete and session invalidation from up-to-6h to "next request". The
+sweeper remains the authoritative cleanup for sessions that never get
+touched again.
+
+### Accepted `returnTo` / post-auth redirect targets
+
+`validateReturnTo` in `functions/oauth-state.ts` is the whitelist for
+post-OAuth redirect targets. Currently accepted values:
+
+- `/lab/` and `/lab/?authReturn=1`
+- `/watch/`
+- `/viewer/`
+- `/auth/popup-complete` — used by the popup flow; the HTML at this
+  route does the opener-notify + self-close dance.
+
+Any new Pages route that needs to receive a post-auth redirect must be
+added to this whitelist; otherwise the OAuth callback will reject it
+and fall back to `/lab/`.
+
+---
+
+## Operational signals
+
+Grep targets for `wrangler pages deployment tail` during auth incident
+response. These are log prefixes emitted by normal code paths — most
+are informational unless volume spikes, but a couple are regression
+canaries.
+
+### Server-side (Pages Functions)
+
+| Prefix | Where | Meaning |
+|---|---|---|
+| `[auth.orphan-delete-failed]` | `functions/auth-middleware.ts` | Fire-and-forget DELETE for an orphaned session row (user deleted under it) failed. Sustained volume = D1 availability issue, not a logic bug. Logged with short sid-prefix only. |
+| `[auth.session.user-missing]` | `functions/api/auth/session.ts` defensive branch | Session cookie resolved to a valid session row but the `users` SELECT returned no row. Paired with the opportunistic cookie clear; presence means the session endpoint is converging a stale client, but a steady stream here in the absence of real user deletions suggests a regression in the session-endpoint `users` SELECT (e.g. a column typo) — investigate before it silently signs everyone out. |
+| `REPORT_DEDUP_DISABLED` | `functions/api/capsules/[code]/report.ts` | See alerting table — repeated here because it's grep-shaped the same way. |
+| `R2_UPLOADED_MISSING` | `functions/api/admin/sweep/orphans.ts` | See alerting table. |
+| `PUBLISH_RECONCILE_LOST` | `functions/api/capsules/publish.ts` | See alerting table. |
+
+### Client-side (browser console, surfaces as error events)
+
+Emitted by the `/lab/` and `/watch/` auth reconciler. These are
+user-visible only via browser devtools, but they're useful when an
+operator is pairing with a reporting user during an incident.
+
+| Prefix | Meaning |
+|---|---|
+| `[auth] logout returned {status}; will reconcile` | `POST /api/auth/logout` returned a non-2xx. Client proceeds to reconcile by re-fetching `/api/auth/session`; final truth comes from the session endpoint, not the logout response. |
+| `[auth] logout transport failed; will reconcile` | Logout fetch threw (offline, CORS, etc). Same reconcile path. |
+| `[auth] session fetch {reason}` | Non-ok response from `/api/auth/session` during hydrate. `{reason}` is the HTTP status or a transport error tag. |
+| `[auth] session fetch {reason} → keep {status}` | Same as above, but the client had a prior known-good session and is preserving it (`keep signed-in` / `keep signed-out`) across the transient failure rather than flipping state on an unverified response. |
+| `[auth] session fetch {reason} → unverified` | Non-ok session fetch with no prior known state; client enters the unverified tri-state (neither signed-in nor signed-out until the next successful fetch). |
+| `[auth] resume-intent sentinel persists after clear` | `sessionStorage.removeItem('atomdojo.resumePublish')` was issued but a subsequent read still returned the key. Extremely rare (sessionStorage quirk or extension interference); investigate if an operator sees this alongside user reports of duplicate publish attempts post-login. |
+| `[auth] resume-intent clear failed` | `sessionStorage.removeItem` threw. Usually disabled storage or private-browsing quota. |
+| `[auth] popup-complete handler failed` | The opener-side `handleAuthComplete` (postMessage / BroadcastChannel listener) threw. Auth state may not be hydrated. The opener does NOT auto-poll; the next user-driven action (opening Transfer dialog → opportunistic `hydrateAuthSession`, or a manual page reload) refreshes the session state. The popup-complete landing page itself surfaces a "Close this tab and refresh the Lab tab" hint when neither channel delivers. |
+| `[auth] dropping auth-complete message from unexpected origin` | A `message` event with the auth-complete shape arrived from an origin that did not match the Lab tab's `window.location.origin`. The handler dropped it (security-correct). On a Vite dev host (port 5173) this commonly indicates a popup that landed on `:8788` — run the Lab under `npm run cf:dev` or use the same host for both. |
+| `[auth] OAuth popup skipped — running on Vite dev host` | Dev-only signal: `tryBeginOAuthPopup` short-circuited because the Lab is on Vite (port != 8788), where `/auth/{provider}/start` 404s. The popup-blocked UX surfaces (Retry / Continue-in-tab / Back). Production traffic never emits this. |
+
+### Client-side sentinels (sessionStorage, not logs)
+
+Not log prefixes, but operators should know what's in sessionStorage
+when debugging with a user:
+
+- `atomdojo.onboardingDismissed` — boolean-ish; set when the user
+  dismisses the onboarding modal. Purely client-side; no backend
+  touchpoint.
+- `atomdojo.resumePublish` — structured JSON
+  `{ kind, provider, iat }` with a 10-minute TTL. Set when the user
+  clicked publish while signed-out and the auth flow was deferred;
+  read on the post-auth return to resume the interrupted action.
+  Self-clears on consume; stale entries are ignored via the `iat` TTL
+  check.
 
 ---
 
@@ -374,7 +536,18 @@ curl -X POST "https://atomdojo.pages.dev/api/admin/sweep/sessions" \
 # Expect 200 with a small JSON body summarizing the sweep.
 ```
 
-Authenticated publish smoke test (requires a test user's session cookie):
+Session endpoint smoke test (signed-out, no cookie):
+
+```bash
+curl -i "https://atomdojo.pages.dev/api/auth/session"
+# Expect HTTP/2 200, body {"status":"signed-out"},
+# headers include Cache-Control: no-store, private / Vary: Cookie.
+# A 401 here is a regression — see Auth session endpoint section.
+```
+
+Authenticated publish smoke test (requires a test user's session cookie
+— use `__Host-atomdojo_session` for production, `atomdojo_session_dev`
+only against a local HTTP dev server):
 
 ```bash
 curl -X POST "https://atomdojo.pages.dev/api/capsules/publish" \

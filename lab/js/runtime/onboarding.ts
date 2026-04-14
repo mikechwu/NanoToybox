@@ -263,8 +263,41 @@ export function createOnboardingController(deps: OnboardingDeps): OnboardingCont
 }
 
 // ── Page-load onboarding overlay gate (reactive) ──
-// Onboarding shows on every page load (page-lifetime dismissal).
-// Dismissed via in-memory Zustand state, reappears on reload.
+// Onboarding shows on every page load (page-lifetime dismissal), EXCEPT
+// when the current browser session already dismissed it — that sentinel
+// lives in sessionStorage so a same-tab OAuth redirect (popup-blocked
+// fallback path in auth-runtime.ts) doesn't re-show the overlay when
+// the user lands back on /lab/. Full browser restart clears the session
+// and restores the fresh-load experience.
+
+/** sessionStorage key marking the overlay as dismissed for this browser
+ *  session. Kept in-module rather than exported — callers interact via
+ *  markOnboardingDismissed() / isOnboardingEligible(). */
+const ONBOARDING_DISMISS_KEY = 'atomdojo.onboardingDismissed';
+
+/** Record that the user dismissed the overlay. Degrades to "no
+ *  persistence" when sessionStorage is unavailable (Safari ITP lockdown,
+ *  private browsing strict modes) — the worst case is the overlay
+ *  re-appearing after a same-tab OAuth return. A single console.warn
+ *  surfaces the divergence so QA and bug reports on private-browsing
+ *  installs have a diagnostic hint instead of a silent behavior parity
+ *  split by browser mode. */
+export function markOnboardingDismissed(): void {
+  try {
+    sessionStorage.setItem(ONBOARDING_DISMISS_KEY, '1');
+  } catch (err) {
+    console.warn(
+      '[onboarding] dismissal persistence failed (private browsing?) — ' +
+      'overlay may re-appear after a same-tab OAuth redirect',
+      err,
+    );
+  }
+}
+
+function wasOnboardingDismissedInSession(): boolean {
+  try { return sessionStorage.getItem(ONBOARDING_DISMISS_KEY) === '1'; }
+  catch { return false; }
+}
 
 /**
  * Check whether onboarding overlay is eligible to show.
@@ -273,6 +306,7 @@ export function createOnboardingController(deps: OnboardingDeps): OnboardingCont
  */
 export function isOnboardingEligible(): boolean {
   if (getDebugParam('e2e') === '1') return false;
+  if (wasOnboardingDismissedInSession()) return false;
   const s = useAppStore.getState();
   if (s.activeSheet !== null) return false;
   if (s.placementActive) return false;

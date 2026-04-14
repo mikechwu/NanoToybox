@@ -86,7 +86,7 @@ Browser                          Web Worker
 │      (teardown seq.    │
 │       and reset helpers)│
 │                        │
-│  runtime/ (35 modules):│
+│  runtime/ (36 modules):│
 │  ├── SceneRuntime     │
 │  ├── WorkerLifecycle  │
 │  ├── SnapshotReconc.  │
@@ -165,7 +165,7 @@ src/ui/ (13 files):             │    sheet, bonded-groups panel,
 
 - **Interactive page: live** — real-time Tersoff simulation with drag, rotate, multi-molecule playground, speed control, and advanced settings
 - **Web Worker physics** — off-thread simulation with snapshot sync, stall detection (5s warning / 15s fatal), automatic sync fallback
-- **React UI** — all 11 UI components are React-authoritative with Zustand store, glassmorphic CSS, responsive layout (phone/tablet/desktop); panel fixed width 250px with scrollbar-gutter stable
+- **React UI** — all UI components are React-authoritative with Zustand store, glassmorphic CSS, responsive layout (phone/tablet/desktop); panel fixed width 250px with scrollbar-gutter stable
 - **Performance optimized** — InstancedMesh rendering (2 draw calls), on-the-fly Tersoff kernel (45% faster), spatial-hash neighbor/bond search (O(N))
 - **Wasm Tersoff kernel** — deployed and enabled by default, automatic JS fallback
 - **CI/CD** — GitHub Actions: typecheck, unit tests, build, E2E, deploy smoke, Python physics tests (91 test files, 1700 tests)

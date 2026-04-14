@@ -48,6 +48,9 @@ Or visit the live demo at [atomdojo.pages.dev](https://atomdojo.pages.dev/lab/).
 - **One-click publish** — Lab's export dialog can publish a capsule to the cloud and return a 12-character share code (Crockford Base32, grouped as `7M4K-2D8Q-9T1V`) plus a share URL
 - **Open anywhere** — Watch accepts a pasted code, a `watch/?c=<code>` URL, or a `/c/:code` preview route
 - **Signed-in publishing** — Google or GitHub OAuth gates publish; reads are public. Per-user quota (10/24h sliding window) plus per-IP WAF rate limits keep abuse in check
+- **Popup-first OAuth** — sign-in opens a provider popup and returns to a dedicated `/auth/popup-complete` landing page that notifies the opener via `postMessage` + `BroadcastChannel` and closes itself; Lab's in-memory state (loaded molecules, interaction mode, camera) is preserved across the flow
+- **Popup-blocked UX** — no silent same-tab fallback; the UI surfaces explicit Retry / Continue-in-tab / Back controls. Same-tab fallback uses a resume-publish intent (sessionStorage, 10-min TTL) plus a `?authReturn=1` query-marker handshake
+- **Never-401 session probe** — `GET /api/auth/session` always returns 200 with a `{ status: 'signed-in' | 'signed-out' }` discriminator and `Cache-Control: no-store, private` / `Vary: Cookie`; stale cookies are opportunistically cleared on signed-out responses so devtools no longer flags normal signed-out state as a failure
 - **Cloudflare-backed** — Pages Functions under `functions/` persist metadata in D1 and capsule bodies in R2; a companion cron Worker in `workers/cron-sweeper/` expires sessions and sweeps orphaned R2 objects
 
 ## How It Works
@@ -131,9 +134,9 @@ NanoToybox/
 ├── tests/                      # Unit, E2E, and physics validation tests
 ├── functions/                  # Cloudflare Pages Functions (share-link backend)
 │   ├── api/capsules/           # Publish, read, report endpoints
-│   ├── api/auth/               # Session + logout
+│   ├── api/auth/               # Session (200-contract probe) + logout
 │   ├── api/admin/              # Moderation + sweeper endpoints (admin-gated)
-│   ├── auth/                   # Google + GitHub OAuth callbacks
+│   ├── auth/                   # Google + GitHub OAuth start/callback + popup-complete landing page
 │   └── c/[code].ts             # /c/:code share-preview route
 ├── migrations/                 # D1 schema migrations (capsule_share, audit/quota, indexes)
 ├── workers/cron-sweeper/       # Scheduled Worker — sessions + R2 orphan sweeps
@@ -166,6 +169,8 @@ npm run cf:d1:migrate  # apply D1 migrations to the local SQLite shim
 npm run cf:dev         # wrangler pages dev dist (Functions + D1/R2 bindings)
 # Open http://localhost:8788/lab/
 ```
+
+Share-link auth flows (popup OAuth, `/auth/popup-complete`, session probe) require the Pages Functions runtime — run `npm run cf:dev` rather than `npm run dev`. Lab detects the Vite dev host (`:5173`) and skips the popup with a console pointer to the wrangler command.
 
 Create a `.dev.vars` file in the repo root for local secrets (not committed). Typical keys:
 

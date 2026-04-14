@@ -410,6 +410,30 @@ Key constraints:
 - If the capability layer cannot provide required inputs, the runtime short-circuits to linear — your strategy will not be called.
 - The controller and UI do not need changes for new strategies; the registry is the extension point.
 
+### Frontend State Patterns (Phase 6)
+
+These are the preferred shapes when introducing new cross-redirect or state-machine flows in the Zustand store. They arose from the Phase 6 auth UX work but apply anywhere the same shape recurs.
+
+#### Discriminated unions with narrow setters
+
+Prefer a discriminated union over a flag-bag object when a slice of state is a state machine with mutually exclusive branches. Pair the union with narrow setters — one setter per variant — so transitions are explicit at the callsite and invalid intermediate states are unreachable.
+
+Example (see `lab/js/store/app-store.ts` and `lab/js/runtime/auth-runtime.ts`): `AuthState` is a discriminated union with variants `{ status: 'loading', session: null }`, `{ status: 'signed-in', session: AuthSessionState }`, `{ status: 'signed-out', session: null }`, `{ status: 'unverified', session: null }`. The store exposes `setAuthSignedIn`, `setAuthSignedOut`, `setAuthUnverified`, `setAuthLoading` — not a single `setAuth(partial)` (the raw `setAuthState` exists only as a test seam, not for production callers). Callers pick the variant; the TS compiler rejects nonsense transitions.
+
+When adding a new state machine to the store, follow this pattern rather than `{ loading: bool, error: string | null, user: User | null }`-style flag bags — those allow `{ loading: true, user: someUser, error: 'x' }` which is not a real state.
+
+#### Kind-tagged error state
+
+Error state in a state machine should be shaped `{ kind: 'someErrorCategory', message: string }`, not a bare `string` or a string with an adjacent "error effect" flag. The `kind` discriminator prevents cross-branch bleed — e.g., a popup-blocked error cannot be silently reinterpreted as a network error by a component that reads only the message.
+
+When error branches need to drive different UI affordances (retry button vs. "open in new tab" button vs. dismiss-only), switch on `kind`, never parse the message.
+
+#### sessionStorage sentinel with `?authReturn=1` handshake
+
+For flows that survive a full-page redirect (OAuth same-tab fallback is the canonical case), encode the pre-redirect intent in `sessionStorage` and tag the redirect destination with a `?authReturn=1` query marker. On load, the runtime checks the query marker first, then consumes the sessionStorage sentinel to resume the intent, then strips both. This is preferred over encoding intent into the OAuth `state` parameter (which is reserved for CSRF) or into cookies (which are visible to unrelated requests).
+
+Scope sentinels to a narrow key (the existing `atomdojo.resumePublish` is the canonical example) and always clear them after consumption — a stale sentinel that survives into the next session is a latent bug.
+
 ## Next Steps (Priority Order)
 
 ### 1. Expand Structure Library
@@ -480,9 +504,19 @@ npm install
 
 | Command | Runs | When to use |
 |---|---|---|
-| `npm run dev` | Vite (port 5173) | Normal Lab/Watch UI work; fast HMR; **no share backend — `/api/capsules/*` will 404** |
-| `npm run build && npm run cf:dev` | Wrangler Pages dev (port 8788) | Share/publish feature work; needs D1 + R2 bindings; no HMR |
+| `npm run dev` | Vite (port 5173) | Normal Lab/Watch UI work; fast HMR; **no backend — `/api/capsules/*`, `/api/auth/*`, and `/auth/*` will 404** |
+| `npm run build && npm run cf:dev` | Wrangler Pages dev (port 8788) | Share/publish **and auth** feature work; needs D1 + R2 bindings and Pages Functions; no HMR |
 | `npm run cron:dev` | Wrangler dev for the cron Worker | Tests the scheduled handler locally against `localhost:8788` |
+
+**Rule of thumb:** if you need to exercise sign-in, session, publish, or share-link flows locally, run `cf:dev`. Vite alone is fine for Lab/Watch UI iteration that does not touch those paths.
+
+##### Auth in Vite dev
+
+`lab/js/runtime/auth-runtime.ts` contains a Vite dev-host guard: when it detects the Vite dev server host (no Pages Functions available), it short-circuits the popup OAuth flow and logs a console message pointing at `wrangler pages dev`. This is intentional — do not try to make the popup flow work under Vite. Switch to `npm run build && npm run cf:dev` when touching auth.
+
+The OAuth flow is popup-primary (a `window.open()` against the provider's consent screen) with an explicit, user-opted-in same-tab fallback (never silent). The popup completes against `/auth/popup-complete`, which is served by the Pages Function at `functions/auth/popup-complete.ts` (static HTML response with a strict CSP). After completion it notifies the opener via `window.opener.postMessage` plus a same-origin `BroadcastChannel('atomdojo-auth')` fallback; the opener re-runs `hydrateAuthSession()` to refresh session state.
+
+The session endpoint (`/api/auth/session`) returns **200 for both signed-in and signed-out** states (it never returns 401). The server sets `Cache-Control: no-store, private`, `Pragma: no-cache`, `Vary: Cookie`, and opportunistically clears stale cookies on sign-out responses. The client fetches it with `cache: 'no-store'`. If you are debugging auth state, verify these response headers and the 200 contract before assuming a bug.
 
 #### D1 setup
 
@@ -506,16 +540,36 @@ The seed command prints `{ shareCode, objectKey }`. The capsule is then reachabl
 #### Testing workflow
 
 - `npm run typecheck` — runs frontend + functions + cron tsconfigs in one command. Prefer this over the granular `typecheck:frontend` / `typecheck:functions` / `typecheck:cron` variants for CI.
-- `npm run test:unit` (vitest) — includes new endpoint handler tests
+- `npm run test:unit` (vitest) — includes new endpoint handler tests and auth UX tests
 - `npm run test:e2e` (playwright) — the share-link flow uses `page.route()` mocking, since Vite preview does not run Pages Functions
 - `npm run lint:dock-contract` — unchanged from prior phases
 
+To run a single test file, pass the path to vitest / playwright:
+
+```
+npm run test:unit -- tests/unit/auth-ux.test.tsx
+npm run test:unit -- tests/unit/auth-middleware.test.ts
+npm run test:unit -- tests/unit/session-endpoint.test.ts
+npm run test:e2e -- tests/e2e/topbar-right-layout.spec.ts
+```
+
+##### Phase 6 auth test catalog
+
+| File | Scope |
+|---|---|
+| `tests/unit/auth-ux.test.tsx` | ~100 tests — popup flow, `AuthState` state machine transitions, kind-tagged error state, sessionStorage sentinel handshake, dev-host guard (run `npx vitest run tests/unit/auth-ux.test.tsx` for the authoritative count) |
+| `tests/unit/auth-middleware.test.ts` | Backend middleware — orphan session cleanup + `hasSessionCookie` detection (Workers tsconfig) |
+| `tests/unit/session-endpoint.test.ts` | Backend — 200 contract for signed-in **and** signed-out, dev-cookie handling, user-missing recovery (Workers tsconfig) |
+| `tests/e2e/topbar-right-layout.spec.ts` | AccountControl + FPSDisplay flex-container geometry regression |
+
+The two backend tests (`auth-middleware.test.ts`, `session-endpoint.test.ts`) compile under `tsconfig.functions.json` so they see the Workers runtime globals. They are listed in `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — same pattern as the capsule endpoint tests. Follow the same dual-listing rule when adding new backend-handler tests.
+
 #### Adding a new endpoint test
 
-- Place the test at `tests/unit/<name>-endpoint.test.ts`
+- Place the test at `tests/unit/<name>-endpoint.test.ts` (or `<name>-middleware.test.ts` for middleware)
 - Add the filename to **both** `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — this prevents Workers globals from leaking into frontend compilation
 - Use hoisted `vi.fn<(...args: unknown[]) => ...>()` for module mocks
-- See `tests/unit/publish-endpoint.test.ts` for the canonical pattern (`minimalValidCapsule()`, `makePermissiveEnv()` helpers)
+- See `tests/unit/publish-endpoint.test.ts` and `tests/unit/session-endpoint.test.ts` for the canonical patterns (`minimalValidCapsule()`, `makePermissiveEnv()` helpers)
 
 #### Cron Worker
 
@@ -585,6 +639,8 @@ E2E tests inject `?e2e=1` via `gotoApp()` from `tests/e2e/helpers.ts`.
 | Shared modules (cross-app) | `src/ui/` (CSS tokens + structural styles), `src/input/` (camera gesture constants), `src/appearance/` (bonded-group color assignments), `src/config/` (playback speed constants, viewer defaults), `src/history/` (history file types, connected components, bonded-group projection, physical unit constants) |
 | Shared icons | `lab/js/components/Icons.tsx` (both lab and watch import from here) |
 | Store callback wiring | `lab/js/runtime/ui-bindings.ts`, `lab/js/store/app-store.ts` |
+| Auth UX & session | `lab/js/runtime/auth-runtime.ts` (popup flow, dev-host guard, `AuthState` discriminated union, kind-tagged errors, sessionStorage sentinel), `lab/js/store/app-store.ts` (narrow setters: `setAuthSignedIn/Out/Unverified/Loading`), `functions/api/auth/session.ts` (200 contract) |
+| Auth tests | `tests/unit/auth-ux.test.tsx` (~100 tests), `tests/unit/auth-middleware.test.ts`, `tests/unit/session-endpoint.test.ts`, `tests/e2e/topbar-right-layout.spec.ts` |
 | Scene / placement | `lab/js/scene.ts`, `lab/js/placement.ts`, `lab/js/runtime/placement-solver.ts`, `tests/unit/placement-solver.test.ts` |
 | Browser physics | `lab/js/physics.ts` (JS Tersoff), `sim/wasm/tersoff.c` (Wasm kernel) |
 | Force calculation (Python) | `sim/potentials/tersoff.py`, `tersoff_fast.py` |

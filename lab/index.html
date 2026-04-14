@@ -738,6 +738,18 @@ canvas { display: block; touch-action: none; }
 .timeline-transfer-dialog__auth-button:disabled {
   opacity: 0.5; cursor: not-allowed;
 }
+/* Subdued variant for the Back action inside the popup-blocked sub-panel.
+ * Same layout as the primary auth buttons, lower visual weight so the
+ * primary decisions (Retry / Continue) remain the visible call-to-action. */
+.timeline-transfer-dialog__auth-button--subtle {
+  background: transparent;
+  color: var(--color-text-secondary);
+  border-color: var(--color-border);
+}
+.timeline-transfer-dialog__auth-button--subtle:hover:not(:disabled) {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
 .timeline-transfer-dialog__auth-checking .timeline-transfer-dialog__description {
   color: var(--color-text-secondary); font-style: italic;
 }

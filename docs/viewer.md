@@ -38,7 +38,7 @@ npm run dev
 | Bonded clusters | Side panel showing live connected components, fixed at 250 px via `--panel-width` CSS custom property (compact #N labels + action columns; scrollbar space reserved with `scrollbar-gutter: stable`). Expanded by default. Header: "Bonded Clusters: N" label + "Collapse"/"Expand" toggle pill; label truncates with ellipsis on narrow panels. User's expand/collapse preference persists across resets. Hover to preview (pale yellow highlight, desktop only — mouse enter shows, mouse leave clears). Row click selection is feature-gated off; rows are display-only (no `role="button"`, no `tabIndex`). Clear Highlight button is hidden. Two-level expand: large clusters + collapsible small clusters. Per-cluster color chip for authored color overrides (see Color Editing UX below). Center and Follow buttons remain fully interactive. |
 | Speed control | 0.5x, 1x, 2x, 4x, Max — canonical 1x = 240 steps/sec independent of display refresh |
 | Pause | Primary control — freezes physics, camera/UI remain active |
-| Timeline | TimelineBar with 2-column layout (mode rail + timeline lane), scrub track, review mode (display-only playback of history), restart from dense frames, and export dialog. 2-slot action zone (export + clear triggers). Recording arms on first atom interaction (drag/move/rotate/flick) |
+| Timeline | TimelineBar with 2-column layout (mode rail + timeline lane), scrub track, review mode (display-only playback of history), restart from dense frames, and a unified transfer dialog (Download + Share tabs). 2-slot action zone (transfer + clear triggers). Recording arms on first atom interaction (drag/move/rotate/flick) |
 | Status | Message-only StatusBar: shows statusError or statusText, returns null otherwise |
 | Scene controls | Add (dock) and Add Molecule (settings sheet) both open the chooser; chooser shows a pinned Recent shortcut after first placement. Clear playground, Reset View. |
 
@@ -157,7 +157,7 @@ The lane has an invariant 3-part grid:
 |---|---|---|
 | Time column | `--tl-time-width` (fixed) | Formatted time readout (fs / ps / ns / us, auto-scaling via `formatTime`) |
 | Track | `1fr` | Draggable scrub track with pointer capture; fill bar + thumb. Disabled (no range) in off/ready states |
-| Action zone | `--tl-action-width` (fixed) | 2-slot zone: export trigger (`ExportTrigger`, appears when export capability is present and timeline has a range) + close/clear trigger (`ClearTrigger`) when available |
+| Action zone | `--tl-action-width` (fixed) | 2-slot zone: transfer trigger (`TransferTrigger`, opens the unified Download + Share dialog; appears when at least one destination is available and the timeline has a range) + close/clear trigger (`ClearTrigger`) when available |
 
 **Overlays** (`timeline-overlay-zone`) float in a reserved zone above the track:
 
@@ -171,9 +171,14 @@ Empty spacers preserve the grid skeleton in modes that don't use overlays or act
 
 **Clear action**: The close icon (`ClearTrigger`) always triggers a confirmation dialog (`TimelineClearDialog`, portaled to `document.body`) before clearing. The dialog announces "Stop recording?" and requires an explicit "Continue" or "Cancel" — the icon-only control is too ambiguous for an irreversible erase on any device. Focus is trapped inside the dialog; Escape dismisses.
 
-**Export action**: The export icon (`ExportTrigger`) opens an export dialog (`TimelineExportDialog`, portaled to `document.body`) with capsule/full kind selection. Export capability is gated by: export dependencies exist AND atom identity is not stale. Export rebuild failures surface via `setStatusText` on the StatusBar.
+**Transfer action**: The transfer icon (`TransferTrigger`) opens a unified transfer dialog (`TimelineTransferDialog`, portaled to `document.body`) with two tabs:
 
-**Dialog mutual exclusion**: Opening the export dialog closes the clear dialog and vice versa — at most one dialog is visible at a time.
+- **Download** — save a local `.atomdojo` file (capsule or full). Each kind shows a size estimate next to its radio, and opening the dialog pauses live playback so the estimate does not shift under the user while they're reading it. Download capability is gated by: export dependencies exist AND atom identity is not stale. Rebuild failures surface via `setStatusText` on the StatusBar.
+- **Share** — publish the capsule to the cloud and return a share link (see "Sharing & Accounts" below). Share is the default tab when both destinations are available (higher-value, cross-session path).
+
+The tab bar is hidden when only one destination is usable (focused surface instead of a dead tab). While a download or publish is in flight, the dialog's backdrop click, Escape, Cancel, and tab switching are all disabled so an in-flight transfer cannot be hidden behind a closed dialog.
+
+**Dialog mutual exclusion**: Opening the transfer dialog closes the clear dialog and vice versa — at most one dialog is visible at a time.
 
 **Timeline Hints**
 
@@ -186,7 +191,7 @@ All 5 timeline interactive controls have `ActionHint` hover/focus tooltips (desk
 | Review (enter) | "Enter review mode at the current time." |
 | Review (disabled) | "No recorded history to review yet." |
 | Restart here | "Restart the simulation from this point." |
-| Export (export icon) | "Export timeline history." |
+| Transfer (transfer icon) | "Transfer history" (opens the Download + Share dialog) |
 | Clear (close icon) | "Stop recording and clear timeline history." |
 
 On touch/coarse-pointer devices, `ActionHint` tooltips are CSS-hidden. Touch discoverability relies on visible button labels and `aria-label` attributes instead.
@@ -218,6 +223,47 @@ Recording is disarmed until the first direct atom interaction (drag, move, rotat
 ### StatusBar
 
 StatusBar is now message-only (no persistent scene summary). It shows `statusError` or `statusText` and returns `null` otherwise. Export rebuild failures surface here via `setStatusText`.
+
+### Sharing & Accounts
+
+Publishing a capsule to the cloud requires signing in. Opening or downloading a capsule does not — reading and downloading remain public. Sign-in state is surfaced in two places: the Share tab inside the transfer dialog, and the account control in the top-right of the Lab.
+
+**Share panel states**
+
+The Share tab in the transfer dialog renders one of five branches depending on the current auth status and publish progress:
+
+| Status | What the Share panel shows |
+|--------|---------------------------|
+| `loading` | "Checking sign-in…" neutral row with a Cancel action. No provider buttons yet. |
+| `signed-out` | "Sign in to publish a share link. Anyone with the link can open it in Watch without signing in." with Continue with Google and Continue with GitHub buttons. |
+| `unverified` | "Can't verify sign-in right now. Retry or continue later." with a Retry button. The OAuth prompt is deliberately withheld so a transport blip (offline, 5xx) cannot push a signed-in user through an unnecessary round-trip. |
+| `signed-in` | "Publish this capsule to get a share link that anyone can open in Watch." with a Publish button. |
+| Success | Share URL in a read-only field with a Copy button and the 12-char share code rendered below. Close action. Non-fatal server warnings (e.g. `quota_accounting_failed`) render as a subtle note alongside the URL without hiding it. |
+
+**Auth-prompt notes.** When a publish attempt returns 401 (session expired mid-flight), the panel flips back to `signed-out` with an inline note — "Your session expired. Sign in to publish again." — rendered alongside the provider buttons. This note comes only from auth-required errors; rate-limit and other publish errors render as a red error line above the Publish button in the signed-in branch instead, so the two error classes never cross-contaminate.
+
+**Primary popup flow.** Clicking a provider button opens a small OAuth popup pointed at `/auth/{provider}/start?returnTo=/auth/popup-complete`. The main Lab tab keeps its scene, timeline, and dismissed-onboarding state throughout; it never navigates away. After the user consents at Google or GitHub, the provider callback sets the session cookie and redirects the popup to `/auth/popup-complete`, which notifies the Lab via `window.opener.postMessage` (or a same-origin `BroadcastChannel` fallback when the browser severed `window.opener`) and then closes itself. The Lab detects completion and resumes the publish request if one was pending.
+
+**Popup-blocked fallback.** If the browser blocks the popup, the Share panel replaces the provider buttons with an explicit three-way choice:
+
+- **Retry popup** — try opening the popup again (useful when the user just granted a one-time permission).
+- **Continue in this tab** — redirect the current tab through OAuth. This warns that unsaved Lab state may be lost, because the main tab will navigate away.
+- **Back** — dismiss the blocked state and pick a different provider.
+
+The runtime never silently falls through to a same-tab redirect — destructive navigation is always user-opt-in.
+
+**Popup-complete landing page.** The `/auth/popup-complete` route renders a minimal spinner with "Signing you in…" and tries to auto-close once the opener has been notified. If it cannot notify the opener (cross-origin-opener-policy severed `window.opener`, Safari chain restrictions) it falls into a stuck-state recovery message: "Sign-in completed. We couldn't notify the original tab automatically. Close this tab and refresh the Lab tab to continue." That way a user who lands on a stuck popup has an actionable hint instead of a perpetual spinner.
+
+**Account control (top-right).** A companion surface in the top-right of the Lab lets users see and change sign-in state without opening the transfer dialog. It sits to the left of the FPS display inside a shared flex container (`TopRightControls`) so the two controls re-flow cleanly as display-name widths or text-size tokens change.
+
+| Status | What the control shows |
+|--------|-----------------------|
+| `loading` | Nothing rendered — a tiny reserved slot felt worse than a clean appearance when the status settles. |
+| `signed-out` | Subtle "Sign in" text action. Click opens a popover with the same Continue-with-Google / Continue-with-GitHub buttons and, if the most recent sign-in attempt was blocked, the same Retry / Continue-in-tab / Back choice as the Share panel. |
+| `signed-in` | Pill chip with an avatar glyph and display name. Click opens a popover with an identity summary and Sign out. |
+| `unverified` | Muted "Sign-in unknown" action whose popover contains a Retry-only menu — no provider buttons. Prevents a transport blip from pushing a signed-in user through a round-trip. |
+
+**Watch is unchanged.** Watch does not require sign-in to open a local file or a shared capsule; the account control is Lab-only.
 
 ### Placement Solver
 
@@ -372,7 +418,7 @@ The interactive page uses a composition root pattern with React-authoritative UI
 ### Technology
 
 - Vite (v8) build pipeline: TypeScript + React (JSX) compiled and bundled. Dev server via `npm run dev`
-- React 19 (`createRoot`) — primary UI surfaces: DockLayout, DockBar, TimelineBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel. Supporting: Segmented, Icons, ActionHint
+- React 19 (`createRoot`) — primary UI surfaces: DockLayout, DockBar, TimelineBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, TopRightControls (AccountControl + FPSDisplay), CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineTransferDialog. Supporting: Segmented, Icons, ActionHint
 - Zustand (`app-store.ts`) — reactive UI state store; imperative callbacks from `main.ts` registered via store slots
 - Web Worker (`simulation-worker.ts`) + bridge (`worker-bridge.ts`) — physics runs off the main thread
 - Three.js v0.170 (npm, bundled by Vite)
@@ -382,6 +428,12 @@ The interactive page uses a composition root pattern with React-authoritative UI
 - Object View controls: React CameraControls (Center + Follow action buttons) + OnboardingOverlay (page-load welcome card with sink animation)
 - MeshStandardMaterial with roughness 0.7, metalness 0 (PBR)
 - Camera-mounted 3-light rig (SpotLight headlight + DirectionalLight fill + AmbientLight)
+
+### Known Issues
+
+- **Popup blockers during sign-in.** If the browser or an extension blocks the OAuth popup, the Share panel (and the top-right Sign-in popover) replaces the provider buttons with a Retry popup / Continue in this tab / Back choice. Retry re-opens the popup; Continue in this tab falls back to a full-page redirect (destructive — see below); Back dismisses the blocked state.
+- **Same-tab sign-in loses unsaved Lab state.** Choosing "Continue in this tab" navigates the main Lab tab through OAuth, so any in-memory scene, timeline history, and transient UI state that has not been saved or published will be lost when the tab reloads. The prompt calls this out before the user commits.
+- **Private browsing re-shows onboarding after same-tab OAuth.** After a same-tab sign-in round-trip in a private / incognito window, the welcome overlay may reappear because `sessionStorage` (where the dismissed-onboarding flag is kept) is not available across the redirect. The popup-based flow preserves onboarding because the Lab tab never navigates.
 
 ---
 

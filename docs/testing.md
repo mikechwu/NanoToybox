@@ -139,11 +139,11 @@ Phase 5 tests ship across three tsconfigs because the frontend and the Pages Fun
 
 | Config | What it covers | Why |
 |--------|---------------|-----|
-| `tsconfig.json` (frontend) | `lab/`, `watch/`, `src/**`, `tests/unit/**/*.{ts,tsx}`, `vite.config.ts` | DOM + React + Three.js. Excludes the six endpoint tests + `cron-sweeper.test.ts` because they import Workers-typed symbols that would fail the DOM-only typecheck. |
-| `tsconfig.functions.json` (Workers) | `functions/**`, `src/share/**`, selected `src/history/*-v1.ts`, the six endpoint test files, `cron-sweeper.test.ts`, `workers/cron-sweeper/src/**` | `strict: true`, `types: ["@cloudflare/workers-types"]`. Gives the handlers real `PagesFunction`, `R2Bucket`, `D1Database`, `ExecutionContext` types. |
+| `tsconfig.json` (frontend) | `lab/`, `watch/`, `src/**`, `tests/unit/**/*.{ts,tsx}`, `vite.config.ts` | DOM + React + Three.js. Excludes the eight Workers-typed handler/middleware tests + `cron-sweeper.test.ts` because they import Workers-typed symbols that would fail the DOM-only typecheck. |
+| `tsconfig.functions.json` (Workers) | `functions/**`, `src/share/**`, selected `src/history/*-v1.ts`, the eight Workers-typed test files (`admin-gate`, `publish-endpoint`, `report-endpoint`, `admin-delete-endpoint`, `admin-orphans-endpoint`, `admin-sessions-endpoint`, `auth-middleware`, `session-endpoint`), `cron-sweeper.test.ts`, `workers/cron-sweeper/src/**` | `strict: true`, `types: ["@cloudflare/workers-types"]`. Gives the handlers and the auth middleware real `PagesFunction`, `R2Bucket`, `D1Database`, `ExecutionContext` types. |
 | `workers/cron-sweeper/tsconfig.json` | The cron Worker package itself | Worker has its own `wrangler.toml`/deploy pipeline; its tsconfig keeps deploy-time typechecking independent of the Pages build. |
 
-The partitioning is enforced by `tsconfig.json`'s explicit `exclude` list — the endpoint tests are owned by the functions config, so they compile exactly once, under the lib set they actually need. Vitest still discovers and runs every file in `tests/unit/`; the split only affects `tsc`.
+The partitioning is enforced by `tsconfig.json`'s explicit `exclude` list — the Workers-typed tests (`auth-middleware.test.ts` and `session-endpoint.test.ts` joined the list in Phase 6) are owned by the functions config, so they compile exactly once, under the lib set they actually need. Vitest still discovers and runs every file in `tests/unit/`; the split only affects `tsc`. `npm run typecheck` fans out across all three configs (frontend → functions → cron) so a Workers-typed test file will be typechecked even though `tsconfig.json` excludes it.
 
 ### Script Reference
 
@@ -209,6 +209,70 @@ await page.route('**/api/capsules/**', (route) => {
 Important fixture contract: `tests/e2e/fixtures/share-capsule.json` must use the current `bondPolicy: { policyId, cutoff, minDist }` shape. The legacy `{ cutoff, minDist }` form is rejected by the capsule importer and will break the watch flow under test. If you regenerate this fixture, preserve `policyId: 'default-carbon-v1'` (or the current default) alongside `cutoff` and `minDist`.
 
 For tests that need the real backend (rare — typically manual verification, not CI), run `npm run build && npm run cf:dev` and point Playwright at `http://localhost:8788` instead of the `vite preview` default.
+
+### Phase 6 Test Layout (Auth & Account UX)
+
+Phase 6 layered a popup-first Google/GitHub OAuth flow, an account chip in the top bar, and a session/logout reconciliation loop on top of the Phase 5 share stack. The test surface follows the same partitioning as Phase 5: React + Zustand + auth-runtime tests sit under the frontend tsconfig, while the auth middleware and the `/api/auth/session` endpoint sit under the functions tsconfig so they can use Cloudflare Workers types.
+
+#### Frontend Auth UX (`tests/unit/auth-ux.test.tsx`)
+
+| File | Purpose |
+|------|---------|
+| `auth-ux.test.tsx` | ~100+ tests exercising the transfer dialog, `AccountControl`, `hydrateAuthSession`, `auth-runtime` popup flow, resume-publish intent, kind-tagged `shareError`, and `resetTransientState`. Runs under the frontend tsconfig (jsdom + React). |
+
+Grouped by describe block:
+
+- **Transfer dialog auth gating** — "Checking sign-in…" while loading; Google + GitHub buttons when signed out; Publish button when signed in; `onSignIn({ resumePublish: true })` wiring; default tab falls back to Download when Share is not wired.
+- **AccountControl top bar** — renders nothing while loading; Sign-in trigger with Google + GitHub when signed out; account chip with display name + Sign out when signed in; truncated user id fallback when display name is null; plain disclosure pattern (trigger uses `aria-haspopup="true"` not `"menu"`, no `role=menu` / `role=menuitem` on signed-in / signed-out / unverified popovers).
+- **`hydrateAuthSession`** — settles to signed-in on 200; cache:no-store + credentials:same-origin on the probe; settles to signed-out on 200 `{ status: signed-out }` (NOT 401); unexpected 401 treated as server error; preserves current session on network failure; first-load network failure or 5xx settles to unverified; malformed 200 settles to unverified; separates transport failure from body-parse failure in logs; drops late fetch writes when a newer authoritative state lands first (hydrate sequence-token race); returns a defensive copy.
+- **`publishCapsule` Retry-After rendering** — numeric seconds → "try again in Ns."; HTTP-date / garbage / missing / zero / negative → generic copy; fractional seconds round up.
+- **Unverified auth state** — neutral "Can't verify" note with Retry button (not OAuth prompt) in the transfer dialog; "Sign-in unknown" retry-only menu (no OAuth providers) in `AccountControl`.
+- **Kind-tagged `shareError`** — 429 rate-limit messages are NOT rendered as an auth-note after an external signed-out flip (prevents 429-into-signed-out bleed); 401 recovery still surfaces the auth-note (auth-kind errors route into the signed-out branch). `shareError` is preserved when transitioning signed-in → signed-out (so the 401 recovery note survives), and cleared when transitioning signed-out → signed-in (prevents stale bleed).
+- **Resume-publish intent** — `onSignIn({ resumePublish: true })` stores a structured JSON payload with `iat` + provider; no-resume invocation does NOT store a payload; `consumeResumePublishIntent` requires BOTH the `?authReturn=1` query marker and a fresh payload (within TTL), and returns false otherwise; malformed payload is cleaned up; `requestShareTabOpen` / `consumeShareTabOpen` one-shot flag semantics. Iat finiteness guard rejects NaN / Infinity / negative values, and the sentinel is still cleared when the marker is present even on rejection.
+- **`onSignOut` reconciliation** — success flips to signed-out and schedules NO reconciliation; 5xx flips the UI to signed-out and then reconciles via `/session` after a delay; transport failure schedules reconciliation.
+- **`AuthState` narrow helpers** — `setAuthLoading` / `setAuthSignedIn` / `setAuthSignedOut` / `setAuthUnverified` enforce the `(status, session)` invariant.
+- **`resetTransientState`** — clears `authPopupBlocked` and `shareTabOpenRequested` one-shot flags; preserves `auth.status` / `auth.session` identity across the reset (including the signed-out identity, not re-initialized to loading).
+- **401 recovery** — on `AuthRequiredError` from publish, session is nulled and the prompt re-renders with the inline note.
+- **`TopRightControls` layout (jsdom)** — `AccountControl` and `FPSDisplay` sit inside a single `.topbar-right` container; long display names don't spill out; the account menu uses `.account-control` as its positioning ancestor.
+- **`auth-runtime` popup OAuth flow** — `window.open` is tried first and there is NO silent fallback to `location.assign`; popup-blocked sets `authPopupBlocked` on the store and does NOT navigate; each retry tries `window.open` fresh (no sticky hint); `onSignInSameTab` commits the destructive redirect for the pending descriptor, and is a no-op when there is no pending descriptor; successful popup on retry clears the popup-blocked flag.
+- **postMessage + BroadcastChannel handler** — same-origin postMessage triggers hydrate + opens Share tab when resume intent was set; cross-origin and malformed payloads are ignored; stale intents (>TTL) do NOT auto-open Share.
+- **Popup-blocked Retry / Continue-in-tab / Back prompts** (both transfer dialog and `AccountControl`) — Retry re-invokes `onSignIn` with the pending descriptor; Continue-in-tab invokes `onSignInSameTab`; Back invokes `onDismissPopupBlocked` and restores the provider picker; popup-blocked copy names the blocked provider. Publish-initiated Back clears the `sessionStorage` resume-publish sentinel; top-bar (non-publish) Back leaves it untouched; an end-to-end scenario verifies Share does NOT auto-open after an unrelated top-bar sign-in that followed a dismissed publish-block.
+- **Onboarding sessionStorage dismissal** — `markOnboardingDismissed` writes the session sentinel; `isOnboardingEligible` returns false when the sentinel is set; eligibility returns to true after sessionStorage is cleared (full browser restart analogue); `markOnboardingDismissed` logs a warning when `sessionStorage.setItem` throws (private browsing).
+- **Vite dev-host guard** — `http://localhost:5173` (Vite dev) skips `window.open` and sets `authPopupBlocked` directly; `http://localhost:8788` (wrangler pages dev) DOES attempt `window.open`; production HTTPS DOES attempt `window.open`.
+- **`detachAuthCompleteListener` singleton semantics** — a second attach returns the SAME detach reference as the first; detach truly removes the listener (subsequent postMessage fires no handler); a cross-origin postMessage on a Vite dev host logs a dev diagnostic.
+- **Resilience under store / storage failures** — the message handler catches errors from `handleAuthComplete` (no unhandled rejection); `onDismissPopupBlocked` logs an error if `sessionStorage.removeItem` silently fails.
+- **popup-complete HTML contract** — the popup-complete document includes `postMessage`, a `BroadcastChannel` fallback, a stuck-state DOM, and a strict CSP.
+
+#### Auth Middleware (`tests/unit/auth-middleware.test.ts`)
+
+| File | Purpose |
+|------|---------|
+| `auth-middleware.test.ts` | New in Phase 6. Orphan-session LEFT JOIN behavior, `hasSessionCookie` protocol scoping, orphan DELETE dedupe + logging. Runs under `tsconfig.functions.json` for Workers types. |
+
+- **`authenticateRequest` orphan-session handling** — returns userId for a valid session whose user row still exists; returns null AND deletes the orphan session when the user row is missing; returns null when the session row itself is missing (no DELETE side effect); returns null for expired session (`expires_at` past), idle-expired session (`last_seen_at > 30d`), missing Cookie header, or Cookie header without the session cookie.
+- **`hasSessionCookie` protocol scoping** — `https + __Host-atomdojo_session` → true; `http://localhost + atomdojo_session_dev` → true; https + dev-cookie only → false (wrong cookie for protocol); http + `__Host-` cookie only → false (wrong cookie for protocol); missing Cookie header or Cookie present without session cookie → false.
+- **Orphan DELETE dedupe + logging (H5)** — logs with the `[auth.orphan-delete-failed]` prefix when DELETE fails; dedupes the DELETE for the same orphan sessionId within one isolate lifetime.
+
+#### Session Endpoint (`tests/unit/session-endpoint.test.ts`)
+
+| File | Purpose |
+|------|---------|
+| `session-endpoint.test.ts` | New in Phase 6. `GET /api/auth/session` response contract: anti-cache headers, signed-in / signed-out payload shape, opportunistic `Set-Cookie` clear on stale cookie, dev-cookie variant, user-row-missing race guard and logging. Runs under `tsconfig.functions.json`. |
+
+- **Response contract** — always sets no-cache headers; signed-in returns 200 with user fields and NO `Set-Cookie`; signed-out with a stale session cookie returns 200 + `Set-Cookie` that clears it; signed-out WITHOUT any session cookie returns 200 and NO `Set-Cookie`; signed-out with a non-session cookie only returns 200 and NO `Set-Cookie`.
+- **User-row-missing race guard** — authenticated userId but missing user row returns 200 signed-out + cookie-clear; the branch logs with the `[auth.session.user-missing]` prefix (M1).
+- **Dev-cookie variant** — HTTP + stale `atomdojo_session_dev` cookie: signed-out + `Set-Cookie` clears the dev cookie; HTTP + only `__Host-` cookie (wrong protocol for it): no self-heal fires.
+
+#### Top-Right Layout E2E (`tests/e2e/topbar-right-layout.spec.ts`)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `topbar-right-layout.spec.ts` | 4 | Playwright geometry regression for the top-right flex container under signed-in, long-display-name, signed-out, and mobile viewport scenarios. |
+
+- **Signed-in** — account chip and FPS display sit inside one `.topbar-right` container and do not overlap.
+- **Long display name** — truncates via ellipsis; chip and FPS do not collide.
+- **Signed-out** — "Sign in" trigger renders inside `.topbar-right`; the opened menu stays inside the viewport.
+- **Mobile viewport** — chip and FPS remain disjoint and inside the viewport.
 
 ### Known Pre-Existing Flake: `worker-integration.spec.ts`
 

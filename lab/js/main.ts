@@ -50,7 +50,12 @@ import { validateCapsuleFile, type AtomDojoPlaybackCapsuleFileV1 } from '../../s
 import { executeFrame, type FrameRuntimeSurface } from './app/frame-runtime';
 import { teardownAllSubsystems, resetSchedulerState, resetSessionState, resetEffectsGate, type TeardownSurface } from './app/app-lifecycle';
 import { serializeForWorkerRestore } from './runtime/restart-state-adapter';
-import { createAuthRuntime, consumeResumePublishIntent, AuthRequiredError } from './runtime/auth-runtime';
+import {
+  createAuthRuntime,
+  consumeResumePublishIntent,
+  attachAuthCompleteListener,
+  AuthRequiredError,
+} from './runtime/auth-runtime';
 
 // --- Globals ---
 let renderer, physics, stateMachine;
@@ -830,6 +835,15 @@ async function init() {
   {
     const { callbacks: authCallbacks, hydrate } = createAuthRuntime();
     useAppStore.getState().setAuthCallbacks(authCallbacks);
+    // Popup OAuth flow: the popup posts `{type:'atomdojo-auth-complete'}`
+    // back to this tab when the provider redirects it to /auth/popup-complete.
+    // Attach once; the listener is idempotent and survives the Lab's
+    // lifetime. In same-tab fallback (popup blocked), the listener is
+    // never triggered — the boot-time resume handshake below handles it.
+    attachAuthCompleteListener();
+    // Same-tab fallback resume: if we previously redirected away in a
+    // popup-blocked browser, the returning page load carries `?authReturn=1`
+    // and an un-consumed sessionStorage sentinel. Consume them here.
     const resumeRequested = consumeResumePublishIntent();
     void hydrate().then((state) => {
       if (resumeRequested && state.status === 'signed-in') {

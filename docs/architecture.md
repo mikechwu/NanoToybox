@@ -65,7 +65,8 @@ NanoToybox/
 │   │   │   ├── ui-bindings.ts        # Zustand store callback registration + review-mode guards (blockIfReviewLocked)
 │   │   │   ├── atom-source.ts        # Renderer-to-input atom-picking adapter
 │   │   │   ├── focus-runtime.ts     # Focus resolution: molecule lookup, centroid, pivot update; ensureFollowTarget for follow-mode validation
-│   │   │   ├── onboarding.ts        # Coachmark scheduling + page-load onboarding overlay gate (isOnboardingEligible, subscribeOnboardingReadiness)
+│   │   │   ├── onboarding.ts        # Coachmark scheduling + page-load onboarding overlay gate (isOnboardingEligible, subscribeOnboardingReadiness, markOnboardingDismissed / wasOnboardingDismissedInSession)
+│   │   │   ├── auth-runtime.ts      # Session hydration + popup OAuth flow (createAuthRuntime, hydrateAuthSession, consumeResumePublishIntent, attach/detachAuthCompleteListener, AuthRequiredError, AUTH_RETURN_QUERY)
 │   │   │   ├── bonded-group-runtime.ts     # Thin lab/store adapter over shared bonded-group-projection
 │   │   │   ├── bonded-group-highlight-runtime.ts # Persistent atom tracking + hover preview resolution; self-healing clearTrackedIfFeatureDisabled()
 │   │   │   ├── bonded-group-coordinator.ts # Coordinated projection + highlight lifecycle
@@ -104,6 +105,8 @@ NanoToybox/
 │   │   │   ├── SheetOverlay.tsx  # Sheet backdrop
 │   │   │   ├── StatusBar.tsx     # Scene status display
 │   │   │   ├── FPSDisplay.tsx    # FPS/simulation status
+│   │   │   ├── AccountControl.tsx # Top-right auth disclosure (loading / signed-in / signed-out / unverified + popup-blocked sub-menu)
+│   │   │   ├── TopRightControls.tsx # Flex row wrapping AccountControl + FPSDisplay (replaces two absolutely-positioned surfaces)
 │   │   │   ├── CameraControls.tsx # Object View panel: Center + Follow buttons (default); mode toggle when Free-Look gate is on
 │   │   │   ├── OnboardingOverlay.tsx # Page-load welcome card with sink-to-Settings animation
 │   │   │   ├── Icons.tsx         # Shared inline SVG icon utility (supporting component)
@@ -563,7 +566,8 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - **ui-bindings.ts** — Zustand store callback registration (React intents → imperative commands). Review-mode guards via `blockIfReviewLocked()` block 6 callbacks: onAdd, onPause, onModeChange, onAddMolecule, onClear, onSelectStructure.
 - **atom-source.ts** — shared renderer-to-input atom-picking adapter
 - **focus-runtime.ts** — focus resolution: molecule lookup, centroid computation, camera pivot update; `ensureFollowTarget()` for follow-mode validation. Placement commit does NOT change focus metadata or retarget camera (Policy A).
-- **onboarding.ts** — coachmark scheduling + page-load onboarding overlay gate (`isOnboardingEligible`, `subscribeOnboardingReadiness`)
+- **onboarding.ts** — coachmark scheduling + page-load onboarding overlay gate (`isOnboardingEligible`, `subscribeOnboardingReadiness`, `markOnboardingDismissed()` / `wasOnboardingDismissedInSession()` — sessionStorage key `atomdojo.onboardingDismissed`)
+- **auth-runtime.ts** — Lab-side auth: `createAuthRuntime()`, `hydrateAuthSession()` (monotonic `hydrateSeq`, `{cache: 'no-store', credentials: 'same-origin'}`), popup OAuth via `window.open` + dual-channel handshake (postMessage + `BroadcastChannel('atomdojo-auth')`), `consumeResumePublishIntent()`, `attachAuthCompleteListener()` / `detachAuthCompleteListener()`, `AuthRequiredError`, `AUTH_RETURN_QUERY`. Vite dev-host guard short-circuits popup when `protocol === 'http:' && port !== '8788'`. Popup-blocked sets store flag, never silently falls back to same-tab. See [Auth Architecture](#auth-architecture) for full state machine + transition table.
 - **bonded-group-runtime.ts** — thin lab/store adapter that delegates projection logic to the shared module (`src/history/bonded-group-projection.ts`). Consumes `getDisplaySource()` (not physics directly) and writes results to Zustand store. `getDisplaySourceKind()` reports live vs review source. Does NOT re-export `BondedGroupSummary` — the canonical definition lives in `src/history/bonded-group-projection.ts` and is re-exported by `app-store.ts` for lab consumers.
 - **bonded-group-highlight-runtime.ts** — persistent atom tracking, hover preview, panel highlight resolution (warm palette via `setHighlightedAtoms`). Self-healing: `clearTrackedIfFeatureDisabled()` clears stale tracked state (`_trackedAtoms`, `selectedBondedGroupId`, `hasTrackedBondedHighlight`) when `canTrackBondedGroupHighlight` is off; called at the top of `syncToRenderer()` and `syncAfterTopologyChange()`. Runtime structure preserved (no store fields or methods deleted — hide pass only).
 - **bonded-group-coordinator.ts** — coordinated projection + highlight lifecycle (update + teardown)
@@ -587,7 +591,7 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - **placement-camera-framing.ts** — pure camera-basis framing solver for placement preview: camera-space projection, adaptive target-shift search (5×5 grid + refinement), overflow deadband, visible-anchor filtering. No THREE/renderer/store imports.
 - **review-mode-action-hints.ts** — transient status hint for review-locked actions; uses `REVIEW_LOCK_STATUS` (fuller copy) via store `setStatusText` with auto-clear timer from `CONFIG.reviewModeUi.statusHintMs`
 
-**Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons, ActionHint. **Hint infrastructure:** ActionHint wraps 5 timeline controls (Start Recording, Restart here, Simulation segment, Review segment, ClearTrigger) plus ReviewLockedControl and Segmented; desktop/keyboard only (touch hidden via CSS media query). timeline-hints.ts is the single source of truth for all timeline tooltip copy (`TIMELINE_HINTS` constant). **Timeline helper modules** (composed by TimelineBar): timeline-format.ts (time formatting + progress), timeline-mode-switch.tsx (mode rail widget), timeline-clear-dialog.tsx (clear confirmation dialog + trigger), timeline-hints.ts (tooltip copy). Imperative controllers remain only for PlacementController and StatusController (hint-only).
+**Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, AccountControl, TopRightControls, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons, ActionHint. **Hint infrastructure:** ActionHint wraps 5 timeline controls (Start Recording, Restart here, Simulation segment, Review segment, ClearTrigger) plus ReviewLockedControl and Segmented; desktop/keyboard only (touch hidden via CSS media query). timeline-hints.ts is the single source of truth for all timeline tooltip copy (`TIMELINE_HINTS` constant). **Timeline helper modules** (composed by TimelineBar): timeline-format.ts (time formatting + progress), timeline-mode-switch.tsx (mode rail widget), timeline-clear-dialog.tsx (clear confirmation dialog + trigger), timeline-hints.ts (tooltip copy). Imperative controllers remain only for PlacementController and StatusController (hint-only).
 
 **Camera callbacks** registered by main.ts via `cameraCallbacks` in the store:
 - `onCenterObject()` — one-shot camera center
@@ -679,6 +683,9 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | Timeline export capabilities (`timelineExportCapabilities`) | timeline-subsystem.ts (via `currentExportCapability`) | Store reads only; subsystem owns capability in all non-off states. `publishTimelineReadyState` does NOT clear `timelineExportCapabilities` — the subsystem is the sole writer. |
 | Atom identity (slot→atomId mapping) | timeline-atom-identity.ts | scene-runtime (append), physics compaction listener, recording orchestrator (capture) |
 | Atom metadata (id→element mapping) | atom-metadata-registry.ts | scene-runtime (register after commit), history-export (getAtomTable for export) |
+| Auth state (`auth.status` / `auth.session`) | Primary writer: `auth-runtime.ts` (via `setAuthLoading` / `setAuthSignedIn` / `setAuthSignedOut` / `setAuthUnverified`). Secondary writer: `TimelineBar.tsx` (calls `setAuthSignedOut()` on `AuthRequiredError` from publish, the 401 recovery path). Both write through the narrow setters — never assemble a raw `AuthState` object. Persists across `resetTransientState`. |
+| `authPopupBlocked` (one-shot) | auth-runtime.ts (set on blocked `window.open`) | AccountControl sub-menu (Retry / Continue-in-tab / Back); cleared by `onDismissPopupBlocked` or `resetTransientState`. |
+| `shareTabOpenRequested` (one-shot) | auth-runtime.ts (on post-popup resume-publish consumption) | TimelineBar read-and-clear on next render; cleared by `resetTransientState`. |
 
 **Note:** The table above covers `lab/` state only. `watch/` has no Zustand store -- all state lives across domain service closures (document, playback, view, camera, appearance, settings) coordinated by the `WatchController` facade, with React `useState` for local UI concerns. React subscribes via `useSyncExternalStore`. See the [Watch App](#watch-app-watch) section for details.
 
@@ -915,7 +922,8 @@ NanoToybox/
 │   │       └── logout.ts             # Clear session cookie
 │   ├── auth/                         # OAuth start/callback per provider
 │   │   ├── google/{start,callback}.ts
-│   │   └── github/{start,callback}.ts
+│   │   ├── github/{start,callback}.ts
+│   │   └── popup-complete.ts         # Static landing for popup flow: dual-channel notify (postMessage + BroadcastChannel) + DOM stuck-state fallback
 │   └── c/[code].ts                   # GET /c/:code — share-preview HTML (og: metadata)
 ├── src/share/                        # Shared modules (frontend + backend)
 │   ├── d1-types.ts                   # Minimal D1 shim shared by both tsconfigs
@@ -1034,10 +1042,86 @@ Client clicks "Sign in with <Provider>"
           │    └── attach userId to context, else 401
 ```
 
-- **Cookie names by environment:** production and preview use distinct cookie names so a preview session never satisfies a production request (and vice versa).
+- **Cookie names by environment:** production and preview use distinct cookie names so a preview session never satisfies a production request (and vice versa). Protocol-scoped: `__Host-atomdojo_session` on HTTPS, `atomdojo_session_dev` on plain-HTTP localhost.
 - **Dev bypass:** when `AUTH_DEV_USER_ID` is set and the request is from localhost, `auth-middleware.ts` short-circuits to that user id. Never active in production.
-- **Session session API:** `GET /api/auth/session` returns the current user (if any); `POST /api/auth/logout` clears the cookie and soft-deletes the session row.
 - **Idle expiration:** sessions expire after 30 days of no `last_seen_at` bump; the session sweeper (above) reclaims the rows.
+
+##### Session probe contract (`GET /api/auth/session`)
+
+Always returns **200** with a JSON `status` discriminator — never 401 for the signed-out case. Rationale: a state-discovery probe is not a protected action, and emitting a red 401 on every Lab page load for signed-out users would bury real auth errors in devtools noise. 401 is reserved for protected-action endpoints (e.g. `/api/capsules/publish`) where it genuinely means "flip UI to an auth prompt".
+
+Response shapes:
+- signed in: `{ status: 'signed-in', userId, displayName, createdAt }`
+- signed out: `{ status: 'signed-out' }`
+
+Anti-cache headers on every response: `Cache-Control: no-store, private`, `Pragma: no-cache`, `Vary: Cookie`. A cached signed-out response could make the opener think a completed popup login failed; a cached signed-in response could keep a stale identity visible after logout. `no-store` is the only directive that forbids storage outright.
+
+**Opportunistic cookie clear (`Set-Cookie`):** when the request presented a session cookie but auth resolution returned `null` (orphan / expired / idle / unknown session id), the signed-out response appends a clearing `Set-Cookie`. Without this the browser would keep sending the stale cookie on every subsequent probe until a protected action finally cleared it. The helper `hasSessionCookie(request)` in `auth-middleware.ts` drives this decision (protocol-scoped to match the request's cookie name).
+
+##### Orphan-session handling
+
+A "session" row whose `user_id` no longer references a live `users` row (user was deleted after sign-in) is treated as unauthenticated. `authenticateRequest()` uses a single `LEFT JOIN sessions→users` round-trip: `users.id IS NULL` distinguishes "session exists but user is gone" from "session row itself missing". Orphans are deleted fire-and-forget so future requests don't repeat the join-and-reject cost. Per-isolate `orphanDeleteDedupe: Set<string>` prevents a persistently-failing DELETE from hammering D1; bounded at `ORPHAN_DEDUPE_LIMIT = 256` so adversarial cookies can't grow memory unbounded. Failures log with the `[auth.orphan-delete-failed]` prefix. Without this check the session probe would report signed-out while protected endpoints still accepted the cookie as authorized — a real correctness gap.
+
+##### Lab-side auth runtime (`lab/js/runtime/auth-runtime.ts`)
+
+Owns session hydration, popup OAuth initiation, and the resume-publish handoff. The Lab must work for unauthenticated users; this runtime never blocks boot on the session fetch. Watch and local download stay fully public.
+
+**Exports:** `createAuthRuntime()`, `hydrateAuthSession()`, `consumeResumePublishIntent()`, `attachAuthCompleteListener()` / `detachAuthCompleteListener()`, `AuthRequiredError`, `AUTH_RETURN_QUERY`, `_resetAuthRuntimeForTest()`.
+
+**AuthCallbacks** (registered on the store): `onSignIn(provider, opts?)`, `onSignInSameTab()`, `onDismissPopupBlocked()`, `onSignOut()`.
+
+**Auth state machine (store contract):** `AuthState` is a discriminated union:
+
+```ts
+| { status: 'loading',    session: null }
+| { status: 'signed-in',  session: AuthSessionState }
+| { status: 'signed-out', session: null }
+| { status: 'unverified', session: null }
+```
+
+Narrow setters in the store: `setAuthLoading`, `setAuthSignedIn`, `setAuthSignedOut`, `setAuthUnverified` (plus raw `setAuthState` as a test seam). `unverified` is distinct from `signed-out` — it means transport/5xx/malformed and we can't confirm either way; UI must render a neutral "can't verify" affordance, NOT an OAuth prompt. Treating a transport blip as signed-out would mislead users whose cookie is still valid server-side.
+
+**Hydration transition table** (`hydrateAuthSession()`; source-of-truth comment lives in `auth-runtime.ts`):
+
+| Outcome                         | Prior state       | Next state   |
+|---------------------------------|-------------------|--------------|
+| 200 `status: 'signed-in'` + shape OK | any          | signed-in    |
+| 200 `status: 'signed-out'`      | any               | signed-out   |
+| network / 5xx / malformed       | loading           | unverified   |
+| network / 5xx / malformed       | any other         | (keep prior) |
+
+Preserving non-`loading` prior states on indeterminate outcomes is the key invariant: a late/concurrent fetch must not clobber an authoritative signed-in or signed-out answer with the weaker `unverified` state. Concurrency is enforced by a monotonic `hydrateSeq` token — each call snapshots its sequence number at start and drops the write if it is no longer the latest. Fetches use `{ cache: 'no-store', credentials: 'same-origin' }`.
+
+**Popup OAuth data-flow (primary path):** Lab issues `window.open(startUrl, 'atomdojo-auth', ...)` — this preserves in-memory scene/timeline state. The OAuth callback sets the session cookie and redirects the popup to `/auth/popup-complete` (static HTML). The landing page notifies the opener via two independent channels:
+
+1. **`window.postMessage({ type: 'atomdojo-auth-complete' }, origin)`** — same-origin, delivered only when `window.opener` survives.
+2. **`BroadcastChannel('atomdojo-auth')`** — same-origin fallback for the case where a Cross-Origin-Opener-Policy response anywhere in the provider → callback → popup-complete chain severs `window.opener` and postMessage silently fails.
+
+Both listeners are attached by `attachAuthCompleteListener()`; on either signal the opener re-hydrates the session and (if `resumePublish` was requested) consumes the intent and reopens the Transfer dialog on the Share tab. The popup-complete page also includes a DOM stuck-state fallback so a user staring at a frozen popup knows what to do. `validateReturnTo` in `functions/oauth-state.ts` is called from `auth/{google,github}/start.ts`, then carried through the signed OAuth state payload and re-used verbatim by the callback redirect; it accepts both `/auth/popup-complete` (popup) and `/lab/?authReturn=1` (same-tab fallback).
+
+**Popup-blocked handling — no silent same-tab fallback:** if `window.open` returns null (blocked), the runtime sets `authPopupBlocked = { provider, resumePublish }` on the store and stops. The UI drives Retry / Continue-in-tab / Back via `AccountControl`'s popup-blocked sub-menu; `onDismissPopupBlocked()` clears the flag. Silent same-tab redirect would throw away Lab in-memory state without user consent.
+
+**Vite dev-host guard:** `window.location.protocol === 'http:' && window.location.port !== '8788'` short-circuits popup on non-wrangler dev hosts (e.g. Vite on 5173). `/auth/{provider}/start` isn't served there, so the runtime surfaces an instructive error instead of opening a popup to nowhere. Wrangler `pages dev` on 8788 is the supported local auth path.
+
+**Resume-publish intent:** structured `{ kind, provider, iat }` JSON written to sessionStorage under `atomdojo.resumePublish` with a 10-minute TTL. Consumed in two paths:
+- **Popup:** via the postMessage/BroadcastChannel handshake after hydration reports signed-in.
+- **Same-tab fallback:** via the `?authReturn=1` query marker (constant `AUTH_RETURN_QUERY`) — without this marker the sentinel is treated as stale and ignored, preventing the "user started OAuth, abandoned it, came back hours later already signed in" leak case.
+
+**`AuthRequiredError`:** typed error (`kind = 'auth-required'`) thrown by protected-action callers (publish) on 401. Consumers flip the store's auth state to signed-out so the Transfer dialog's Share panel re-renders as the in-context auth prompt rather than a generic "publish failed".
+
+##### Store contract: auth transient flags
+
+Both flags are one-shot UI control-flow signals cleared by `resetTransientState()`. `auth.status` / `auth.session` are NOT cleared — identity persists across resets.
+
+- **`authPopupBlocked: { provider, resumePublish } | null`** — present iff the most recent sign-in attempt's `window.open` returned null. `AccountControl` renders the popup-blocked sub-menu (Retry / Continue-in-tab / Back) while non-null. Cleared by `onDismissPopupBlocked()` or `resetTransientState()`.
+- **`shareTabOpenRequested: boolean`** — one-shot trigger telling `TimelineBar` to open the Transfer dialog on the Share tab after the OAuth return completes. Set by the auth runtime on successful post-popup hydration when a resume-publish intent was consumed; read-and-cleared by the TimelineBar consumer on next render. Also cleared by `resetTransientState()`.
+
+##### Lab UI components
+
+- **`AccountControl.tsx`** — top-right auth disclosure with four status branches (loading / signed-in / signed-out / unverified) plus a popup-blocked sub-menu (Retry / Continue-in-tab / Back). Uses plain ARIA disclosure semantics (not `role="menu"`).
+- **`TopRightControls.tsx`** — flex row wrapping `AccountControl` + `FPSDisplay`. Replaces the previous pair of independently-absolutely-positioned surfaces so they lay out against each other deterministically.
+- **`TimelineBar.tsx`** — auth wiring: opportunistic `hydrateAuthSession()` on Share-tab open, 401 recovery via `AuthRequiredError` (flips store to signed-out), kind-tagged `shareError: { kind: 'auth' | 'other', message }`, Back handler delegates to `onDismissPopupBlocked`.
+- **`timeline-transfer-dialog.tsx`** — five Share-panel states (success / loading / unverified / signed-out / signed-in) plus a popup-blocked sub-panel and a `ShareActions` sub-component.
 
 #### Admin Gate
 
@@ -1100,9 +1184,11 @@ Narrow module ownership table — who owns what across the Phase 5 surface:
 | Sweeps | `functions/api/admin/sweep/orphans.ts`, `.../sessions.ts` | Invoked only via `admin-gate.ts`. |
 | Admin seed (local) | `functions/api/admin/seed.ts` | Dev-only. |
 | Share-preview HTML | `functions/c/[code].ts` | og: metadata + redirect; 404 on non-accessible. |
-| Session API | `functions/api/auth/session.ts`, `.../logout.ts` | Cookie verification lives in `functions/auth-middleware.ts`. |
-| OAuth | `functions/auth/{google,github}/{start,callback}.ts` + `oauth-state.ts` + `oauth-helpers.ts` | HMAC-signed state, 10min TTL, provider-bound. No cross-provider auto-linking. |
-| Auth gate (user) | `functions/auth-middleware.ts` | Session cookie verify; `AUTH_DEV_USER_ID` dev bypass on localhost. |
+| Session API | `functions/api/auth/session.ts`, `.../logout.ts` | `session.ts` always returns 200 with `status` discriminator, anti-cache headers, opportunistic `Set-Cookie` clear on stale-cookie+signed-out. Cookie verification lives in `functions/auth-middleware.ts`. |
+| OAuth | `functions/auth/{google,github}/{start,callback}.ts` + `oauth-state.ts` + `oauth-helpers.ts` + `functions/auth/popup-complete.ts` | HMAC-signed state, 10min TTL, provider-bound. No cross-provider auto-linking. `popup-complete.ts` is the popup landing; dual-channel notify (postMessage + `BroadcastChannel('atomdojo-auth')`) + DOM stuck-state fallback. |
+| Auth gate (user) | `functions/auth-middleware.ts` | Session cookie verify with LEFT JOIN→users (orphan → null + fire-and-forget DELETE, `[auth.orphan-delete-failed]` log prefix, per-isolate dedupe). `hasSessionCookie()` helper for session-probe cookie-clear decision. `AUTH_DEV_USER_ID` dev bypass on localhost. |
+| Lab auth runtime | `lab/js/runtime/auth-runtime.ts` | Session hydration (monotonic `hydrateSeq` guard), popup OAuth (`window.open`), dual-channel handshake, `AuthRequiredError`, resume-publish intent (sessionStorage + `AUTH_RETURN_QUERY`), Vite dev-host guard (8788). |
+| Lab auth UI | `lab/js/components/AccountControl.tsx`, `TopRightControls.tsx`, `TimelineBar.tsx`, `timeline-transfer-dialog.tsx` | Four-branch disclosure + popup-blocked sub-menu; top-right flex row; Share-tab hydration + 401 recovery; five-state Share panel. |
 | Auth gate (admin) | `functions/admin-gate.ts` | Two-path: localhost+`DEV_ADMIN_ENABLED`, or `X-Cron-Secret` constant-time. 404 on failure. |
 | Env binding type | `functions/env.ts` | D1, R2, secret typing shared by all handlers. |
 | Cron scheduling | `workers/cron-sweeper/` | Standalone Worker with its own `wrangler.toml` / `tsconfig.json` / `README.md`. Pure HTTP client to admin sweeps. |

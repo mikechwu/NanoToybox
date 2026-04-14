@@ -152,6 +152,26 @@ interface TimelineTransferDialogProps {
    *  wires this to the store's `authCallbacks.onSignIn(provider, { resumePublish: true })`
    *  so we round-trip back into this dialog after OAuth. */
   onSignIn: (provider: 'google' | 'github') => void;
+  /** Non-null when the most recent sign-in attempt's popup was blocked.
+   *  The signed-out branch replaces the provider buttons with a
+   *  Retry / Continue-in-tab prompt. */
+  popupBlocked: { provider: 'google' | 'github'; resumePublish: boolean } | null;
+  /** Called by the popup-blocked prompt's "Retry popup" button. Host
+   *  re-invokes onSignIn with the pending provider + resumePublish. */
+  onRetryPopup: () => void;
+  /** Called by the popup-blocked prompt's "Continue in this tab" button —
+   *  the user has consented to the destructive redirect. */
+  onSignInSameTab: () => void;
+  /** Called by the popup-blocked prompt's Back button — clears the
+   *  pending descriptor so the user can pick a different provider. */
+  onDismissPopupBlocked: () => void;
+}
+
+/** Human-readable provider label used by the popup-blocked sub-panel
+ *  copy ("Google popup was blocked…"). Kept as a tiny helper so the
+ *  mapping lives in one place if provider IDs diverge from labels. */
+function providerLabel(provider: 'google' | 'github'): string {
+  return provider === 'google' ? 'Google' : 'GitHub';
 }
 
 /** Cancel-row pattern shared by 4 of the 5 Share-panel branches. The
@@ -188,7 +208,7 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
     downloadSubmitting, downloadError, downloadConfirmEnabled, fullEstimate, capsuleEstimate,
     shareTabAvailable, shareConfirmEnabled, onConfirmShare,
     shareSubmitting, shareError, authNote, shareUrl, shareCode, shareWarnings,
-    authStatus, onSignIn,
+    authStatus, onSignIn, popupBlocked, onRetryPopup, onSignInSameTab, onDismissPopupBlocked,
   } = props;
   const [retryingAuth, setRetryingAuth] = useState(false);
 
@@ -463,24 +483,65 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                     {authNote}
                   </p>
                 )}
-                <div className="timeline-transfer-dialog__auth-buttons">
-                  <button
-                    className="timeline-transfer-dialog__auth-button"
-                    onClick={() => onSignIn('google')}
-                    disabled={transferBusy}
-                    data-testid="transfer-auth-google"
-                  >
-                    Continue with Google
-                  </button>
-                  <button
-                    className="timeline-transfer-dialog__auth-button"
-                    onClick={() => onSignIn('github')}
-                    disabled={transferBusy}
-                    data-testid="transfer-auth-github"
-                  >
-                    Continue with GitHub
-                  </button>
-                </div>
+                {popupBlocked ? (
+                  /* Popup-blocked sub-panel — replaces the provider buttons
+                   *  with an explicit Retry / Continue-in-tab / Back choice
+                   *  so we never silently destroy in-memory Lab state on a
+                   *  same-tab redirect the user didn't ask for, and the
+                   *  user can back out to pick a different provider. */
+                  <div className="timeline-transfer-dialog__popup-blocked" data-testid="transfer-popup-blocked">
+                    <p className="timeline-transfer-dialog__auth-note" role="status" aria-live="polite">
+                      {providerLabel(popupBlocked.provider)} popup was blocked. Retry, continue in this tab,
+                      or go back to choose another sign-in method —
+                      unsaved Lab state may be lost on same-tab sign-in.
+                    </p>
+                    <div className="timeline-transfer-dialog__auth-buttons">
+                      <button
+                        className="timeline-transfer-dialog__auth-button"
+                        onClick={onRetryPopup}
+                        disabled={transferBusy}
+                        data-testid="transfer-popup-retry"
+                      >
+                        Retry {providerLabel(popupBlocked.provider)} popup
+                      </button>
+                      <button
+                        className="timeline-transfer-dialog__auth-button"
+                        onClick={onSignInSameTab}
+                        disabled={transferBusy}
+                        data-testid="transfer-popup-same-tab"
+                      >
+                        Continue in this tab
+                      </button>
+                      <button
+                        className="timeline-transfer-dialog__auth-button timeline-transfer-dialog__auth-button--subtle"
+                        onClick={onDismissPopupBlocked}
+                        disabled={transferBusy}
+                        data-testid="transfer-popup-back"
+                      >
+                        Back
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="timeline-transfer-dialog__auth-buttons">
+                    <button
+                      className="timeline-transfer-dialog__auth-button"
+                      onClick={() => onSignIn('google')}
+                      disabled={transferBusy}
+                      data-testid="transfer-auth-google"
+                    >
+                      Continue with Google
+                    </button>
+                    <button
+                      className="timeline-transfer-dialog__auth-button"
+                      onClick={() => onSignIn('github')}
+                      disabled={transferBusy}
+                      data-testid="transfer-auth-github"
+                    >
+                      Continue with GitHub
+                    </button>
+                  </div>
+                )}
                 <ShareActions onCancel={handleCancel} transferBusy={transferBusy} />
               </div>
             ) : (

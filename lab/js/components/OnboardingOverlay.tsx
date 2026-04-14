@@ -1,7 +1,12 @@
 /**
  * OnboardingOverlay — welcome card shown on each page load.
  *
- * Page-lifetime dismissal only — reappears on reload (no localStorage).
+ * Dismissal scope: sessionStorage-lifetime. Dismissed once per browser
+ * session (NOT localStorage) so a full browser restart restores the
+ * fresh-load experience, while a same-tab OAuth redirect that lands
+ * back on /lab/ does not re-show the overlay. See runtime/onboarding.ts
+ * `markOnboardingDismissed` / `isOnboardingEligible` for the gate.
+ *
  * Visibility is driven by a reactive readiness gate in runtime/onboarding.ts
  * (subscribeOnboardingReadiness) that waits for scene content + no blockers.
  *
@@ -13,6 +18,7 @@
 
 import React, { useCallback, useEffect, useRef } from 'react';
 import { useAppStore } from '../store/app-store';
+import { markOnboardingDismissed } from '../runtime/onboarding';
 
 /** Sink animation duration in ms — must match CSS @keyframes onboarding-sink. */
 export const SINK_DURATION_MS = 950;
@@ -20,12 +26,16 @@ export const SINK_DURATION_MS = 950;
 export const FALLBACK_MARGIN_MS = 100;
 
 /**
- * Finalize onboarding dismiss: transition exiting → dismissed.
- * Pure state logic — DOM cleanup is the caller's responsibility.
+ * Finalize onboarding dismiss: transition exiting → dismissed and persist
+ * the dismissal for the rest of the browser session so a same-tab OAuth
+ * redirect doesn't re-show the overlay on return. Pure state logic plus
+ * the one-line sessionStorage write — DOM cleanup is the caller's
+ * responsibility.
  */
 export function finalizeDismissAction(): void {
   if (useAppStore.getState().onboardingPhase === 'exiting') {
     useAppStore.getState().setOnboardingPhase('dismissed');
+    markOnboardingDismissed();
   }
 }
 
