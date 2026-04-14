@@ -884,9 +884,235 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
 
 **Build:** `tsconfig.json` includes `watch/js/**/*.ts` and `watch/js/**/*.tsx` so watch app sources participate in the project-wide type check alongside lab and shared modules.
 
+### Share-Link Backend (Phase 5)
+
+Phase 5 adds cloud-published capsule share links: Lab publishes a capsule → Cloudflare Pages Functions persist metadata + blob → a 12-character share code (Crockford Base32, e.g. `7M4K2D8Q9T1V`, displayed grouped `7M4K-2D8Q-9T1V`) lets anyone open the capsule in Watch. The backend is a thin Pages Functions layer over D1 (metadata) and R2 (blobs), with a companion cron Worker that drives periodic sweeps.
+
+**Repository additions:**
+```
+NanoToybox/
+├── functions/                        # Cloudflare Pages Functions (backend)
+│   ├── env.ts                        # Env type (D1, R2, secrets)
+│   ├── admin-gate.ts                 # Two-path admin gate (constant-time compare)
+│   ├── auth-middleware.ts            # Session cookie verification + dev bypass
+│   ├── oauth-state.ts                # HMAC-signed state (10min TTL, provider-bound)
+│   ├── oauth-helpers.ts              # User + session creation after provider callback
+│   ├── api/
+│   │   ├── capsules/
+│   │   │   ├── publish.ts            # POST — authenticated publish (quota + persist)
+│   │   │   ├── [code].ts             # GET — metadata (gated by accessibility predicate)
+│   │   │   └── [code]/
+│   │   │       ├── blob.ts           # GET — capsule JSON blob with safe headers
+│   │   │       ├── preview/poster.ts # GET — poster image (404 until preview ready)
+│   │   │       └── report.ts         # POST — abuse report (IP-hash de-dup)
+│   │   ├── admin/
+│   │   │   ├── capsules/[code]/delete.ts  # Moderation delete (idempotent)
+│   │   │   ├── sweep/orphans.ts           # R2 orphan sweep (24h threshold)
+│   │   │   ├── sweep/sessions.ts          # Expired/idle session + quota-bucket prune
+│   │   │   └── seed.ts                    # Local-only admin seed
+│   │   └── auth/
+│   │       ├── session.ts            # Current-session probe
+│   │       └── logout.ts             # Clear session cookie
+│   ├── auth/                         # OAuth start/callback per provider
+│   │   ├── google/{start,callback}.ts
+│   │   └── github/{start,callback}.ts
+│   └── c/[code].ts                   # GET /c/:code — share-preview HTML (og: metadata)
+├── src/share/                        # Shared modules (frontend + backend)
+│   ├── d1-types.ts                   # Minimal D1 shim shared by both tsconfigs
+│   ├── share-code.ts                 # Generate / normalize / validate share codes
+│   ├── share-record.ts               # Status enums, accessibility predicates, metadata mapper
+│   ├── publish-core.ts               # Validation, metadata extraction, SHA-256, collision-safe persist
+│   ├── rate-limit.ts                 # Split quota API (check / consume / prune)
+│   └── audit.ts                      # Append-only audit log, IP hashing, usage counters
+├── migrations/                       # D1 schema (sqlite)
+│   ├── 0001_capsule_share.sql
+│   ├── 0002_audit_quota_counters.sql
+│   └── 0003_capsule_object_key_index.sql
+├── workers/cron-sweeper/             # Companion Worker (separate deploy)
+│   ├── wrangler.toml                 # Own config, two cron triggers
+│   ├── tsconfig.json                 # Own tsconfig
+│   ├── README.md                     # Deploy notes
+│   └── src/index.ts                  # Scheduled handler (HMAC-header call to admin sweeps)
+├── tsconfig.json                     # Frontend (lab + watch + src/)
+├── tsconfig.functions.json           # Backend (functions/ + handler tests, workers-types)
+└── wrangler.toml                     # Pages project binding manifest
+```
+
+#### Data Plane vs Control Plane
+
+- **Control plane — D1 (SQLite):** the authoritative index of every share. `capsule_share` holds one row per capsule keyed by internal `id`, indexed on `share_code` (unique), `status`, `owner_user_id`, `created_at`, and `object_key`. Status transitions (`draft` → `ready` → optional `ready_pending_preview` → `removed`/`rejected`) are the only signal that ever gates reads. `users`, `oauth_accounts` (`(provider, provider_account_id)` unique, **no auto cross-provider linking** — Phase 1 policy), and `sessions` (`last_seen_at` for 30-day idle expiration) live beside it. Append-only observability lives in `capsule_share_audit` and per-day `usage_counter`. Quota state lives in `publish_quota_window` (`(user_id, window_key)` PK).
+- **Data plane — R2:** validated capsule blobs under a single `capsules/<id>/capsule.atomdojo` prefix. **Validate-then-write** (no quarantine prefix); validation lives in `src/share/publish-core.ts` and runs before any R2 write. The bucket is **never** served publicly — all reads flow through `functions/api/capsules/[code]/blob.ts`, which re-checks the row status before streaming bytes. Preview assets (poster, motion) use sibling keys tracked by `preview_poster_key` / `preview_motion_key`.
+- **Accessibility gate:** `src/share/share-record.ts` exposes `isAccessibleStatus(status)` — only `ready` and `ready_pending_preview` expose blob/metadata. Every GET handler runs the predicate before responding; non-accessible statuses return `404` (no state leak). `toMetadataResponse(row)` is the single place metadata is projected for clients.
+
+#### Control Flows
+
+**Publish (Lab → cloud):**
+```
+Lab TimelineBar (Transfer → Share tab)
+    → onPublishCapsule callback (lab/js/components/timeline-transfer-dialog.tsx
+                                 + lab/js/runtime/timeline-subsystem.ts)
+    → POST /api/capsules/publish
+           │
+           ▼
+    functions/api/capsules/publish.ts
+      1. auth-middleware  → require session user
+      2. rate-limit.checkPublishQuota(userId)      (read-only preflight)
+      3. publish-core.validateAndExtractMetadata() (size, format, version, SHA-256)
+      4. publish-core.persistRecord()              (insert draft row, collision-safe share_code)
+      5. R2.put(capsules/<id>/capsule.atomdojo)
+      6. flip status draft → ready (or ready_pending_preview if preview pipeline defers)
+      7. rate-limit.consumePublishQuota(userId)    (write-only; failure → warning, not abort)
+      8. audit.recordAuditEvent('publish_success')
+    → 201 { shareCode, warnings?: ['quota_accounting_failed' | 'audit_write_failed'] }
+```
+The response `warnings[]` surfaces publish-succeeded-but-bookkeeping-degraded states; the lab success state renders each warning as a subtle note.
+
+**Resolve (Watch opens a share):**
+```
+User pastes any of: raw code, grouped code, /c/<code>, /watch/?c=<code>, full URL
+    → share-code.normalizeShareInput()          (src/share/share-code.ts)
+    → WatchController.openSharedCapsule(input)  (watch/js/watch-controller.ts)
+         ├── GET /api/capsules/<code>           → metadata (404 if not accessible)
+         ├── GET /api/capsules/<code>/blob      → capsule JSON bytes
+         ├── construct File (synthesize name/type)
+         └── route through existing openFile() transactional pipeline
+    → document-service prepare/commit → renderer displays the capsule
+```
+
+**Share preview (`GET /c/:code`):** `functions/c/[code].ts` returns HTML with `og:` metadata plus a client-side redirect to `/watch/?c=<code>`. Bots get metadata without JS; browsers get the redirect. Non-accessible statuses return `404` (same predicate as the API).
+
+**Moderation:**
+```
+Admin caller (dev localhost OR cron header)
+    → POST /api/admin/capsules/<code>/delete
+    → functions/api/admin/capsules/[code]/delete.ts
+         1. admin-gate.ts                 (two-path check; 404 on failure)
+         2. flip status → removed         (idempotent — already-removed returns OK)
+         3. R2.delete(object_key)
+         4. audit.recordAuditEvent('moderation_delete')
+```
+
+**Sweep (cron companion → admin endpoints):**
+```
+Cloudflare cron trigger (workers/cron-sweeper/wrangler.toml)
+    → workers/cron-sweeper/src/index.ts scheduled handler
+    → POST /api/admin/sweep/sessions   (every 6h)
+        → functions/api/admin/sweep/sessions.ts
+        → prune expired/idle sessions + expired quota buckets (rate-limit.pruneExpiredQuotaBuckets)
+        → audit 'session_swept'
+    → POST /api/admin/sweep/orphans    (daily 03:30 UTC)
+        → functions/api/admin/sweep/orphans.ts
+        → list R2 keys older than 24h with no matching capsule_share row
+        → delete orphans; audit 'orphan_swept' / 'orphan_sweep_failed'
+```
+
+#### Auth Architecture
+
+OAuth is the only identity source. State is server-signed and provider-bound; sessions are cookie-only.
+
+```
+Client clicks "Sign in with <Provider>"
+    → GET /auth/<provider>/start
+          │  functions/auth/<provider>/start.ts
+          │    ├── oauth-state.signState(provider, nonce, ttl=10min)
+          │    └── 302 → provider consent URL (state in query)
+          ▼
+    Provider consent
+          │
+          ▼
+    → GET /auth/<provider>/callback
+          │  functions/auth/<provider>/callback.ts
+          │    ├── oauth-state.verifyState() — HMAC + TTL + provider binding
+          │    ├── exchange code for token, fetch provider profile
+          │    ├── oauth-helpers.findOrCreateUser()   (no cross-provider linking — Phase 1)
+          │    ├── oauth-helpers.createSession()       (D1 insert)
+          │    └── Set-Cookie session + 302 → app
+          ▼
+    Subsequent requests
+          │  functions/auth-middleware.ts
+          │    ├── read session cookie, verify row, bump last_seen_at
+          │    └── attach userId to context, else 401
+```
+
+- **Cookie names by environment:** production and preview use distinct cookie names so a preview session never satisfies a production request (and vice versa).
+- **Dev bypass:** when `AUTH_DEV_USER_ID` is set and the request is from localhost, `auth-middleware.ts` short-circuits to that user id. Never active in production.
+- **Session session API:** `GET /api/auth/session` returns the current user (if any); `POST /api/auth/logout` clears the cookie and soft-deletes the session row.
+- **Idle expiration:** sessions expire after 30 days of no `last_seen_at` bump; the session sweeper (above) reclaims the rows.
+
+#### Admin Gate
+
+`functions/admin-gate.ts` is the single authorization primitive for `functions/api/admin/*` and is also enforced independently in `workers/cron-sweeper/src/index.ts`. It accepts **either** of two paths:
+
+1. `DEV_ADMIN_ENABLED === 'true'` **and** the request originates from localhost. Local-only developer escape hatch.
+2. An `X-Cron-Secret` header whose value matches `CRON_SECRET`, compared with `crypto.subtle.timingSafeEqual`-style **constant-time** compare. This is the path the cron companion uses.
+
+On failure the gate returns `404 Not Found` (not `401`/`403`) so the endpoint does not leak its own existence to unauthenticated callers. Both sides of the wire use the same constant-time helper so secret-length mismatches don't create a timing channel.
+
+#### Rate Limiting / Quota
+
+Per-user publishing is bounded by a sliding-window quota backed by D1. Contract in `src/share/rate-limit.ts`:
+
+- **Split API** — `checkPublishQuota(userId)` is **read-only** (preflight gate), `consumePublishQuota(userId)` is **write-only** (called only after the blob write + status flip succeed). This split exists so **failed publish attempts don't consume quota**: a 4xx rejection leaves the user's budget untouched. `pruneExpiredQuotaBuckets()` is called by the session sweep.
+- **Defaults** — `DEFAULT_PUBLISH_QUOTA`: 10 publishes per 24h, composed of 24× 1h buckets (coarse-bucket sliding window). Callers may override via `PublishQuotaConfig`.
+- **Overshoot axes** (documented in the module docstring — ops must understand both):
+  1. **Bounded-burst overshoot:** concurrent publishes that each pass `checkPublishQuota` before any calls `consumePublishQuota`. Bounded by in-flight concurrency; acceptable.
+  2. **Consume-failure overshoot:** if `consumePublishQuota` throws after the publish already succeeded, quota is not debited. The handler records `publish_quota_accounting_failed` in the audit stream and surfaces `'quota_accounting_failed'` in the response `warnings[]`. Under sustained D1 outages this becomes **unbounded** — ops must alert on `publish_quota_accounting_failed` counts and treat spikes as an incident, because the user-visible quota gate is degraded while the write path still works.
+- **Event vocabulary** distinguishes rejection causes so dashboards can separate them: `publish_rejected_quota`, `publish_rejected_size`, `publish_rejected_invalid`.
+
+#### Audit Stream Contract
+
+`src/share/audit.ts` is the append-only observability layer for the control plane. Every consequential state change writes one row to `capsule_share_audit`.
+
+- **Event types:** `publish_success`, `publish_rejected_quota`, `publish_quota_accounting_failed`, `publish_rejected_size`, `publish_rejected_invalid`, `abuse_report`, `moderation_delete`, `orphan_swept`, `orphan_sweep_failed`, `session_swept`. Each state transition emits exactly one event type, so the stream is a reconciliation log: replaying it reproduces the count of each outcome per day.
+- **`recordAuditEvent()`** is the only writer. It defensively truncates `reason` fields to `MAX_AUDIT_REASON_LENGTH = 500` chars so a caller with a huge error message cannot bloat the table.
+- **`hasRecentAuditEvent(ipHash, eventType, windowSeconds)`** supports per-IP per-day de-duplication for abuse reports (prevents report spam from a single source).
+- **`hashIp(ip)`** is a SHA-256 over the IP plus `SESSION_SECRET` salt. The function **rejects an empty salt** to fail loudly if the secret is unset — an empty salt would make the hash trivially reversible.
+- **`incrementUsageCounter(metric, day)`** writes to `usage_counter` (PK `(metric, day)`), giving pre-aggregated per-day rollups for dashboards without scanning the audit stream.
+
+Reconciliation model: the audit stream is the system of record for "what happened". The quota and usage counters are derived caches; the sweeper can rebuild them from the audit stream if needed.
+
+#### Cron Companion Worker (`workers/cron-sweeper/`)
+
+Cloudflare Pages Functions do not support scheduled handlers, so the sweeps run from a separately deployed standard Worker. It owns its own `wrangler.toml` and `tsconfig.json`; it shares no runtime code with the Pages project — it is a pure HTTP client that POSTs to `/api/admin/sweep/*` on the production Pages URL with the `X-Cron-Secret` header.
+
+- **Schedule** (from `workers/cron-sweeper/wrangler.toml`):
+  - `0 */6 * * *` — every 6 hours → `/api/admin/sweep/sessions`
+  - `30 3 * * *` — daily 03:30 UTC → `/api/admin/sweep/orphans`
+- Both ends (`functions/admin-gate.ts` and `workers/cron-sweeper/src/index.ts`) compare the secret with the same constant-time routine — never string equality.
+- Deploy notes (secret setup, base URL override for local dev) live in `workers/cron-sweeper/README.md`. Keep cron counts within the active Workers plan's limits (free tier: 5 crons/account).
+
+#### Module Ownership
+
+Narrow module ownership table — who owns what across the Phase 5 surface:
+
+| Area | Owner module(s) | Notes |
+|------|-----------------|-------|
+| Share-code shape | `src/share/share-code.ts` | Generate / normalize / validate. Single source of truth for every paste shape (raw, grouped, `/c/<code>`, `/watch/?c=<code>`, full URL). |
+| Status + accessibility | `src/share/share-record.ts` | `isAccessibleStatus`, `toMetadataResponse`. Every GET handler routes through these. |
+| Publish pipeline | `src/share/publish-core.ts` | Validation, metadata extraction, SHA-256, ID generation, collision-safe `persistRecord`. |
+| Rate limit / quota | `src/share/rate-limit.ts` | Split API: `checkPublishQuota` / `consumePublishQuota` / `pruneExpiredQuotaBuckets`. Hot path: `functions/api/capsules/publish.ts`. |
+| Audit + counters | `src/share/audit.ts` | `recordAuditEvent`, `hasRecentAuditEvent`, `hashIp`, `incrementUsageCounter`. Event-type vocabulary is closed. |
+| D1 type shim | `src/share/d1-types.ts` | Shared across `tsconfig.json` and `tsconfig.functions.json` so handler tests don't depend on `@cloudflare/workers-types`. |
+| Publish endpoint | `functions/api/capsules/publish.ts` | Auth → preflight quota → validate → R2 write → status flip → consume quota → audit. |
+| Read endpoints | `functions/api/capsules/[code].ts`, `.../blob.ts`, `.../preview/poster.ts` | All gated by `isAccessibleStatus`; 404 on anything else. |
+| Abuse report | `functions/api/capsules/[code]/report.ts` | IP-hash de-dup via `hasRecentAuditEvent`. |
+| Moderation | `functions/api/admin/capsules/[code]/delete.ts` | Idempotent status flip + R2 remove. |
+| Sweeps | `functions/api/admin/sweep/orphans.ts`, `.../sessions.ts` | Invoked only via `admin-gate.ts`. |
+| Admin seed (local) | `functions/api/admin/seed.ts` | Dev-only. |
+| Share-preview HTML | `functions/c/[code].ts` | og: metadata + redirect; 404 on non-accessible. |
+| Session API | `functions/api/auth/session.ts`, `.../logout.ts` | Cookie verification lives in `functions/auth-middleware.ts`. |
+| OAuth | `functions/auth/{google,github}/{start,callback}.ts` + `oauth-state.ts` + `oauth-helpers.ts` | HMAC-signed state, 10min TTL, provider-bound. No cross-provider auto-linking. |
+| Auth gate (user) | `functions/auth-middleware.ts` | Session cookie verify; `AUTH_DEV_USER_ID` dev bypass on localhost. |
+| Auth gate (admin) | `functions/admin-gate.ts` | Two-path: localhost+`DEV_ADMIN_ENABLED`, or `X-Cron-Secret` constant-time. 404 on failure. |
+| Env binding type | `functions/env.ts` | D1, R2, secret typing shared by all handlers. |
+| Cron scheduling | `workers/cron-sweeper/` | Standalone Worker with its own `wrangler.toml` / `tsconfig.json` / `README.md`. Pure HTTP client to admin sweeps. |
+| Schema migrations | `migrations/0001_capsule_share.sql`, `0002_audit_quota_counters.sql`, `0003_capsule_object_key_index.sql` | Applied via `wrangler d1 migrations apply`. |
+| Lab integration | `lab/js/components/TimelineBar.tsx` + `timeline-transfer-dialog.tsx`, `lab/js/runtime/timeline-subsystem.ts` (`onPublishCapsule` on `TimelineCallbacks`) | Unified "Transfer" dialog: Download / Share tabs. Renders response `warnings[]` as a subtle note. |
+| Watch integration | `watch/js/watch-controller.ts` (`openSharedCapsule`), `watch/js/main.ts` | Normalize → metadata fetch → blob fetch → synthesize `File` → existing `openFile()` transactional pipeline. |
+
 ### Deferred Phases
 
-Phase 3B-D (remaining interface narrowing), Phase 4 (folder reorganization), and Phase 5 (workspace assessment) are intentionally deferred.
+Phase 3B-D (remaining interface narrowing) and Phase 4 (folder reorganization) are intentionally deferred.
 
 ## External Dependencies
 

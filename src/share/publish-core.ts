@@ -13,21 +13,8 @@
  *              functions/api/admin/seed.ts
  */
 
-// D1Database is provided by the Cloudflare Workers runtime.
-// Declare a minimal interface here so this module type-checks in both
-// the Workers runtime and the Vite/vitest build environment.
-interface D1Database {
-  prepare(query: string): D1PreparedStatement;
-}
-interface D1PreparedStatement {
-  bind(...values: unknown[]): D1PreparedStatement;
-  run(): Promise<D1Result>;
-}
-interface D1Result {
-  success: boolean;
-}
-
 import { validateCapsuleFile } from '../history/history-file-v1';
+import type { D1Database } from './d1-types';
 import type { AtomDojoPlaybackCapsuleFileV1 } from '../history/history-file-v1';
 import { generateShareCode } from './share-code';
 import type { ShareRecordStatus, PreviewStatus } from './share-record';

@@ -11,15 +11,19 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.functions.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.functions.json && tsc --noEmit -p workers/cron-sweeper/tsconfig.json",
     "typecheck:frontend": "tsc --noEmit",
     "typecheck:functions": "tsc --noEmit -p tsconfig.functions.json",
+    "typecheck:cron": "tsc --noEmit -p workers/cron-sweeper/tsconfig.json",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
     "lint:dock-contract": "grep -q \"const DOCK_ROOT_SELECTOR = '\\[data-dock-root\\]'\" lab/js/runtime/overlay-layout.ts && ! grep -q \"querySelector('.dock')\" lab/js/runtime/overlay-layout.ts && echo 'dock-contract: PASS' || (echo 'dock-contract: FAIL — overlay-layout.ts must use DOCK_ROOT_SELECTOR, not hardcoded .dock' && exit 1)",
     "seed:capsule": "sh scripts/seed-capsule.sh",
     "cf:d1:migrate": "wrangler d1 migrations apply atomdojo-capsules --local",
-    "cf:dev": "wrangler pages dev dist"
+    "cf:dev": "wrangler pages dev dist",
+    "cron:deploy": "cd workers/cron-sweeper && wrangler deploy",
+    "cron:dev": "cd workers/cron-sweeper && wrangler dev --var PAGES_BASE_URL:http://localhost:8788",
+    "cron:tail": "cd workers/cron-sweeper && wrangler tail"
   },
   "repository": {
     "type": "git",

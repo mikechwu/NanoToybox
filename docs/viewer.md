@@ -8,7 +8,7 @@ NanoToybox has three browser interfaces:
 |-----------|------|---------|
 | **Interactive Page** | `lab/index.html` | Real-time Tersoff simulation with drag/rotate interaction |
 | **Trajectory Viewer** | `viewer/index.html` | Pre-computed trajectory playback with stride control |
-| **Watch** | `watch/index.html` | Import and play back `.atomdojo` history files exported from lab |
+| **Watch** | `watch/index.html` | Import and play back `.atomdojo` history files — from local files or from shared cloud capsules via share code |
 
 ## Interactive Page (`lab/`)
 
@@ -443,6 +443,8 @@ npm run dev
 
 "Watch History" title, an "Open File" button, and a drag-and-drop zone. A support note describes accepted formats. File detection is automatic (format, version, and kind inspection) — there is no user type picker.
 
+The landing page also exposes a **share-code input** for opening capsules that live in the cloud (see Remote Open via Share Code below). The top bar in the workspace provides the same affordance so the user can switch to a shared capsule without returning to the landing state.
+
 ### Supported Formats
 
 | Kind | Version | Status |
@@ -451,6 +453,28 @@ npm run dev
 | `"capsule"` | v1 | Supported — loads into workspace. Contains dense frames and atoms but NO restart frames or checkpoints. Bond topology is reconstructed at playback time from atom positions. Capsule files may include optional appearance (`CapsuleAppearanceV1`) with authored color assignments and optional sparse interaction timeline (`CapsuleInteractionTimelineV1`). |
 | `"reduced"` | v1 | Legacy import alias — normalized to `LoadedCapsuleHistory` at import time. Same runtime behavior as capsule. |
 
+### Remote Open via Share Code
+
+Watch can open capsules hosted in the cloud via a 12-char Crockford Base32 share code. When Watch is loaded with a `?c=<code>` query parameter, it auto-fetches the referenced capsule and routes it through the same transactional file-open pipeline as a local file — a failure leaves the current document intact.
+
+**URL entry points:**
+
+- `/watch/?c=<code>` — Watch auto-loads on page init
+- `/c/:code` — backend share-preview HTML page that redirects into `/watch/?c=<code>`
+- Landing-page share-code input and top-bar share-code affordance — user pastes a code (or any of the supported input shapes below), and the controller fetches and loads it
+
+**Accepted input shapes:** the controller's `openSharedCapsule(input)` method normalizes input via `normalizeShareInput()` (in `src/share/share-code.ts`) and accepts:
+
+- Raw 12-char code (e.g. `ABCDEFGHJKMN`)
+- Grouped/spaced code (e.g. `ABCD-EFGH-JKMN` or `ABCD EFGH JKMN`)
+- Path form `/c/:code`
+- Watch URL form `/watch/?c=<code>`
+- Full absolute URL containing either of the above
+
+Invalid or unparseable input produces an "Invalid share code or URL" error without disturbing the current document.
+
+**Fetch pipeline:** `openSharedCapsule()` (in `watch/js/watch-controller.ts`) first calls `/api/capsules/:code` for metadata (existence / accessibility check), then `/api/capsules/:code/blob` for the capsule JSON. The response is wrapped in a `File` object and handed to the same `openFile()` entry point used by drag-drop and file-picker flows, so all validation, transactional rollback, and commit-phase checks are shared between local and remote opens. Network or server errors surface through the error overlay.
+
 ### Workspace
 
 Once a valid file loads, the app presents:
@@ -458,7 +482,7 @@ Once a valid file loads, the app presents:
 | Element | Details |
 |---------|---------|
 | Canvas | Three.js scene (same renderer as lab, via thin adapter: `initForPlayback` + `updateReviewFrame`) |
-| Top bar | File-kind badge + file name + "Open File" action |
+| Top bar | File-kind badge + file name + "Open File" action + share-code input (see Remote Open via Share Code above) |
 | Bonded-groups panel | Two-tier expand (large/small clusters) with hover preview, Center/Follow buttons, and authored color editing (see Color Editing below) |
 | Timeline | Custom scrub track (thick variant from shared `timeline-track.css`) with pointer-event scrubbing and time readouts at both ends |
 | Playback dock | Transport cluster + utility cluster (repeat, smooth toggle, speed) + settings button (see Playback Dock below) |

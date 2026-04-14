@@ -21,6 +21,19 @@
     "tests/unit/**/*.ts",
     "tests/unit/**/*.tsx",
     "vite.config.ts"
+  ],
+  "exclude": [
+    // Backend-handler tests run under tsconfig.functions.json because they
+    // import from functions/ and depend on Cloudflare Workers globals
+    // (PagesFunction, R2Bucket, D1Database). The main typecheck already
+    // runs both configs via the `typecheck` script.
+    "tests/unit/admin-gate.test.ts",
+    "tests/unit/publish-endpoint.test.ts",
+    "tests/unit/report-endpoint.test.ts",
+    "tests/unit/admin-delete-endpoint.test.ts",
+    "tests/unit/admin-orphans-endpoint.test.ts",
+    "tests/unit/admin-sessions-endpoint.test.ts",
+    "tests/unit/cron-sweeper.test.ts"
   ]
   // Coverage: all extracted app/bench source modules are .ts/.tsx and type-checked.
   // Inline <script type="module"> in HTML entrypoints are sanctioned exceptions.

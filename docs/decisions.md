@@ -677,3 +677,97 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Rationale:** Replay was a legacy format with no implementation path. Keeping it in the UI created dead product surface and confused the export state machine.
 
 **Evidence:** `lab/js/components/timeline-export-dialog.tsx`, `lab/js/store/app-store.ts`
+
+## D86: Capsule Share-Link Architecture — Metadata-First Control Plane + Private R2 Data Plane
+
+**Decision:** Split the share-link service into a D1 control plane (metadata, share-code lookup, publish state machine) and an R2 data plane holding capsule blobs. R2 stays private — all public access is mediated by Pages Functions that resolve the share code through application policy before streaming the blob.
+
+**Rationale:** D1 gives cheap, queryable metadata (lookups, audit joins, quota) while R2 gives cheap blob storage. Routing every read through a Function keeps user-controlled filenames and raw storage URLs out of the public surface, and lets us change storage layouts without breaking links.
+
+**Alternatives rejected:** Public R2 bucket (leaks filenames, no access control, impossible to rotate); storing capsule bytes in D1 (wrong pricing and size model).
+
+## D87: Share-Code Format — 12-Char Crockford Base32
+
+**Decision:** Share codes are 12 characters of Crockford Base32 (~60 bits entropy), case-insensitive, excluding ambiguous glyphs (I, L, O, U). The canonical URL is `/c/<code>` (ungrouped); display form groups as `7M4K-2D8Q-9T1V`. `normalizeShareInput` accepts raw code, grouped code, `/c/:code`, `/watch/?c=…`, or a full URL.
+
+**Rationale:** 60 bits defeats enumeration at any reasonable request rate; Crockford Base32 is readable on paper and over voice. A single normalizer collapses every observed input form into one canonical lookup key.
+
+**Alternatives rejected:** Shorter codes (enumeration risk); UUIDs (user-unfriendly, unreadable).
+
+## D88: Validate-Then-Write Publish Model (Phase 1b)
+
+**Decision:** The publish Pages Function validates the capsule body in memory and only writes to R2 on success. If the subsequent D1 metadata insert fails, the R2 object is deleted to roll back. The quarantine/`incoming/` prefix pattern is reserved for a future presigned-URL direct-upload path.
+
+**Rationale:** The Function already holds the full body in memory at validation time, so an upload-then-validate two-stage flow adds latency and a cleanup burden for no win. Rollback on D1 failure keeps the two stores consistent without distributed-transaction machinery.
+
+**Alternatives rejected:** Upload-to-`incoming/` then validate (unnecessary when the body is already in the Function); fire-and-forget with an async janitor (leaves orphans during outages).
+
+## D89: OAuth + Session Cookie (Not Cloudflare Access)
+
+**Decision:** Auth uses OAuth 2.0 authorization-code flow against Google and GitHub, exchanged for an HttpOnly session cookie. Cookie name is `__Host-atomdojo_session` over HTTPS and `atomdojo_session_dev` over plain-HTTP localhost. Each `(provider, provider_account_id)` maps to exactly one user — no automatic cross-provider account linking in Phase 1. A `AUTH_DEV_USER_ID` env var plus a localhost origin (both required) enables a dev bypass.
+
+**Rationale:** OAuth is standard, familiar to users, and avoids embedding long-lived API keys in the browser bundle. The `__Host-` prefix enforces Secure + path=/ + no Domain, which blocks subdomain cookie attacks. Requiring both the env var and the localhost origin for the dev bypass is defense in depth against accidental production exposure.
+
+**Alternatives rejected:** Cloudflare Access (wrong audience — we need public sign-up, not SSO to an app); long-lived API keys in browser bundles (unrevocable, easy to exfiltrate); auto cross-provider linking (email-confusion account-takeover risk).
+
+## D90: Two-Phase Publish Quota — Preflight Check + Post-Success Consume
+
+**Decision:** Quota enforcement splits into `checkPublishQuota` (read-only preflight, before validation and write) and `consumePublishQuota` (run after a successful persist). Failed attempts — size, validation, R2 error, D1 metadata error — do NOT consume quota. If the consume itself fails after a successful persist, the client still receives 201 with `warnings: ['quota_accounting_failed']`; the publish is real. Overshoot is bounded by concurrency under normal conditions and by D1-outage duration in the pathological case, which emits a `publish_quota_accounting_failed` critical audit event that ops alerting MUST watch.
+
+**Rationale:** Single-step check+consume would charge failures, turning a bug or network blip into user-visible quota loss. A full Durable-Object atomic counter would eliminate drift but costs significant complexity and is scoped to a future phase.
+
+**Alternatives rejected:** Single-step check+consume (charges failures); Durable-Object atomic counter (deferred to a later phase).
+
+## D91: Distinct Audit Event Types for Quota Rejection vs. Accounting Failure
+
+**Decision:** Quota-related audit events split into `publish_rejected_quota` (429 path — the user was denied) and `publish_quota_accounting_failed` (publish succeeded, counter drifted, critical). These are never collapsed into a single event type.
+
+**Rationale:** 429 dashboards count user-facing rejections; reconciliation tooling counts internal drift. Conflating them would contaminate both streams — alert fatigue on one side, false-negative reconciliation on the other.
+
+## D92: Admin Gate Dual Auth Path
+
+**Decision:** Admin endpoints require one of two auth paths, both enforced by `functions/admin-gate.ts`: (1) local operator — `DEV_ADMIN_ENABLED=true` AND a localhost origin, strict equality check on both; (2) production automation — `X-Cron-Secret` header, constant-time compared against the `CRON_SECRET` env var. Every failure path returns 404 (not 403) to avoid leaking endpoint existence. Used by `seed`, `delete`, `sweep/orphans`, and `sweep/sessions`.
+
+**Rationale:** Dev operators need a zero-friction local path; scheduled automation needs a headless path; neither should unlock the other. 404-on-failure denies attackers even the signal that a gated route exists at that URL.
+
+**Alternatives rejected:** 403 on failure (existence leak); one-size-fits-all bearer token (dev workflow friction); checking only env var or only origin (each alone is insufficient).
+
+## D93: IP Hashing with Mandatory Salt
+
+**Decision:** IPs are never stored raw. `hashIp(ip, salt)` computes SHA-256 over `ip\u0000salt` with the salt sourced from `SESSION_SECRET`; the function rejects an empty salt. The digest is stored in `capsule_share_audit.ip_hash` and used for per-IP-per-day de-duplication. Rotating `SESSION_SECRET` invalidates old hashes, and that rotation is documented as an operational runbook item.
+
+**Rationale:** Hashed-with-salt preserves the de-dup signal we need (same IP twice in one day) without retaining PII. A mandatory salt prevents accidental plain-SHA-256 collisions with global rainbow tables. Unicode NUL as the delimiter makes the pre-image unambiguous even if an IP string contains unusual separators.
+
+**Alternatives rejected:** Storing raw IPs (PII and retention risk); hashing without a salt (rainbow-table attack); hashing with a compile-time constant salt (can't be rotated without a code deploy).
+
+## D94: Companion Cron Worker at `workers/cron-sweeper/`
+
+**Decision:** Scheduled sweeps live in a dedicated Worker at `workers/cron-sweeper/` that calls the Pages Functions admin sweep endpoints via `X-Cron-Secret`. Schedules: `0 */6 * * *` (sessions + quota buckets), `30 3 * * *` (R2 orphans).
+
+**Rationale:** Pages Functions cannot register scheduled handlers; something outside Pages must invoke the sweeps. Embedding sweep logic directly in the Worker would duplicate code already implemented as Pages Functions endpoints. Having the Worker call the Functions keeps one implementation, one test surface, and one set of audit events.
+
+**Alternatives rejected:** Inline sweep logic in the Worker (code duplication); external cron service (adds a third-party dependency and credential).
+
+## D95: Unified "Transfer" Dialog Replaces Separate Publish + Export Triggers
+
+**Decision:** One cloud-arrows trigger opens one dialog containing Download and Share tabs. The tab bar is hidden when only one destination is available. The dialog holds a dialog-level busy guard — one operation at a time; cancel, close, Escape, and backdrop dismissal are all disabled during submit. Action availability is the single source of truth; dead tabs never render. Warnings appear as a subtle non-blocking pill in the Share success state.
+
+**Rationale:** Two separate top-level triggers fragmented the transfer flow and doubled the icon surface. A unified dialog gives a single mental model ("send this somewhere") with per-destination tabs, and driving visibility off action availability eliminates drift between "button present" and "button usable." The busy guard prevents double-submit during the inherently-async publish/export.
+
+**Alternatives rejected:** Two separate buttons (fragmented UX, duplicated state); one button that silently does the "right" thing (breaks discoverability for the non-default destination).
+
+## D96: tsconfig Split — Frontend / Functions / Cron
+
+**Decision:** The repo ships three TypeScript configs: `tsconfig.json` for the frontend (excludes endpoint tests), `tsconfig.functions.json` for Pages Functions and their tests (includes Workers globals such as `PagesFunction`, `D1Database`, `R2Bucket`), and a third config for the cron Worker. `npm run typecheck` runs all three as a single gate.
+
+**Rationale:** Endpoint tests need Workers runtime globals that must not leak into Vite's compile of the frontend, but they also must be type-checked somewhere or they silently rot. Three narrow configs plus one gate catches drift in any codebase without polluting the others.
+
+**Alternatives rejected:** Single shared config (Workers globals pollute frontend compile); excluding endpoint tests from type-check entirely (silent rot).
+
+## D97: WAF Rate Limiting for Per-IP, In-Code for Per-User Quota
+
+**Decision:** Per-IP request limiting is enforced at the Cloudflare WAF edge (the recommended configuration is documented in `wrangler.toml`), not in Pages Functions code. Per-user publish quota is enforced in code via the `publish_quota_window` D1 table.
+
+**Rationale:** Per-IP is an anonymous, identity-free signal best handled at the edge where it can short-circuit before reaching our Functions. Per-user quota is identity-aware and requires looking up a session and a window row — it must run in code where auth is already resolved.
+
+**Alternatives rejected:** In-code per-IP limiting (adds DB round-trips to every request, worse-than-edge latency); WAF-only (can't express per-user quotas).

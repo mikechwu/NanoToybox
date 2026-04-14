@@ -1,0 +1,29 @@
+# Cron-sweeper — companion Worker that invokes the Pages admin sweep
+# endpoints on a schedule. Deployed separately from the main Pages project
+# because Cloudflare Pages Functions do not support scheduled handlers.
+#
+# Deploy:
+#   cd workers/cron-sweeper
+#   wrangler secret put CRON_SECRET    # must match value in Pages project
+#   wrangler deploy
+
+name = "atomdojo-cron-sweeper"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# The production base URL that the scheduled handler POSTs to.
+# Override locally via `wrangler dev --var PAGES_BASE_URL=http://localhost:8788`.
+[vars]
+PAGES_BASE_URL = "https://atomdojo.pages.dev"
+
+# Schedules:
+#   */60 minutes — sessions + quota buckets (cheap, frequent)
+#   daily 03:30 UTC — R2 orphan sweep (moderate cost, rare-hit)
+#
+# Keep cron counts under Workers free-tier limits unless the project is
+# on a paid plan (free tier: 5 crons/account; paid: 250/account).
+[triggers]
+crons = [
+  "0 */6 * * *",    # every 6h — /api/admin/sweep/sessions
+  "30 3 * * *",     # daily 03:30 UTC — /api/admin/sweep/orphans
+]

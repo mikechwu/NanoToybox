@@ -12,6 +12,14 @@
     "functions/**/*.ts",
     "src/share/**/*.ts",
     "src/history/history-file-v1.ts",
-    "src/history/bond-policy-v1.ts"
+    "src/history/bond-policy-v1.ts",
+    "tests/unit/admin-gate.test.ts",
+    "tests/unit/publish-endpoint.test.ts",
+    "tests/unit/report-endpoint.test.ts",
+    "tests/unit/admin-delete-endpoint.test.ts",
+    "tests/unit/admin-orphans-endpoint.test.ts",
+    "tests/unit/admin-sessions-endpoint.test.ts",
+    "tests/unit/cron-sweeper.test.ts",
+    "workers/cron-sweeper/src/**/*.ts"
   ]
 }

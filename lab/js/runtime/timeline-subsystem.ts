@@ -67,8 +67,10 @@ export interface TimelineSubsystemDeps {
   /** Estimate dependency — returns formatted size strings for both export kinds. */
   getExportEstimates?: () => { capsule: string | null; full: string | null };
   exportCapabilities?: { full: boolean; capsule: boolean };
-  /** Publish dependency — publishes a capsule to cloud storage and returns share info. */
-  publishCapsule?: () => Promise<{ shareCode: string; shareUrl: string }>;
+  /** Publish dependency — publishes a capsule to cloud storage and returns share info.
+   *  `warnings` carries non-fatal server-reported issues (e.g. quota-accounting
+   *  drift) that the UI should surface subtly without blocking the share. */
+  publishCapsule?: () => Promise<{ shareCode: string; shareUrl: string; warnings?: string[] }>;
 }
 
 /** High-level subsystem handle — main.ts should only use these methods. */

@@ -930,6 +930,21 @@ canvas { display: block; touch-action: none; }
 .timeline-transfer-dialog__code code {
   font-family: var(--font-family); letter-spacing: 0.05em;
 }
+/* Non-fatal publish warning — rendered alongside the share URL when the
+   server returns warnings[] on a real success (e.g. quota-accounting
+   drift). Low-emphasis: no alarming color, no icon, no border. The
+   share URL remains the primary visual element.
+   Uses --color-text (not --color-text-secondary) so the 11-12px font
+   size still passes WCAG AA contrast against the tinted background in
+   both light and dark themes — muted-on-muted failed AA in dark mode. */
+.timeline-transfer-dialog__warning {
+  margin-top: 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
+  color: var(--color-text);
+  font-size: var(--font-xs); line-height: 1.4;
+}
 /* Shared: errors + actions */
 .timeline-transfer-dialog__error {
   color: rgba(220, 80, 60, 0.9); font-size: var(--font-xs); margin-bottom: 8px;

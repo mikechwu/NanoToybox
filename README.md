@@ -2,7 +2,7 @@
 
 Interactive carbon nanostructure simulation playground running real-time molecular dynamics in the browser.
 
-Drag atoms, spin molecules, and watch carbon structures respond with real Tersoff physics — no server required.
+Drag atoms, spin molecules, and watch carbon structures respond with real Tersoff physics — no server required. Publish a session as a compact **capsule** and share a short code or link that opens instantly in the Watch viewer.
 
 ## Demo
 
@@ -42,6 +42,13 @@ Or visit the live demo at [atomdojo.pages.dev](https://atomdojo.pages.dev/lab/).
 - **Capsule and full file support** — loads compact capsule files (position-only with authored appearance) or full simulation histories; reconstructs bond topology on the fly via shared topology builders
 - **Authored color import** — capsule files carry per-group color assignments from the lab; Watch applies them so playback colors match the original session
 - **Shared rendering** — same PBR materials, camera orbit, XYZ triad, overlay layout, and theme system as the interactive lab
+
+### Share links (capsule publishing)
+
+- **One-click publish** — Lab's export dialog can publish a capsule to the cloud and return a 12-character share code (Crockford Base32, grouped as `7M4K-2D8Q-9T1V`) plus a share URL
+- **Open anywhere** — Watch accepts a pasted code, a `watch/?c=<code>` URL, or a `/c/:code` preview route
+- **Signed-in publishing** — Google or GitHub OAuth gates publish; reads are public. Per-user quota (10/24h sliding window) plus per-IP WAF rate limits keep abuse in check
+- **Cloudflare-backed** — Pages Functions under `functions/` persist metadata in D1 and capsule bodies in R2; a companion cron Worker in `workers/cron-sweeper/` expires sessions and sweeps orphaned R2 objects
 
 ## How It Works
 
@@ -122,6 +129,14 @@ NanoToybox/
 ├── structures/library/         # 15 relaxed 0K structures
 ├── scripts/                    # CLI tools, scaling research
 ├── tests/                      # Unit, E2E, and physics validation tests
+├── functions/                  # Cloudflare Pages Functions (share-link backend)
+│   ├── api/capsules/           # Publish, read, report endpoints
+│   ├── api/auth/               # Session + logout
+│   ├── api/admin/              # Moderation + sweeper endpoints (admin-gated)
+│   ├── auth/                   # Google + GitHub OAuth callbacks
+│   └── c/[code].ts             # /c/:code share-preview route
+├── migrations/                 # D1 schema migrations (capsule_share, audit/quota, indexes)
+├── workers/cron-sweeper/       # Scheduled Worker — sessions + R2 orphan sweeps
 └── docs/                       # Developer documentation
 ```
 
@@ -131,13 +146,42 @@ NanoToybox/
 
 ```bash
 npm install          # first time only
-npm run dev          # Vite dev server with HMR
+npm run dev          # Vite dev server with HMR (frontend only)
 npm run build        # production build → dist/
 npm run preview      # preview built output
-npm run typecheck    # TypeScript type-checking
+npm run typecheck    # TypeScript type-check (frontend + functions + cron)
 npm run test:unit    # Vitest unit tests
 npm run test:e2e     # Playwright E2E browser tests
 ```
+
+`npm run typecheck` fans out to `typecheck:frontend`, `typecheck:functions`, and `typecheck:cron` — the repo has a split tsconfig (`tsconfig.json` for the Vite app, `tsconfig.functions.json` for Pages Functions, `workers/cron-sweeper/tsconfig.json` for the cron Worker).
+
+### Share-link backend (Pages Functions, D1, R2)
+
+The capsule publishing feature runs on Cloudflare Pages Functions. Run the frontend + backend locally with Wrangler:
+
+```bash
+npm run build          # build dist/ first (Wrangler serves from it)
+npm run cf:d1:migrate  # apply D1 migrations to the local SQLite shim
+npm run cf:dev         # wrangler pages dev dist (Functions + D1/R2 bindings)
+# Open http://localhost:8788/lab/
+```
+
+Create a `.dev.vars` file in the repo root for local secrets (not committed). Typical keys:
+
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` — OAuth credentials
+- `SESSION_SECRET` — HMAC key for the session cookie
+- `AUTH_DEV_USER_ID` — optional localhost-only dev bypass for signed-in routes
+- `DEV_ADMIN_ENABLED=true` — optional localhost-only admin gate for moderation/sweep endpoints
+- `CRON_SECRET` — shared secret for the cron Worker to call admin sweep endpoints
+
+Seed a capsule for manual testing:
+
+```bash
+npm run seed:capsule    # POSTs a fixture capsule to the local dev server
+```
+
+The companion cron Worker lives in `workers/cron-sweeper/` with its own scripts: `npm run cron:dev` (local), `npm run cron:deploy`, `npm run cron:tail`.
 
 ### Python simulation engine
 
@@ -163,6 +207,12 @@ make -C sim/wasm     # Rebuild tersoff.wasm + glue
 - **CI** runs on every push/PR: typecheck, unit tests, build, Playwright E2E, deploy smoke check, Python physics tests
 - **Deploy** to Cloudflare Pages on push to main: build → verify → E2E → deploy
 
+### Deployment
+
+- **Frontend + Pages Functions** deploy together to Cloudflare Pages. Bindings (D1 `atomdojo-capsules`, R2 `atomdojo-capsule-store`) and WAF rules are declared in `wrangler.toml`; secrets (`SESSION_SECRET`, OAuth credentials, `CRON_SECRET`) are set via `wrangler pages secret put ...` in the Cloudflare dashboard
+- **D1 migrations** live in `migrations/` and are applied with `wrangler d1 migrations apply atomdojo-capsules` (add `--local` for the dev SQLite shim, omit for production)
+- **Cron Worker** in `workers/cron-sweeper/` is a separate deployable. It calls admin sweep endpoints (`X-Cron-Secret` auth) on a schedule — `0 */6 * * *` expires sessions, `30 3 * * *` sweeps orphaned R2 objects. Deploy with `npm run cron:deploy`
+
 ## Documentation
 
 Detailed docs in [`docs/`](docs/):
@@ -175,6 +225,7 @@ Detailed docs in [`docs/`](docs/):
 - [Decisions](docs/decisions.md) — key design rationale
 - [Testing & Validation](docs/testing.md) — test ladder, pass criteria, how to run
 - [ML Surrogate](docs/ml-surrogate.md) — force decomposition, training pipeline (deferred)
+- [Operations](docs/operations.md) — share-link deployment runbook, secrets, sweeps, reconciliation
 - [Contributing](docs/contributing.md) — development guide
 
 ## License

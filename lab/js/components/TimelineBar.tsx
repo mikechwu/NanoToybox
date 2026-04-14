@@ -216,7 +216,11 @@ function TimelineBarActive() {
   const [estimates, setEstimates] = useState<{ capsule?: string | null; full?: string | null }>({});
   const [shareSubmitting, setShareSubmitting] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
-  const [shareResult, setShareResult] = useState<{ shareCode: string; shareUrl: string } | null>(null);
+  const [shareResult, setShareResult] = useState<{
+    shareCode: string;
+    shareUrl: string;
+    warnings?: string[];
+  } | null>(null);
   const transferDidPause = useRef(false);
 
   // Latest callbacks ref — keeps unmount cleanup current even when callbacks
@@ -240,8 +244,23 @@ function TimelineBarActive() {
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
+  // Generation counter for in-flight share publishes.
+  //
+  // Problem without this: the `showTransfer` auto-close guard (see
+  // `useEffect` below) can invoke `closeTransferSession` while a publish
+  // is still awaiting `onPublishCapsule`. When the publish resolves, it
+  // would land `setShareResult(result)` after state was cleared, leaving
+  // a stale shareUrl/warnings visible the next time the dialog opens.
+  //
+  // Fix: bump the generation on every close; compare after the await and
+  // drop the result if the generation moved on.
+  const shareRunIdRef = useRef(0);
+
   // Canonical close helper — resets pause, dialog, and all transient state.
   const closeTransferSession = useCallback(() => {
+    // Invalidate any in-flight publish result so late resolutions cannot
+    // repaint the dialog with stale data after the user has closed it.
+    shareRunIdRef.current++;
     if (transferDidPause.current) {
       callbacks?.onResumeFromExport?.();
       transferDidPause.current = false;
@@ -337,16 +356,20 @@ function TimelineBarActive() {
       setShareError('Share is not available right now.');
       return;
     }
+    // Capture the generation at submit time. If closeTransferSession
+    // runs while this await is pending, the generation moves and we
+    // drop the late result — the dialog has been torn down.
+    const runId = ++shareRunIdRef.current;
     setShareSubmitting(true);
     setShareError(null);
     try {
       const result = await callbacks.onPublishCapsule();
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || shareRunIdRef.current !== runId) return;
       setShareResult(result);
       setShareSubmitting(false);
     } catch (e) {
       console.error('[TimelineBar] share failed:', e);
-      if (mountedRef.current) {
+      if (mountedRef.current && shareRunIdRef.current === runId) {
         setShareError(e instanceof Error ? e.message : 'Share failed.');
         setShareSubmitting(false);
       }
@@ -515,6 +538,7 @@ function TimelineBarActive() {
         shareError={shareError}
         shareUrl={shareResult?.shareUrl ?? null}
         shareCode={shareResult?.shareCode ?? null}
+        shareWarnings={shareResult?.warnings ?? null}
       />
     </>
   );

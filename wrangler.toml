@@ -14,3 +14,41 @@ database_id = "<created-via-wrangler-d1-create>"
 [[r2_buckets]]
 binding = "R2_BUCKET"
 bucket_name = "atomdojo-capsule-store"
+
+# ── Scheduled cleanup (Phase 5) ──────────────────────────────────────────────
+# Pages Functions cannot register scheduled handlers directly. The companion
+# Worker at `workers/cron-sweeper/` handles this — see its README.
+#
+# Deployment steps:
+#   1. cd workers/cron-sweeper
+#   2. wrangler secret put CRON_SECRET                     # in the Worker
+#   3. wrangler pages secret put CRON_SECRET --project-name=atomdojo  # in Pages
+#      (SAME value in both; they must match byte-for-byte for X-Cron-Secret.)
+#   4. wrangler deploy  (or: `npm run cron:deploy` from repo root)
+#
+# The Worker runs:
+#   "0 */6 * * *"  → POST /api/admin/sweep/sessions
+#   "30 3 * * *"   → POST /api/admin/sweep/orphans
+# with X-Cron-Secret header. The admin-gate in functions/admin-gate.ts
+# accepts this as the production automation path.
+#
+# Never commit CRON_SECRET. In local dev the sweep endpoints are also
+# reachable via the DEV_ADMIN_ENABLED + localhost path.
+#
+# ── Per-IP rate limiting (Phase 5) ───────────────────────────────────────────
+# Per-IP rate limits on publish and resolve are enforced by Cloudflare WAF at
+# the edge, not by application code. Configure in the Cloudflare dashboard:
+#
+#   Security → WAF → Rate limiting rules
+#     Rule: "Publish per IP"
+#       When: hostname eq atomdojo.pages.dev AND path eq /api/capsules/publish
+#       Rate: 30 requests per 1 minute per IP
+#       Action: block for 10 minutes
+#     Rule: "Resolve per IP"
+#       When: hostname eq atomdojo.pages.dev AND path contains /api/capsules/
+#       Rate: 300 requests per 1 minute per IP
+#       Action: challenge (managed challenge)
+#
+# Per-user quotas (10 publishes/24h) are enforced inside publish.ts via the
+# publish_quota_window D1 table — see src/share/rate-limit.ts.
+

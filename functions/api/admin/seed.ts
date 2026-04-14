@@ -9,6 +9,7 @@
  */
 
 import type { Env } from '../../env';
+import { requireAdminOr404 } from '../../admin-gate';
 import {
   preparePublishRecord,
   persistRecord,
@@ -18,14 +19,8 @@ import {
 export const onRequestPost: PagesFunction<Env> = async (context) => {
   const { request, env } = context;
 
-  // Hard gate: reject unless both conditions are true
-  if (env.DEV_ADMIN_ENABLED !== 'true') {
-    return new Response('Not found', { status: 404 });
-  }
-  const url = new URL(request.url);
-  if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
-    return new Response('Not found', { status: 404 });
-  }
+  const denied = requireAdminOr404(request, env);
+  if (denied) return denied;
 
   const body = await request.text();
 

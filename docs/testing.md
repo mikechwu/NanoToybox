@@ -107,6 +107,113 @@ npx vitest run
 npx vitest run tests/unit/simulation-timeline.test.ts
 ```
 
+### Phase 5 Test Layout
+
+Phase 5 introduced the Cloudflare-backed share/publish stack (Pages Functions + D1 + R2 + a cron Worker). The test surface is organized by ownership rather than by feature: pure shared modules, Workers-typed endpoint handlers, and end-to-end share flows each live in their own group with a tailored tsconfig and mocking pattern.
+
+#### Share Stack Unit Tests (`tests/unit/`)
+
+| Area | File(s) | Purpose |
+|------|---------|---------|
+| Share pure modules | `share-code.test.ts`, `share-record.test.ts`, `publish-core.test.ts` | Share-code encoding/decoding, publish-record preparation, and the pure publish-core pipeline. No mocks — uses real `crypto.subtle` / `crypto.randomUUID`. |
+| Rate limit | `rate-limit.test.ts` | Covers the split quota API (`checkPublishQuota` + `consumePublishQuota`) plus an inline legacy `checkAndConsume` helper to guard the previous single-call shape. |
+| Audit | `audit.test.ts` | Day-keyed counters, `hashIp` properties, and the `MAX_AUDIT_REASON_LENGTH` defensive-truncation path. |
+| Pages Functions handlers | `admin-gate.test.ts`, `publish-endpoint.test.ts`, `report-endpoint.test.ts`, `admin-delete-endpoint.test.ts`, `admin-orphans-endpoint.test.ts`, `admin-sessions-endpoint.test.ts` | Handler-level tests for `functions/**`. Need Cloudflare Workers globals (`PagesFunction`, `R2Bucket`, `D1Database`) — typechecked under `tsconfig.functions.json`. |
+| Cron Worker | `cron-sweeper.test.ts` | The scheduled Worker that sweeps expired/orphaned records. Shares the functions tsconfig for Workers types. |
+| Lab publish UI | `timeline-bar-lifecycle.test.tsx` | Transfer dialog, tab availability, busy-guard, warnings pill — the lab-side publish UX attached to the timeline bar. |
+| Lab layout regression | `timeline-layout.spec.ts` (E2E) | Bounding-box checks for the restart anchor vs. action-zone geometry. Playwright, not Vitest. |
+
+#### Share Stack E2E Tests (`tests/e2e/`)
+
+| File | Purpose |
+|------|---------|
+| `watch-share.spec.ts` | 13 tests covering landing + top-bar share-code input, `?c=` bootstrap, pasted code/URL/grouped forms, error states, and state preservation across navigation. |
+| `timeline-layout.spec.ts` | Action-zone + restart-anchor geometry regression (lab). |
+| `fixtures/share-capsule.json` | Minimal valid capsule used to back `page.route()` mocks; must carry the current `bondPolicy: { policyId, cutoff, minDist }` shape. |
+
+E2E specs intercept `/api/capsules/*` with `page.route()` because `vite preview` (the Playwright webServer) does not execute Pages Functions. See [E2E Strategy](#e2e-strategy-share-stack) below.
+
+### Split tsconfig Model
+
+Phase 5 tests ship across three tsconfigs because the frontend and the Pages Functions / cron Worker live in the same repo but compile against different lib sets.
+
+| Config | What it covers | Why |
+|--------|---------------|-----|
+| `tsconfig.json` (frontend) | `lab/`, `watch/`, `src/**`, `tests/unit/**/*.{ts,tsx}`, `vite.config.ts` | DOM + React + Three.js. Excludes the six endpoint tests + `cron-sweeper.test.ts` because they import Workers-typed symbols that would fail the DOM-only typecheck. |
+| `tsconfig.functions.json` (Workers) | `functions/**`, `src/share/**`, selected `src/history/*-v1.ts`, the six endpoint test files, `cron-sweeper.test.ts`, `workers/cron-sweeper/src/**` | `strict: true`, `types: ["@cloudflare/workers-types"]`. Gives the handlers real `PagesFunction`, `R2Bucket`, `D1Database`, `ExecutionContext` types. |
+| `workers/cron-sweeper/tsconfig.json` | The cron Worker package itself | Worker has its own `wrangler.toml`/deploy pipeline; its tsconfig keeps deploy-time typechecking independent of the Pages build. |
+
+The partitioning is enforced by `tsconfig.json`'s explicit `exclude` list — the endpoint tests are owned by the functions config, so they compile exactly once, under the lib set they actually need. Vitest still discovers and runs every file in `tests/unit/`; the split only affects `tsc`.
+
+### Script Reference
+
+| Script | Runs |
+|--------|------|
+| `npm run typecheck` | All three tsconfigs in sequence (frontend → functions → cron). |
+| `npm run typecheck:frontend` | `tsc --noEmit` against `tsconfig.json` only. |
+| `npm run typecheck:functions` | `tsc --noEmit -p tsconfig.functions.json`. |
+| `npm run typecheck:cron` | `tsc --noEmit -p workers/cron-sweeper/tsconfig.json`. |
+| `npm run test:unit` | `vitest run` — all Vitest files under `tests/unit/`. |
+| `npm run test:e2e` | `playwright test` — all specs under `tests/e2e/`. |
+| `npm run build` | `vite build` — produces `dist/` consumed by `cf:dev`. |
+| `npm run cf:dev` | `wrangler pages dev dist` — full local backend with Functions + D1 + R2 bindings. Use this when you need real `/api/capsules/*` responses. |
+| `npm run dev` | `vite` dev server — frontend only, no Functions. |
+| `npm run cf:d1:migrate` | Applies migrations to the local D1 (`atomdojo-capsules`). |
+| `npm run cron:dev` / `cron:deploy` / `cron:tail` | Local/prod lifecycle for the cron-sweeper Worker. |
+| `npm run seed:capsule` | Seeds a sample capsule into local R2/D1 for manual testing. |
+
+### Mock Patterns for Pages Functions Handlers
+
+Handler tests share a small but consistent recipe. The goal is to exercise the real handler end-to-end (request parsing, auth, quota, audit, R2/D1 writes, response shaping) while keeping the collaborators swappable.
+
+1. **Hoisted `vi.fn` mocks via `vi.hoisted()`** — every collaborator (auth, quota, audit, publish-core) is a hoisted function reference so `vi.mock()` can capture it before imports resolve. The pattern:
+
+   ```ts
+   const authMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<string | null>>());
+   vi.mock('../../src/share/auth-middleware', async () => {
+     const actual = await vi.importActual<typeof import('../../src/share/auth-middleware')>(
+       '../../src/share/auth-middleware',
+     );
+     return { ...actual, authenticateRequest: (...args: unknown[]) => authMock(...args) };
+   });
+   ```
+
+   Each `beforeEach` resets the mock; tests call `authMock.mockResolvedValue(...)` to script the path under test.
+2. **Mock D1 that implements the SQL dialect (not the method surface)** — the rate-limit and publish code use real SQL (`COALESCE(SUM(…))`, `IN (…)`, upserts, `LIMIT 1`). The mock D1 in these tests parses the prepared statement and returns dialect-correct results rather than stubbing by method name. This catches SQL-shape regressions that a `vi.fn().mockResolvedValue(...)` stub would miss.
+3. **Minimal handler context constructed by hand** — tests build `context = { request, env, params }` directly (see the `makeContext()` helper pattern in `publish-endpoint.test.ts`) rather than reaching for a full `EventContext`. Handlers only read `.request` and `.env`, so the minimal shape is cast via `as unknown as Parameters<typeof onRequestPost>[0]`.
+4. **Real `Request` objects** — `new Request('http://localhost/api/capsules/publish', { method, headers, body })` exercises the real Web Fetch API surface, avoiding header/method-parsing mocks.
+5. **Workers types required** — because the handler signatures reference `PagesFunction`, `R2Bucket`, and `D1Database`, these files only typecheck under `tsconfig.functions.json` (see [Split tsconfig Model](#split-tsconfig-model)).
+
+#### Reference Fixture Helpers (`publish-endpoint.test.ts`)
+
+Two helpers in `tests/unit/publish-endpoint.test.ts` are the canonical templates for new endpoint tests:
+
+- **`minimalValidCapsule()`** — the smallest JSON blob that passes `preparePublishRecord`. It pins:
+  - `format: 'atomdojo-history'`, `version: 1`, `kind: 'capsule'`
+  - A valid `producer`, `simulation.units`, `atoms`, and `timeline.denseFrames` with monotonic `timePs`
+  - **`bondPolicy: { policyId, cutoff, minDist }`** — the current shape. Legacy `{ cutoff, minDist }` without `policyId` is rejected by the importer and will cause tests to fail.
+- **`makePermissiveEnv()`** — returns `{ env, r2Puts, r2Deletes }`. The returned `env.DB` answers every prepared statement with `{ success: true }` / `null` / empty results, and `env.R2_BUCKET` captures `put`/`delete` calls into the returned arrays so tests can assert on the key names that were written. Use this when you want to focus on handler behavior (auth, quota, audit, response shape) rather than on D1 / R2 wire semantics.
+
+New endpoint tests should prefer these helpers over ad-hoc fixtures so the expected-valid-shape invariant has a single owner.
+
+### E2E Strategy: Share Stack {#e2e-strategy-share-stack}
+
+Playwright's `webServer` runs `vite preview` against `dist/`, which serves static assets only — `functions/**` is **not** executed. To test the full watch-share UX without standing up `wrangler pages dev`, the specs intercept every `/api/capsules/**` request with `page.route()` and reply with a fixture-backed response:
+
+```ts
+await page.route('**/api/capsules/**', (route) => {
+  // return the share-capsule fixture or a scripted error
+});
+```
+
+Important fixture contract: `tests/e2e/fixtures/share-capsule.json` must use the current `bondPolicy: { policyId, cutoff, minDist }` shape. The legacy `{ cutoff, minDist }` form is rejected by the capsule importer and will break the watch flow under test. If you regenerate this fixture, preserve `policyId: 'default-carbon-v1'` (or the current default) alongside `cutoff` and `minDist`.
+
+For tests that need the real backend (rare — typically manual verification, not CI), run `npm run build && npm run cf:dev` and point Playwright at `http://localhost:8788` instead of the `vite preview` default.
+
+### Known Pre-Existing Flake: `worker-integration.spec.ts`
+
+`tests/e2e/worker-integration.spec.ts` has a timing-sensitive stall-detection test that is intermittently flaky under cumulative CPU/GC pressure from earlier specs in the same run (notably `smoke.spec.ts`'s bench-wasm path and the React UI suite). It was classified on 2026-04-13 and is **not** a Phase 2 or Phase 5 regression. See the file-header comment in that spec for the full reproduction/isolation notes, bisection result, and retry guidance — do not treat full-suite failures here as signals for share-stack work.
+
 ### Timeline Subsystem (~122 tests across 9 files)
 
 | File | Tests | What it validates |

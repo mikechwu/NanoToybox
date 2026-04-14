@@ -1,6 +1,6 @@
 # NanoToybox Developer Documentation
 
-Welcome to the NanoToybox project — a browser-based interactive carbon nanostructure simulation playground.
+Welcome to the NanoToybox project — a browser-based interactive carbon nanostructure simulation playground. Lab authors simulations and publishes compact **capsules** as share-links; the Watch app opens them via short code, URL, or `/c/:code`. Capsule storage, auth, and moderation are handled by a Cloudflare Pages Functions backend (D1 + R2) with a companion cron-sweeper Worker.
 
 ## Documentation Index
 
@@ -14,6 +14,7 @@ Welcome to the NanoToybox project — a browser-based interactive carbon nanostr
 | [Viewer](viewer.md) | Trajectory viewer and interactive page |
 | [Project Decisions](decisions.md) | Key strategic decisions and their rationale |
 | [Scaling Research](scaling-research.md) | Real-time browser limits, collision benchmarks, bottleneck analysis |
+| [Operations](operations.md) | Share-link deployment runbook: secrets, schedules, alerting, reconciliation |
 | [Contributing](contributing.md) | How to continue development, rules, workflow |
 
 ## Quick Start
@@ -182,4 +183,4 @@ src/ui/ (13 files):             │    sheet, bonded-groups panel,
 
 ## Project Goal
 
-Build an immersive, interactive, scientifically accurate browser-based playground for carbon nanostructures (C60, graphene, CNTs, diamond). Users can explore, drag, rotate, and interact with real molecular dynamics simulations in real-time.
+Build an immersive, interactive, scientifically accurate browser-based playground for carbon nanostructures (C60, graphene, CNTs, diamond). Users can explore, drag, rotate, and interact with real molecular dynamics simulations in real-time — and share the results as capsule links that open instantly in the Watch viewer.

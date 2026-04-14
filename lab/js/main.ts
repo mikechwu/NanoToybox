@@ -754,8 +754,46 @@ async function init() {
         credentials: 'same-origin',
         body: artifact.json,
       });
-      if (!res.ok) throw new Error(`Publish failed: ${await res.text()}`);
-      return res.json();
+      if (!res.ok) {
+        // 429 is rate-limited; surface the Retry-After hint if present so
+        // the UI can show a human-readable delay instead of the generic
+        // server message.
+        if (res.status === 429) {
+          const retryAfter = res.headers.get('Retry-After');
+          throw new Error(
+            retryAfter
+              ? `Publish quota exceeded — try again in ${retryAfter}s.`
+              : 'Publish quota exceeded. Try again later.',
+          );
+        }
+        throw new Error(`Publish failed: ${await res.text()}`);
+      }
+      // Typed payload + shape check — res.json() returns any, which
+      // would silently propagate malformed responses (CDN error page,
+      // proxy-rewritten body) as undefined shareCode/shareUrl in the UI.
+      const payload = (await res.json()) as {
+        shareCode?: unknown;
+        shareUrl?: unknown;
+        warnings?: unknown;
+      };
+      if (typeof payload.shareCode !== 'string' || typeof payload.shareUrl !== 'string') {
+        throw new Error('Publish: unexpected server response shape.');
+      }
+      const warnings = Array.isArray(payload.warnings)
+        ? payload.warnings.filter((w): w is string => typeof w === 'string')
+        : undefined;
+      // The share succeeded (server returned 201). If the server attached
+      // any warnings (e.g. quota counter write failed), surface them in
+      // the devtools console so they show up in user-reported bug reports.
+      // The share URL itself is still valid and returned to the UI.
+      if (warnings && warnings.length > 0) {
+        console.warn('[publish] server reported non-fatal warnings:', warnings);
+      }
+      return {
+        shareCode: payload.shareCode,
+        shareUrl: payload.shareUrl,
+        ...(warnings && warnings.length > 0 ? { warnings } : {}),
+      };
     },
   });
   _timelineSub.installAndEnable(); // Atomic: install callbacks + enter ready state (no transient off flash)

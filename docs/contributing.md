@@ -445,6 +445,99 @@ The following items are intentionally deferred — do not start them without an 
 6. npm run build                  # Production build → dist/
 ```
 
+### Cloudflare / Share Backend (Phase 5 — Share & Publish)
+
+The Phase 5 share-and-publish work adds a Cloudflare Pages Functions backend (under `functions/`) for publishing and sharing capsules, backed by D1 (SQLite) and R2 (object store), plus a companion scheduled Worker (`workers/cron-sweeper/`) for periodic cleanup. Lab + Watch UI work is unchanged — these onboarding notes apply when you're touching share/publish, auth, admin, or cron code. (Not to be confused with the deferred "Phase 5: Workspace assessment" item above, which is a separate architectural track.)
+
+#### Required packages
+
+Already in `devDependencies` — a fresh `npm install` is all you need:
+- `wrangler` — Cloudflare CLI (pages dev, D1 migrations, worker deploy)
+- `@cloudflare/workers-types` — Workers runtime type globals, consumed by `tsconfig.functions.json` and `workers/cron-sweeper/tsconfig.json`
+
+#### First-time setup
+
+```
+cp .dev.vars.example .dev.vars     # (create this if not present)
+# fill in OAuth client IDs/secrets from the operator, or set AUTH_DEV_USER_ID for bypass mode
+npm install
+```
+
+`.dev.vars` is gitignored (`.dev.vars` and `.dev.vars.*` patterns) — **never commit it**.
+
+#### `.dev.vars` contents
+
+| Key | Purpose |
+|-----|---------|
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google OAuth client credentials |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub OAuth client credentials |
+| `SESSION_SECRET` | HMAC-signed session + OAuth state + IP hash salt (single rotate point) |
+| `AUTH_DEV_USER_ID` | Optional dev bypass. With this set AND running on localhost, publish/admin endpoints treat every request as this user. **Never set in production.** |
+| `DEV_ADMIN_ENABLED=true` | Optional. Unlocks admin routes for local testing alongside the localhost origin check. |
+| `CRON_SECRET` | Optional. For local testing of the cron Worker dispatch. Production value must match between Pages and the companion Worker. |
+
+#### Local dev modes
+
+| Command | Runs | When to use |
+|---|---|---|
+| `npm run dev` | Vite (port 5173) | Normal Lab/Watch UI work; fast HMR; **no share backend — `/api/capsules/*` will 404** |
+| `npm run build && npm run cf:dev` | Wrangler Pages dev (port 8788) | Share/publish feature work; needs D1 + R2 bindings; no HMR |
+| `npm run cron:dev` | Wrangler dev for the cron Worker | Tests the scheduled handler locally against `localhost:8788` |
+
+#### D1 setup
+
+- `npm run cf:d1:migrate` — apply pending migrations to the local D1 (idempotent)
+- First-time: `wrangler d1 create atomdojo-capsules`, then paste the returned `database_id` into `wrangler.toml`
+
+Local Wrangler state (local D1 + R2 + cache, potentially including seeded/test user data) lives under `.wrangler/` and is gitignored.
+
+#### Seeding a capsule for local share-link testing
+
+```
+# Terminal 1
+npm run build && npm run cf:dev
+
+# Terminal 2 (requires DEV_ADMIN_ENABLED=true in .dev.vars)
+npm run seed:capsule -- path/to/capsule.atomdojo
+```
+
+The seed command prints `{ shareCode, objectKey }`. The capsule is then reachable via `/c/<shareCode>` and `/watch/?c=<shareCode>`.
+
+#### Testing workflow
+
+- `npm run typecheck` — runs frontend + functions + cron tsconfigs in one command. Prefer this over the granular `typecheck:frontend` / `typecheck:functions` / `typecheck:cron` variants for CI.
+- `npm run test:unit` (vitest) — includes new endpoint handler tests
+- `npm run test:e2e` (playwright) — the share-link flow uses `page.route()` mocking, since Vite preview does not run Pages Functions
+- `npm run lint:dock-contract` — unchanged from prior phases
+
+#### Adding a new endpoint test
+
+- Place the test at `tests/unit/<name>-endpoint.test.ts`
+- Add the filename to **both** `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — this prevents Workers globals from leaking into frontend compilation
+- Use hoisted `vi.fn<(...args: unknown[]) => ...>()` for module mocks
+- See `tests/unit/publish-endpoint.test.ts` for the canonical pattern (`minimalValidCapsule()`, `makePermissiveEnv()` helpers)
+
+#### Cron Worker
+
+- Code lives at `workers/cron-sweeper/` with its own `wrangler.toml` and `tsconfig.json`
+- Deploy: `npm run cron:deploy`
+- Tail production logs: `npm run cron:tail`
+- Manual invocation: `curl -X GET 'https://<worker-url>/?target=sessions' -H 'X-Cron-Secret: …'` — returns 404 if the secret is missing or wrong (intentional; see `workers/cron-sweeper/README.md`)
+
+#### OAuth redirect URIs
+
+Register these in the Google and GitHub OAuth application dashboards:
+
+- Local: `http://localhost:8788/auth/google/callback`, `http://localhost:8788/auth/github/callback`
+- Production: `https://atomdojo.pages.dev/auth/google/callback`, `https://atomdojo.pages.dev/auth/github/callback`
+
+#### Gotchas
+
+- **Session cookie name differs by scheme.** OAuth login on plain-HTTP localhost uses `atomdojo_session_dev` (no `__Host-` prefix). Production/HTTPS uses `__Host-atomdojo_session`.
+- **Admin endpoints return 404, not 403, on auth failure.** This is intentional to avoid leaking route existence.
+- **Publish endpoint returns 201 even when `warnings[]` is present** — that is a successful publish with operator follow-up needed, not a failure.
+- **Local caches are gitignored.** `.wrangler/`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, and `.dev.vars` are all excluded from version control.
+
 ### Debug Query Params
 
 The app supports URL-based debug overrides via `getDebugParam()` in `config.ts`.

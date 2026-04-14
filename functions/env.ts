@@ -18,6 +18,11 @@ export interface Env {
   // Dev-only bypass (set in .dev.vars, never in production)
   AUTH_DEV_USER_ID?: string;
   DEV_ADMIN_ENABLED?: string;
+
+  // Production cron automation secret — enables a deployed cron Worker
+  // to invoke admin sweep endpoints by presenting X-Cron-Secret. Never
+  // expose this as a browser-visible token; set via `wrangler secret put`.
+  CRON_SECRET?: string;
 }
 
 /** Extended context with authenticated user ID (set by auth middleware). */

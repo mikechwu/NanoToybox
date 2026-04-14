@@ -1163,6 +1163,61 @@ describe('TimelineBar unified shell', () => {
 
     // Should show share code
     expect(document.querySelector('.timeline-transfer-dialog__code')?.textContent).toContain('TEST12345678');
+
+    // No warnings in the response → no warning note rendered
+    expect(document.querySelector('[data-testid="transfer-dialog-warning"]')).toBeNull();
+  });
+
+  it('successful publish with warnings surfaces a subtle note (non-blocking)', async () => {
+    // Server returned 201 with warnings: ['quota_accounting_failed'].
+    // The share URL must still render (primary surface), plus a low-
+    // emphasis note so operators/support can see the reconciliation
+    // signal without confusing normal users.
+    const onPublish = vi.fn(async () => ({
+      shareCode: 'WARN12345678',
+      shareUrl: 'https://atomdojo.pages.dev/c/WARN12345678',
+      warnings: ['quota_accounting_failed'],
+    }));
+    act(() => { installWithPublish({ onPublish }); setActiveRange(); });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    switchToShareTab();
+
+    const confirmBtn = document.querySelector('.timeline-transfer-dialog__confirm') as HTMLButtonElement;
+    await act(async () => { confirmBtn.click(); });
+
+    // Share URL is still primary — must remain visible and usable.
+    const urlInput = document.querySelector('.timeline-transfer-dialog__url-input') as HTMLInputElement;
+    expect(urlInput.value).toBe('https://atomdojo.pages.dev/c/WARN12345678');
+
+    // Warning note is present with the operator-facing copy.
+    const warning = document.querySelector('[data-testid="transfer-dialog-warning"]');
+    expect(warning).not.toBeNull();
+    expect(warning?.textContent).toContain('operator review');
+
+    // Accessibility: polite live region so it doesn't interrupt anything.
+    expect(warning?.getAttribute('role')).toBe('status');
+    expect(warning?.getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('unknown warning code still renders a note with the code visible', async () => {
+    const onPublish = vi.fn(async () => ({
+      shareCode: 'UNKN12345678',
+      shareUrl: 'https://atomdojo.pages.dev/c/UNKN12345678',
+      warnings: ['some_future_warning'],
+    }));
+    act(() => { installWithPublish({ onPublish }); setActiveRange(); });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    switchToShareTab();
+    const confirmBtn = document.querySelector('.timeline-transfer-dialog__confirm') as HTMLButtonElement;
+    await act(async () => { confirmBtn.click(); });
+
+    const warning = document.querySelector('[data-testid="transfer-dialog-warning"]');
+    expect(warning).not.toBeNull();
+    expect(warning?.textContent).toContain('some_future_warning');
   });
 
   it('cancel/close resumes simulation when publish caused pause', () => {

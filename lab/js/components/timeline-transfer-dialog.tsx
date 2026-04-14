@@ -60,6 +60,22 @@ export function TransferTrigger({ onClick, label = 'Transfer history' }: { onCli
 
 type EstimateValue = string | null | undefined;
 
+/**
+ * Map server warning codes to a subtle human-readable note.
+ *
+ * The note is shown alongside the share URL (never replacing it) so
+ * operators / support debugging a user-reported issue can see the
+ * reconciliation signal without confusing normal users. Keep text
+ * neutral — the share IS valid, accounting just needs review.
+ */
+function formatShareWarning(codes: readonly string[]): string {
+  if (codes.includes('quota_accounting_failed')) {
+    return 'Share created. Background accounting needs operator review.';
+  }
+  // Unknown warning — surface it literally but don't alarm.
+  return `Share created. Note: ${codes.join(', ')}`;
+}
+
 function EstimateSlot({ value }: { value: EstimateValue }) {
   if (value === undefined) {
     return <span className="timeline-transfer-dialog__estimate timeline-transfer-dialog__estimate--muted" aria-live="polite">Estimating…</span>;
@@ -101,6 +117,10 @@ interface TimelineTransferDialogProps {
   shareError: string | null;
   shareUrl: string | null;
   shareCode: string | null;
+  /** Non-fatal server warnings for a real successful publish (e.g.
+   *  'quota_accounting_failed'). Rendered as a subtle note alongside
+   *  the share URL — never blocks or hides the URL. Keep null when none. */
+  shareWarnings: string[] | null;
 }
 
 export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
@@ -109,7 +129,7 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
     downloadTabAvailable, availableKinds, downloadKind, onSelectDownloadKind, onConfirmDownload,
     downloadSubmitting, downloadError, downloadConfirmEnabled, fullEstimate, capsuleEstimate,
     shareTabAvailable, shareConfirmEnabled, onConfirmShare,
-    shareSubmitting, shareError, shareUrl, shareCode,
+    shareSubmitting, shareError, shareUrl, shareCode, shareWarnings,
   } = props;
 
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -309,6 +329,16 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                 {shareCode && (
                   <p className="timeline-transfer-dialog__code">
                     Code: <code>{shareCode}</code>
+                  </p>
+                )}
+                {shareWarnings && shareWarnings.length > 0 && (
+                  <p
+                    className="timeline-transfer-dialog__warning"
+                    role="status"
+                    aria-live="polite"
+                    data-testid="transfer-dialog-warning"
+                  >
+                    {formatShareWarning(shareWarnings)}
                   </p>
                 )}
               </div>
