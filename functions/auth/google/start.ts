@@ -14,6 +14,7 @@ import type { Env } from '../../env';
 import { createOAuthState, validateReturnTo } from '../../oauth-state';
 import { authenticateRequest } from '../../auth-middleware';
 import { verifyAgeIntent, SignedIntentError } from '../../signed-intents';
+import { POLICY_VERSION } from '../../../src/share/constants';
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const { env, request } = context;
@@ -28,7 +29,10 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   // again from AccountControl while still signed in) do not need to
   // re-prove age — they are already authenticated and the publish-time
   // 428 precondition catches them if their acceptance row is missing.
+  // Track whether the start happened on the post-clickwrap path so the
+  // OAuth state can carry the marker through to the callback.
   const existingUserId = await authenticateRequest(request, env);
+  let crossedClickwrap = false;
   if (!existingUserId) {
     try {
       if (!ageIntent) {
@@ -38,6 +42,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
         );
       }
       await verifyAgeIntent(env, ageIntent);
+      crossedClickwrap = true;
     } catch (err) {
       const code = err instanceof SignedIntentError ? err.code : 'invalid';
       return new Response(`Invalid age confirmation nonce: ${code}`, {
@@ -47,7 +52,14 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   }
 
   const returnTo = validateReturnTo(url.searchParams.get('returnTo'));
-  const state = await createOAuthState(env, 'google', returnTo);
+  // Bind the clickwrap confirmation to the OAuth state so the callback
+  // can record `user_policy_acceptance` after the provider account
+  // resolves. Existing-session re-auth omits the marker — those users
+  // are already past the clickwrap (and the publish-428 backstop
+  // covers them if their acceptance row is missing).
+  const state = await createOAuthState(env, 'google', returnTo, crossedClickwrap
+    ? { age13PlusConfirmed: true, agePolicyVersion: POLICY_VERSION }
+    : {});
 
   const callbackUrl = new URL('/auth/google/callback', request.url).toString();
   const params = new URLSearchParams({

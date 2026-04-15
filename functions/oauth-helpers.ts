@@ -5,7 +5,7 @@
 import type { Env } from './env';
 import { setSessionCookie } from './auth-middleware';
 
-interface OAuthUserInfo {
+export interface OAuthUserInfo {
   provider: 'google' | 'github';
   providerAccountId: string;
   email: string | null;
@@ -13,50 +13,12 @@ interface OAuthUserInfo {
   displayName: string | null;
 }
 
-/**
- * Find or create a user from OAuth provider info.
- * Phase 1 policy: no automatic cross-provider linking.
- */
-export async function findOrCreateUser(
-  db: D1Database,
-  info: OAuthUserInfo,
-): Promise<string> {
-  // Check for existing OAuth account
-  const existing = await db
-    .prepare(
-      'SELECT user_id FROM oauth_accounts WHERE provider = ? AND provider_account_id = ?',
-    )
-    .bind(info.provider, info.providerAccountId)
-    .first<{ user_id: string }>();
-
-  if (existing) return existing.user_id;
-
-  // Create new user + OAuth account
-  const userId = crypto.randomUUID();
-  const oauthId = crypto.randomUUID();
-  const now = new Date().toISOString();
-
-  await db.batch([
-    db
-      .prepare('INSERT INTO users (id, display_name, created_at) VALUES (?, ?, ?)')
-      .bind(userId, info.displayName, now),
-    db
-      .prepare(
-        `INSERT INTO oauth_accounts (id, user_id, provider, provider_account_id, email, email_verified)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        oauthId,
-        userId,
-        info.provider,
-        info.providerAccountId,
-        info.email,
-        info.emailVerified ? 1 : 0,
-      ),
-  ]);
-
-  return userId;
-}
+// `findOrCreateUser` was removed in the age-clickwrap simplification —
+// every OAuth callback now goes through
+// `findOrCreateUserWithPolicyAcceptance` in `policy-acceptance.ts` so
+// the user/oauth_accounts/user_policy_acceptance writes happen in one
+// transactional batch (no observable interleaving where account-linked
+// rows exist without the matching acceptance row).
 
 /**
  * Create a new session and return a Response that sets the session cookie

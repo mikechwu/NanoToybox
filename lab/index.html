@@ -874,19 +874,141 @@ canvas { display: block; touch-action: none; }
   color: var(--color-text);
 }
 
-/* ── Shared 13+ age-gate checkbox (Phase B) ────────────────────────────
- * Rendered above the provider buttons in BOTH the AccountControl menu
- * and the Transfer dialog's signed-out panel — one component, one
- * sentence, so the two consent points cannot drift. */
-.age-gate { margin: 8px 0 10px; font-size: 13px; }
-.age-gate--compact { margin: 4px 0 8px; font-size: 12px; }
-.age-gate__label {
-  display: grid; grid-template-columns: 20px 1fr; gap: 6px 8px;
-  align-items: start; cursor: pointer;
+/* Signed-out provider-picker variant. The default menu has 4 px
+ * padding because it frames narrow list-style rows (Manage uploads,
+ * Sign out). The provider picker carries copy + CTA buttons + inline
+ * status row, so it reads cleaner at 12 px padding with 8 px gaps.
+ * The modifier is applied conditionally on the outer menu — only
+ * when the signed-out provider-picker branch renders, never when the
+ * popup-blocked recovery sub-menu takes over (see AccountControl.tsx).
+ * Signed-in / unverified surfaces use a different menu tree entirely. */
+.account-control__menu--signin {
+  padding: 12px;
+  gap: 8px;
+  min-width: 260px;
 }
-.age-gate__label input { margin-top: 2px; }
-.age-gate__note { color: var(--color-muted, #8792a8); margin: 4px 0 0; font-size: 11px; }
-.age-gate__error { color: #ff6b6b; margin: 4px 0 0; font-size: 12px; }
+/* Narrow-viewport fallback: right-anchored 260 px popover plus the
+ * trigger's right edge can overflow the left edge on < 320-360 px
+ * screens. Drop the min-width and let the menu shrink to the
+ * viewport minus a small gutter. */
+@media (max-width: 480px) {
+  .account-control__menu--signin {
+    min-width: 0;
+    width: calc(100vw - 24px);
+    max-width: 260px;
+  }
+}
+.account-control__menu--signin .account-control__hint {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
+  line-height: 1.5;
+}
+.account-control__auth-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* Provider sign-in buttons — mirror the Transfer dialog's auth
+ * button shape (bordered, centered, tap-friendly) so both
+ * "here's where you sign in" surfaces read as the same component
+ * family. The generic `.account-control__menu-item` stays list-style
+ * for the signed-in / popup-blocked surfaces. */
+.account-control__auth-button {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+  text-align: center;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.account-control__auth-button:hover:not(:disabled),
+.account-control__auth-button:focus-visible {
+  border-color: var(--color-accent-text);
+  outline: none;
+}
+.account-control__auth-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Shared 13+ age-gate clickwrap (D120 — supersedes D118) ────────────
+ * Single sentence with linked Privacy/Terms anchors, rendered above
+ * the provider/Publish buttons in:
+ *   - AccountControl signed-out menu      (id="age-clickwrap-account")
+ *   - Transfer dialog signed-out panel    (id="age-clickwrap-share")
+ *   - Transfer dialog publish-428 fallback (id="age-clickwrap-publish")
+ * Each id is referenced via aria-describedby on the gated buttons so
+ * screen readers hear the clickwrap as the button's described context.
+ *
+ * Link styling: inline flow (no inline-block). The paragraph's 1.6
+ * line-height gives each line ~21 px of natural vertical space, which
+ * is the right tap target for an inline link inside body copy (iOS
+ * HIG's 44 px rule targets standalone controls, not anchors inside
+ * prose). A tiny padding + negative margin lets the hover/focus
+ * background breathe without breaking paragraph rhythm. */
+.age-clickwrap {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+.age-clickwrap a {
+  color: var(--color-accent-text, #0066cc);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  /* 2 px vertical padding keeps the hit area robust for users who
+   * override line-height via accessibility reader stylesheets (the
+   * line-height: 1 collapse case). Negative y-margin cancels the
+   * layout effect so the surrounding lines don't get pushed apart.
+   * x-padding gives the hover/focus background a subtle halo. */
+  padding: 2px 2px;
+  margin: -2px -1px;
+  border-radius: 2px;
+  transition: background 120ms ease;
+}
+.age-clickwrap a:hover {
+  background: var(--color-surface-hover);
+}
+.age-clickwrap a:focus-visible {
+  outline: 2px solid var(--color-accent-text, #0066cc);
+  outline-offset: 2px;
+  background: var(--color-surface-hover);
+}
+
+/* ── Sign-in attempt status row ────────────────────────────────────────
+ * Renders below the provider buttons when authSignInAttempt is set:
+ * 'starting' shows a muted "Starting sign-in…" line, 'failed' shows
+ * the structured failure message + Retry. */
+.auth-attempt-status {
+  margin: 6px 0 0;
+  font-size: 12px;
+  /* `--color-text-secondary` is theme-aware; `--color-muted` is not
+   * written by applyThemeTokens and would always render the
+   * hard-coded fallback, giving low contrast on the light theme. */
+  color: var(--color-text-secondary);
+}
+.auth-attempt-status--failed {
+  color: var(--color-text);
+}
+.auth-attempt-retry {
+  margin-left: 8px;
+  background: none;
+  border: 1px solid var(--color-border, rgba(255,255,255,0.12));
+  color: var(--color-text);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.auth-attempt-retry:hover {
+  background: var(--color-surface-hover, rgba(255,255,255,0.06));
+}
 
 /* On narrow viewports, shrink the max-width so long display names don't
  * crowd the FPS display; the flex container handles horizontal placement. */

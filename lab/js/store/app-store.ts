@@ -122,46 +122,62 @@ export type AuthState =
  *  blocker. Surfaced in the Share panel and AccountControl so the user
  *  can explicitly retry the popup OR opt into the destructive same-tab
  *  redirect (which loses in-memory Lab state). Null when no block is
- *  pending. */
+ *  pending.
+ *
+ *  Post-D120 (age clickwrap simplification): no longer carries an
+ *  age-intent snapshot. Retry and Continue-in-tab paths re-fetch a
+ *  fresh intent just-in-time, so the descriptor stays valid
+ *  indefinitely without a stale-token recovery dance. */
 export interface AuthPopupBlockedPending {
   provider: 'google' | 'github';
   resumePublish: boolean;
-  /** Signed age-intent nonce carried forward so the user's eventual
-   *  Retry / Continue-in-tab choice lands at `/auth/{provider}/start`
-   *  with the server-required age-gate param intact. Null when the
-   *  user was already signed in (bypass path). */
-  ageIntent?: string | null;
-  /** Wall-clock ms when the carried `ageIntent` was minted. Read by
-   *  the React retry / continue-in-tab handlers to decide whether to
-   *  reuse the stored token or reroute the user to the provider
-   *  picker so a fresh nonce can be minted. Null when `ageIntent` is
-   *  null. Without this, a user who waits at the popup-blocked
-   *  prompt for a few minutes would silently reuse an expired token
-   *  and hit a raw 400 on `/auth/{provider}/start`. */
-  ageIntentMintedAt?: number | null;
 }
+
+/** Last sign-in attempt's status, surfaced in the React UI for
+ *  inline "Starting sign-in…" + structured failure messages. The
+ *  runtime owns every write (see `lab/js/runtime/auth-runtime.ts`):
+ *
+ *    - 'starting' → set BEFORE openOAuthPopupShell so the UI can
+ *                   disable provider buttons immediately.
+ *    - null      → cleared after a successful navigatePopupTo, OR
+ *                   cleared and replaced by `authPopupBlocked` if
+ *                   the popup shell open returned null.
+ *    - 'failed'  → set when the just-in-time age-intent fetch fails
+ *                   (any branch — initial click, popup-blocked retry,
+ *                   same-tab fallback). Carries a user-visible message
+ *                   keyed off the fetch-failure taxonomy.
+ *
+ *  Cleared by `resetTransientState()` — same lifecycle category as
+ *  `authPopupBlocked` and `shareTabOpenRequested` (one-shot
+ *  control-flow flags whose validity is tied to the current scene/
+ *  runtime, not durable identity). */
+export type AuthSignInAttempt = {
+  provider: 'google' | 'github';
+  resumePublish: boolean;
+  status: 'starting' | 'failed';
+  /** User-visible message keyed off the fetch-failure taxonomy.
+   *  Null only valid when status === 'starting'. */
+  message: string | null;
+};
 
 /** Imperative callbacks registered by main.ts, invoked by AccountControl + Transfer dialog.
  *  Kept on the store so React components get them without prop drilling. */
 export interface AuthCallbacks {
-  /** Start the OAuth flow. Prefers a popup; on block, sets
-   *  `authPopupBlocked` on the store WITHOUT navigating — the UI then
-   *  offers an explicit Retry / Continue-in-tab choice. */
+  /** Start the OAuth flow. The runtime owns the entire shell-then-fetch-
+   *  then-navigate sequence — the React UI calls this synchronously
+   *  from a click handler with NO age-intent argument. The runtime
+   *  opens the popup shell first (still inside the user gesture), then
+   *  fetches the age intent just-in-time, then navigates the popup.
+   *  On popup block, sets `authPopupBlocked`. On fetch failure, sets
+   *  `authSignInAttempt: { status: 'failed', ... }`. */
   onSignIn: (
     provider: 'google' | 'github',
-    opts?: {
-      resumePublish?: boolean;
-      ageIntent?: string | null;
-      /** mintedAt timestamp paired with `ageIntent`. Carried into the
-       *  popup-blocked descriptor so a subsequent Retry / same-tab
-       *  click can detect a stale token and reroute to the picker. */
-      ageIntentMintedAt?: number | null;
-    },
+    opts: { resumePublish: boolean },
   ) => void;
   /** User has explicitly consented to the destructive same-tab redirect
    *  for the currently-pending blocked sign-in. Reads the pending
-   *  descriptor from the store, performs `location.assign`, and clears
-   *  the pending flag. No-op when nothing is pending. */
+   *  descriptor from the store, fetches a fresh age intent, then
+   *  performs `location.assign`. No-op when nothing is pending. */
   onSignInSameTab: () => void;
   /** User clicked Back from the popup-blocked prompt. Clears the pending
    *  descriptor AND — when the abandoned flow was a publish-initiated
@@ -422,6 +438,13 @@ export interface AppStore {
    *  this on either choice. See AuthPopupBlockedPending. */
   authPopupBlocked: AuthPopupBlockedPending | null;
   setAuthPopupBlocked: (pending: AuthPopupBlockedPending | null) => void;
+  /** Non-null while a sign-in attempt is in flight or has just failed.
+   *  Lets `AccountControl` and the Transfer dialog Share panel render
+   *  "Starting sign-in…" or a structured failure message without
+   *  duplicating local state per surface. The runtime owns every write
+   *  — see `AuthSignInAttempt` for the lifecycle. */
+  authSignInAttempt: AuthSignInAttempt | null;
+  setAuthSignInAttempt: (next: AuthSignInAttempt | null) => void;
 
   /** One-shot resume-publish trigger.
    *
@@ -587,6 +610,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   authCallbacks: null,
   auth: { status: 'loading', session: null },
   authPopupBlocked: null,
+  authSignInAttempt: null,
   shareTabOpenRequested: false,
   bondedGroupCallbacks: null,
   bondedGroupColorAssignments: [],
@@ -728,6 +752,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setAuthUnverified: () => set({ auth: { status: 'unverified', session: null } }),
   setAuthCallbacks: (cbs) => set({ authCallbacks: cbs }),
   setAuthPopupBlocked: (pending) => set({ authPopupBlocked: pending }),
+  setAuthSignInAttempt: (next) => set({ authSignInAttempt: next }),
   requestShareTabOpen: () => set({ shareTabOpenRequested: true }),
   consumeShareTabOpen: () => {
     const pending = get().shareTabOpenRequested;
@@ -818,11 +843,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
     //   - authPopupBlocked: last-sign-in-attempt's blocked descriptor.
     //     Stale after a teardown/reinit; showing it against the new
     //     session would be meaningless.
+    //   - authSignInAttempt: in-flight or just-failed sign-in status.
+    //     A "Starting sign-in…" or stale failure message must not
+    //     survive a teardown/reinit and render against a new context.
     //   - shareTabOpenRequested: one-shot OAuth-return trigger.
     //     Already consumed once; carrying it across a teardown/reinit
     //     would either re-open the Transfer dialog in a fresh scene or
     //     permanently sit pending.
     authPopupBlocked: null,
+    authSignInAttempt: null,
     shareTabOpenRequested: false,
   }),
 }));

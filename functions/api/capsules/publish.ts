@@ -75,12 +75,15 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     return new Response('Unauthorized', { status: 401 });
   }
 
-  // 13+ age-gate precondition (plan Phase B). A user may have signed in
-  // before the gate shipped or before the publish path was gated — in
-  // both cases they must confirm now. The 428 response parallels the
-  // 413 contract: the Transfer dialog catches it and renders the
-  // inline retro-ack checkbox. Cheap point-read keyed on the composite
-  // PK (user_id, policy_kind).
+  // Minimum-age acceptance precondition (D120 legacy backstop — see
+  // `functions/policy-acceptance.ts` MINIMUM_AGE_POLICY_KIND). Most
+  // post-D120 users have the row written at OAuth callback time; this
+  // 428 covers (a) accounts created before the callback acceptance
+  // write shipped and (b) any state produced through an unexpected
+  // path. The response parallels the 413 contract: the Transfer
+  // dialog catches it and renders the publish-clickwrap fallback
+  // (single Publish button; clicking IS the consent). Cheap
+  // point-read keyed on the composite PK (user_id, policy_kind).
   const acceptance = await env.DB.prepare(
     `SELECT 1 AS ok FROM user_policy_acceptance
       WHERE user_id = ? AND policy_kind = 'age_13_plus' LIMIT 1`,

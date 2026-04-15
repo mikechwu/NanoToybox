@@ -5,7 +5,12 @@
 
 import type { Env } from '../../env';
 import { verifyOAuthState } from '../../oauth-state';
-import { findOrCreateUser, createSessionAndRedirect } from '../../oauth-helpers';
+import { createSessionAndRedirect } from '../../oauth-helpers';
+import {
+  findOrCreateUserWithPolicyAcceptance,
+  redirectToAuthError,
+  POLICY_VERSION,
+} from '../../policy-acceptance';
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const { env, request } = context;
@@ -61,17 +66,43 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     name?: string;
   };
 
-  const userId = await findOrCreateUser(env.DB, {
-    provider: 'google',
-    providerAccountId: userInfo.id,
-    email: userInfo.email ?? null,
-    emailVerified: userInfo.verified_email ?? false,
-    displayName: userInfo.name ?? null,
-  });
+  // Acceptance recording is fused into user creation. For NEW accounts
+  // the helper writes users + oauth_accounts + user_policy_acceptance
+  // in a single db.batch — there is no observable interleaving where
+  // account-linked rows exist without an acceptance row. For EXISTING
+  // accounts the helper UPSERTs the acceptance row before we set the
+  // session cookie. See plan §2 backend "Acceptance invariant — precise
+  // wording" for the three-part guarantee.
+  let result;
+  try {
+    result = await findOrCreateUserWithPolicyAcceptance(
+      env.DB,
+      {
+        provider: 'google',
+        providerAccountId: userInfo.id,
+        email: userInfo.email ?? null,
+        emailVerified: userInfo.verified_email ?? false,
+        displayName: userInfo.name ?? null,
+      },
+      {
+        age13PlusConfirmed: statePayload.age13PlusConfirmed === true,
+        policyVersion: statePayload.agePolicyVersion ?? POLICY_VERSION,
+      },
+    );
+  } catch (err) {
+    // Includes MissingAge13PlusError (brand-new account + legacy state)
+    // and any DB / batch error. In both cases we MUST NOT create a
+    // session cookie — bail to /auth/error so the user can retry with
+    // fresh post-deploy state. The helper guarantees no users /
+    // oauth_accounts rows exist on the MissingAge13PlusError path; D1
+    // batches are atomic so DB errors leave nothing partially committed.
+    console.error('[auth.google.callback] policy acceptance failed:', err);
+    return redirectToAuthError(request, 'google', 'acceptance_failed');
+  }
 
   return createSessionAndRedirect(
     env.DB,
-    userId,
+    result.userId,
     statePayload.returnTo,
     request,
   );

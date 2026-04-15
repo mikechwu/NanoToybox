@@ -9,9 +9,9 @@
  *   - data-policy-segment="A" present, B/D/E/F absent
  *   - /account/ shell loads (will paint signed-out fallback because no API)
  *   - Cross-page links between /privacy and /terms work
- *   - The 13+ checkbox renders inside the Lab Transfer dialog signed-out panel
- *     (verified separately under the unit suite for full state machine; here
- *     we just confirm the DOM hook is present)
+ *   - The AgeClickwrapNotice (D120) renders inside the Lab Transfer dialog
+ *     signed-out panel (verified separately under the unit suite for full
+ *     state machine; here we just confirm the DOM hook is present)
  *
  * Future: when E2E gets a wrangler-pages-dev backend, expand this file
  * to cover age-gate + delete flows end-to-end.
@@ -122,8 +122,8 @@ test.describe('Phase 7 — policy routes', () => {
   });
 });
 
-test.describe('Phase 7 — Lab signed-out transfer dialog age-gate hook', () => {
-  test('signed-out Share panel renders the AgeGate checkbox (testid)', async ({ page, baseURL }) => {
+test.describe('D120 — Lab signed-out transfer dialog clickwrap hook', () => {
+  test('signed-out Share panel renders the AgeClickwrapNotice + provider buttons', async ({ page, baseURL }) => {
     // Force signed-out by intercepting the session probe.
     await page.route('**/api/auth/session', (route) =>
       route.fulfill({
@@ -133,8 +133,8 @@ test.describe('Phase 7 — Lab signed-out transfer dialog age-gate hook', () => 
         body: JSON.stringify({ status: 'signed-out' }),
       }),
     );
-    // Stub the age-intent endpoint so the AgeGateCheckbox effect resolves
-    // when the user checks the box (verified in unit tests too).
+    // Stub the age-intent endpoint so the runtime's JIT fetch resolves
+    // when a provider button is clicked (D120 flow — no checkbox).
     await page.route('**/api/account/age-confirmation/intent', (route) =>
       route.fulfill({
         status: 200,
@@ -161,18 +161,17 @@ test.describe('Phase 7 — Lab signed-out transfer dialog age-gate hook', () => 
     }
     await trigger.click();
 
-    // The signed-out auth prompt should render the shared AgeGateCheckbox
-    // by data-testid (component is shared between AccountControl and
-    // Transfer dialog — the Transfer-side instance uses suffix=transfer).
-    const checkbox = page.locator('[data-testid="age-gate-checkbox-transfer"]');
-    await expect(checkbox).toBeVisible({ timeout: 5000 });
+    // The signed-out auth prompt should render the shared AgeClickwrapNotice
+    // (D120 — supersedes D118) + provider buttons. No checkbox — buttons
+    // are enabled immediately; clicking IS the consent.
+    const clickwrap = page.locator('#age-clickwrap-share');
+    await expect(clickwrap).toBeVisible({ timeout: 5000 });
+    await expect(clickwrap).toContainText('at least 13');
 
-    // Provider buttons must be disabled until the box is ticked.
+    // Provider buttons are enabled and reference the clickwrap via
+    // aria-describedby so screen readers hear it as context.
     const google = page.locator('[data-testid="transfer-auth-google"]');
-    await expect(google).toBeDisabled();
-
-    // Tick the checkbox; the stubbed intent endpoint resolves; button enables.
-    await checkbox.check();
-    await expect(google).toBeEnabled({ timeout: 3000 });
+    await expect(google).toBeEnabled();
+    await expect(google).toHaveAttribute('aria-describedby', 'age-clickwrap-share');
   });
 });

@@ -5,7 +5,12 @@
 
 import type { Env } from '../../env';
 import { verifyOAuthState } from '../../oauth-state';
-import { findOrCreateUser, createSessionAndRedirect } from '../../oauth-helpers';
+import { createSessionAndRedirect } from '../../oauth-helpers';
+import {
+  findOrCreateUserWithPolicyAcceptance,
+  redirectToAuthError,
+  POLICY_VERSION,
+} from '../../policy-acceptance';
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const { env, request } = context;
@@ -67,17 +72,32 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     email?: string | null;
   };
 
-  const userId = await findOrCreateUser(env.DB, {
-    provider: 'github',
-    providerAccountId: String(userInfo.id),
-    email: userInfo.email ?? null,
-    emailVerified: false, // GitHub email verification requires separate API call
-    displayName: userInfo.name ?? userInfo.login,
-  });
+  // See google/callback.ts for the full rationale on the new helper +
+  // failure-path redirect.
+  let result;
+  try {
+    result = await findOrCreateUserWithPolicyAcceptance(
+      env.DB,
+      {
+        provider: 'github',
+        providerAccountId: String(userInfo.id),
+        email: userInfo.email ?? null,
+        emailVerified: false, // GitHub email verification requires separate API call
+        displayName: userInfo.name ?? userInfo.login,
+      },
+      {
+        age13PlusConfirmed: statePayload.age13PlusConfirmed === true,
+        policyVersion: statePayload.agePolicyVersion ?? POLICY_VERSION,
+      },
+    );
+  } catch (err) {
+    console.error('[auth.github.callback] policy acceptance failed:', err);
+    return redirectToAuthError(request, 'github', 'acceptance_failed');
+  }
 
   return createSessionAndRedirect(
     env.DB,
-    userId,
+    result.userId,
     statePayload.returnTo,
     request,
   );

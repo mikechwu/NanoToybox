@@ -16,9 +16,13 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ActionHint } from './ActionHint';
 import type { TimelineExportKind } from './timeline-export-dialog';
+import { useAppStore } from '../store/app-store';
 import type { AuthStatus } from '../store/app-store';
 import { hydrateAuthSession } from '../runtime/auth-runtime';
-import { AgeGateCheckbox, AGE_INTENT_STALE_AFTER_MS } from './AgeGateCheckbox';
+import { AgeClickwrapNotice } from './AgeClickwrapNotice';
+
+const CLICKWRAP_SHARE_ID = 'age-clickwrap-share';
+const CLICKWRAP_PUBLISH_ID = 'age-clickwrap-publish';
 
 // ── Trigger hook + icon ──
 
@@ -149,13 +153,13 @@ interface TimelineTransferDialogProps {
    *                 transport blip can't push a signed-in user into an
    *                 unnecessary round-trip. */
   authStatus: AuthStatus;
-  /** Invoked when the user clicks one of the auth-prompt buttons. The host
-   *  wires this to the store's `authCallbacks.onSignIn(provider, { resumePublish: true, ageIntent, ageIntentMintedAt })`
-   *  so we round-trip back into this dialog after OAuth. The dialog owns
-   *  the age-gate checkbox state; only a fresh, server-issued `ageIntent`
-   *  + its mint time are passed through (mintedAt is required so the
-   *  popup-blocked retry path can later detect a stale snapshot). */
-  onSignIn: (provider: 'google' | 'github', ageIntent: string, ageIntentMintedAt: number) => void;
+  /** Invoked when the user clicks one of the auth-prompt buttons. The
+   *  host wires this to `authCallbacks.onSignIn(provider, { resumePublish: true })`
+   *  — note: NO age-intent argument. The runtime owns the popup-shell-
+   *  then-fetch-then-navigate sequence (D120 — supersedes D118), so the
+   *  dialog click handler stays synchronous and inside the user gesture.
+   *  Awaiting any fetch here would break popup-not-blocked semantics. */
+  onSignIn: (provider: 'google' | 'github') => void;
   /** Non-null when the most recent sign-in attempt's popup was blocked.
    *  The signed-out branch replaces the provider buttons with a
    *  Retry / Continue-in-tab prompt. */
@@ -171,15 +175,18 @@ interface TimelineTransferDialogProps {
   onDismissPopupBlocked: () => void;
 
   /** When non-null, the publish endpoint returned 428 Precondition
-   *  Required — the signed-in user has not yet confirmed age_13_plus.
-   *  The Share panel's signed-in branch renders an inline retro-ack
-   *  checkbox + "Agree & Retry" button instead of the publish button. */
+   *  Required — the signed-in user has no acceptance row on file.
+   *  The Share panel's signed-in branch renders the publish-clickwrap
+   *  fallback (D120 — supersedes D118): a single Publish button above
+   *  the clickwrap notice. Clicking IS the consent — no checkbox. */
   ageConfirmationRequired: {
     message: string;
     policyVersion: string | null;
   } | null;
-  /** Called when the user accepts the retro-ack. Host POSTs to
-   *  `/api/account/age-confirmation` then re-attempts the publish. */
+  /** Called when the user clicks Publish on the publish-clickwrap
+   *  fallback. Host POSTs to `/api/account/age-confirmation` (which
+   *  calls the shared `recordAge13PlusAcceptance` helper) then
+   *  re-attempts the publish. */
   onAgeConfirmationAck: () => void;
 }
 
@@ -235,37 +242,13 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
     ageConfirmationRequired, onAgeConfirmationAck,
   } = props;
   const [retryingAuth, setRetryingAuth] = useState(false);
-  const [ageConfirmed, setAgeConfirmed] = useState(false);
-  const [ageIntent, setAgeIntent] = useState<string | null>(null);
-  const [ageMintedAt, setAgeMintedAt] = useState<number | null>(null);
-  const [ageStaleNote, setAgeStaleNote] = useState<string | null>(null);
-  const [ageRefreshNonce, setAgeRefreshNonce] = useState(0);
-  const [ageFetching, setAgeFetching] = useState(false);
-  const handleAgeIntent = useCallback((token: string | null, mintedAt: number | null) => {
-    setAgeIntent(token);
-    setAgeMintedAt(mintedAt);
-    if (token) setAgeStaleNote(null);
-  }, []);
-  const handleAgeSignIn = useCallback(
-    (provider: 'google' | 'github') => {
-      if (!ageIntent || ageMintedAt === null) return;
-      // Click-time freshness check — see AccountControl for the
-      // popup-blocker rationale (we cannot await the fetch here). On
-      // stale token we drop it AND bump the refresh nonce so the
-      // AgeGateCheckbox effect actually re-fires; the periodic timer
-      // alone would leave us idle for up to 4 min.
-      if (Date.now() - ageMintedAt > AGE_INTENT_STALE_AFTER_MS) {
-        setAgeStaleNote('Refreshing sign-in… click again in a moment.');
-        setAgeIntent(null);
-        setAgeMintedAt(null);
-        setAgeRefreshNonce((n) => n + 1);
-        return;
-      }
-      onSignIn(provider, ageIntent, ageMintedAt);
-    },
-    [ageIntent, ageMintedAt, onSignIn],
-  );
-  const [retroAckChecked, setRetroAckChecked] = useState(false);
+  // Sign-in attempt status surfaced inline below the provider buttons
+  // ("Starting sign-in…" / structured failure message + Retry). Owned
+  // by the runtime — see lab/js/runtime/auth-runtime.ts.
+  const signInAttempt = useAppStore((s) => s.authSignInAttempt);
+  const isStartingSignIn = signInAttempt?.status === 'starting';
+  const failedSignInMessage = signInAttempt?.status === 'failed' ? signInAttempt.message : null;
+  const failedSignInProvider = signInAttempt?.status === 'failed' ? signInAttempt.provider : null;
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const prevOpen = useRef(false);
@@ -577,10 +560,14 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                       unsaved Lab state may be lost on same-tab sign-in.
                     </p>
                     <div className="timeline-transfer-dialog__auth-buttons">
+                      {/* Disable while a sign-in attempt is in flight so a
+                       *  rapid Retry/Continue click can't open a second
+                       *  popup shell or fire a parallel intent fetch
+                       *  (matches the AccountControl gating). */}
                       <button
                         className="timeline-transfer-dialog__auth-button"
                         onClick={onRetryPopup}
-                        disabled={transferBusy}
+                        disabled={transferBusy || isStartingSignIn}
                         data-testid="transfer-popup-retry"
                       >
                         Retry {providerLabel(popupBlocked.provider)} popup
@@ -588,7 +575,7 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                       <button
                         className="timeline-transfer-dialog__auth-button"
                         onClick={onSignInSameTab}
-                        disabled={transferBusy}
+                        disabled={transferBusy || isStartingSignIn}
                         data-testid="transfer-popup-same-tab"
                       >
                         Continue in this tab
@@ -596,7 +583,7 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                       <button
                         className="timeline-transfer-dialog__auth-button timeline-transfer-dialog__auth-button--subtle"
                         onClick={onDismissPopupBlocked}
-                        disabled={transferBusy}
+                        disabled={transferBusy || isStartingSignIn}
                         data-testid="transfer-popup-back"
                       >
                         Back
@@ -605,66 +592,73 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                   </div>
                 ) : (
                   <>
-                    <AgeGateCheckbox
-                      checked={ageConfirmed}
-                      onCheckedChange={setAgeConfirmed}
-                      onAgeIntent={handleAgeIntent}
-                      onFetchingChange={setAgeFetching}
-                      refreshNonce={ageRefreshNonce}
-                      idSuffix="transfer"
-                    />
-                    {ageStaleNote && !ageIntent ? (
-                      <p className="age-gate__note" role="status" aria-live="polite">
-                        {ageFetching ? 'Refreshing sign-in…' : ageStaleNote}
-                      </p>
-                    ) : null}
+                    <AgeClickwrapNotice id={CLICKWRAP_SHARE_ID} action="continue" />
                     <div className="timeline-transfer-dialog__auth-buttons">
                       <button
                         className="timeline-transfer-dialog__auth-button"
-                        onClick={() => handleAgeSignIn('google')}
-                        disabled={transferBusy || !ageConfirmed || !ageIntent}
+                        onClick={() => onSignIn('google')}
+                        disabled={transferBusy || isStartingSignIn}
+                        aria-describedby={CLICKWRAP_SHARE_ID}
                         data-testid="transfer-auth-google"
                       >
                         Continue with Google
                       </button>
                       <button
                         className="timeline-transfer-dialog__auth-button"
-                        onClick={() => handleAgeSignIn('github')}
-                        disabled={transferBusy || !ageConfirmed || !ageIntent}
+                        onClick={() => onSignIn('github')}
+                        disabled={transferBusy || isStartingSignIn}
+                        aria-describedby={CLICKWRAP_SHARE_ID}
                         data-testid="transfer-auth-github"
                       >
                         Continue with GitHub
                       </button>
                     </div>
+                    {isStartingSignIn ? (
+                      <p className="auth-attempt-status" role="status" aria-live="polite">
+                        Starting sign-in…
+                      </p>
+                    ) : null}
+                    {failedSignInMessage ? (
+                      <p
+                        className="auth-attempt-status auth-attempt-status--failed"
+                        role="status"
+                        aria-live="polite"
+                        data-testid="transfer-auth-error"
+                      >
+                        {failedSignInMessage}
+                        {failedSignInProvider ? (
+                          <button
+                            className="auth-attempt-retry"
+                            onClick={() => onSignIn(failedSignInProvider)}
+                            data-testid="transfer-auth-retry"
+                          >
+                            Retry
+                          </button>
+                        ) : null}
+                      </p>
+                    ) : null}
                   </>
                 )}
                 <ShareActions onCancel={handleCancel} transferBusy={transferBusy} />
               </div>
             ) : ageConfirmationRequired ? (
-              /* signed-in, but publish returned 428 — retro-ack needed. */
+              /* signed-in, but publish returned 428 — clickwrap retry. The
+                 server-side acceptance row was never written for this user
+                 (legacy/pre-deploy account, see plan §3 backend). One click
+                 ack-and-publish in sequence: the host's onAgeConfirmationAck
+                 POSTs to /api/account/age-confirmation, then re-runs the
+                 publish. No checkbox — clicking Publish IS the consent. */
               <>
-                <p className="timeline-transfer-dialog__description">
-                  Before publishing, please confirm you are at least 13 and have
-                  read our updated <a href="/privacy/" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
-                  {' '}and <a href="/terms/" target="_blank" rel="noopener noreferrer">Terms</a>.
-                </p>
-                <label className="age-gate__label">
-                  <input
-                    type="checkbox"
-                    checked={retroAckChecked}
-                    onChange={(e) => setRetroAckChecked(e.target.checked)}
-                    data-testid="transfer-retro-ack"
-                  />
-                  <span>I confirm that I am at least 13 years old.</span>
-                </label>
+                <AgeClickwrapNotice id={CLICKWRAP_PUBLISH_ID} action="publish" />
                 <ShareActions onCancel={handleCancel} transferBusy={transferBusy}>
                   <button
                     className="timeline-transfer-dialog__confirm"
                     onClick={onAgeConfirmationAck}
-                    disabled={transferBusy || !retroAckChecked}
+                    disabled={transferBusy}
+                    aria-describedby={CLICKWRAP_PUBLISH_ID}
                     data-testid="transfer-retro-ack-confirm"
                   >
-                    Agree &amp; publish
+                    {shareSubmitting ? 'Publishing\u2026' : 'Publish'}
                   </button>
                 </ShareActions>
               </>

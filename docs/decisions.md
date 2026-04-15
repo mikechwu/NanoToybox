@@ -941,3 +941,39 @@ This layering ensures that a policy change triggers conformance failures (intent
 **Rationale:** A single-lane setup either forces every contributor to install and run wrangler (high friction) or drops backend coverage (quality regression). Splitting the projects lets each lane optimize for its constraint — default for speed and zero-install, pages-dev for real backend paths.
 
 **Evidence:** `tests/e2e/pages-dev-flows.spec.ts`
+
+## D120: Age Clickwrap + Just-In-Time Intent — Supersedes D118
+
+**Supersedes:** D118.
+
+**Decision:** Replace the explicit 13+ checkbox + interval-refreshed age-intent nonce with:
+
+1. A single short clickwrap sentence (`<AgeClickwrapNotice>`) rendered above the provider buttons in every gated surface (AccountControl signed-out menu, Transfer dialog signed-out Share panel, Transfer dialog publish-428 fallback). Clicking the provider/Publish button IS the consent.
+2. A just-in-time `fetch('/api/account/age-confirmation/intent')` issued by the auth runtime AFTER it has already opened the popup shell synchronously inside the user gesture (`openOAuthPopupShell` → `fetchAgeIntent` → `navigatePopupTo`). Same-tab fallback also fetches JIT but can await before `location.assign` because that path doesn't need user-gesture qualification.
+3. A new OAuth state field `age13PlusConfirmed?: true` (plus `agePolicyVersion?: string`) so the callback can write the durable `user_policy_acceptance` row at the moment account-linked personal data starts being stored — fused with new-user creation in a single `db.batch([...])` via `findOrCreateUserWithPolicyAcceptance`.
+
+**Rationale:**
+
+- Lower friction: one less click on every sign-in.
+- No stored expiring nonce in React state — no refresh intervals, no stale-token recovery dance, no `AGE_INTENT_STALE_AFTER_MS` constant.
+- Single proof artifact: every acceptance write goes through `recordAge13PlusAcceptance` (the new-user batch is the one allowed exception, inlined for atomicity).
+- Stronger invariant: brand-new accounts cannot exist without a matching `user_policy_acceptance` row (atomic batch). Existing accounts and pre-deploy in-flight users are still publish-gated by the unchanged `428` backstop.
+- Popup reliability preserved: the runtime opens the popup shell synchronously inside the click handler (still inside the live user gesture), then performs the async fetch and navigates the popup once the intent resolves.
+
+**Acceptance invariant — precise wording (do not relax):**
+
+1. New-account creation through the post-clickwrap flow ⇒ acceptance.
+2. Callback acceptance failure ⇒ no session (callback bails before `createSessionAndRedirect`, redirects to `/auth/error`).
+3. Legacy / pre-deploy existing sessions are still publish-gated by `428`.
+
+The publish-`428` path is **not** redundant with the callback acceptance write — it covers the legacy population that the callback write does not.
+
+**Resume-publish sentinel timing (load-bearing):** the runtime writes `atomdojo.resumePublish` to sessionStorage **only after** the JIT intent fetch resolves successfully and immediately before `navigatePopupTo` / `location.assign`. Pre-fetch sentinel writes orphan into a later unrelated sign-in's auto-Share-open; the post-fetch timing closes that failure window. Defensive `clearResumeIntent()` runs in the catch branch.
+
+**Alternatives rejected:**
+
+- Keep the checkbox + interval refresh (D118 — superseded). Higher friction and stale-token recovery is intricate.
+- Drop the popup entirely and always same-tab. Regresses Lab's "don't lose canvas state" UX.
+- `findOrCreateUser` followed by a separate acceptance UPSERT. Re-introduces the gap where account-linked rows can exist without acceptance if the second await throws.
+
+**Evidence:** `functions/policy-acceptance.ts`, `functions/oauth-state.ts`, `functions/auth/error.ts`, `lab/js/runtime/auth-runtime.ts`, `lab/js/components/AgeClickwrapNotice.tsx`, `tests/unit/policy-acceptance.test.ts`, `tests/unit/oauth-state.test.ts`, `tests/unit/auth-error-route.test.ts`.

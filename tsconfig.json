@@ -44,7 +44,11 @@
     "tests/unit/publish-age-gate.test.ts",
     "tests/unit/account-delete-cascade.test.ts",
     "tests/unit/account-capsules-pagination.test.ts",
-    "tests/unit/privacy-request-endpoint.test.ts"
+    "tests/unit/privacy-request-endpoint.test.ts",
+    "tests/unit/policy-acceptance.test.ts",
+    "tests/unit/oauth-state.test.ts",
+    "tests/unit/auth-error-route.test.ts",
+    "tests/unit/auth-callback-acceptance.test.ts"
   ]
   // Coverage: all extracted app/bench source modules are .ts/.tsx and type-checked.
   // Inline <script type="module"> in HTML entrypoints are sanctioned exceptions.

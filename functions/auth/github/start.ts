@@ -10,6 +10,7 @@ import type { Env } from '../../env';
 import { createOAuthState, validateReturnTo } from '../../oauth-state';
 import { authenticateRequest } from '../../auth-middleware';
 import { verifyAgeIntent, SignedIntentError } from '../../signed-intents';
+import { POLICY_VERSION } from '../../../src/share/constants';
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const { env, request } = context;
@@ -20,7 +21,9 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   const url = new URL(request.url);
   const ageIntent = url.searchParams.get('ageIntent');
 
+  // See google/start.ts for the full rationale on the marker-carry.
   const existingUserId = await authenticateRequest(request, env);
+  let crossedClickwrap = false;
   if (!existingUserId) {
     try {
       if (!ageIntent) {
@@ -30,6 +33,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
         );
       }
       await verifyAgeIntent(env, ageIntent);
+      crossedClickwrap = true;
     } catch (err) {
       const code = err instanceof SignedIntentError ? err.code : 'invalid';
       return new Response(`Invalid age confirmation nonce: ${code}`, {
@@ -39,7 +43,9 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   }
 
   const returnTo = validateReturnTo(url.searchParams.get('returnTo'));
-  const state = await createOAuthState(env, 'github', returnTo);
+  const state = await createOAuthState(env, 'github', returnTo, crossedClickwrap
+    ? { age13PlusConfirmed: true, agePolicyVersion: POLICY_VERSION }
+    : {});
 
   const params = new URLSearchParams({
     client_id: env.GITHUB_CLIENT_ID,

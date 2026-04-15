@@ -11,7 +11,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { onRequestGet as googleStart } from '../../functions/auth/google/start';
 import { onRequestGet as githubStart } from '../../functions/auth/github/start';
 import { createAgeIntent, createSignedIntent } from '../../functions/signed-intents';
+import { verifyOAuthState } from '../../functions/oauth-state';
 import type { Env } from '../../functions/env';
+
+/** Extract the `state` query param from the OAuth provider redirect's
+ *  Location header. The redirect URL contains state as one of several
+ *  encoded params; verifyOAuthState then decodes the HMAC-signed
+ *  payload so we can assert on its contents. */
+function extractStateParam(location: string): string {
+  const url = new URL(location);
+  const state = url.searchParams.get('state');
+  if (!state) throw new Error(`no state param in ${location}`);
+  return state;
+}
 
 const authMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<string | null>>());
 vi.mock('../../functions/auth-middleware', () => ({
@@ -87,6 +99,32 @@ describe('auth/google/start — age-gate enforcement', () => {
       env: env(),
     } as unknown as Parameters<typeof googleStart>[0]);
     expect(res.status).toBe(302);
+  });
+
+  it('D120: post-clickwrap OAuth state carries age13PlusConfirmed=true + agePolicyVersion', async () => {
+    authMock.mockResolvedValue(null);
+    const token = await createAgeIntent(env());
+    const res = await googleStart({
+      request: new Request(`https://example.test/auth/google/start?ageIntent=${token}`),
+      env: env(),
+    } as unknown as Parameters<typeof googleStart>[0]);
+    expect(res.status).toBe(302);
+    const state = extractStateParam(res.headers.get('Location')!);
+    const payload = await verifyOAuthState(env(), state, 'google');
+    expect(payload.age13PlusConfirmed).toBe(true);
+    expect(typeof payload.agePolicyVersion).toBe('string');
+    expect(payload.agePolicyVersion!.length).toBeGreaterThan(0);
+  });
+
+  it('D120: existing-session bypass omits age13PlusConfirmed (no clickwrap was crossed this time)', async () => {
+    authMock.mockResolvedValue('existing-user');
+    const res = await googleStart({
+      request: new Request('https://example.test/auth/google/start'),
+      env: env(),
+    } as unknown as Parameters<typeof googleStart>[0]);
+    const state = extractStateParam(res.headers.get('Location')!);
+    const payload = await verifyOAuthState(env(), state, 'google');
+    expect(payload.age13PlusConfirmed).toBeUndefined();
   });
 });
 

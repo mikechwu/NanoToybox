@@ -62,6 +62,32 @@ bucket_name = "atomdojo-capsules-prod"
 #       When: hostname eq atomdojo.pages.dev AND path contains /api/capsules/
 #       Rate: 300 requests per 1 minute per IP
 #       Action: challenge (managed challenge)
+#     Rule: "Age-intent signing per IP" (D120)
+#       When: hostname eq atomdojo.pages.dev AND path eq /api/account/age-confirmation/intent
+#       Rate: 30 requests per 1 minute per IP
+#       Action: managed challenge (or block for 5 minutes)
+#       Rationale: this endpoint is unauthenticated and signs a fresh
+#       HMAC token on every POST. The token does NOT expose data, but
+#       the endpoint is a cheap CPU-amplification target for an
+#       attacker looking to burn Workers CPU on crypto.subtle.sign.
+#       Managed challenge is sufficient — real users hit it at most
+#       twice (once per sign-in surface in a session) so the rate cap
+#       is generous from the user's perspective.
+#
+#       Layer 2 (app-level, always-on): the Worker itself also caps
+#       each per-isolate, per-hashed-IP bucket at 60 req/60s in
+#       `functions/api/account/age-confirmation/intent.ts`. This is
+#       not a substitute for the WAF rule above — a determined
+#       cross-IP attacker needs WAF at the edge — but it guarantees
+#       that an incorrectly-configured dashboard cannot expose the
+#       endpoint to unlimited single-isolate amplification. The WAF
+#       rule still matters because Cloudflare multiplexes many
+#       requests into one isolate; without the edge cap an attacker
+#       can still burn isolate CPU under the 60/min ceiling.
+#
+#       Release-readiness: `docs/contributing.md` Doc-drift release
+#       check links to the WAF-verification step that must run
+#       before every production deploy.
 #
 # Per-user quotas (10 publishes/24h) are enforced inside publish.ts via the
 # publish_quota_window D1 table — see src/share/rate-limit.ts.

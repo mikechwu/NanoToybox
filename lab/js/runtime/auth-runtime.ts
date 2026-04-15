@@ -75,9 +75,10 @@ export class AuthRequiredError extends Error {
 /** Thrown by the publish fetch when the server returned 428 Precondition
  *  Required — the authenticated user has no `age_13_plus` acceptance row.
  *  The Transfer dialog catches this the same way it catches
- *  AuthRequiredError and surfaces the inline retro-ack checkbox. The
- *  `policyVersion` is preserved so the retro-ack call can record the
- *  server's current policy version. */
+ *  AuthRequiredError and surfaces the inline publish-clickwrap fallback
+ *  (single Publish button; clicking IS the consent). The
+ *  `policyVersion` is preserved so the legacy-remediation call can
+ *  record the server's current policy version. */
 export class AgeConfirmationRequiredError extends Error {
   readonly kind = 'age-confirmation-required' as const;
   readonly policyVersion: string | null;
@@ -274,23 +275,76 @@ function isAuthCompleteMessage(v: unknown): v is AuthCompleteMessage {
   return !!v && typeof v === 'object' && (v as { type?: unknown }).type === 'atomdojo-auth-complete';
 }
 
-/** Open a popup for the OAuth flow. Returns true on success, false if the
- *  browser blocked or otherwise refused the open. On a false return the
- *  caller does NOT auto-navigate — it surfaces the block to the user via
- *  the store so they can explicitly retry or consent to the same-tab
- *  (destructive) redirect. Every attempt is fresh: there is no sticky
- *  "popup blocker active" hint that suppresses later attempts. */
-function tryOpenAuthPopup(startUrl: string): boolean {
+/** Open the popup shell synchronously inside the click handler. Returns
+ *  the live Window or null when the browser blocked the open. The
+ *  caller MUST navigate the popup (via `navigatePopupTo`) or close it
+ *  (via `closePopupShell`) — leaking a blank popup is a UX bug.
+ *
+ *  Writes a minimal same-origin loading document immediately so the
+ *  user doesn't see a scary blank window while the age-intent fetch
+ *  is in flight. The doc.write is best-effort: if a browser blocks it
+ *  (e.g. some embedded webviews), the popup still opens and the
+ *  navigation kicks in once the fetch resolves — the user just sees
+ *  the default blank state for the fetch duration. */
+function openOAuthPopupShell(): Window | null {
+  if (isViteDevHost()) {
+    console.warn(
+      `[auth] OAuth popup skipped — running on Vite dev host (${window.location.origin}). ` +
+      'Run `npm run cf:dev` (wrangler pages dev on :8788) to exercise the popup flow.',
+    );
+    return null;
+  }
   let popup: Window | null = null;
   try {
-    popup = window.open(startUrl, 'atomdojo-auth', POPUP_FEATURES);
+    popup = window.open('', 'atomdojo-auth', POPUP_FEATURES);
   } catch {
-    popup = null;
+    return null;
   }
-  if (!popup) return false;
+  if (!popup) return null;
   // Focus is best-effort — some browsers auto-focus the popup, others don't.
   try { popup.focus(); } catch { /* ignore */ }
-  return true;
+  // Best-effort interim content. Same-origin so document.write is
+  // permitted; if a webview blocks it the popup just stays blank for
+  // the ~50-500 ms fetch window.
+  try {
+    popup.document.write(
+      '<!doctype html>' +
+      '<title>Starting sign-in\u2026</title>' +
+      '<style>body{font:14px -apple-system,BlinkMacSystemFont,sans-serif;color:#333;padding:24px;text-align:center}</style>' +
+      '<p>Starting sign-in\u2026</p>',
+    );
+    popup.document.close();
+  } catch { /* ignore */ }
+  return popup;
+}
+
+/** Best-effort failure message in the popup before close. Used so a
+ *  fetch-failure isn't silent if the popup stole focus from the Lab. */
+function showFailureInPopup(popup: Window): void {
+  try {
+    popup.document.open();
+    popup.document.write(
+      '<!doctype html>' +
+      '<title>Sign-in failed</title>' +
+      '<style>body{font:14px -apple-system,BlinkMacSystemFont,sans-serif;color:#333;padding:24px;text-align:center}</style>' +
+      '<p>Sign-in could not start. Please return to the previous tab and try again.</p>',
+    );
+    popup.document.close();
+  } catch { /* ignore */ }
+}
+
+/** Idempotent cleanup — safe to call on a popup that's already
+ *  navigated away or already closed. */
+function closePopupShell(popup: Window | null): void {
+  if (!popup) return;
+  try { popup.close(); } catch { /* ignore */ }
+}
+
+/** Navigate an already-opened shell to the OAuth start URL. */
+function navigatePopupTo(popup: Window, provider: 'google' | 'github', ageIntent: string): void {
+  const startPath = provider === 'google' ? '/auth/google/start' : '/auth/github/start';
+  const params = new URLSearchParams({ returnTo: '/auth/popup-complete', ageIntent });
+  popup.location.href = `${startPath}?${params.toString()}`;
 }
 
 /** True when the current host looks like a Vite dev server (i.e. plain
@@ -425,35 +479,129 @@ async function handleAuthComplete(): Promise<void> {
   }
 }
 
-/** Try the popup path. Returns true if the popup opened; false when
- *  blocked (caller is expected to surface the block to the user rather
- *  than silently same-tab-navigate).
+/** Just-in-time age-intent fetch. The endpoint is unauthenticated and
+ *  not user-bound — its sole purpose is to prove that the entity
+ *  hitting `/auth/{provider}/start` crossed the clickwrap UI in a
+ *  real browser context. Durable user-binding happens at the OAuth
+ *  callback. `same-origin` is the right credential mode (consistent
+ *  with the rest of Lab's same-origin fetches); `include` would
+ *  falsely imply the call relies on session cookies.
  *
- *  Dev-mode guard: when the Lab is running on a Vite dev host (not
- *  `wrangler pages dev` on 8788), `/auth/{provider}/start` isn't served
- *  — the popup would load a 404/SPA-index and hang. We return false
- *  (same as "blocked") so the user sees the popup-blocked UX with a
- *  Continue-in-tab option instead of a silently-broken popup. A
- *  single-line console warning tells the developer why. */
-function tryBeginOAuthPopup(
-  provider: 'google' | 'github',
-  ageIntent?: string | null,
-): boolean {
-  if (isViteDevHost()) {
-    console.warn(
-      `[auth] OAuth popup skipped — running on Vite dev host (${window.location.origin}). ` +
-      'Run `npm run cf:dev` (wrangler pages dev on :8788) to exercise the popup flow.',
-    );
-    return false;
+ *  Throws an `AgeIntentFetchError` on every failure mode so callers
+ *  can map to a stable user-visible message via `messageForFetchError`. */
+class AgeIntentFetchError extends Error {
+  readonly kind = 'age-intent-fetch' as const;
+  readonly mode: 'network' | 'server-5xx' | 'server-4xx' | 'rate-limited' | 'invalid-body';
+  /** Seconds to wait before retrying, parsed from the server's
+   *  `Retry-After` header on 429 responses. Only meaningful when
+   *  `mode === 'rate-limited'`; `null` when the header is missing,
+   *  malformed, or the mode is something else. */
+  readonly retryAfterSeconds: number | null;
+  constructor(mode: AgeIntentFetchError['mode'], message: string, retryAfterSeconds: number | null = null) {
+    super(message);
+    this.name = 'AgeIntentFetchError';
+    this.mode = mode;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
-  const startPath = provider === 'google' ? '/auth/google/start' : '/auth/github/start';
-  // Popup always uses the popup-complete landing as its returnTo — the
-  // popup doesn't reload the Lab, so no `?authReturn=1` handshake.
-  const popupReturnTo = '/auth/popup-complete';
-  const params = new URLSearchParams({ returnTo: popupReturnTo });
-  if (ageIntent) params.set('ageIntent', ageIntent);
-  const popupUrl = `${startPath}?${params.toString()}`;
-  return tryOpenAuthPopup(popupUrl);
+}
+
+/** Parse `Retry-After` as a non-negative integer number of seconds.
+ *  Spec allows an HTTP-date too, but our own server only ever emits
+ *  a delta-seconds integer; anything else is treated as "unknown"
+ *  (null). Contract: accept ONLY a clean `^\d+$` whole-string decimal
+ *  value within safe-integer range. Partial garbage (e.g. `60abc`)
+ *  and fractional values (`1.5`) both fall through to null so the
+ *  caller can render the generic "a moment" message. */
+function parseRetryAfterSeconds(raw: string | null): number | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const n = Number(trimmed);
+  if (!Number.isSafeInteger(n) || n < 0) return null;
+  return n;
+}
+
+/** Distinct from a fetch failure — the user closed the popup window
+ *  while the JIT intent fetch was still in flight. Caught after the
+ *  fetch resolves; `navigatePopupTo` would otherwise throw
+ *  cross-origin / invalid-access on a closed window, and the generic
+ *  fetch-error message would mis-tell the user "could not start"
+ *  when in fact the start was abandoned by their own click. */
+class PopupClosedDuringFetchError extends Error {
+  readonly kind = 'popup-closed-during-fetch' as const;
+  constructor() {
+    super('Sign-in popup was closed before the request finished.');
+    this.name = 'PopupClosedDuringFetchError';
+  }
+}
+
+async function fetchAgeIntent(): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetch('/api/account/age-confirmation/intent', {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+    });
+  } catch (err) {
+    throw new AgeIntentFetchError('network', `network: ${(err as Error).message}`);
+  }
+  if (res.status >= 500) {
+    throw new AgeIntentFetchError('server-5xx', `server ${res.status}`);
+  }
+  // 429 Too Many Requests is the app-level rate limiter on the intent
+  // endpoint (per-isolate per-IP cap; see intent.ts). Surface it as a
+  // distinct mode so the UI can render a temporary-wait message with
+  // the server's retry hint, not the generic "not available here"
+  // copy that the other 4xx branches use.
+  if (res.status === 429) {
+    const retryAfterSeconds = parseRetryAfterSeconds(res.headers.get('Retry-After'));
+    throw new AgeIntentFetchError(
+      'rate-limited',
+      `rate limited (retry-after ${retryAfterSeconds ?? 'unknown'})`,
+      retryAfterSeconds,
+    );
+  }
+  if (!res.ok) {
+    throw new AgeIntentFetchError('server-4xx', `server ${res.status}`);
+  }
+  let body: { ageIntent?: unknown };
+  try {
+    body = await res.json();
+  } catch (err) {
+    throw new AgeIntentFetchError('invalid-body', `body parse: ${(err as Error).message}`);
+  }
+  if (!body || typeof body.ageIntent !== 'string') {
+    throw new AgeIntentFetchError('invalid-body', 'ageIntent missing in response');
+  }
+  return body.ageIntent;
+}
+
+/** Format a Retry-After seconds value as a short human phrase. 60 →
+ *  "about 1 minute", 120 → "about 2 minutes", 30 → "about 30 seconds".
+ *  Returns "a moment" when the value is missing. */
+function formatRetryWait(seconds: number | null): string {
+  if (seconds === null || seconds <= 0) return 'a moment';
+  if (seconds < 60) return `about ${seconds} seconds`;
+  const minutes = Math.round(seconds / 60);
+  return minutes === 1 ? 'about 1 minute' : `about ${minutes} minutes`;
+}
+
+/** User-facing message keyed off the fetch-failure taxonomy. */
+function messageForFetchError(err: unknown): string {
+  if (err instanceof PopupClosedDuringFetchError) {
+    return 'Sign-in window was closed. Click Continue with Google or GitHub to try again.';
+  }
+  if (err instanceof AgeIntentFetchError) {
+    switch (err.mode) {
+      case 'network':       return 'Sign-in unavailable — check your connection and retry.';
+      case 'server-5xx':    return 'Sign-in temporarily unavailable. Please try again.';
+      case 'rate-limited':  return `Too many sign-in attempts. Please wait ${formatRetryWait(err.retryAfterSeconds)} and try again.`;
+      case 'server-4xx':    return 'Sign-in isn\u2019t available here.';
+      case 'invalid-body':  return 'Sign-in returned an unexpected response. Please try again.';
+    }
+  }
+  return 'Could not start sign-in. Please try again.';
 }
 
 /** Commit the destructive same-tab redirect. Only called when the user
@@ -462,16 +610,19 @@ function tryBeginOAuthPopup(
  *  the redirect; the boot-time resume handshake (`?authReturn=1` +
  *  sessionStorage intent) recovers the Transfer dialog + Share tab.
  *  Secondary sign-ins (top-bar) pass withAuthMarker=false so a returning
- *  page load won't auto-open the Transfer dialog unexpectedly. */
+ *  page load won't auto-open the Transfer dialog unexpectedly.
+ *
+ *  Same-tab is allowed to await before navigation — `location.assign`
+ *  doesn't require user-gesture qualification the way `window.open`
+ *  does, so the JIT fetch is safe to run synchronously here. */
 function beginOAuthSameTab(
   provider: 'google' | 'github',
   withAuthMarker: boolean,
-  ageIntent?: string | null,
+  ageIntent: string,
 ): void {
   const startPath = provider === 'google' ? '/auth/google/start' : '/auth/github/start';
   const returnTo = withAuthMarker ? '/lab/?authReturn=1' : '/lab/';
-  const params = new URLSearchParams({ returnTo });
-  if (ageIntent) params.set('ageIntent', ageIntent);
+  const params = new URLSearchParams({ returnTo, ageIntent });
   const url = `${startPath}?${params.toString()}`;
   window.location.assign(url);
 }
@@ -555,40 +706,144 @@ export function consumeResumePublishIntent(): boolean {
 /** Factory — returns store-shaped callbacks + a hydrator.
  *  Callers wire these into the store and invoke hydrate on mount. */
 export function createAuthRuntime(): { callbacks: AuthCallbacks; hydrate: () => Promise<AuthState> } {
+  // Monotonic attempt id. Any async branch captures this at the moment
+  // it is scheduled and checks `attemptId === currentAttemptId` before
+  // committing side effects. A new attempt bumps the id, which strands
+  // any in-flight branch from an older attempt so it can't flip the
+  // store into a 'failed' state or navigate the popup after a newer
+  // attempt has already started. See `latestAttempt()` below.
+  let currentAttemptId = 0;
+  const latestAttempt = () => currentAttemptId;
+
   const callbacks: AuthCallbacks = {
     onSignIn: (provider, opts) => {
       const resume = Boolean(opts?.resumePublish);
-      const ageIntent = opts?.ageIntent ?? null;
-      const ageIntentMintedAt = opts?.ageIntentMintedAt ?? null;
+      const store = useAppStore.getState();
+
+      // Runtime-level critical section (P1 audit fix). The UI disables
+      // provider buttons while `authSignInAttempt.status === 'starting'`,
+      // but UI disabling is advisory: rapid double-clicks, keyboard
+      // activation, or a second visible surface can still race before
+      // React re-renders. Guard at the owner of the side effect so the
+      // invariant (one live sign-in attempt per runtime) holds even if
+      // the UI layer regresses.
+      if (store.authSignInAttempt?.status === 'starting') return;
+
+      // Bump the attempt id AFTER the idle check — any in-flight branch
+      // from a prior attempt is now stranded by id comparison below.
+      const attemptId = ++currentAttemptId;
+
       // Clear any prior popup-blocked prompt before attempting — if the
       // popup opens this turn, the stale prompt must not linger.
-      useAppStore.getState().setAuthPopupBlocked(null);
-      // Set the resume intent BEFORE any navigation attempt so both the
-      // popup-complete handshake and the same-tab handshake see it.
-      if (resume) setResumePublishIntent(provider);
-      if (tryBeginOAuthPopup(provider, ageIntent)) return;
-      // Popup blocked — do NOT silently navigate. Surface the block via
-      // the store so the UI can offer an explicit Retry / Continue-in-tab
-      // choice. The pending descriptor preserves the original `resume`
-      // choice AND the age-intent + mintedAt so the same-tab commit uses
-      // the right `authReturn` marker and the React retry handlers can
-      // detect a stale token and reroute the user to a fresh mint.
-      useAppStore.getState().setAuthPopupBlocked({
-        provider,
-        resumePublish: resume,
-        ageIntent,
-        ageIntentMintedAt,
-      });
+      store.setAuthPopupBlocked(null);
+      // Mark the attempt as starting so React UIs can disable provider
+      // buttons immediately. Cleared on every terminal branch below.
+      store.setAuthSignInAttempt({ provider, resumePublish: resume, status: 'starting', message: null });
+
+      // CRITICAL: open the popup shell SYNCHRONOUSLY before any await.
+      // `window.open` requires a live user gesture; awaiting fetchAgeIntent
+      // before this line would let the browser strip the gesture
+      // qualification and trigger popup blockers — re-introducing the
+      // exact problem this shell-first refactor was added to prevent.
+      const popup = openOAuthPopupShell();
+      if (!popup) {
+        // Popup-blocked descriptor takes over. Do NOT write the resume
+        // sentinel here — see "Resume-sentinel timing contract" in the
+        // plan. Sentinel writes happen only at the navigation site.
+        store.setAuthSignInAttempt(null);
+        store.setAuthPopupBlocked({ provider, resumePublish: resume });
+        return;
+      }
+      // Now we're free to go async — the popup is already open.
+      void (async () => {
+        try {
+          const ageIntent = await fetchAgeIntent();
+          // Stranded-attempt check. If a NEWER onSignIn has run while
+          // we awaited, do not touch the store or the popup — the new
+          // attempt owns both. Close this (now-orphaned) popup quietly
+          // so we don't leak a blank window.
+          if (attemptId !== latestAttempt()) {
+            closePopupShell(popup);
+            return;
+          }
+          // The user may have closed the popup while the fetch was in
+          // flight. `popup.location.href = …` on a closed window throws
+          // cross-origin / invalid-access in most browsers, and the
+          // generic catch below would mis-attribute that as a fetch
+          // failure. Detect explicitly so the UI can show "Sign-in
+          // window was closed" instead of "could not start sign-in."
+          if (popup.closed) throw new PopupClosedDuringFetchError();
+          // Sentinel timing: write only after fetch success, immediately
+          // before navigation. This closes the failure window where a
+          // pre-fetch sentinel write could orphan into a later unrelated
+          // sign-in's auto-Share-open.
+          if (resume) setResumePublishIntent(provider);
+          navigatePopupTo(popup, provider, ageIntent);
+          useAppStore.getState().setAuthSignInAttempt(null);
+        } catch (err) {
+          // Stranded-attempt check on the failure branch — same rationale
+          // as the success branch: a newer attempt owns the store state.
+          if (attemptId !== latestAttempt()) {
+            closePopupShell(popup);
+            return;
+          }
+          // Defensive: clear any prior sentinel so a stale one from an
+          // earlier attempt cannot leak past this failure.
+          clearResumeIntent();
+          // Only attempt the popup failure write + close when the popup
+          // is still open — calling document.write/close on a closed
+          // window is wasted noise (and the user already saw the popup
+          // disappear when they closed it themselves).
+          if (!popup.closed) {
+            showFailureInPopup(popup);
+            closePopupShell(popup);
+          }
+          useAppStore.getState().setAuthSignInAttempt({
+            provider, resumePublish: resume, status: 'failed',
+            message: messageForFetchError(err),
+          });
+        }
+      })();
     },
     onSignInSameTab: () => {
       // User explicitly consented to the destructive redirect from the
       // popup-blocked prompt. Read the pending descriptor, clear it,
-      // then navigate. If nothing is pending (stale click, concurrent
-      // cancel), no-op rather than randomly navigating.
-      const pending = useAppStore.getState().authPopupBlocked;
+      // then fetch a fresh intent and navigate. `location.assign` does
+      // not require user-gesture qualification, so awaiting before
+      // navigation is safe here (unlike the popup path).
+      const store = useAppStore.getState();
+      // Same critical section as onSignIn above — refuse to start if an
+      // attempt is already in flight (e.g. user clicks Continue-in-tab
+      // repeatedly while the fetch is in flight).
+      if (store.authSignInAttempt?.status === 'starting') return;
+      const pending = store.authPopupBlocked;
       if (!pending) return;
-      useAppStore.getState().setAuthPopupBlocked(null);
-      beginOAuthSameTab(pending.provider, pending.resumePublish, pending.ageIntent ?? null);
+      const attemptId = ++currentAttemptId;
+      store.setAuthPopupBlocked(null);
+      const provider = pending.provider;
+      const resume = pending.resumePublish;
+      store.setAuthSignInAttempt({ provider, resumePublish: resume, status: 'starting', message: null });
+      void (async () => {
+        try {
+          const ageIntent = await fetchAgeIntent();
+          // Stranded-attempt check — a newer onSignIn/onSignInSameTab
+          // may have started while we awaited.
+          if (attemptId !== latestAttempt()) return;
+          // Sentinel timing: write only after fetch success, immediately
+          // before navigation (see plan §3 "Resume-sentinel timing contract").
+          if (resume) setResumePublishIntent(provider);
+          beginOAuthSameTab(provider, resume, ageIntent);
+          // No setAuthSignInAttempt(null) here — location.assign tears
+          // down the page, the cleared state would never reach the user.
+        } catch (err) {
+          if (attemptId !== latestAttempt()) return;
+          clearResumeIntent();
+          useAppStore.getState().setAuthSignInAttempt({
+            provider, resumePublish: resume, status: 'failed',
+            message: messageForFetchError(err),
+          });
+        }
+      })();
     },
     onDismissPopupBlocked: () => {
       // User backed out of the popup-blocked prompt. Clear the pending

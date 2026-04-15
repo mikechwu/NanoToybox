@@ -105,8 +105,8 @@ NanoToybox/
 │   │   │   ├── SheetOverlay.tsx  # Sheet backdrop
 │   │   │   ├── StatusBar.tsx     # Scene status display
 │   │   │   ├── FPSDisplay.tsx    # FPS/simulation status
-│   │   │   ├── AccountControl.tsx # Top-right auth disclosure (loading / signed-in / signed-out / unverified + popup-blocked sub-menu); Phase 7: signed-out menu embeds AgeGateCheckbox
-│   │   │   ├── AgeGateCheckbox.tsx # Phase 7 — 13+ age-confirmation checkbox; POSTs to /api/account/age-confirmation/intent for a 5-min HMAC nonce; refreshes every 4 min + on visibility change + on consumer-bumped `refreshNonce`. Shared by AccountControl signed-out menu + Transfer dialog signed-out panel
+│   │   │   ├── AccountControl.tsx # Top-right auth disclosure (loading / signed-in / signed-out / unverified + popup-blocked sub-menu); D120: signed-out menu renders AgeClickwrapNotice + provider buttons (no checkbox)
+│   │   │   ├── AgeClickwrapNotice.tsx # D120 — single short clickwrap sentence with linked Privacy/Terms anchors. Rendered above provider/Publish buttons; consuming buttons reference its `id` via `aria-describedby`. Replaces the deleted AgeGateCheckbox.
 │   │   │   ├── TopRightControls.tsx # Flex row wrapping AccountControl + FPSDisplay (replaces two absolutely-positioned surfaces)
 │   │   │   ├── CameraControls.tsx # Object View panel: Center + Follow buttons (default); mode toggle when Free-Look gate is on
 │   │   │   ├── OnboardingOverlay.tsx # Page-load welcome card with sink-to-Settings animation
@@ -1245,33 +1245,49 @@ Phase 7 adds four static route entrypoints, an authenticated owner-self-service 
 
 **Routes (build entrypoints — see `vite.config.ts`):** `/privacy`, `/terms`, `/account`, `/privacy-request`. `/privacy` and `/terms` receive build-time `<meta name="policy-version">` + `<meta name="policy-active-segments">` injection from `src/policy/vite-policy-plugin.ts`, driven by `POLICY_VERSION` / `ACTIVE_POLICY_SEGMENTS` / `POLICY_FEATURES` in `src/policy/policy-config.ts`. The meta tags are consumed by `scripts/deploy-smoke.sh` and `tests/e2e/policy-routes.spec.ts` to assert deploy-and-test alignment without duplicating the policy version as a magic string.
 
-**13+ age gate (server-authoritative, two enforcement points):**
+**13+ age gate (server-authoritative, two enforcement points; D120 — supersedes D118):**
 
 ```
 Signed-out user on Lab (signed-out AccountControl menu OR Transfer dialog signed-out panel)
-    ├── AgeGateCheckbox.tsx (shared component)
-    │     ├── POST /api/account/age-confirmation/intent
-    │     │     → functions/api/account/age-confirmation/intent.ts
-    │     │     → signed-intents.ts issues 5-min HMAC nonce
-    │     ├── Refresh policy: every 4 min + on visibilitychange + on consumer-bumped `refreshNonce`
-    │     └── Nonce carried into OAuth `state` payload
+    ├── AgeClickwrapNotice.tsx (shared component)
+    │     └── Single short clickwrap sentence with linked Privacy/Terms;
+    │          provider buttons reference its id via aria-describedby.
     │
-    └── User clicks Sign-In with <Provider>
-          → GET /auth/{google,github}/start
+    └── User clicks Continue with <Provider>
+          ├── React click handler is synchronous — no awaits.
+          ├── auth-runtime.ts onSignIn() opens the popup shell
+          │     SYNCHRONOUSLY inside the user gesture (window.open with "")
+          │     so popup blockers don't fire.
+          ├── Then asynchronously POST /api/account/age-confirmation/intent
+          │     for a 5-minute HMAC nonce (no caching, no React state).
+          ├── Resume-publish sentinel written ONLY now, just before navigation
+          │     (closes the orphan-on-fetch-fail leak).
+          └── popup.location.href = `/auth/{provider}/start?ageIntent=…`
                 → validates nonce (HMAC + TTL) before 302 to provider
                 → live-session bypass: already-signed-in users skip the check
-                → on successful callback, upserts `user_policy_acceptance` row
-                     (composite PK on user_id + policy_kind; UPSERT)
+                → OAuth state payload now carries `age13PlusConfirmed: true` +
+                   `agePolicyVersion: '<deployed POLICY_VERSION>'`
+                → on successful callback, findOrCreateUserWithPolicyAcceptance
+                   writes users + oauth_accounts + user_policy_acceptance in
+                   ONE atomic db.batch (new accounts cannot exist without
+                   the matching acceptance row). Existing accounts get a
+                   single-statement acceptance UPSERT before session creation.
+                → Acceptance failure → redirect to /auth/error (no session
+                   cookie set; user clicks Retry on the error page).
 
-Already-signed-in user publishes a capsule
+Already-signed-in user publishes a capsule (legacy backstop)
     → POST /api/capsules/publish
           → if no `user_policy_acceptance` row for `age_13_plus`:
-                → 428 Precondition Required, structured body
+                → 428 Precondition Required, structured body (legacy backstop —
+                   new users have the row from the OAuth callback above).
                 → Lab catches via AgeConfirmationRequiredError
-                → Transfer dialog renders inline retro-ack (accept → re-post publish)
+                → Transfer dialog renders the publish-clickwrap fallback;
+                   the Publish button POSTs to /api/account/age-confirmation
+                   (which calls the SAME `recordAge13PlusAcceptance` helper)
+                   and re-runs the publish.
 ```
 
-This two-point enforcement (OAuth start for new users; publish for pre-existing users who signed in before the gate shipped) means no user reaches a publish without either (a) consenting at sign-in or (b) consenting inline in the Transfer dialog.
+This two-point enforcement covers (a) post-clickwrap new users via the OAuth callback acceptance write, and (b) legacy / pre-deploy existing accounts via the unchanged publish-`428` backstop. The 428 path is **not** redundant with the callback write — it covers the population that the callback write does not (do not remove it).
 
 **Account API (`functions/api/account/*`, all behind `auth-middleware.ts`):**
 
@@ -1314,9 +1330,11 @@ User submits /privacy-request form
 | Policy source-of-truth | `src/policy/policy-config.ts` | `POLICY_VERSION`, `ACTIVE_POLICY_SEGMENTS`, `POLICY_FEATURES`. Single string constant referenced everywhere (smoke script, E2E, injected meta). |
 | Policy build-time injection | `src/policy/vite-policy-plugin.ts` | Registered in `vite.config.ts`. Injects two meta tags into `privacy/index.html` and `terms/index.html` at build. |
 | Policy routes | `privacy/index.html`, `terms/index.html`, `account/` (`index.html` + `main.tsx`), `privacy-request/` (`index.html` + `main.ts`) | Registered in `vite.config.ts` `rollupOptions.input`. |
-| Age-gate checkbox | `lab/js/components/AgeGateCheckbox.tsx` | Shared by signed-out AccountControl menu + Transfer dialog signed-out panel. Refreshes every 4 min + on `visibilitychange` + on consumer-bumped `refreshNonce`. |
-| Age-gate intent | `functions/signed-intents.ts`, `functions/api/account/age-confirmation/intent.ts`, `.../age-confirmation/index.ts` | `signed-intents.ts` is the HMAC primitive (5-min TTL). `intent.ts` issues; the nonce is validated at `auth/{google,github}/start.ts`. |
-| Age-gate publish enforcement | `functions/api/capsules/publish.ts` | 428 with structured body when no `age_13_plus` row. Lab catches via `AgeConfirmationRequiredError` and renders inline retro-ack. |
+| Age-gate clickwrap | `lab/js/components/AgeClickwrapNotice.tsx` | D120 (supersedes D118) — single short clickwrap sentence with linked Privacy/Terms; rendered above provider/Publish buttons in AccountControl, Transfer dialog signed-out panel, and Transfer dialog publish-428 fallback. Buttons reference the notice via `aria-describedby`. |
+| Age-gate intent (JIT) | `functions/signed-intents.ts`, `functions/api/account/age-confirmation/intent.ts`, `lab/js/runtime/auth-runtime.ts` | `signed-intents.ts` is the HMAC primitive (5-min TTL). `intent.ts` issues. The auth runtime fetches the nonce just-in-time AFTER opening the popup shell synchronously; the nonce is validated at `auth/{google,github}/start.ts`. |
+| Acceptance recording | `functions/policy-acceptance.ts` | Single source of truth for the 13+ acceptance row. `recordAge13PlusAcceptance(db, userId, version)` does the UPSERT + audit. `findOrCreateUserWithPolicyAcceptance` writes new accounts atomically (users + oauth_accounts + acceptance in one `db.batch`); existing accounts UPSERT acceptance before session creation. The legacy endpoint `POST /api/account/age-confirmation` calls the same helper (no duplicated SQL). |
+| Age-gate publish enforcement (legacy backstop) | `functions/api/capsules/publish.ts` | 428 with structured body when no `age_13_plus` row. Lab catches via `AgeConfirmationRequiredError` and renders the publish-clickwrap fallback (Publish button POSTs to `/api/account/age-confirmation` and re-runs publish). New users get the row from the OAuth callback above; the 428 path covers legacy / pre-deploy existing accounts. |
+| Acceptance failure UX | `functions/auth/error.ts` | OAuth callback redirects here when `findOrCreateUserWithPolicyAcceptance` cannot record the row (e.g., DB error or `MissingAge13PlusError` on a brand-new account). Renders a friendly error page with whitelisted `reason`/`provider` query params and a Retry link to `/lab/`. No session cookie is set on this path (preserves "callback acceptance failure ⇒ no session"). |
 | Policy acceptance persistence | `migrations/0006_user_policy_acceptance.sql` | Composite PK `(user_id, policy_kind)`; UPSERT on accept. |
 | Account API | `functions/api/account/me.ts`, `.../delete.ts`, `.../capsules/index.ts`, `.../capsules/delete-all.ts`, `.../capsules/[code]/index.ts` | All no-cache (`http-cache.ts`). Cross-user → 404. Self-delete is re-scan-and-verify; `ok: false` on any residual row. |
 | Shared capsule-delete core | `src/share/capsule-delete.ts` | Wrapped by both admin moderation and owner self-service. Tombstone semantics (`status='deleted'`, NULL content fields, NULL `object_key` on R2 success). |

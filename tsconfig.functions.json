@@ -31,6 +31,10 @@
     "tests/unit/account-delete-cascade.test.ts",
     "tests/unit/account-capsules-pagination.test.ts",
     "tests/unit/privacy-request-endpoint.test.ts",
+    "tests/unit/policy-acceptance.test.ts",
+    "tests/unit/oauth-state.test.ts",
+    "tests/unit/auth-error-route.test.ts",
+    "tests/unit/auth-callback-acceptance.test.ts",
     "workers/cron-sweeper/src/**/*.ts"
   ]
 }

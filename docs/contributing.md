@@ -525,6 +525,54 @@ The following items are intentionally deferred — do not start them without an 
 6. npm run build                  # Production build → dist/
 ```
 
+#### Doc-drift release check
+
+Before opening a release PR, run this grep to catch retired-UX
+references that slipped into new code or comments. All matches should
+either be inside an append-only decision entry (e.g., D118) or a
+clearly historical section ("Replaces the deleted AgeGateCheckbox"):
+
+```
+rg -n 'AgeGateCheckbox|refreshNonce|retro-ack checkbox|AGE_INTENT_STALE_AFTER_MS' \
+  docs/ functions/ lab/js/ watch/js/ src/ tests/ \
+  privacy/ terms/ account/ privacy-request/ README.md *.md
+```
+
+The `privacy/`, `terms/`, `account/`, and `privacy-request/` paths are
+the static policy-facing surfaces — stale text there affects live
+user-facing routes, not just source comments, so the release check
+must cover them too.
+
+Anything else is stale and should be updated — the retired UX should
+not dangle in the active codebase's comments or live docs.
+
+#### Production deploy readiness (Cloudflare side)
+
+Before promoting any Workers/Pages change to production, verify the
+following Cloudflare-side controls are in place. These are NOT
+managed as code in this repo — they live in the Cloudflare dashboard
+and must be kept in sync by the deploy operator.
+
+1. **WAF rate-limit rules** — confirm every rule documented in the
+   "Per-IP rate limiting" block of `wrangler.toml` is present and
+   enabled in Security → WAF → Rate limiting rules. At minimum:
+   - "Publish per IP" (30 req/min on `/api/capsules/publish`)
+   - "Resolve per IP" (300 req/min on `/api/capsules/`)
+   - "Age-intent signing per IP" (D120 — 30 req/min on
+     `/api/account/age-confirmation/intent`)
+
+   The age-intent endpoint has an app-level layer-2 cap in the Worker
+   (60/isolate/min) that prevents unbounded single-isolate CPU
+   amplification, but the WAF rule is still required for cross-IP /
+   cross-isolate attacks. Treat a missing WAF rule as a launch
+   blocker.
+
+2. **Scheduled Workers** — `wrangler.toml` pins the cron-sweeper
+   schedules; verify the Worker is deployed with both `X-Cron-Secret`
+   matching the environment.
+
+3. **Doc-drift grep** — see above subsection.
+
 ### Cloudflare / Share Backend (Phase 5 — Share & Publish)
 
 The Phase 5 share-and-publish work adds a Cloudflare Pages Functions backend (under `functions/`) for publishing and sharing capsules, backed by D1 (SQLite) and R2 (object store), plus a companion scheduled Worker (`workers/cron-sweeper/`) for periodic cleanup. Lab + Watch UI work is unchanged — these onboarding notes apply when you're touching share/publish, auth, admin, or cron code. (Not to be confused with the deferred "Phase 5: Workspace assessment" item above, which is a separate architectural track.)

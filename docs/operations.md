@@ -526,11 +526,23 @@ does NOT fail the request).
 
 The publish endpoint returns **428 Precondition Required** with body
 `{ error: 'age_confirmation_required', policyVersion, message }`
-when the authenticated user has no `age_13_plus` row. The Lab
-Transfer dialog catches this and renders the inline retro-ack
-checkbox; a user stuck in a loop (repeated 428s after clicking
-accept) is usually a client cache / extension issue, but to unblock
-manually:
+when the authenticated user has no `age_13_plus` row.
+
+D120 update: this path is now a **legacy backstop**. New users have
+the row written at OAuth callback time
+(`functions/policy-acceptance.ts findOrCreateUserWithPolicyAcceptance`),
+so the 428 here covers (a) accounts created before the
+post-clickwrap callback write shipped and (b) any account state
+created through an unexpected path. Expect this to fire for a
+shrinking pre-deploy population.
+
+The Lab Transfer dialog catches `AgeConfirmationRequiredError` and
+renders the publish-clickwrap fallback (single Publish button — no
+checkbox; clicking IS the consent). The button POSTs to
+`/api/account/age-confirmation`, which calls the same
+`recordAge13PlusAcceptance` helper as the OAuth callback. A user
+stuck in a loop (repeated 428s after clicking Publish) is usually
+a client cache / extension issue, but to unblock manually:
 
 ```sql
 -- Confirm whether the row exists.
@@ -539,8 +551,9 @@ FROM user_policy_acceptance
 WHERE user_id = ? AND policy_kind = 'age_13_plus';
 ```
 
-If the row is missing, either have the user retry the retro-ack
-(preferred — it emits the audit event), or insert the acceptance on
+If the row is missing, either have the user retry the publish-clickwrap
+fallback (preferred — it emits the audit event via
+`recordAge13PlusAcceptance`), or insert the acceptance on
 their behalf **only when you have a support ticket documenting their
 confirmation**:
 

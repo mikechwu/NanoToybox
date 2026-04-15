@@ -302,14 +302,16 @@ Phase 7 added the account-lifecycle / account-erasure surface: signed intents (H
 | `account-delete-cascade.test.ts` | Cascade order, partial-failure behavior, and the rule that an audit-log failure folds into `ok:false` rather than being silently swallowed. Typechecked under functions tsconfig. |
 | `account-capsules-pagination.test.ts` | Paginated capsule listing: cursor base64url encoding/decoding round-trip with correct padding. Typechecked under functions tsconfig. |
 | `account-delete-all-loop.test.tsx` | Bulk delete-all client loop: cap-hit reporting, per-item failure surfacing (jsdom + fetch stub). Runs under frontend tsconfig. |
-| `age-gate-checkbox-refresh.test.tsx` | Age-gate UI: `refreshNonce` trigger path and the uncheck-mid-fetch cancellation case. Runs under frontend tsconfig. |
+| `policy-acceptance.test.ts` | D120 — covers `recordAge13PlusAcceptance` (UPSERT + best-effort audit) and the four-branch matrix of `findOrCreateUserWithPolicyAcceptance` (marker absent / present × new / existing account). Includes the atomicity guard (induced batch failure leaves no partially-committed rows). Typechecked under functions tsconfig. |
+| `oauth-state.test.ts` | D120 — sign + verify round-trip for the new `age13PlusConfirmed` and `agePolicyVersion` payload fields, backward-compat for in-flight pre-deploy state, and HMAC tampering rejection. Typechecked under functions tsconfig. |
+| `auth-error-route.test.ts` | D120 — `/auth/error` landing page contract: 200, `Cache-Control: no-store`, whitelisted `reason`/`provider` query params, no raw-input reflection (XSS guard). Typechecked under functions tsconfig. |
 | `privacy-request-endpoint.test.ts` | 13 cases over `POST /api/privacy-request`: full request-body validation + the signed-nonce contract. Typechecked under functions tsconfig. |
 
 Existing fixtures updated for Phase 7 (called out because a fresh contributor will trip over them):
 
-- `publish-endpoint.test.ts` — the `makeContext()` mock D1 now returns `{ok: 1}` only when the prepared statement references `user_policy_acceptance`, so the publish endpoint's new age-gate point-read passes through without having to re-stub the whole D1 mock.
+- `publish-endpoint.test.ts` — the `makeContext()` mock D1 returns `{ok: 1}` only when the prepared statement references `user_policy_acceptance`, so the publish endpoint's age-gate point-read passes through without having to re-stub the whole D1 mock.
 - `admin-delete-endpoint.test.ts` — fixtures gained a `share_code` column because the shared delete core reads it.
-- `auth-ux.test.tsx` — assertions updated for the popup-blocked descriptor (`ageIntent` + `ageIntentMintedAt`), the `aria-haspopup="dialog"` change (was `"true"`), and the new AgeGate checkbox flow with a stubbed `fetch`.
+- `auth-ux.test.tsx` — D120: assertions cover the clickwrap rendering + JIT fetch + `authSignInAttempt` store state. The `age-gate-checkbox-refresh.test.tsx` file was deleted (the AgeGateCheckbox component is gone; the JIT fetch removes the refresh-interval/stale-token machinery the deleted test guarded).
 
 #### Account-Erasure E2E Specs (`tests/e2e/`)
 

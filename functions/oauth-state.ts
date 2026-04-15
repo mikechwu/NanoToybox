@@ -1,16 +1,41 @@
 /**
  * OAuth state parameter: HMAC-signed, short-lived, provider-bound.
- * Carries CSRF protection, return path, and freshness proof.
+ * Carries CSRF protection, return path, freshness proof, and (since
+ * the age-clickwrap simplification, plan §1 backend) the post-clickwrap
+ * 13+ acceptance marker so the callback can record acceptance after
+ * the provider account resolves.
+ *
+ * Both age fields are optional so verifying a payload minted before the
+ * fields existed (in-flight users at deploy time) succeeds; the
+ * callback treats `age13PlusConfirmed === true` as the only signal to
+ * write acceptance, and falls back to current `POLICY_VERSION` when
+ * `agePolicyVersion` is missing but the marker is present.
  */
 
 import type { Env } from './env';
 
-interface OAuthStatePayload {
+export interface OAuthStatePayload {
   provider: string;
   returnTo: string;
   nonce: string;
   iat: number;
   exp: number;
+  /** Set to literal `true` when the start endpoint verified the age
+   *  intent. Absent for in-flight (pre-deploy) state payloads — the
+   *  callback uses `=== true` to refuse silent fall-through. */
+  age13PlusConfirmed?: true;
+  /** Snapshot of the deployed POLICY_VERSION at start time. Records
+   *  what the user actually saw, even if a deploy bumped the version
+   *  between start and callback. Optional — see module doc. */
+  agePolicyVersion?: string;
+}
+
+/** Options passed to `createOAuthState`. Empty object is valid for
+ *  surfaces that don't carry age confirmation (e.g., re-auth from a
+ *  signed-in session) — the marker stays absent. */
+export interface CreateOAuthStateOptions {
+  age13PlusConfirmed?: true;
+  agePolicyVersion?: string;
 }
 
 const STATE_TTL_SECONDS = 600; // 10 minutes
@@ -60,6 +85,7 @@ export async function createOAuthState(
   env: Env,
   provider: string,
   returnTo: string,
+  options: CreateOAuthStateOptions = {},
 ): Promise<string> {
   const secret = env.SESSION_SECRET;
   if (!secret) throw new Error('SESSION_SECRET not configured');
@@ -77,6 +103,13 @@ export async function createOAuthState(
     iat: now,
     exp: now + STATE_TTL_SECONDS,
   };
+  // Only include the optional fields when the caller passed them so
+  // surfaces that don't carry age confirmation (re-auth from a live
+  // session) keep producing the original 5-field payload shape.
+  if (options.age13PlusConfirmed === true) payload.age13PlusConfirmed = true;
+  if (typeof options.agePolicyVersion === 'string') {
+    payload.agePolicyVersion = options.agePolicyVersion;
+  }
 
   const payloadB64 = btoa(JSON.stringify(payload))
     .replace(/\+/g, '-')

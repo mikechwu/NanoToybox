@@ -801,9 +801,10 @@ async function init() {
         if (res.status === 401) {
           throw new AuthRequiredError('Your session expired. Sign in to publish again.');
         }
-        // 428 Precondition Required — the user has not yet confirmed
-        // they are 13+. The Transfer dialog catches this like the 413
-        // branch and renders the inline retro-ack checkbox.
+        // 428 Precondition Required — legacy/pre-D120 user with no
+        // acceptance row. The Transfer dialog catches this like the 413
+        // branch and renders the publish-clickwrap fallback (single
+        // Publish button; clicking IS the consent).
         if (res.status === 428) {
           let policyVersion: string | null = null;
           try {
@@ -813,7 +814,7 @@ async function init() {
             }
           } catch { /* fall through */ }
           throw new AgeConfirmationRequiredError(
-            'Please confirm you are at least 13 to publish.',
+            'Please confirm you meet the minimum age required in your country of residence before publishing.',
             policyVersion,
           );
         }

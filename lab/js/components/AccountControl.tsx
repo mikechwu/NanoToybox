@@ -1,5 +1,5 @@
 /**
- * AccountControl — compact account chip in the Lab top bar (Phase 6 Auth UX).
+ * AccountControl — compact account chip in the Lab top bar.
  *
  * Four states, keyed by `auth.status`:
  *   - loading     → render nothing (tiny reserved slot feels worse than
@@ -13,6 +13,12 @@
  *                   the OAuth providers here — pretending the user is
  *                   signed-out on a transport blip would push them into
  *                   an unnecessary OAuth round-trip.
+ *
+ * Age clickwrap (D120 — supersedes D118): the signed-out menu shows a
+ * single short clickwrap sentence above the provider buttons. No
+ * checkbox, no local age-intent state. The runtime owns the
+ * popup-shell-then-fetch-then-navigate sequence — the click handler
+ * is synchronous and passes only `{ resumePublish }` to `onSignIn`.
  *
  * Accessibility: this is a plain disclosure (toggle button + revealed
  * panel of native buttons), NOT an ARIA `menu` widget. ARIA menus require
@@ -29,7 +35,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store/app-store';
 import { hydrateAuthSession } from '../runtime/auth-runtime';
-import { AgeGateCheckbox, AGE_INTENT_STALE_AFTER_MS } from './AgeGateCheckbox';
+import { AgeClickwrapNotice } from './AgeClickwrapNotice';
+
+const CLICKWRAP_ID = 'age-clickwrap-account';
 
 function useOnClickOutside(ref: React.RefObject<HTMLElement | null>, onOutside: () => void, active: boolean) {
   useEffect(() => {
@@ -66,20 +74,10 @@ export function AccountControl() {
   const session = useAppStore((s) => s.auth.session);
   const callbacks = useAppStore((s) => s.authCallbacks);
   const popupBlocked = useAppStore((s) => s.authPopupBlocked);
+  const signInAttempt = useAppStore((s) => s.authSignInAttempt);
 
   const [open, setOpen] = useState(false);
   const [retrying, setRetrying] = useState(false);
-  const [ageConfirmed, setAgeConfirmed] = useState(false);
-  const [ageIntent, setAgeIntent] = useState<string | null>(null);
-  const [ageMintedAt, setAgeMintedAt] = useState<number | null>(null);
-  const [ageStaleNote, setAgeStaleNote] = useState<string | null>(null);
-  const [ageRefreshNonce, setAgeRefreshNonce] = useState(0);
-  const [ageFetching, setAgeFetching] = useState(false);
-  const handleAgeIntent = useCallback((token: string | null, mintedAt: number | null) => {
-    setAgeIntent(token);
-    setAgeMintedAt(mintedAt);
-    if (token) setAgeStaleNote(null);
-  }, []);
   const rootRef = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
 
@@ -95,53 +93,11 @@ export function AccountControl() {
     return null;
   }
 
+  // Secondary entry — user hasn't asked to publish, so resumePublish=false.
+  // Click handler MUST stay synchronous (no awaits) so the runtime can
+  // open the popup shell inside the live user gesture.
   const handleSignIn = (provider: 'google' | 'github') => {
-    if (!ageConfirmed || !ageIntent || ageMintedAt === null) return;
-    // Click-time freshness check: if the prefetched token is older
-    // than the staleness threshold (background-throttle, sleep/resume,
-    // or a missed periodic refresh), refuse the click and show an
-    // inline note. The AgeGateCheckbox effect will re-mint within a
-    // few hundred ms; the user clicks again on the second tap. Doing
-    // an awaited fetch here would break popup-not-blocked semantics
-    // (window.open requires a synchronous user gesture).
-    if (Date.now() - ageMintedAt > AGE_INTENT_STALE_AFTER_MS) {
-      setAgeStaleNote('Refreshing sign-in… click again in a moment.');
-      // Drop the stale token AND increment the refresh nonce so the
-      // checkbox effect actually re-runs. Without the nonce bump the
-      // component would stay idle until the next 4-min tick or
-      // visibilitychange — leaving the user looking at a disabled
-      // button and a misleading "click again" note.
-      setAgeIntent(null);
-      setAgeMintedAt(null);
-      setAgeRefreshNonce((n) => n + 1);
-      return;
-    }
-    // Secondary entry — user hasn't asked to publish, so no resume intent.
-    callbacks?.onSignIn(provider, { ageIntent, ageIntentMintedAt: ageMintedAt });
-  };
-
-  /** True when the popup-blocked descriptor's snapshot of the age
-   *  intent is older than the staleness threshold. The descriptor's
-   *  token would still arrive at /auth/{provider}/start as fresh from
-   *  the server's perspective until 5 minutes have elapsed, but
-   *  refusing reuse at the 4-minute mark mirrors the click-time guard
-   *  on the live AgeGateCheckbox so the user never hits a raw 400. */
-  const popupBlockedTokenIsStale = (): boolean => {
-    if (!popupBlocked?.ageIntent || popupBlocked.ageIntentMintedAt == null) return false;
-    return Date.now() - popupBlocked.ageIntentMintedAt > AGE_INTENT_STALE_AFTER_MS;
-  };
-
-  /** Stale-token recovery for popup-blocked retry / same-tab paths.
-   *  Clears the blocked descriptor (returning the user to the provider
-   *  picker), surfaces an inline note, AND bumps the AgeGateCheckbox
-   *  refresh nonce so a fresh intent is minted immediately rather than
-   *  waiting for the next 4-min interval. */
-  const recoverStalePopupBlocked = () => {
-    useAppStore.getState().setAuthPopupBlocked(null);
-    setAgeStaleNote('Refreshing sign-in… choose your provider again.');
-    setAgeIntent(null);
-    setAgeMintedAt(null);
-    setAgeRefreshNonce((n) => n + 1);
+    callbacks?.onSignIn(provider, { resumePublish: false });
   };
 
   const handleSignOut = async () => {
@@ -156,32 +112,12 @@ export function AccountControl() {
 
   const handleRetryPopup = () => {
     if (!popupBlocked || !callbacks) return;
-    // Stale token? Reroute to the picker so a fresh nonce is minted.
-    // Reusing an expired token would land at /auth/{provider}/start
-    // and immediately 400 the user.
-    if (popupBlockedTokenIsStale()) {
-      recoverStalePopupBlocked();
-      return;
-    }
-    // Carry the original ageIntent + mintedAt through the retry —
-    // without ageIntent the second attempt would land at
-    // /auth/{provider}/start with no nonce and immediately 400.
-    // Mirrors TimelineBar.handleRetryPopup.
-    callbacks.onSignIn(popupBlocked.provider, {
-      resumePublish: popupBlocked.resumePublish,
-      ageIntent: popupBlocked.ageIntent ?? null,
-      ageIntentMintedAt: popupBlocked.ageIntentMintedAt ?? null,
-    });
+    // Re-issue the original click; the runtime fetches a fresh age
+    // intent JIT, so there is no stale-token recovery to perform here.
+    callbacks.onSignIn(popupBlocked.provider, { resumePublish: popupBlocked.resumePublish });
   };
 
   const handleContinueInTab = () => {
-    // Same staleness guard as the popup retry — the same-tab redirect
-    // would otherwise reuse an expired snapshot and 400 the user
-    // mid-navigation.
-    if (popupBlockedTokenIsStale()) {
-      recoverStalePopupBlocked();
-      return;
-    }
     callbacks?.onSignInSameTab();
   };
 
@@ -275,6 +211,13 @@ export function AccountControl() {
   }
 
   // signed-out
+  // Provider buttons are disabled while a sign-in attempt is in flight
+  // (status==='starting') so the user can't kick off a parallel attempt
+  // while the popup shell is still navigating.
+  const isStarting = signInAttempt?.status === 'starting';
+  const failedMessage = signInAttempt?.status === 'failed' ? signInAttempt.message : null;
+  const failedProvider = signInAttempt?.status === 'failed' ? signInAttempt.provider : null;
+
   return (
     <div className="account-control" ref={rootRef} data-testid="account-control" data-auth-status={status}>
       <button
@@ -287,11 +230,21 @@ export function AccountControl() {
         <span className="account-control__label">Sign in</span>
       </button>
       {open && (
-        <div className="account-control__menu" aria-label="Sign in">
+        // The `--signin` CTA-frame modifier is applied ONLY when the
+        // signed-out provider-picker branch renders — not when the
+        // popup-blocked recovery branch takes over. Keeps the
+        // popup-blocked sub-menu on the default 4 px list-frame so its
+        // `.account-control__menu-item` rows match the signed-in /
+        // unverified surfaces. Switches back to the CTA frame if the
+        // user clicks Back (popup-blocked → provider-picker).
+        <div
+          className={`account-control__menu${popupBlocked ? '' : ' account-control__menu--signin'}`}
+          aria-label="Sign in"
+        >
           {popupBlocked ? (
             /* Popup-blocked sub-menu — Retry / Continue-in-tab / Back.
-             *  The Back option lets the user switch providers without
-             *  committing to either of the other paths. */
+             *  Keeps the list-style `.account-control__menu-item` shape
+             *  because these are recovery actions, not primary CTAs. */
             <div data-testid="account-popup-blocked">
               <p className="account-control__hint">
                 {providerLabel(popupBlocked.provider)} popup was blocked. Retry, continue in this tab,
@@ -300,6 +253,7 @@ export function AccountControl() {
               <button
                 className="account-control__menu-item"
                 onClick={handleRetryPopup}
+                disabled={isStarting}
                 data-testid="account-popup-retry"
               >
                 Retry {providerLabel(popupBlocked.provider)} popup
@@ -307,6 +261,7 @@ export function AccountControl() {
               <button
                 className="account-control__menu-item"
                 onClick={handleContinueInTab}
+                disabled={isStarting}
                 data-testid="account-popup-same-tab"
               >
                 Continue in this tab
@@ -314,6 +269,7 @@ export function AccountControl() {
               <button
                 className="account-control__menu-item"
                 onClick={handleDismissPopupBlocked}
+                disabled={isStarting}
                 data-testid="account-popup-back"
               >
                 Back
@@ -324,38 +280,48 @@ export function AccountControl() {
               <p className="account-control__hint">
                 Sign in to publish share links. Reading and downloading stay public.
               </p>
-              <AgeGateCheckbox
-                checked={ageConfirmed}
-                onCheckedChange={setAgeConfirmed}
-                onAgeIntent={handleAgeIntent}
-                onFetchingChange={setAgeFetching}
-                refreshNonce={ageRefreshNonce}
-                idSuffix="accountcontrol"
-                compact
-              />
-              {ageStaleNote && !ageIntent ? (
-                <p className="age-gate__note" role="status" aria-live="polite">
-                  {ageFetching ? 'Refreshing sign-in…' : ageStaleNote}
-                </p>
-              ) : null}
-              <button
-                className="account-control__menu-item"
-                onClick={() => handleSignIn('google')}
-                disabled={!ageConfirmed || !ageIntent}
-                data-testid="account-signin-google"
-              >
-                Continue with Google
-              </button>
-              <button
-                className="account-control__menu-item"
-                onClick={() => handleSignIn('github')}
-                disabled={!ageConfirmed || !ageIntent}
-                data-testid="account-signin-github"
-              >
-                Continue with GitHub
-              </button>
+              <AgeClickwrapNotice id={CLICKWRAP_ID} action="continue" />
+              <div className="account-control__auth-buttons">
+                <button
+                  className="account-control__auth-button"
+                  onClick={() => handleSignIn('google')}
+                  disabled={isStarting}
+                  aria-describedby={CLICKWRAP_ID}
+                  data-testid="account-signin-google"
+                >
+                  Continue with Google
+                </button>
+                <button
+                  className="account-control__auth-button"
+                  onClick={() => handleSignIn('github')}
+                  disabled={isStarting}
+                  aria-describedby={CLICKWRAP_ID}
+                  data-testid="account-signin-github"
+                >
+                  Continue with GitHub
+                </button>
+              </div>
             </>
           )}
+          {isStarting ? (
+            <p className="auth-attempt-status" role="status" aria-live="polite">
+              Starting sign-in…
+            </p>
+          ) : null}
+          {failedMessage ? (
+            <p className="auth-attempt-status auth-attempt-status--failed" role="status" aria-live="polite">
+              {failedMessage}
+              {failedProvider ? (
+                <button
+                  className="auth-attempt-retry"
+                  onClick={() => handleSignIn(failedProvider)}
+                  data-testid="account-signin-retry"
+                >
+                  Retry
+                </button>
+              ) : null}
+            </p>
+          ) : null}
         </div>
       )}
     </div>

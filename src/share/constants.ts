@@ -54,9 +54,12 @@ export { POLICY_VERSION } from '../policy/policy-config';
 
 /**
  * Structured body returned on 428 Precondition Required from
- * /api/capsules/publish when the authenticated user has not yet
- * accepted the 13+ policy. The frontend catches this the same way it
- * catches 413 and renders the inline retro-ack.
+ * /api/capsules/publish when the authenticated user has no
+ * minimum-age acceptance row on file (legacy / pre-D120 users — see
+ * `functions/policy-acceptance.ts MINIMUM_AGE_POLICY_KIND`). The
+ * frontend catches this the same way it catches 413 and renders the
+ * publish-clickwrap fallback (single Publish button; clicking IS
+ * the consent).
  */
 export interface AgeConfirmationRequiredBody {
   error: 'age_confirmation_required';
@@ -65,7 +68,7 @@ export interface AgeConfirmationRequiredBody {
 }
 
 export const AGE_CONFIRMATION_REQUIRED_MESSAGE =
-  'Please confirm you are at least 13 to publish.';
+  'Please confirm you meet the minimum age required in your country of residence before publishing.';
 
 /**
  * Maximum allowed length of the `message` field on a `/privacy-request`

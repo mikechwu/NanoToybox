@@ -77,6 +77,50 @@ function setSession(session: { userId: string; displayName: string | null } | nu
   else useAppStore.getState().setAuthSignedOut();
 }
 
+/** Stub `/api/account/age-confirmation/intent` so the runtime's
+ *  just-in-time fetch resolves with a stable token. Returns the
+ *  original `fetch` so the caller can restore in `finally`. Token
+ *  defaults to `'test-token'`; pass a different value for tests that
+ *  assert the URL contains a specific intent. */
+function stubAgeIntentFetch(token: string = 'test-token'): typeof fetch {
+  const original = globalThis.fetch;
+  globalThis.fetch = vi.fn(async (url) => {
+    if (String(url).includes('/api/account/age-confirmation/intent')) {
+      return new Response(JSON.stringify({ ageIntent: token, ttlSeconds: 300 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response('not mocked', { status: 500 });
+  }) as typeof fetch;
+  return original;
+}
+
+/** Make `/api/account/age-confirmation/intent` reject — used by tests
+ *  that assert the runtime surfaces a structured failure via
+ *  `authSignInAttempt: 'failed'`. */
+function stubAgeIntentNetworkError(): typeof fetch {
+  const original = globalThis.fetch;
+  globalThis.fetch = vi.fn(async (url) => {
+    if (String(url).includes('/api/account/age-confirmation/intent')) {
+      throw new TypeError('NetworkError');
+    }
+    return new Response('not mocked', { status: 500 });
+  }) as typeof fetch;
+  return original;
+}
+
+/** Flush queued microtasks AND a macrotask tick so the runtime's
+ *  `void (async () => { … })()` IIFE runs to completion before
+ *  assertions. The fetch + response.json() chain creates several
+ *  awaits internally; six microtask drains plus a setTimeout(0) tick
+ *  is enough to settle them in vitest's jsdom environment. */
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  await new Promise<void>((r) => setTimeout(r, 0));
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+}
+
 // ── Transfer dialog Share tab states ──
 
 describe('Transfer dialog — Share tab auth gating', () => {
@@ -116,65 +160,35 @@ describe('Transfer dialog — Share tab auth gating', () => {
     expect(document.querySelector('.timeline-transfer-dialog__confirm')).toBeNull();
   });
 
-  it('auth prompt button invokes authCallbacks.onSignIn with resumePublish: true', async () => {
-    // Phase B — the buttons are gated on the 13+ age-gate checkbox + a
-    // server-issued ageIntent nonce. Stub the intent endpoint and go
-    // through the checkbox path.
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn(async (url) => {
-      if (String(url).includes('/api/account/age-confirmation/intent')) {
-        return new Response(JSON.stringify({ ageIntent: 'test-token', ttlSeconds: 300 }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      return new Response('not mocked', { status: 500 });
-    }) as typeof fetch;
-    try {
-      const onSignIn = vi.fn();
-      act(() => {
-        installPublishableTimeline();
-        setSession(null);
-        useAppStore.getState().setAuthCallbacks({ onSignIn, onSignInSameTab: vi.fn(), onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}) });
+  it('auth prompt button invokes authCallbacks.onSignIn with resumePublish: true (D120 flow)', () => {
+    // D120 (supersedes D118): the buttons render the clickwrap notice
+    // and call onSignIn synchronously with NO age intent — the runtime
+    // owns the JIT fetch. The host's adapter unwraps the click into
+    // `{ resumePublish: true }`.
+    const onSignIn = vi.fn();
+    act(() => {
+      installPublishableTimeline();
+      setSession(null);
+      useAppStore.getState().setAuthCallbacks({
+        onSignIn, onSignInSameTab: vi.fn(),
+        onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}),
       });
-      render(<TimelineBar />);
-      act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    });
+    render(<TimelineBar />);
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
 
-      // Check the 13+ checkbox and wait for the intent fetch to resolve.
-      const checkbox = document.querySelector('[data-testid="age-gate-checkbox-transfer"]') as HTMLInputElement;
-      act(() => { fireEvent.click(checkbox); });
-      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    // Clickwrap renders + provider buttons reference it via aria-describedby.
+    const clickwrap = document.getElementById('age-clickwrap-share');
+    expect(clickwrap).not.toBeNull();
+    expect(clickwrap?.textContent).toContain('confirm that you are at least 13');
+    const google = document.querySelector('[data-testid="transfer-auth-google"]') as HTMLButtonElement;
+    expect(google.getAttribute('aria-describedby')).toBe('age-clickwrap-share');
 
-      act(() => {
-        (document.querySelector('[data-testid="transfer-auth-google"]') as HTMLButtonElement).click();
-      });
-      // Phase 7 freshness wiring: onSignIn now also carries the
-      // ageIntent's mintedAt timestamp so the popup-blocked retry
-      // path can detect a stale snapshot. We don't assert the exact
-      // number — only that it's a positive integer (Date.now() ms).
-      expect(onSignIn).toHaveBeenCalledWith(
-        'google',
-        expect.objectContaining({
-          resumePublish: true,
-          ageIntent: 'test-token',
-          ageIntentMintedAt: expect.any(Number),
-        }),
-      );
+    act(() => { google.click(); });
+    expect(onSignIn).toHaveBeenCalledWith('google', { resumePublish: true });
 
-      act(() => {
-        (document.querySelector('[data-testid="transfer-auth-github"]') as HTMLButtonElement).click();
-      });
-      expect(onSignIn).toHaveBeenCalledWith(
-        'github',
-        expect.objectContaining({
-          resumePublish: true,
-          ageIntent: 'test-token',
-          ageIntentMintedAt: expect.any(Number),
-        }),
-      );
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    act(() => { (document.querySelector('[data-testid="transfer-auth-github"]') as HTMLButtonElement).click(); });
+    expect(onSignIn).toHaveBeenCalledWith('github', { resumePublish: true });
   });
 
   it('shows Publish button when signed in', () => {
@@ -247,51 +261,40 @@ describe('AccountControl top-bar', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('shows "Sign in" trigger when signed out, with Google + GitHub menu items', async () => {
-    // Phase B — provider buttons are gated on the 13+ checkbox + nonce.
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn(async (url) => {
-      if (String(url).includes('/api/account/age-confirmation/intent')) {
-        return new Response(JSON.stringify({ ageIntent: 'ac-token', ttlSeconds: 300 }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      return new Response('not mocked', { status: 500 });
-    }) as typeof fetch;
-    try {
-      const onSignIn = vi.fn();
-      act(() => {
-        setSession(null);
-        useAppStore.getState().setAuthCallbacks({ onSignIn, onSignInSameTab: vi.fn(), onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}) });
+  it('shows "Sign in" trigger when signed out, with Google + GitHub menu items + clickwrap', () => {
+    // D120 (supersedes D118): provider buttons render immediately
+    // alongside the clickwrap notice. No checkbox state. AccountControl
+    // is the SECONDARY entry — resumePublish is false.
+    const onSignIn = vi.fn();
+    act(() => {
+      setSession(null);
+      useAppStore.getState().setAuthCallbacks({
+        onSignIn, onSignInSameTab: vi.fn(),
+        onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}),
       });
-      render(<AccountControl />);
+    });
+    render(<AccountControl />);
 
-      const trigger = document.querySelector('[data-testid="account-signin"]') as HTMLButtonElement;
-      expect(trigger).not.toBeNull();
-      expect(trigger.textContent).toContain('Sign in');
+    const trigger = document.querySelector('[data-testid="account-signin"]') as HTMLButtonElement;
+    expect(trigger).not.toBeNull();
+    expect(trigger.textContent).toContain('Sign in');
 
-      act(() => { trigger.click(); });
-      const google = document.querySelector('[data-testid="account-signin-google"]') as HTMLButtonElement;
-      const github = document.querySelector('[data-testid="account-signin-github"]') as HTMLButtonElement;
-      expect(google).not.toBeNull();
-      expect(github).not.toBeNull();
+    act(() => { trigger.click(); });
+    const google = document.querySelector('[data-testid="account-signin-google"]') as HTMLButtonElement;
+    const github = document.querySelector('[data-testid="account-signin-github"]') as HTMLButtonElement;
+    expect(google).not.toBeNull();
+    expect(github).not.toBeNull();
 
-      // Check the age-gate checkbox + flush microtasks so the intent fetch resolves.
-      const checkbox = document.querySelector('[data-testid="age-gate-checkbox-accountcontrol"]') as HTMLInputElement;
-      act(() => { fireEvent.click(checkbox); });
-      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    // Clickwrap renders + buttons reference it via aria-describedby.
+    const clickwrap = document.getElementById('age-clickwrap-account');
+    expect(clickwrap).not.toBeNull();
+    expect(clickwrap?.textContent).toContain('confirm that you are at least 13');
+    expect(google.getAttribute('aria-describedby')).toBe('age-clickwrap-account');
+    expect(github.getAttribute('aria-describedby')).toBe('age-clickwrap-account');
 
-      act(() => { google.click(); });
-      // Top-bar sign-in is secondary — should NOT set resumePublish intent.
-      // After Phase B it forwards the ageIntent.
-      expect(onSignIn).toHaveBeenCalledTimes(1);
-      const [provider, opts] = onSignIn.mock.calls[0];
-      expect(provider).toBe('google');
-      expect(opts).toMatchObject({ ageIntent: 'ac-token', ageIntentMintedAt: expect.any(Number) });
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    act(() => { google.click(); });
+    expect(onSignIn).toHaveBeenCalledTimes(1);
+    expect(onSignIn).toHaveBeenCalledWith('google', { resumePublish: false });
   });
 
   it('shows account chip with display name and Sign out when signed in', async () => {
@@ -838,30 +841,110 @@ describe('resume-publish intent (structured payload + query-marker handshake)', 
     vi.restoreAllMocks();
   });
 
-  it('onSignIn with resumePublish stores a structured JSON payload with iat + provider', () => {
-    // Stub window.open so the popup path succeeds — otherwise the call
-    // would bail to the popup-blocked branch and not even attempt a URL.
+  it('LEAK GUARD: onSignIn with resumePublish does NOT write the sentinel when the JIT fetch fails', async () => {
+    // The whole point of the D120 sentinel-after-fetch timing is to
+    // close the leak where a pre-fetch sentinel write would orphan
+    // into a later unrelated sign-in's auto-Share-open. This test
+    // is the regression guard: any future change that moves the
+    // setResumePublishIntent call before `await fetchAgeIntent()`
+    // (or that drops the defensive clearResumeIntent in the catch)
+    // will fail here.
+    const popupLocation = { href: '' };
+    const fakePopup = {
+      focus: vi.fn(),
+      closed: false,
+      location: popupLocation,
+      document: { write: vi.fn(), close: vi.fn(), open: vi.fn() },
+      close: vi.fn(),
+    };
     (window as unknown as { open: typeof window.open }).open = vi.fn(
-      () => ({ focus: vi.fn(), closed: false } as unknown as Window),
+      () => fakePopup as unknown as Window,
+    ) as typeof window.open;
+    const savedFetch = stubAgeIntentNetworkError();
+    try {
+      const { callbacks } = createAuthRuntime();
+      callbacks.onSignIn('google', { resumePublish: true });
+      // Sentinel must NOT exist immediately (we never write it pre-fetch).
+      expect(sessionStorage.getItem('atomdojo.resumePublish')).toBeNull();
+
+      await flushMicrotasks();
+
+      // Sentinel STILL absent after the fetch fails — the catch branch's
+      // clearResumeIntent fires defensively and the post-fetch write
+      // never executed.
+      expect(sessionStorage.getItem('atomdojo.resumePublish')).toBeNull();
+      // Popup never navigated.
+      expect(popupLocation.href).toBe('');
+      // Failure message surfaced via the store for the UI to render.
+      expect(useAppStore.getState().authSignInAttempt?.status).toBe('failed');
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  it('LEAK GUARD: onSignInSameTab with resumePublish does NOT write the sentinel when the JIT fetch fails', async () => {
+    (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
+    const savedFetch = stubAgeIntentNetworkError();
+    try {
+      const { callbacks } = createAuthRuntime();
+      // First call sets the popup-blocked descriptor (popup returned null).
+      callbacks.onSignIn('github', { resumePublish: true });
+      // No sentinel was ever written for this attempt.
+      expect(sessionStorage.getItem('atomdojo.resumePublish')).toBeNull();
+
+      // User clicks Continue-in-tab → fetch fails → no navigation, no sentinel.
+      callbacks.onSignInSameTab();
+      await flushMicrotasks();
+      expect(sessionStorage.getItem('atomdojo.resumePublish')).toBeNull();
+      expect(window.location.assign).not.toHaveBeenCalled();
+      expect(useAppStore.getState().authSignInAttempt?.status).toBe('failed');
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  it('onSignIn with resumePublish stores a structured JSON payload AFTER fetch resolves (D120 timing)', async () => {
+    // D120: the resume-publish sentinel is written ONLY after the
+    // age-intent fetch resolves successfully, immediately before
+    // navigatePopupTo. This is the key guard against a leak where a
+    // fetch failure orphans the sentinel into a later unrelated
+    // sign-in (which would then auto-open the Share tab).
+    let popupHref: string | null = null;
+    const fakePopup = {
+      focus: vi.fn(),
+      closed: false,
+      document: { write: vi.fn(), close: vi.fn(), open: vi.fn() },
+      get location() { return { href: '' }; },
+      set location(value: { href: string } | string) {
+        // Some test runtimes treat `popup.location.href = url` as
+        // setting the location object itself; guard either shape.
+        if (typeof value === 'object') popupHref = value.href;
+      },
+      close: vi.fn(),
+    };
+    (window as unknown as { open: typeof window.open }).open = vi.fn(
+      () => fakePopup as unknown as Window,
     ) as typeof window.open;
     const now = 1_700_000_000_000;
     vi.spyOn(Date, 'now').mockReturnValue(now);
-    const { callbacks } = createAuthRuntime();
-    callbacks.onSignIn('google', { resumePublish: true });
+    const originalFetch = stubAgeIntentFetch('signin-token');
+    try {
+      const { callbacks } = createAuthRuntime();
+      callbacks.onSignIn('google', { resumePublish: true });
 
-    const raw = sessionStorage.getItem('atomdojo.resumePublish');
-    expect(raw).not.toBeNull();
-    const payload = JSON.parse(raw!);
-    expect(payload).toEqual({ kind: 'resumePublish', provider: 'google', iat: now });
+      // Sentinel must NOT exist before the fetch resolves — that's the
+      // failure-window guard the new timing closes.
+      expect(sessionStorage.getItem('atomdojo.resumePublish')).toBeNull();
 
-    // Popup path uses /auth/popup-complete as its returnTo — the same-tab
-    // `?authReturn=1` marker is only applied on explicit Continue-in-tab.
-    const openSpy = window.open as unknown as ReturnType<typeof vi.fn>;
-    const target = openSpy.mock.calls[0][0] as string;
-    expect(target).toContain('/auth/google/start');
-    expect(target).toContain(encodeURIComponent('/auth/popup-complete'));
-    // No auto same-tab navigation.
-    expect(window.location.assign).not.toHaveBeenCalled();
+      await flushMicrotasks();
+
+      const raw = sessionStorage.getItem('atomdojo.resumePublish');
+      expect(raw).not.toBeNull();
+      const payload = JSON.parse(raw!);
+      expect(payload).toEqual({ kind: 'resumePublish', provider: 'google', iat: now });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('onSignIn without resumePublish does NOT store a payload', () => {
@@ -869,7 +952,7 @@ describe('resume-publish intent (structured payload + query-marker handshake)', 
       () => ({ focus: vi.fn(), closed: false } as unknown as Window),
     ) as typeof window.open;
     const { callbacks } = createAuthRuntime();
-    callbacks.onSignIn('github');
+    callbacks.onSignIn('github', { resumePublish: false });
     expect(sessionStorage.getItem('atomdojo.resumePublish')).toBeNull();
     expect(window.location.assign).not.toHaveBeenCalled();
   });
@@ -1136,6 +1219,57 @@ describe('resetTransientState — clears one-shot auth flags, preserves identity
     act(() => { useAppStore.getState().resetTransientState(); });
     expect(useAppStore.getState().authPopupBlocked).toBeNull();
     expect(useAppStore.getState().shareTabOpenRequested).toBe(false);
+  });
+
+  it('AccountControl provider buttons disable while authSignInAttempt.status === starting', () => {
+    act(() => {
+      setSession(null);
+      useAppStore.getState().setAuthCallbacks({
+        onSignIn: vi.fn(), onSignInSameTab: vi.fn(),
+        onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}),
+      });
+      useAppStore.getState().setAuthSignInAttempt({
+        provider: 'google', resumePublish: false, status: 'starting', message: null,
+      });
+    });
+    render(<AccountControl />);
+    act(() => { (document.querySelector('[data-testid="account-signin"]') as HTMLButtonElement).click(); });
+    const google = document.querySelector('[data-testid="account-signin-google"]') as HTMLButtonElement;
+    const github = document.querySelector('[data-testid="account-signin-github"]') as HTMLButtonElement;
+    expect(google.disabled).toBe(true);
+    expect(github.disabled).toBe(true);
+  });
+
+  it('Transfer dialog provider buttons disable while authSignInAttempt.status === starting', () => {
+    act(() => {
+      installPublishableTimeline();
+      setSession(null);
+      useAppStore.getState().setAuthCallbacks({
+        onSignIn: vi.fn(), onSignInSameTab: vi.fn(),
+        onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}),
+      });
+      useAppStore.getState().setAuthSignInAttempt({
+        provider: 'github', resumePublish: true, status: 'starting', message: null,
+      });
+    });
+    render(<TimelineBar />);
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    const google = document.querySelector('[data-testid="transfer-auth-google"]') as HTMLButtonElement;
+    const github = document.querySelector('[data-testid="transfer-auth-github"]') as HTMLButtonElement;
+    expect(google.disabled).toBe(true);
+    expect(github.disabled).toBe(true);
+  });
+
+  it('clears authSignInAttempt (D120 — same lifecycle as authPopupBlocked)', () => {
+    act(() => {
+      useAppStore.getState().setAuthSignInAttempt({
+        provider: 'google', resumePublish: false, status: 'starting', message: null,
+      });
+    });
+    expect(useAppStore.getState().authSignInAttempt).not.toBeNull();
+
+    act(() => { useAppStore.getState().resetTransientState(); });
+    expect(useAppStore.getState().authSignInAttempt).toBeNull();
   });
 
   it('preserves auth identity (auth.status / auth.session) across the reset', () => {
@@ -1432,17 +1566,44 @@ describe('auth-runtime — popup OAuth flow', () => {
     vi.restoreAllMocks();
   });
 
-  it('tries window.open first; does NOT fall back to location.assign when popup succeeds', () => {
-    const fakePopup = { focus: vi.fn(), closed: false } as unknown as Window;
-    (window as unknown as { open: typeof window.open }).open = vi.fn(() => fakePopup) as typeof window.open;
+  it('tries window.open first; navigates the popup to /auth/{provider}/start after intent fetch (D120)', async () => {
+    // D120 (supersedes D118): the popup shell opens with empty URL
+    // synchronously inside the user gesture, then the runtime fetches
+    // the age intent JIT and sets `popup.location.href` to the start
+    // URL once the fetch resolves. The opener's `window.open` is
+    // called with `''`; the navigated URL appears on
+    // `popup.location.href` only after the async fetch completes.
+    const popupLocation = { href: '' };
+    const fakePopup = {
+      focus: vi.fn(),
+      closed: false,
+      location: popupLocation,
+      document: { write: vi.fn(), close: vi.fn(), open: vi.fn() },
+      close: vi.fn(),
+    };
+    (window as unknown as { open: typeof window.open }).open = vi.fn(
+      () => fakePopup as unknown as Window,
+    ) as typeof window.open;
+    const savedFetch = stubAgeIntentFetch('popup-token');
+    try {
     const { callbacks } = createAuthRuntime();
     callbacks.onSignIn('google', { resumePublish: true });
     expect(window.open).toHaveBeenCalledTimes(1);
-    const openedUrl = (window.open as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    // Popup uses the popup-complete landing as its returnTo, not /lab/.
-    expect(openedUrl).toContain('/auth/google/start');
-    expect(openedUrl).toContain(encodeURIComponent('/auth/popup-complete'));
+    // Shell opens with empty URL — no navigation yet.
+    expect((window.open as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('');
+    expect(popupLocation.href).toBe('');
+
+    await flushMicrotasks();
+
+    // After the JIT fetch resolves, the runtime sets popup.location.href
+    // to the start URL with the freshly minted ageIntent embedded.
+    expect(popupLocation.href).toContain('/auth/google/start');
+    expect(popupLocation.href).toContain(encodeURIComponent('/auth/popup-complete'));
+    expect(popupLocation.href).toContain('ageIntent=popup-token');
     expect(window.location.assign).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
   });
 
   it('popup blocked: sets authPopupBlocked on the store and does NOT navigate', () => {
@@ -1457,8 +1618,6 @@ describe('auth-runtime — popup OAuth flow', () => {
     expect(useAppStore.getState().authPopupBlocked).toEqual({
       provider: 'github',
       resumePublish: true,
-      ageIntent: null,
-      ageIntentMintedAt: null,
     });
   });
 
@@ -1466,29 +1625,41 @@ describe('auth-runtime — popup OAuth flow', () => {
     const openSpy = vi.fn(() => null) as unknown as typeof window.open;
     (window as unknown as { open: typeof window.open }).open = openSpy;
     const { callbacks } = createAuthRuntime();
-    callbacks.onSignIn('google');
-    callbacks.onSignIn('google');
-    callbacks.onSignIn('google');
+    callbacks.onSignIn('google', { resumePublish: false });
+    callbacks.onSignIn('google', { resumePublish: false });
+    callbacks.onSignIn('google', { resumePublish: false });
     // Every call reaches window.open — no permanent suppression after one block.
     expect(openSpy).toHaveBeenCalledTimes(3);
     // No auto-navigation — the UI must drive any same-tab fallback.
     expect(window.location.assign).not.toHaveBeenCalled();
   });
 
-  it('onSignInSameTab commits the destructive redirect for the pending descriptor', () => {
+  it('onSignInSameTab commits the destructive redirect for the pending descriptor (D120: awaits fetch)', async () => {
+    // D120: same-tab fallback fetches a fresh age intent JIT before
+    // navigation. `location.assign` does not require user-gesture
+    // qualification so the await is safe (unlike the popup path).
     (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
-    const { callbacks } = createAuthRuntime();
-    callbacks.onSignIn('github', { resumePublish: true });
-    expect(useAppStore.getState().authPopupBlocked).not.toBeNull();
+    const savedFetch = stubAgeIntentFetch('sametab-token');
+    try {
+      const { callbacks } = createAuthRuntime();
+      callbacks.onSignIn('github', { resumePublish: true });
+      // First call writes the popup-blocked descriptor (popup returned null).
+      expect(useAppStore.getState().authPopupBlocked).not.toBeNull();
 
-    callbacks.onSignInSameTab();
-    // Now the same-tab navigation happens, with the resume marker preserved.
-    expect(window.location.assign).toHaveBeenCalledTimes(1);
-    const target = (window.location.assign as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(target).toContain('/auth/github/start');
-    expect(target).toContain(encodeURIComponent('/lab/?authReturn=1'));
-    // Pending descriptor cleared so a second click can't re-fire.
-    expect(useAppStore.getState().authPopupBlocked).toBeNull();
+      callbacks.onSignInSameTab();
+      // Pending descriptor cleared synchronously so a second click can't re-fire.
+      expect(useAppStore.getState().authPopupBlocked).toBeNull();
+
+      await flushMicrotasks();
+
+      expect(window.location.assign).toHaveBeenCalledTimes(1);
+      const target = (window.location.assign as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      expect(target).toContain('/auth/github/start');
+      expect(target).toContain(encodeURIComponent('/lab/?authReturn=1'));
+      expect(target).toContain('ageIntent=sametab-token');
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
   });
 
   it('onSignInSameTab is a no-op when no pending descriptor is set', () => {
@@ -1637,64 +1808,13 @@ describe('Transfer dialog — popup-blocked Retry / Continue-in-tab prompt', () 
     expect(onSignIn).toHaveBeenCalledTimes(1);
     // After Phase B age-gate, the Retry path also forwards an `ageIntent`
     // (null when the abandoned popup-blocked attempt had no nonce).
-    expect(onSignIn).toHaveBeenCalledWith('github', { resumePublish: true, ageIntent: null, ageIntentMintedAt: null });
+    expect(onSignIn).toHaveBeenCalledWith('github', { resumePublish: true });
   });
 
-  it('Retry with a stale age-intent snapshot reroutes to the picker (no onSignIn call, descriptor cleared)', () => {
-    // A user pauses at the popup-blocked prompt for >4 minutes.
-    // Reusing the stored token would land at /auth/{provider}/start
-    // with an expired nonce and immediately 400. The retry handler
-    // must detect the staleness and clear the descriptor so the
-    // dialog re-renders the provider picker (where the live
-    // AgeGateCheckbox state is independently fresh).
-    const onSignIn = vi.fn();
-    act(() => {
-      installPublishableTimeline();
-      setSession(null);
-      useAppStore.getState().setAuthCallbacks({
-        onSignIn, onSignInSameTab: vi.fn(), onDismissPopupBlocked: vi.fn(), onSignOut: vi.fn(async () => {}),
-      });
-      // 30 minutes ago is well past the 4-min staleness threshold.
-      useAppStore.getState().setAuthPopupBlocked({
-        provider: 'google',
-        resumePublish: true,
-        ageIntent: 'old-token',
-        ageIntentMintedAt: Date.now() - 30 * 60 * 1000,
-      });
-    });
-    render(<TimelineBar />);
-    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
-    act(() => { (document.querySelector('[data-testid="transfer-popup-retry"]') as HTMLButtonElement).click(); });
-
-    expect(onSignIn).not.toHaveBeenCalled();
-    expect(useAppStore.getState().authPopupBlocked).toBeNull();
-  });
-
-  it('Continue-in-tab with a stale age-intent snapshot also reroutes (no onSignInSameTab call)', () => {
-    const onSignInSameTab = vi.fn();
-    act(() => {
-      installPublishableTimeline();
-      setSession(null);
-      useAppStore.getState().setAuthCallbacks({
-        onSignIn: vi.fn(),
-        onSignInSameTab,
-        onDismissPopupBlocked: vi.fn(),
-        onSignOut: vi.fn(async () => {}),
-      });
-      useAppStore.getState().setAuthPopupBlocked({
-        provider: 'google',
-        resumePublish: true,
-        ageIntent: 'old-token',
-        ageIntentMintedAt: Date.now() - 30 * 60 * 1000,
-      });
-    });
-    render(<TimelineBar />);
-    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
-    act(() => { (document.querySelector('[data-testid="transfer-popup-same-tab"]') as HTMLButtonElement).click(); });
-
-    expect(onSignInSameTab).not.toHaveBeenCalled();
-    expect(useAppStore.getState().authPopupBlocked).toBeNull();
-  });
+  // Stale-token recovery tests removed (D120). The popup-blocked
+  // descriptor no longer carries an ageIntent snapshot — every Retry /
+  // Continue-in-tab fetches a fresh intent JIT, so there is no stale
+  // path to test. The popup-blocked descriptor stays valid indefinitely.
 
   it('Continue-in-tab button invokes onSignInSameTab', () => {
     const onSignInSameTab = vi.fn();
@@ -1798,7 +1918,7 @@ describe('AccountControl — popup-blocked Retry / Continue-in-tab prompt', () =
     // pending ageIntent through the retry path. Without this, the
     // second attempt would land at /auth/{provider}/start with no
     // nonce and immediately 400.
-    expect(onSignIn).toHaveBeenCalledWith('github', { resumePublish: false, ageIntent: null, ageIntentMintedAt: null });
+    expect(onSignIn).toHaveBeenCalledWith('github', { resumePublish: false });
   });
 
   it('Back button invokes onDismissPopupBlocked and restores the provider picker', () => {
@@ -1835,6 +1955,300 @@ describe('AccountControl — popup-blocked Retry / Continue-in-tab prompt', () =
     expect(copy).toContain('Google popup was blocked');
     const retryLabel = document.querySelector('[data-testid="account-popup-retry"]')?.textContent ?? '';
     expect(retryLabel).toContain('Retry Google popup');
+  });
+});
+
+// ── Rate-limited fetch (D120 — 429 branch). The intent endpoint has
+// an app-level layer-2 cap that surfaces 429 with Retry-After. The
+// runtime must route this to a distinct mode (not the generic 4xx
+// "not available here" bucket) and render a temporary-wait message
+// with the server's retry hint.
+
+describe('auth-runtime — 429 rate-limited fetch surfaces a temporary-wait message', () => {
+  const originalLocation = window.location;
+  const originalOpen = window.open;
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+    useAppStore.getState().setAuthLoading();
+    sessionStorage.clear();
+    _resetAuthRuntimeForTest();
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Partial<Location> }).location = {
+      ...originalLocation,
+      protocol: 'https:', host: 'atomdojo.test', hostname: 'atomdojo.test', port: '',
+      origin: 'https://atomdojo.test', href: 'https://atomdojo.test/lab/', assign: vi.fn(),
+    } as Location;
+  });
+  afterEach(() => {
+    (window as unknown as { open: typeof window.open }).open = originalOpen;
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Location }).location = originalLocation;
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  function stubIntentWith429(retryAfter: string | null): typeof fetch {
+    const original = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url) => {
+      if (String(url).includes('/api/account/age-confirmation/intent')) {
+        const headers: Record<string, string> = {};
+        if (retryAfter !== null) headers['Retry-After'] = retryAfter;
+        return new Response('Too many requests', { status: 429, headers });
+      }
+      return new Response('not mocked', { status: 500 });
+    }) as typeof fetch;
+    return original;
+  }
+
+  function stubFakePopup() {
+    const popupLocation = { href: '' };
+    const fakePopup = {
+      focus: vi.fn(), closed: false, location: popupLocation,
+      document: { write: vi.fn(), close: vi.fn(), open: vi.fn() }, close: vi.fn(),
+    };
+    (window as unknown as { open: typeof window.open }).open = vi.fn(
+      () => fakePopup as unknown as Window,
+    ) as typeof window.open;
+    return { fakePopup, popupLocation };
+  }
+
+  it('429 with a parseable Retry-After → "wait about N seconds/minutes" message', async () => {
+    stubFakePopup();
+    const savedFetch = stubIntentWith429('45');
+    try {
+      const { callbacks } = createAuthRuntime();
+      callbacks.onSignIn('google', { resumePublish: false });
+      await flushMicrotasks();
+      const attempt = useAppStore.getState().authSignInAttempt;
+      expect(attempt?.status).toBe('failed');
+      expect(attempt?.message).toMatch(/too many sign-in attempts/i);
+      // The rounding rule: < 60 s renders as "about N seconds".
+      expect(attempt?.message).toContain('about 45 seconds');
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  it('429 with Retry-After ≥ 60 renders as "about 1 minute" / "about N minutes"', async () => {
+    stubFakePopup();
+    const savedFetch = stubIntentWith429('60');
+    try {
+      const { callbacks } = createAuthRuntime();
+      callbacks.onSignIn('google', { resumePublish: false });
+      await flushMicrotasks();
+      const attempt = useAppStore.getState().authSignInAttempt;
+      expect(attempt?.message).toContain('about 1 minute');
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  it('429 without a Retry-After header → falls back to "wait a moment"', async () => {
+    stubFakePopup();
+    const savedFetch = stubIntentWith429(null);
+    try {
+      const { callbacks } = createAuthRuntime();
+      callbacks.onSignIn('github', { resumePublish: false });
+      await flushMicrotasks();
+      const attempt = useAppStore.getState().authSignInAttempt;
+      expect(attempt?.message).toMatch(/too many sign-in attempts/i);
+      expect(attempt?.message).toContain('a moment');
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  it('429 with a malformed Retry-After also falls back to "wait a moment" (does not throw)', async () => {
+    stubFakePopup();
+    const savedFetch = stubIntentWith429('not-a-number');
+    try {
+      const { callbacks } = createAuthRuntime();
+      callbacks.onSignIn('github', { resumePublish: false });
+      await flushMicrotasks();
+      const attempt = useAppStore.getState().authSignInAttempt;
+      expect(attempt?.message).toContain('a moment');
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  it('429 with Retry-After="60abc" (partial-garbage tail) is treated as unknown, not 60', async () => {
+    stubFakePopup();
+    const savedFetch = stubIntentWith429('60abc');
+    try {
+      const { callbacks } = createAuthRuntime();
+      callbacks.onSignIn('google', { resumePublish: false });
+      await flushMicrotasks();
+      const attempt = useAppStore.getState().authSignInAttempt;
+      // Whole-string regex contract: partial-garbage MUST fall through
+      // to "a moment" — NOT silently render "about 1 minute".
+      expect(attempt?.message).toContain('a moment');
+      expect(attempt?.message).not.toContain('about 1 minute');
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  it('429 with Retry-After="1.5" (fractional) falls through to "a moment"', async () => {
+    stubFakePopup();
+    const savedFetch = stubIntentWith429('1.5');
+    try {
+      const { callbacks } = createAuthRuntime();
+      callbacks.onSignIn('google', { resumePublish: false });
+      await flushMicrotasks();
+      const attempt = useAppStore.getState().authSignInAttempt;
+      // delta-seconds is an integer per RFC 7231; reject fractionals.
+      expect(attempt?.message).toContain('a moment');
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  it('429 with Retry-After whitespace-only value falls through to "a moment"', async () => {
+    stubFakePopup();
+    const savedFetch = stubIntentWith429('   ');
+    try {
+      const { callbacks } = createAuthRuntime();
+      callbacks.onSignIn('google', { resumePublish: false });
+      await flushMicrotasks();
+      const attempt = useAppStore.getState().authSignInAttempt;
+      expect(attempt?.message).toContain('a moment');
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  it('429 DOES NOT render the generic 4xx "isn\u2019t available here" copy', async () => {
+    stubFakePopup();
+    const savedFetch = stubIntentWith429('5');
+    try {
+      const { callbacks } = createAuthRuntime();
+      callbacks.onSignIn('google', { resumePublish: false });
+      await flushMicrotasks();
+      const attempt = useAppStore.getState().authSignInAttempt;
+      expect(attempt?.message).not.toContain('isn\u2019t available here');
+      expect(attempt?.message).not.toContain("isn't available here");
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+});
+
+// ── Runtime-level critical section (D120 — audit P1 follow-up).
+// The UI disables provider buttons while authSignInAttempt.status ===
+// 'starting', but UI disabling is advisory. The runtime enforces the
+// same invariant at the owner of the side effect: onSignIn refuses
+// re-entry while an attempt is in flight, and a monotonic attemptId
+// strands any stale async branch so it cannot navigate the popup or
+// flip the store after a newer attempt has started.
+
+describe('auth-runtime — critical section (runtime guards UI-bypass races)', () => {
+  const originalLocation = window.location;
+  const originalOpen = window.open;
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    useAppStore.getState().resetTransientState();
+    useAppStore.getState().setAuthLoading();
+    sessionStorage.clear();
+    _resetAuthRuntimeForTest();
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Partial<Location> }).location = {
+      ...originalLocation,
+      protocol: 'https:', host: 'atomdojo.test', hostname: 'atomdojo.test', port: '',
+      origin: 'https://atomdojo.test', href: 'https://atomdojo.test/lab/', assign: vi.fn(),
+    } as Location;
+  });
+  afterEach(() => {
+    (window as unknown as { open: typeof window.open }).open = originalOpen;
+    delete (window as unknown as { location?: Location }).location;
+    (window as unknown as { location: Location }).location = originalLocation;
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('onSignIn: second call while first is in flight is rejected — only one popup + one fetch commit', async () => {
+    const popupLocation = { href: '' };
+    const fakePopup = {
+      focus: vi.fn(),
+      closed: false,
+      location: popupLocation,
+      document: { write: vi.fn(), close: vi.fn(), open: vi.fn() },
+      close: vi.fn(),
+    };
+    const openSpy = vi.fn(() => fakePopup as unknown as Window);
+    (window as unknown as { open: typeof window.open }).open = openSpy as typeof window.open;
+    const fetchSpy = vi.fn(async (url: string) => {
+      if (String(url).includes('/api/account/age-confirmation/intent')) {
+        return new Response(JSON.stringify({ ageIntent: 'tok', ttlSeconds: 300 }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('not mocked', { status: 500 });
+    });
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const { callbacks } = createAuthRuntime();
+    // Two synchronous calls back-to-back — mimics a rapid double-click
+    // that defeats React's async re-render of the disabled state.
+    callbacks.onSignIn('google', { resumePublish: true });
+    callbacks.onSignIn('google', { resumePublish: true });
+
+    await flushMicrotasks();
+
+    // Exactly one popup shell opened, exactly one intent fetch issued,
+    // exactly one navigation committed to the popup.
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(popupLocation.href).toContain('/auth/google/start');
+  });
+
+  it('onSignIn: three rapid calls still commit only one attempt', async () => {
+    const popupLocation = { href: '' };
+    const fakePopup = {
+      focus: vi.fn(), closed: false, location: popupLocation,
+      document: { write: vi.fn(), close: vi.fn(), open: vi.fn() }, close: vi.fn(),
+    };
+    const openSpy = vi.fn(() => fakePopup as unknown as Window);
+    (window as unknown as { open: typeof window.open }).open = openSpy as typeof window.open;
+    const savedFetch = stubAgeIntentFetch('tok');
+    try {
+      const { callbacks } = createAuthRuntime();
+      callbacks.onSignIn('google', { resumePublish: false });
+      callbacks.onSignIn('github', { resumePublish: false });
+      callbacks.onSignIn('google', { resumePublish: true });
+      await flushMicrotasks();
+      // Only the first click wins — the other two see the 'starting'
+      // status and early-return without opening a shell.
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(popupLocation.href).toContain('/auth/google/start');
+      // Sentinel NOT written because the winning call had resumePublish=false.
+      expect(sessionStorage.getItem('atomdojo.resumePublish')).toBeNull();
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  it('onSignInSameTab: second call while first is in flight is rejected', async () => {
+    (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
+    const savedFetch = stubAgeIntentFetch('tok');
+    try {
+      const { callbacks } = createAuthRuntime();
+      callbacks.onSignIn('github', { resumePublish: true });
+      // Popup blocked, descriptor set. Now two rapid Continue-in-tab clicks.
+      expect(useAppStore.getState().authPopupBlocked).not.toBeNull();
+      callbacks.onSignInSameTab();
+      // Pending descriptor cleared by the first call; the second
+      // should early-return because no pending descriptor remains
+      // AND authSignInAttempt.status === 'starting'.
+      callbacks.onSignInSameTab();
+      await flushMicrotasks();
+      expect(window.location.assign).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
   });
 });
 
@@ -1880,12 +2294,24 @@ describe('Popup-blocked Back dismisses the resume-publish intent', () => {
   });
 
   it('Back after publish-initiated popup-block clears the sessionStorage sentinel', () => {
-    // Simulate a blocked publish sign-in.
+    // D120: the popup-blocked path no longer writes the sentinel
+    // (sentinel is written only at the navigation site, after the JIT
+    // fetch resolves). For this test we pre-seed the sentinel as if a
+    // PRIOR successful sign-in attempt had stored it; the dismiss
+    // handler must still clear it defensively when the abandoned flow
+    // was publish-initiated, so a later unrelated sign-in's
+    // popup-complete handshake does not auto-open Share.
+    sessionStorage.setItem(
+      'atomdojo.resumePublish',
+      JSON.stringify({ kind: 'resumePublish', provider: 'google', iat: Date.now() }),
+    );
     (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
     const { callbacks } = createAuthRuntime();
     callbacks.onSignIn('google', { resumePublish: true });
+    // Popup-blocked descriptor set; sentinel from the prior attempt
+    // remains because the runtime did not clear it on this attempt.
+    expect(useAppStore.getState().authPopupBlocked).toEqual({ provider: 'google', resumePublish: true });
     expect(sessionStorage.getItem('atomdojo.resumePublish')).not.toBeNull();
-    expect(useAppStore.getState().authPopupBlocked).toEqual({ provider: 'google', resumePublish: true, ageIntent: null, ageIntentMintedAt: null });
 
     // User clicks Back.
     callbacks.onDismissPopupBlocked();
@@ -1905,8 +2331,8 @@ describe('Popup-blocked Back dismisses the resume-publish intent', () => {
     // Now block a secondary top-bar sign-in (resumePublish:false).
     (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
     const { callbacks } = createAuthRuntime();
-    callbacks.onSignIn('github'); // defaults to resumePublish:false
-    expect(useAppStore.getState().authPopupBlocked).toEqual({ provider: 'github', resumePublish: false, ageIntent: null, ageIntentMintedAt: null });
+    callbacks.onSignIn('github', { resumePublish: false }); // defaults to resumePublish:false
+    expect(useAppStore.getState().authPopupBlocked).toEqual({ provider: 'github', resumePublish: false });
 
     callbacks.onDismissPopupBlocked();
     // Pending cleared, but the pre-existing intent (unrelated) is not
@@ -1917,10 +2343,18 @@ describe('Popup-blocked Back dismisses the resume-publish intent', () => {
   });
 
   it('end-to-end: Back after publish-block → unrelated top-bar sign-in → Share does NOT auto-open', async () => {
-    // Step 1: blocked publish sign-in stashes the sentinel.
+    // D120: pre-seed a sentinel (as if a prior successful publish-
+    // initiated attempt had set it) so we can verify the Back path
+    // clears it. The new sentinel-write timing means a fresh
+    // popup-blocked attempt does NOT write the sentinel itself.
+    sessionStorage.setItem(
+      'atomdojo.resumePublish',
+      JSON.stringify({ kind: 'resumePublish', provider: 'google', iat: Date.now() }),
+    );
     (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
     const { callbacks } = createAuthRuntime();
     callbacks.onSignIn('google', { resumePublish: true });
+    // Sentinel still present (came from the pre-seed, not from this attempt).
     expect(sessionStorage.getItem('atomdojo.resumePublish')).not.toBeNull();
 
     // Step 2: user clicks Back — sentinel cleared by the runtime.
@@ -1936,7 +2370,7 @@ describe('Popup-blocked Back dismisses the resume-publish intent', () => {
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     )) as typeof fetch;
     attachedTeardown = attachAuthCompleteListener();
-    callbacks.onSignIn('github'); // no resumePublish — top-bar default
+    callbacks.onSignIn('github', { resumePublish: false }); // no resumePublish — top-bar default
 
     // Simulate the popup-complete postMessage arriving.
     window.dispatchEvent(new MessageEvent('message', {
@@ -2040,11 +2474,11 @@ describe('auth-runtime — Vite dev host guard (H2)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const { callbacks } = createAuthRuntime();
-    callbacks.onSignIn('google');
+    callbacks.onSignIn('google', { resumePublish: false });
     // The dev guard short-circuits BEFORE window.open — popup-blocked UI fires.
     expect(openSpy).not.toHaveBeenCalled();
     expect(useAppStore.getState().authPopupBlocked).toEqual({
-      provider: 'google', resumePublish: false, ageIntent: null, ageIntentMintedAt: null,
+      provider: 'google', resumePublish: false,
     });
     // Developer-facing diagnostic.
     const msg = warn.mock.calls.map((c) => String(c[0])).join('\n');
@@ -2061,7 +2495,7 @@ describe('auth-runtime — Vite dev host guard (H2)', () => {
     (window as unknown as { open: typeof window.open }).open = openSpy as unknown as typeof window.open;
 
     const { callbacks } = createAuthRuntime();
-    callbacks.onSignIn('google');
+    callbacks.onSignIn('google', { resumePublish: false });
     expect(openSpy).toHaveBeenCalledTimes(1);
     expect(useAppStore.getState().authPopupBlocked).toBeNull();
   });
@@ -2075,7 +2509,7 @@ describe('auth-runtime — Vite dev host guard (H2)', () => {
     (window as unknown as { open: typeof window.open }).open = openSpy as unknown as typeof window.open;
 
     const { callbacks } = createAuthRuntime();
-    callbacks.onSignIn('google');
+    callbacks.onSignIn('google', { resumePublish: false });
     expect(openSpy).toHaveBeenCalledTimes(1);
   });
 });
@@ -2224,7 +2658,13 @@ describe('auth-runtime — resilience under store / storage failures (H3, H4)', 
   });
 
   it('H4: onDismissPopupBlocked logs an error if sessionStorage.removeItem silently fails', () => {
-    // Seed a publish-initiated blocked descriptor.
+    // D120: pre-seed the sentinel directly. The popup-blocked path
+    // no longer writes the sentinel itself (sentinel is written only
+    // at the navigation site, after the JIT fetch resolves).
+    sessionStorage.setItem(
+      'atomdojo.resumePublish',
+      JSON.stringify({ kind: 'resumePublish', provider: 'google', iat: Date.now() }),
+    );
     (window as unknown as { open: typeof window.open }).open = vi.fn(() => null) as typeof window.open;
     const { callbacks } = createAuthRuntime();
     callbacks.onSignIn('google', { resumePublish: true });

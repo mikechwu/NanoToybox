@@ -17,7 +17,7 @@
  * Coverage today:
  *   1. /privacy-request: nonce → form submit → 200 + reference id
  *   2. /privacy-request: missing nonce → 401 invalid_nonce
- *   3. Lab transfer dialog: signed-out auth gating + AgeGateCheckbox
+ *   3. Lab transfer dialog: signed-out auth gating + AgeClickwrapNotice
  *      rendering against a real backend (the static lane skipped
  *      this because the publishable timeline isn't installed).
  */
@@ -104,7 +104,22 @@ test.describe('Pages-dev — Lab transfer dialog signed-out gating', () => {
     );
   });
 
-  test('signed-out: AgeGate checkbox renders and gates provider buttons', async ({ page, baseURL }) => {
+  test('signed-out: clickwrap notice renders and provider buttons are gated by aria-describedby (D120)', async ({ page, context, baseURL }) => {
+    // Short-circuit /auth/google/start BEFORE navigating so the popup
+    // the runtime opens after the JIT intent fetch never enters the
+    // real provider redirect chain. Without this, the popup keeps
+    // running after the assertion and can create CI flakes (dangling
+    // pages + network calls into accounts.google.com). The 204 body
+    // resolves the popup's navigation without setting any cookies or
+    // changing app state.
+    await context.route('**/auth/google/start**', (route) =>
+      route.fulfill({
+        status: 204,
+        headers: { 'Cache-Control': 'no-store' },
+        body: '',
+      }),
+    );
+
     // Force signed-out via the real session probe — wrangler-dev
     // returns `{status:'signed-out'}` when no cookie is present.
     const url = new URL(`${baseURL}/lab/`);
@@ -122,11 +137,37 @@ test.describe('Pages-dev — Lab transfer dialog signed-out gating', () => {
     }
     await trigger.click();
 
-    const checkbox = page.locator('[data-testid="age-gate-checkbox-transfer"]');
-    await expect(checkbox).toBeVisible({ timeout: 5_000 });
+    // D120 — AgeClickwrapNotice replaces the deleted AgeGateCheckbox.
+    // Provider buttons are enabled immediately; clicking is the consent.
+    const clickwrap = page.locator('#age-clickwrap-share');
+    await expect(clickwrap).toBeVisible({ timeout: 5_000 });
+    await expect(clickwrap).toContainText('at least 13');
+
     const google = page.locator('[data-testid="transfer-auth-google"]');
-    await expect(google).toBeDisabled();
-    await checkbox.check();
-    await expect(google).toBeEnabled({ timeout: 5_000 });
+    const github = page.locator('[data-testid="transfer-auth-github"]');
+    await expect(google).toBeEnabled();
+    await expect(github).toBeEnabled();
+    await expect(google).toHaveAttribute('aria-describedby', 'age-clickwrap-share');
+    await expect(github).toHaveAttribute('aria-describedby', 'age-clickwrap-share');
+
+    // Clicking a provider triggers the JIT age-intent fetch. We
+    // capture the popup via `context.waitForEvent('page')` so we can
+    // close it deterministically after the assertion, avoiding
+    // dangling pages in the context after the test ends.
+    const popupPromise = context.waitForEvent('page', { timeout: 5_000 }).catch(() => null);
+    const intentRequest = page.waitForRequest((req) =>
+      req.url().includes('/api/account/age-confirmation/intent') && req.method() === 'POST',
+      { timeout: 5_000 },
+    );
+    await google.click();
+    const req = await intentRequest;
+    expect(req.url()).toContain('/api/account/age-confirmation/intent');
+
+    const popup = await popupPromise;
+    if (popup) {
+      // Wait for the intercepted 204 to land so we don't race the close.
+      await popup.waitForLoadState('load').catch(() => {});
+      await popup.close();
+    }
   });
 });

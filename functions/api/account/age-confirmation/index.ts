@@ -1,23 +1,35 @@
 /**
  * POST /api/account/age-confirmation
  *
- * Writes the 13+ acceptance row for the authenticated user.
+ * Legacy / remediation endpoint for the 13+ acceptance row. Most users
+ * have the row written at OAuth callback time (see
+ * `functions/policy-acceptance.ts findOrCreateUserWithPolicyAcceptance`).
+ * This endpoint covers:
  *
- * Server-authoritative: the user_id is read from the session cookie, not
- * from the request body — a client that tries to fabricate acceptance
- * for another user (by POSTing a different user_id) is ignored.
+ *   - users created BEFORE the OAuth-callback acceptance write shipped
+ *     (legacy population) who hit the publish-time 428 backstop;
+ *   - any account state created through an unexpected path (which
+ *     should be vanishingly rare post-deploy).
  *
- * Idempotent: composite PK on (user_id, policy_kind) makes a repeat
- * acceptance an UPSERT that updates `accepted_at` + `policy_version`
- * without creating a duplicate row. Callers can safely retry.
+ * Server-authoritative: the user_id is read from the session cookie,
+ * not from the request body — a client that tries to fabricate
+ * acceptance for another user (by POSTing a different user_id) is
+ * ignored.
+ *
+ * Idempotent: the shared helper does an UPSERT on (user_id,
+ * policy_kind), so repeat calls update `accepted_at` + `policy_version`
+ * without creating a duplicate row.
+ *
+ * The endpoint must NOT keep its own SQL — both this surface and the
+ * OAuth callback share `recordAge13PlusAcceptance` so a future
+ * policy-version bump or schema migration lands in one place.
  */
 
 import type { Env } from '../../../env';
 import { authenticateRequest } from '../../../auth-middleware';
 import { noCacheJson } from '../../../http-cache';
-import { recordAuditEvent } from '../../../../src/share/audit';
-import { errorMessage } from '../../../../src/share/error-message';
 import { POLICY_VERSION } from '../../../../src/share/constants';
+import { recordAge13PlusAcceptance } from '../../../policy-acceptance';
 
 export const onRequestPost: PagesFunction<Env> = async (context) => {
   const { request, env } = context;
@@ -27,36 +39,19 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     return new Response('Unauthorized', { status: 401 });
   }
 
-  const now = new Date().toISOString();
+  // Single source of truth — the helper does the UPSERT and
+  // best-effort audit emission. Throws on DB failure; that surfaces
+  // as a 500 from this endpoint, which ops sees in Pages logs.
+  await recordAge13PlusAcceptance(env.DB, userId, POLICY_VERSION);
 
-  await env.DB.prepare(
-    `INSERT INTO user_policy_acceptance (user_id, policy_kind, policy_version, accepted_at)
-     VALUES (?, 'age_13_plus', ?, ?)
-     ON CONFLICT(user_id, policy_kind)
-       DO UPDATE SET policy_version = excluded.policy_version,
-                     accepted_at    = excluded.accepted_at`,
-  )
-    .bind(userId, POLICY_VERSION, now)
-    .run();
-
-  // Fire-and-forget audit — the UPSERT above is the authoritative
-  // record of consent. NOTE: if the UPSERT throws (D1 outage) the
-  // audit is also skipped, because we never reach this line — the
-  // surface-level failure is the 500 from the awaited UPSERT, which
-  // ops sees in Pages logs.
-  recordAuditEvent(env.DB, {
-    eventType: 'age_confirmation_recorded',
-    actor: userId,
-    severity: 'info',
-    details: { policyVersion: POLICY_VERSION },
-  }).catch((err) => {
-    console.error(`[account.age-confirmation] audit write failed: ${errorMessage(err)}`);
-  });
-
+  // Wall-clock timestamp returned for observability — the helper
+  // writes its own `accepted_at`; the timestamp here is informational
+  // for the client (it is what would be returned from a fresh GET).
+  const acceptedAt = new Date().toISOString();
   return noCacheJson({
     userId,
     policyKind: 'age_13_plus',
     policyVersion: POLICY_VERSION,
-    acceptedAt: now,
+    acceptedAt,
   });
 };
