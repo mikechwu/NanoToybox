@@ -142,6 +142,36 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+/**
+ * Minimal blob-response mock for fallback-path tests (`blobRes.body`
+ * is null). Portable across Node/undici and jsdom — we do NOT use
+ * `new Response(…)` + `Object.defineProperty(res, 'body', …)` because
+ * Node 22+ undici enforces `.stream()` on Blob-bodied Response at
+ * construction, and the property override does not reliably
+ * pass through to `.blob()` across implementations.
+ *
+ * Implements only the surface the controller reads:
+ *   - `ok`, `status` — for the response-gate check.
+ *   - `headers.get('Content-Type')` — used to tag the final File.
+ *   - `body` — null, forcing the fallback branch.
+ *   - `blob()` — returns a Blob carrying the provided bytes.
+ */
+function makeFallbackBlobResponse(
+  bytes: Uint8Array,
+  contentType = 'application/json',
+): Response {
+  const blob = new Blob([bytes as unknown as BlobPart], { type: contentType });
+  // `Response` typing is wide; we return a structural subset cast so
+  // the controller's property reads line up.
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'Content-Type': contentType }),
+    body: null,
+    blob: async () => blob,
+  } as unknown as Response;
+}
+
 describe('openProgress state machine', () => {
   beforeEach(() => {
     // Each test installs its own fetch per scenario.
@@ -353,18 +383,13 @@ describe('openProgress state machine', () => {
       }
     });
 
-    // Metadata with sizeBytes=500. Blob response built with body
-    // explicitly null to force the fallback branch.
+    // Metadata with sizeBytes=500. Blob response uses the minimal
+    // fallback mock (body: null, works portably across Node/undici
+    // and jsdom without the Response + defineProperty dance).
     const metadata = jsonResponse({ sizeBytes: 500 }, { status: 200 });
-    // Construct a Response whose `.body` getter returns null.
-    // (Response's body is only null for redirects / empty in the
-    //  spec — we fake it directly via Object.defineProperty.)
-    const fakeBlob = new Blob(['{"bad":"json"}'], { type: 'application/json' });
-    const blobResponse = new Response(fakeBlob, {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
-    Object.defineProperty(blobResponse, 'body', { get: () => null });
+    const blobResponse = makeFallbackBlobResponse(
+      new TextEncoder().encode('{"bad":"json"}'),
+    );
 
     globalThis.fetch = ((url: string) =>
       Promise.resolve(url.includes('/blob') ? blobResponse : metadata.clone())) as unknown as typeof fetch;
@@ -426,14 +451,12 @@ describe('openProgress state machine', () => {
     const metadata = jsonResponse(
       { sizeBytes: capsuleJson.length }, { status: 200 },
     );
-    // Force the fallback-blob branch for determinism in jsdom (the
+    // Force the fallback-blob branch via the portable mock (the
     // ReadableStream integration is out of scope here — the stream
     // path is tested separately).
-    const blobRes = new Response(capsuleJson, {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
-    Object.defineProperty(blobRes, 'body', { get: () => null });
+    const blobRes = makeFallbackBlobResponse(
+      new TextEncoder().encode(capsuleJson),
+    );
 
     const ctl = createWatchController();
     const stages: string[] = [];
@@ -765,12 +788,8 @@ describe('openProgress state machine', () => {
     // fire and the final tick must clamp to 100.
     const payload = new Uint8Array(150).fill(0x20); // whitespace, harmless
     const metadata = jsonResponse({ sizeBytes: 100 }, { status: 200 });
-    const blobRes = new Response(payload, {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
-    // Force the fallback branch.
-    Object.defineProperty(blobRes, 'body', { get: () => null });
+    // Force the fallback branch via the portable mock.
+    const blobRes = makeFallbackBlobResponse(payload);
 
     globalThis.fetch = ((url: string) =>
       Promise.resolve(url.includes('/blob') ? blobRes : metadata.clone())) as unknown as typeof fetch;

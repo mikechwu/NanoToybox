@@ -82,9 +82,16 @@ test.describe('Watch Round 6 — landing + boot', () => {
     expect(errors).toEqual([])
   })
 
-  test('landing page shows Open File button', async ({ page, baseURL }) => {
+  test('empty-state open panel exposes the "Open local file" secondary action', async ({ page, baseURL }) => {
+    // Post-WatchLanding: the workspace shell is always rendered and
+    // the centered open panel overlays the canvas area until a file
+    // loads. The local-file entry moved from `.watch-btn` ("Open
+    // File") to the panel's secondary button ("Open local file").
     await page.goto(`${baseURL}/watch/?e2e=1`)
-    await expect(page.locator('.watch-btn', { hasText: 'Open File' })).toBeAttached({ timeout: 5000 })
+    await expect(page.locator('.watch-workspace')).toBeAttached({ timeout: 5000 })
+    await expect(
+      page.locator('.watch-open-panel__secondary', { hasText: 'Open local file' }),
+    ).toBeAttached({ timeout: 5000 })
   })
 })
 

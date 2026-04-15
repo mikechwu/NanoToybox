@@ -49,10 +49,28 @@ test.describe('C.2 Integration — Worker-Driven Main App', () => {
     // Wait for app to fully initialize (React StatusBar renders scene info)
     await expect(page.getByRole('toolbar', { name: 'Simulation controls' })).toBeAttached({ timeout: 15000 })
 
-    // Give the worker time to initialize and process at least one frame
-    await page.waitForTimeout(2000)
+    // Poll until the worker has produced at least one snapshot,
+    // rather than using a fixed timeout. Under CI load (headless
+    // Chromium on a constrained runner) 2 seconds is sometimes not
+    // enough for the worker to warm up and deliver its first frame,
+    // producing an intermittent `hasSnapshot=false` flake. A
+    // condition-based wait removes the timing dependency while still
+    // preserving the downstream assertions below.
+    await expect
+      .poll(
+        async () => {
+          const s = await page.evaluate(() => {
+            const fn = (window as Record<string, unknown>)._getWorkerDebugState as (() => WorkerDebugState) | undefined
+            return fn ? fn() : null
+          }) as WorkerDebugState | null
+          return s?.hasSnapshot === true && (s?.totalStepsProfiled ?? 0) > 0
+        },
+        { timeout: 15000, intervals: [100, 250, 500] },
+      )
+      .toBe(true)
 
-    // Query worker integration state via debug hook
+    // Query worker integration state via debug hook for the detailed
+    // assertions below.
     const state = await page.evaluate(() => {
       const fn = (window as Record<string, unknown>)._getWorkerDebugState as (() => WorkerDebugState) | undefined
       return fn ? fn() : null
