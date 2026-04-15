@@ -547,13 +547,28 @@ function AccountApp() {
                 </p>
               ) : (
                 <ul className="acct__uploads-list">
-                  {capsules.map((c) => (
+                  {capsules.map((c, i) => {
+                    const title = c.title?.trim();
+                    // Row identifier used by delete-confirm + action
+                    // aria-labels. `||` (not `??`) so whitespace-only
+                    // titles fall through to the shareCode — otherwise
+                    // the confirm prompt would render "Delete ?".
+                    const rowName = title || c.shareCode;
+                    return (
                     <li key={c.shareCode} className="acct__upload">
                       <div className="acct__upload-meta">
-                        <div className="acct__upload-title">
-                          {c.title?.trim() || <em>Untitled</em>}
-                        </div>
-                        <code className="acct__upload-code">{c.shareCode}</code>
+                        {title ? (
+                          <>
+                            <div className="acct__upload-title">{title}</div>
+                            <code className="acct__upload-code">{c.shareCode}</code>
+                          </>
+                        ) : (
+                          // Index continues across paginated "Load more" (append in place).
+                          <div className="acct__upload-title acct__upload-title--code">
+                            <span className="acct__upload-index">#{i + 1}</span>
+                            <code>{c.shareCode}</code>
+                          </div>
+                        )}
                       </div>
                       <div className="acct__upload-stats">
                         <span><strong>{formatBytes(c.sizeBytes)}</strong></span>
@@ -565,6 +580,7 @@ function AccountApp() {
                           href={`/c/${c.shareCode}`}
                           target="_blank"
                           rel="noopener noreferrer"
+                          aria-label={`Open ${rowName} (opens in new tab)`}
                         >
                           Open
                         </a>
@@ -572,6 +588,7 @@ function AccountApp() {
                           type="button"
                           className="acct-btn acct-btn--ghost"
                           onClick={() => onCopyLink(c.shareCode)}
+                          aria-label={`Copy share link for ${rowName}`}
                         >
                           {copiedCode === c.shareCode ? 'Copied' : 'Copy link'}
                         </button>
@@ -579,10 +596,11 @@ function AccountApp() {
                           type="button"
                           className="acct-btn acct-btn--danger"
                           disabled={deletingCode === c.shareCode}
+                          aria-label={`Delete ${rowName}`}
                           onClick={() => {
                             if (
                               confirm(
-                                `Delete ${c.title ?? c.shareCode}? The public link will stop working.`,
+                                `Delete ${rowName}? The public link will stop working.`,
                               )
                             ) {
                               onDeleteCapsule(c.shareCode);
@@ -593,7 +611,8 @@ function AccountApp() {
                         </button>
                       </div>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               )}
 

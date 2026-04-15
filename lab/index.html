@@ -263,21 +263,31 @@ canvas { display: block; touch-action: none; }
    Uses min-width so edge cases (large counts, long text) can still expand.
    --panel-width is the single tuning point for panel sizing. */
 .bonded-groups-panel {
-  --panel-width: 250px;
+  --panel-width: 260px;
   position: fixed;
   /* top set per-side below (secondary slot, offset below primary overlays) */
   z-index: 150;
   pointer-events: auto;
-  background: var(--panel-bg);
-  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  /* Surface tokens match the AccountControl chip + FPS display
+   * (`--color-surface`, plain `blur(var(--glass-blur))`). The previous
+   * `--panel-bg` + `saturate(180%)` rendered subtly grayer/glassier
+   * than the two chrome cards in the same top-bar row, so the three
+   * surfaces read as belonging to different visual systems. Aligning
+   * the background tokens makes the row look like one family. */
+  background: var(--color-surface);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  padding: 6px 10px;
+  padding: 8px 10px;
   user-select: none;
   -webkit-user-select: none;
-  width: var(--panel-width);
-  min-width: var(--panel-width);
+  /* Mobile safety: never wider than the viewport minus the side anchor.
+   * Side anchors are 12 px (see `.bonded-groups-panel.side-*` rules); we
+   * cap at viewport - 24 so the panel never bleeds off-screen on
+   * narrow phones and the rules below don't need a media query. */
+  width: min(var(--panel-width), calc(100vw - 24px));
+  min-width: 0;
   max-height: 60vh;
   overflow-y: auto;
   /* Reserve scrollbar space permanently so content never shifts when scrollbar appears */
@@ -334,7 +344,7 @@ canvas { display: block; touch-action: none; }
   display: grid;
   grid-template-columns: subgrid;
   align-items: center;
-  padding: 2px 0;
+  padding: 4px 2px;
   font-size: var(--font-xs);
   background: none;
   border: none;
@@ -353,7 +363,7 @@ canvas { display: block; touch-action: none; }
 .bonded-groups-small-toggle {
   grid-column: 1 / -1;
   display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; padding: 4px 0; margin-top: 4px;
+  gap: 8px; padding: 8px 2px 4px; margin-top: 6px;
   border-top: 1px solid var(--color-border);
   background: none; border-left: none; border-right: none; border-bottom: none;
   color: inherit; font: inherit; font-size: var(--font-xs); font-weight: 500;
@@ -411,22 +421,31 @@ canvas { display: block; touch-action: none; }
   display: grid;
   grid-template-columns: 24px 1fr 4ch 3em 3em;
   column-gap: 6px;
-  padding: 0 8px;
+  padding: 0 4px;
 }
-/* Column header spans all 5 columns, subgrid aligns its children */
+/* Column header spans all 5 columns; subgrid aligns its children with
+ * the row content beneath. Headers stay CENTRED in each column track
+ * — that's what gives the wider header words ("ATOMS", "CENTER") room
+ * to breathe between adjacent columns. Per-column edge alignment
+ * (right / left) caused the labels to butt up against each other.
+ * The new bottom hairline reads the row as a header; that's separate
+ * from alignment and is kept. */
 .bonded-groups-col-header {
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: subgrid;
   align-items: center;
-  padding: 0 0 2px;
+  padding: 4px 0 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--color-border);
 }
 .bonded-groups-col-header > span {
   font-size: 9px; color: var(--color-text-secondary);
   text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.6;
   text-align: center; padding: 0 2px;
 }
-/* "Cluster" header spans both color-chip + index columns when color editing is enabled */
+/* "Cluster" header spans both color-chip + index columns when color
+ * editing is enabled. */
 .bonded-groups-col-cluster { grid-column: span 2; text-align: center; }
 .bonded-groups-atoms { text-align: right; padding: 0 6px; font-variant-numeric: tabular-nums; }
 .bonded-groups-action-btn {
@@ -598,10 +617,16 @@ canvas { display: block; touch-action: none; }
  * One positioning ancestor replaces the previous two independently
  * absolutely-positioned surfaces. Children align to the top so multi-line
  * FPS (compact vs. expanded) does not shift the account chip vertically.
- * z-index slightly higher than the default overlay layer so the account
- * menu does not disappear behind side panels. */
+ *
+ * z-index escape: must sit ABOVE .bonded-groups-panel (z-index 150)
+ * because the AccountControl popover menu is a descendant of this
+ * stacking context — without this, the menu opens but is partially
+ * occluded by the bonded-groups panel on every viewport (most
+ * visible on mobile where both surfaces stretch wide). Stays BELOW
+ * the sheet backdrop (200) and dialogs (300) so modal layers still
+ * cover the chip when they're up. */
 .topbar-right {
-  position: absolute; top: 12px; right: 12px; z-index: 11;
+  position: absolute; top: 12px; right: 12px; z-index: 170;
   /* `inline-flex` is the directly shrink-to-fit row contract — it
    * IS a content-sized horizontal box, no intrinsic-size negotiation
    * required. The earlier `flex + width: max-content` combo worked
@@ -711,15 +736,29 @@ canvas { display: block; touch-action: none; }
   align-items: center; gap: 6px;
   background: transparent; border: 1px solid transparent;
   color: var(--color-text-secondary);
-  padding: 6px 10px; border-radius: var(--radius-sm);
-  font-size: inherit; line-height: 1.3; cursor: pointer;
+  /* Geometry tuned to match `.react-fps` exactly so the chip / Sign-in
+   * pill / FPS pill render at the same height in the top-bar row.
+   * Was `padding: 6px 10px; font-size: inherit (--font-xs=12); line-height: 1.3`
+   * — about 4 px shorter than FPS (`6px 12px / --font-sm=14 / 1.4`).
+   * `--font-sm` + 1.4 + symmetric 12 px horizontal padding = identical box. */
+  padding: 6px 12px; border-radius: var(--radius-sm);
+  font-size: var(--font-sm); line-height: 1.4; cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-/* Signed-out variant. Acknowledges that the signed-out and signed-in
- * trigger have diverged in browser layout behaviour; declaring its
- * own contract lets us harden the Sign-in path independently of the
- * chip path and keeps future test failures easy to map to the
- * right CSS rule. */
+/* Card surface shared by chip + signin — matches .react-fps +
+ * .bonded-groups-panel so all top-bar actors read as one family.
+ * Unverified deliberately skips this treatment (see its own rule). */
+.account-control__trigger--chip,
+.account-control__trigger--signin {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  color: var(--color-text);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+}
+/* Signed-out variant — left-aligned label. Kept as its own rule so
+ * the chip and signin paths can diverge independently if one platform
+ * regresses in isolation (prior CI drift hit only the signed-in chip). */
 .account-control__trigger--signin {
   justify-content: flex-start;
   text-align: left;
@@ -732,15 +771,14 @@ canvas { display: block; touch-action: none; }
   outline: none;
 }
 .account-control__trigger--chip {
-  background: var(--color-surface);
-  border-color: var(--color-border);
-  color: var(--color-text);
-  padding: 4px 10px 4px 4px;
-  /* Chip variant carries heavier intrinsic content (avatar disc +
-   * label + padding) than the signed-out trigger — the previous CI
-   * failure surfaced specifically here. `min-width: max-content`
-   * floors the chip at its intrinsic width even if a parent ever
-   * passes through a smaller flex basis. */
+  /* 6px vertical padding matches .react-fps so chip + FPS heights
+   * line up. Left padding stays tight (4px) — the avatar disc
+   * already provides breathing room there. */
+  padding: 6px 10px 6px 4px;
+  /* Chip carries heavier intrinsic content (avatar + label) than the
+   * signed-out trigger. `min-width: max-content` floors the chip at
+   * its intrinsic width even if a parent ever passes a smaller flex
+   * basis — a prior CI drift surfaced specifically on this path. */
   min-width: max-content;
 }
 /* Unverified variant — subdued tone, italic label, no avatar. Communicates
@@ -760,40 +798,80 @@ canvas { display: block; touch-action: none; }
   max-width: 120px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* AccountControl popover menu — Wikipedia-clean.
+ * Smaller radius + sharper directional shadow + theme-token surface
+ * keep it consistent with /account, /privacy, /terms. Identity gets
+ * a hairline-divided header; Sign-out gets a hairline-divided footer
+ * so the visual rhythm reads as: WHO → WHAT YOU CAN DO → SESSION END.
+ * Sign-out is intentionally NOT styled as destructive — it doesn't
+ * delete data, the user can sign back in any time. The previous
+ * green-text "destructive" treatment was the wrong cue for this
+ * action; it's now the same neutral tone as Manage uploads. */
 .account-control__menu {
-  position: absolute; right: 0; top: calc(100% + 4px);
-  min-width: 200px; max-width: 260px;
-  background: var(--color-surface);
-  backdrop-filter: blur(var(--glass-blur));
+  position: absolute; right: 0; top: calc(100% + 6px);
+  min-width: 220px; max-width: 280px;
+  /* Fully opaque — menu items must NOT show the BondedClusters panel
+   * (or anything else) bleeding through. `--color-surface` is the
+   * translucent token we use for in-row chrome (chip / FPS pill /
+   * BondedGroups panel header) where seeing the canvas through is
+   * intentional; here, a popover with text needs solid contrast.
+   * `--page-bg` is the always-opaque page-tone token written by
+   * applyThemeTokens (light: #f2f2f0, dark: #181820). */
+  background: var(--page-bg);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.18);
-  display: flex; flex-direction: column; gap: 4px;
+  border-radius: 4px;
+  padding: 4px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 8px 28px rgba(0, 0, 0, 0.18);
+  display: flex; flex-direction: column; gap: 0;
 }
 .account-control__hint {
-  margin: 4px 6px 8px;
-  color: var(--color-text-secondary); font-size: var(--font-xs); line-height: 1.4;
+  margin: 6px 10px 8px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs); line-height: 1.45;
 }
 .account-control__identity {
-  margin: 2px 6px 8px;
-  color: var(--color-text); font-size: var(--font-sm); font-weight: 500;
+  margin: 0 0 4px;
+  padding: 10px 12px 10px;
+  color: var(--color-text);
+  font-size: var(--font-sm); font-weight: 600;
+  letter-spacing: -0.005em;
+  border-bottom: 1px solid var(--color-border);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .account-control__menu-item {
-  background: transparent; border: 1px solid transparent;
-  padding: 8px 10px; border-radius: var(--radius-sm);
+  background: transparent; border: none;
+  padding: 9px 12px;
+  border-radius: 3px;
+  margin: 1px 0;
   font-size: var(--font-sm); color: var(--color-text);
   text-align: left; cursor: pointer;
-  transition: background 0.12s;
   display: block; text-decoration: none;
+  transition: background 120ms ease, color 120ms ease;
+  white-space: nowrap;
 }
 .account-control__menu-item:hover,
 .account-control__menu-item:focus-visible {
-  background: var(--color-surface-hover, rgba(128,128,128,0.15));
+  background: var(--color-surface-hover);
+  color: var(--color-text);
   outline: none;
+  text-decoration: none;
 }
+/* Sign-out lives below a hairline divider — it's not destructive
+ * (no data loss, the user can sign back in), so it stays in the
+ * neutral text colour. The hairline + secondary tone communicate
+ * "session-ending" without shouting "delete". */
 .account-control__menu-item--destructive {
-  color: var(--color-accent-text);
+  color: var(--color-text-secondary);
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+}
+.account-control__menu-item--destructive:hover,
+.account-control__menu-item--destructive:focus-visible {
+  color: var(--color-text);
 }
 
 /* ── Shared 13+ age-gate checkbox (Phase B) ────────────────────────────
@@ -1195,21 +1273,32 @@ canvas { display: block; touch-action: none; }
 .timeline-transfer-dialog__copy:hover { background: var(--color-surface-hover); }
 .timeline-transfer-dialog__code {
   font-size: var(--font-xs); color: var(--color-text-secondary);
-  margin-top: 8px;
+  margin-top: 10px;
+  /* Extra breathing room below so the actions divider doesn't crowd
+   * the code line. Was implicitly handled by the floating "Manage
+   * uploads" paragraph; that paragraph is gone (now an action-row
+   * peer of Close) so the spacing has to come from here. */
+  margin-bottom: 14px;
 }
 .timeline-transfer-dialog__code code {
   font-family: var(--font-family); letter-spacing: 0.05em;
 }
-/* Subtle "Manage uploads" link in the post-publish success state.
- * Low-emphasis on purpose — it's a reinforcement, not a CTA.
- */
-.timeline-transfer-dialog__manage {
-  font-size: var(--font-xs); margin-top: 8px;
+/* Leading link inside .timeline-transfer-dialog__actions for the
+ * share-success branch. `margin-right: auto` floats it to the row's
+ * leading edge while the cancel/confirm buttons stay anchored to the
+ * right (the row's `justify-content: flex-end` is unchanged).
+ * Intentionally low-emphasis: a small underlined secondary action,
+ * not a CTA — the divider above it reads as a clean separator
+ * between content and actions. */
+.timeline-transfer-dialog__manage-link {
+  margin-right: auto;
+  align-self: center;
+  font-size: var(--font-xs);
+  color: var(--color-text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
-.timeline-transfer-dialog__manage a {
-  color: var(--color-text-secondary); text-decoration: underline;
-}
-.timeline-transfer-dialog__manage a:hover {
+.timeline-transfer-dialog__manage-link:hover {
   color: var(--color-text);
 }
 /* Non-fatal publish warning — rendered alongside the share URL when the

@@ -6,13 +6,21 @@
  */
 
 .bg-panel {
-  --panel-width: 250px;
-  background: var(--panel-bg);
+  --panel-width: 260px;
+  /* Surface tokens match the lab .bonded-groups-panel + the chip +
+   * FPS pill, so the watch top-bar family reads identically to lab.
+   * (Was `--panel-bg` + `saturate(180%)` — slightly grayer/glassier
+   * than the sibling chrome.) */
+  background: var(--color-surface);
+  backdrop-filter: blur(var(--glass-blur, 8px));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 8px));
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm, 6px);
-  padding: 6px 10px;
-  width: var(--panel-width);
-  min-width: var(--panel-width);
+  padding: 8px 10px;
+  /* Mobile safety: never wider than the viewport minus side anchors
+   * (12 px each). Identical contract to lab. */
+  width: min(var(--panel-width), calc(100vw - 24px));
+  min-width: 0;
   max-height: 60vh;
   overflow-y: auto;
   scrollbar-gutter: stable;
@@ -54,16 +62,21 @@
   grid-template-columns: 24px 1fr 4ch 3em 3em;
   column-gap: 6px;
   margin-top: 6px;
-  padding: 0 8px;
+  padding: 0 4px;
 }
 
-/* ── Column header (subgrid, matches lab) ── */
+/* ── Column header (subgrid, matches lab). Headers stay CENTRED in
+ * each column track so wider words ("ATOMS", "CENTER") get the
+ * column-gap as natural breathing room. The hairline border-bottom
+ * reads the row as a header divider. */
 .bg-panel__col-header {
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: subgrid;
   align-items: center;
-  padding: 0 0 2px;
+  padding: 4px 0 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--color-border);
 }
 .bg-panel__col-header > span {
   font-size: 9px; color: var(--color-text-secondary, #888);
@@ -79,7 +92,7 @@
   display: grid;
   grid-template-columns: subgrid;
   align-items: center;
-  padding: 2px 0;
+  padding: 4px 2px;
   font-size: var(--font-xs, 0.75rem);
   background: none;
   border: none;
@@ -138,7 +151,7 @@
 .bg-panel__small-toggle {
   grid-column: 1 / -1;
   display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; padding: 4px 0; margin-top: 4px;
+  gap: 8px; padding: 8px 2px 4px; margin-top: 6px;
   border-top: 1px solid var(--color-border, rgba(255,255,255,0.12));
   background: none; border-left: none; border-right: none; border-bottom: none;
   color: inherit; font: inherit; font-size: 0.75rem; font-weight: 500;

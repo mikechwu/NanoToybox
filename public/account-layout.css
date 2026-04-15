@@ -435,6 +435,15 @@ button {
   color: var(--color-text-secondary);
   margin-top: 2px;
 }
+/* Untitled row: `#N <code>` on one line — no redundant code-line beneath. */
+.acct__upload-title--code { display: flex; align-items: baseline; gap: 8px; }
+.acct__upload-index { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; font-weight: 400; }
+.acct__upload-title--code code {
+  font-family: var(--ff-mono);
+  font-size: 13px;
+  color: var(--color-text);
+  letter-spacing: 0.05em;
+}
 
 .acct__upload-stats {
   font-size: 12.5px;

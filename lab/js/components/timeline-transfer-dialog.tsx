@@ -196,15 +196,22 @@ function providerLabel(provider: 'google' | 'github'): string {
  *  Keeping the wrapper inline (not in its own file) preserves locality and
  *  the per-branch class/disabled semantics. */
 function ShareActions({
-  onCancel, transferBusy, cancelLabel = 'Cancel', children,
+  onCancel, transferBusy, cancelLabel = 'Cancel', children, leadingLink,
 }: {
   onCancel: () => void;
   transferBusy: boolean;
   cancelLabel?: string;
   children?: React.ReactNode;
+  /** Optional left-aligned secondary action (typically a navigation
+   *  link). Floats to the row's leading edge via `margin-right: auto`
+   *  so the cancel/confirm buttons stay anchored to the right. Used by
+   *  the share-success branch to host "Manage uploads" without
+   *  cramping the success copy above the divider. */
+  leadingLink?: React.ReactNode;
 }) {
   return (
     <div className="timeline-transfer-dialog__actions">
+      {leadingLink}
       <button
         className="timeline-transfer-dialog__cancel"
         onClick={onCancel}
@@ -467,21 +474,6 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                     Code: <code>{shareCode}</code>
                   </p>
                 )}
-                {/* Subtle reinforcement: post-publish is the moment the
-                  * user has just produced something they might want to
-                  * curate later. Pointing them at the Account page from
-                  * here closes the discoverability gap without adding a
-                  * top-level nav element. */}
-                <p className="timeline-transfer-dialog__manage">
-                  <a
-                    href="/account/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    data-testid="transfer-manage-uploads"
-                  >
-                    Manage uploads
-                  </a>
-                </p>
                 {shareWarnings && shareWarnings.length > 0 && (
                   <p
                     className="timeline-transfer-dialog__warning"
@@ -495,8 +487,31 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                 {/* No shareError render here — handleShareConfirm clears
                  *  shareError before setting shareResult, and the auth-status
                  *  effect in TimelineBar clears it on any status transition
-                 *  that could repaint this branch. */}
-                <ShareActions onCancel={handleCancel} transferBusy={transferBusy} cancelLabel="Close" />
+                 *  that could repaint this branch.
+                 *
+                 *  "Manage uploads" lives in the action row as a leading
+                 *  link, NOT as a floating paragraph between the code line
+                 *  and the divider — that earlier placement crowded the
+                 *  separator and read as an unfinished thought. As an
+                 *  action-row peer it's clearly a secondary navigation
+                 *  alongside Close, with the divider doing its proper job. */}
+                <ShareActions
+                  onCancel={handleCancel}
+                  transferBusy={transferBusy}
+                  cancelLabel="Close"
+                  leadingLink={
+                    <a
+                      className="timeline-transfer-dialog__manage-link"
+                      href="/account/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-testid="transfer-manage-uploads"
+                      aria-label="Manage uploads (opens in new tab)"
+                    >
+                      Manage uploads
+                    </a>
+                  }
+                />
               </div>
             ) : authStatus === 'loading' ? (
               <div className="timeline-transfer-dialog__auth-checking" aria-live="polite">

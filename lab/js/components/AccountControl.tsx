@@ -216,13 +216,17 @@ export function AccountControl() {
             </p>
             {/* Task-oriented label — the destination is the page that
               * lists the user's published share links and exposes the
-              * delete controls. Rendered as a real <a> so middle-click
-              * / cmd-click open in a new tab work as expected. */}
+              * delete controls. Opens in a new tab so the user keeps
+              * their current Lab session intact (mirrors the same link
+              * in the Transfer dialog's Share-success state). */}
             <a
               className="account-control__menu-item"
               href="/account/"
+              target="_blank"
+              rel="noopener noreferrer"
               onClick={close}
               data-testid="account-manage-uploads"
+              aria-label="Manage uploads (opens in new tab)"
             >
               Manage uploads
             </a>
