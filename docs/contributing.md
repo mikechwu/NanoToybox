@@ -130,7 +130,7 @@ Shared icons live in `lab/js/components/Icons.tsx`. Both lab and watch import fr
 
 | File / Folder | Owns | Notes |
 |---------------|------|-------|
-| `main.ts` | Composition root — wires subsystems, owns RAF start/stop, registers global listeners | Nothing else should attach `window` listeners or call `requestAnimationFrame` directly |
+| `main.ts` | Composition root — wires subsystems, owns RAF start/stop, registers global listeners | Nothing else should attach `window` listeners or call `requestAnimationFrame` directly. Narrow carve-out: **one-shot paint-deferral primitives** (e.g. `components/timeline-after-paint.ts`'s `scheduleAfterNextPaint`) may call rAF from UI components to yield a paint before expensive main-thread work (INP hygiene). These are fire-once (work → done, with cancel) and must not own a sustained frame loop — that remains `main.ts` / `app/frame-runtime.ts` territory. |
 | `app/frame-runtime.ts` | Per-frame sequencing (physics → reconcile → feedback → highlight → record → render → status) | Ordering invariants live here, not in main.ts |
 | `app/app-lifecycle.ts` | Teardown sequencing (ordered destroy of all runtime subsystems) | Dependency-aware order; see numbered list in its module header |
 | `runtime/*` | Feature-specific runtime behavior (one module per concern) | Each module has its own contract header (see below) |

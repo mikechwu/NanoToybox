@@ -35,6 +35,8 @@ import {
 import { hydrateAuthSession, AuthRequiredError, AgeConfirmationRequiredError } from '../runtime/auth-runtime';
 import { ActionHint } from './ActionHint';
 import { TIMELINE_HINTS } from './timeline-hints';
+import { scheduleAfterNextPaint } from './timeline-after-paint';
+import { measureSync } from './timeline-performance';
 
 // ── Shared shell ──
 
@@ -257,6 +259,31 @@ function TimelineBarActive() {
   const latestCallbacksRef = useRef(callbacks);
   useEffect(() => { latestCallbacksRef.current = callbacks; }, [callbacks]);
 
+  // Unified pause entry point for the Transfer dialog — wraps the pause
+  // callback in a User Timing measure so DevTools Performance can show
+  // the main-thread cost of pausing the simulation. Used by BOTH dialog
+  // open paths (direct click AND OAuth-return Share resume) so one
+  // doesn't silently drift ahead of the other in future refactors.
+  // Reads through latestCallbacksRef so the helper stays stable even
+  // when the store reinstalls timelineCallbacks mid-session.
+  //
+  // If onPauseForExport throws, treat it as "did not pause" — the caller
+  // then skips the matching resume call on close. The alternative (let
+  // the throw propagate) would abort the entire click path: the dialog
+  // would never open and the user would see the Transfer button do
+  // nothing, with no signal why. Log at warn so the failure is
+  // diagnosable; downstream UI stays usable.
+  const pauseForTransfer = useCallback(() => {
+    return measureSync('transfer-pause', () => {
+      try {
+        return latestCallbacksRef.current?.onPauseForExport?.() ?? false;
+      } catch (err) {
+        console.warn('[TimelineBar] onPauseForExport threw; continuing unpaused:', err);
+        return false;
+      }
+    });
+  }, []);
+
   // Preferred default kind — computed at open time, not hook init
   const preferredKind = exportCaps?.capsule ? 'capsule' as const : 'full' as const;
 
@@ -312,12 +339,12 @@ function TimelineBarActive() {
     setShareSubmitting(false);
     setShareError(null);
     setShareResult(null);
-    transferDidPause.current = callbacks?.onPauseForExport?.() ?? false;
+    transferDidPause.current = pauseForTransfer();
     // Default to Share tab (Phase 6 Auth UX contract) — the cross-session,
     // higher-value path. Fall back to Download only when Share is not
     // actionable (no publishCapsule callback or no recorded range).
     transferDialog.request(shareAvailable ? 'share' : 'download');
-  }, [clear, preferredKind, callbacks, transferDialog, shareAvailable]);
+  }, [clear, preferredKind, pauseForTransfer, transferDialog, shareAvailable]);
 
   const openClear = useCallback(() => {
     closeTransferSession();
@@ -387,32 +414,65 @@ function TimelineBarActive() {
     setShareSubmitting(false);
     setShareError(null);
     setShareResult(null);
-    transferDidPause.current = callbacks?.onPauseForExport?.() ?? false;
+    transferDidPause.current = pauseForTransfer();
     transferDialog.request('share');
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareTabOpenRequested, shareAvailable]);
 
-  // Async estimate computation — only runs when the Download tab can
-  // actually be used. Share-only flows skip the artifact build + stringify
-  // cost entirely. If download becomes actionable mid-session (e.g. the
-  // user switches tabs and Download becomes available), the effect re-runs
-  // because downloadActionAvailable is in the dep list.
+  // Async estimate computation — the artifact build + JSON.stringify
+  // cost lives behind three guards to keep it off the Transfer-click
+  // interaction path:
+  //
+  // 1. tab === 'download'. Share-first openings (the common path and
+  //    the one shown in the INP report) skip the cost entirely.
+  // 2. downloadActionAvailable. Stored capability alone is not enough;
+  //    the runtime callback must also be wired.
+  // 3. Success cache: skip if a prior run in THIS open already produced
+  //    at least one usable size string. Failed runs (both fields null)
+  //    are NOT cached — tab switching retries, which covers transient
+  //    failures without locking the user out of a valid estimate for
+  //    the whole session. Close+reopen always clears both cases via
+  //    openTransfer() / closeTransferSession()'s setEstimates({}).
+  //
+  // Scheduling goes through scheduleAfterNextPaint so the dialog gets
+  // a paint opportunity before the expensive work runs — microtask
+  // queues (Promise.resolve) are not sufficient for INP because they
+  // can still run before paint.
+  //
+  // Callback read through latestCallbacksRef (not a captured `callbacks`
+  // closure) so the effect does not rerun when the store reinstalls
+  // timelineCallbacks. The `cancelled` flag is LOAD-BEARING: once the
+  // rAF has fired, cancelAnimationFrame is a no-op and this flag is the
+  // only thing preventing a stale setState after unmount or dialog
+  // close. Do not remove it in a future refactor.
   useEffect(() => {
-    if (!transferDialog.open || !downloadActionAvailable) return;
+    if (!transferDialog.open) return;
+    if (transferDialog.tab !== 'download') return;
+    if (!downloadActionAvailable) return;
+    const hasSuccessfulEstimate =
+      typeof estimates.capsule === 'string' || typeof estimates.full === 'string';
+    if (hasSuccessfulEstimate) return;
+
     let cancelled = false;
-    Promise.resolve()
-      .then(() => {
-        if (cancelled) return;
-        const result = callbacks?.getExportEstimates?.() ?? { capsule: null, full: null };
+    const cancelSchedule = scheduleAfterNextPaint(() => {
+      if (cancelled) return;
+      try {
+        const result = measureSync('export-estimate', () =>
+          latestCallbacksRef.current?.getExportEstimates?.() ?? { capsule: null, full: null },
+        );
         if (!cancelled) setEstimates(result);
-      })
-      .catch((err) => {
+      } catch (err) {
         console.warn('[TimelineBar] estimate computation failed:', err);
         if (!cancelled) setEstimates({ capsule: null, full: null });
-      });
-    return () => { cancelled = true; };
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      cancelSchedule();
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transferDialog.open, downloadActionAvailable]);
+  }, [transferDialog.open, transferDialog.tab, downloadActionAvailable]);
 
   // Cleanup: resume on unmount if transfer caused pause.
   // Uses latestCallbacksRef so cleanup calls the current handler even if

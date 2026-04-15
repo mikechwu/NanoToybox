@@ -14,6 +14,21 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, act, fireEvent } from '@testing-library/react';
+
+// Mock the after-paint scheduler so estimate work fires synchronously
+// under test. Real production code uses rAF + setTimeout to yield a
+// paint before expensive work; that timing is covered by manual
+// verification, not these unit tests. MUST be a vi.fn so individual
+// tests can override its implementation (e.g. to capture the callback
+// for close/tab-switch cancellation tests).
+vi.mock('../../lab/js/components/timeline-after-paint', () => ({
+  scheduleAfterNextPaint: vi.fn((work: () => void) => {
+    work();
+    return () => {};
+  }),
+}));
+
+import { scheduleAfterNextPaint } from '../../lab/js/components/timeline-after-paint';
 import { useAppStore } from '../../lab/js/store/app-store';
 import type { TimelineCallbacks } from '../../lab/js/store/app-store';
 import { TimelineBar } from '../../lab/js/components/TimelineBar';
@@ -34,6 +49,29 @@ function installSubsystemWithCallbacks(mode: 'off' | 'ready' | 'active', callbac
   useAppStore.getState().installTimelineUI({ ...defaultCallbacks, ...callbacks }, mode);
 }
 
+/**
+ * Override the scheduler mock for a single test so that scheduled work
+ * is captured instead of running synchronously. Lets the test decide
+ * when (or whether) to fire the post-paint tick — used by cancellation
+ * tests that want to assert "the work was scheduled" independently of
+ * "the work ran."
+ *
+ * Returns `{ get }` where `get()` returns the captured work, or `null`
+ * if either (a) nothing has been scheduled yet or (b) the effect's
+ * cleanup already invoked the canceller. Asserting on `get()` directly
+ * therefore both checks the presence/absence of a pending work item
+ * and (via `get()?.()` to fire it) lets the test simulate the paint
+ * tick explicitly.
+ */
+function captureScheduledWork(): { get: () => (() => void) | null } {
+  let pending: (() => void) | null = null;
+  vi.mocked(scheduleAfterNextPaint).mockImplementation((work) => {
+    pending = work;
+    return () => { pending = null; };
+  });
+  return { get: () => pending };
+}
+
 // jsdom has no ResizeObserver. TimelineBar's width-aware restart clamp
 // instantiates one in a layout effect, so we install a global no-op stub
 // for this file. Individual tests can replace it to capture callbacks.
@@ -45,6 +83,13 @@ beforeEach(() => {
       disconnect() {}
     };
   }
+  // Reset the scheduler mock to the synchronous default before each
+  // test so that per-case overrides (e.g. captured-work pattern for
+  // cancellation tests) do not leak into the next test.
+  vi.mocked(scheduleAfterNextPaint).mockImplementation((work) => {
+    work();
+    return () => {};
+  });
 });
 
 describe('TimelineBar unified shell', () => {
@@ -1470,7 +1515,7 @@ describe('TimelineBar unified shell', () => {
     expect(getExportEstimates).not.toHaveBeenCalled();
   });
 
-  it('getExportEstimates IS called when Download is actionable', async () => {
+  it('getExportEstimates IS called when Download tab is selected', async () => {
     const getExportEstimates = vi.fn(() => ({ capsule: '100 KB', full: '1 MB' }));
     act(() => {
       installWithPublish({}); // provides both onExportHistory and onPublishCapsule
@@ -1491,10 +1536,529 @@ describe('TimelineBar unified shell', () => {
     });
     render(<TimelineBar />);
 
+    // Dialog opens on Share by default when both destinations are
+    // available — estimate must NOT fire yet because Share users have
+    // not asked for Download details.
     act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(getExportEstimates).not.toHaveBeenCalled();
+
+    // User clicks the Download tab → this is the real trigger for the
+    // estimate work. Tab is identified by role + text content.
+    act(() => {
+      const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      const downloadTab = tabs.find((t) => t.textContent?.trim() === 'Download');
+      if (!downloadTab) throw new Error('Download tab not found');
+      downloadTab.click();
+    });
     await act(async () => { await Promise.resolve(); });
 
     expect(getExportEstimates).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Phase 4 new tests: performance contract for the Transfer INP fix ──
+
+  // Covers the exact regression that motivated the fix: when both Share
+  // and Download are wired, the dialog defaults to Share and must NOT
+  // compute Download estimates (which requires a full artifact build +
+  // JSON.stringify of history data — the INP cost in the Chrome UX
+  // report).
+  it('Share-default open does not compute Download estimates', async () => {
+    const getExportEstimates = vi.fn(() => ({ capsule: '100 KB', full: '1 MB' }));
+    act(() => {
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          onExportHistory: vi.fn(async () => 'saved' as const),
+          onPublishCapsule: vi.fn(async () => ({ shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPauseForExport: vi.fn(() => true),
+          onResumeFromExport: vi.fn(),
+          getExportEstimates,
+        },
+        'active',
+        { full: true, capsule: true },
+      );
+      setActiveRange();
+    });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    await act(async () => { await Promise.resolve(); });
+
+    // Precondition: dialog is on the Share panel.
+    expect(document.querySelector('[role="tabpanel"][aria-label="Share"]')).not.toBeNull();
+    // Performance contract: no estimate work on the Share path.
+    expect(getExportEstimates).not.toHaveBeenCalled();
+  });
+
+  // Close-before-schedule cancellation: if the user closes the dialog
+  // after the effect has scheduled work but before the after-paint work
+  // fires, the captured result must not update estimate state.
+  it('closing the dialog cancels a pending estimate schedule', async () => {
+    const getExportEstimates = vi.fn(() => ({ capsule: '100 KB', full: '1 MB' }));
+    const sched = captureScheduledWork();
+
+    act(() => {
+      installWithPublish({});
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          onExportHistory: vi.fn(async () => 'saved' as const),
+          onPublishCapsule: vi.fn(async () => ({ shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPauseForExport: vi.fn(() => true),
+          onResumeFromExport: vi.fn(),
+          getExportEstimates,
+        },
+        'active',
+        { full: true, capsule: true },
+      );
+      setActiveRange();
+    });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    // Open is on Share — no schedule yet.
+    expect(sched.get()).toBeNull();
+
+    // Switch to Download — effect schedules work.
+    act(() => {
+      const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      tabs.find((t) => t.textContent?.trim() === 'Download')?.click();
+    });
+    expect(typeof sched.get()).toBe('function');
+
+    // Close the dialog before firing the scheduled work.
+    act(() => {
+      const cancel = document.querySelector('.timeline-transfer-dialog__cancel') as HTMLButtonElement | null;
+      cancel?.click();
+    });
+
+    // Effect cleanup should have reset the captured work to null via
+    // the helper's returned canceller. Even if a stale reference
+    // survived, firing it must not set state (guarded by `cancelled`).
+    expect(sched.get()).toBeNull();
+    expect(getExportEstimates).not.toHaveBeenCalled();
+  });
+
+  // Tab-switch cancellation: if the user switches back to Share before
+  // the captured work fires, firing it later must not land stale state.
+  it('switching tabs cancels a pending estimate schedule', async () => {
+    const getExportEstimates = vi.fn(() => ({ capsule: '100 KB', full: '1 MB' }));
+    const sched = captureScheduledWork();
+
+    act(() => {
+      installWithPublish({});
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          onExportHistory: vi.fn(async () => 'saved' as const),
+          onPublishCapsule: vi.fn(async () => ({ shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPauseForExport: vi.fn(() => true),
+          onResumeFromExport: vi.fn(),
+          getExportEstimates,
+        },
+        'active',
+        { full: true, capsule: true },
+      );
+      setActiveRange();
+    });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+
+    // Download tab → schedule captured.
+    act(() => {
+      const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      tabs.find((t) => t.textContent?.trim() === 'Download')?.click();
+    });
+    const capturedWork = sched.get();
+    expect(typeof capturedWork).toBe('function');
+
+    // Switch back to Share — cleanup should reset the captured work.
+    act(() => {
+      const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      tabs.find((t) => t.textContent?.trim() === 'Share')?.click();
+    });
+    expect(sched.get()).toBeNull();
+
+    // Fire the stale captured work — must NOT invoke the estimate
+    // callback (the effect's `cancelled` flag guards the write).
+    act(() => { capturedWork?.(); });
+    expect(getExportEstimates).not.toHaveBeenCalled();
+  });
+
+  // One-compute-per-session: a user pinging Download ⇄ Share multiple
+  // times within one open must only trigger the expensive estimate once.
+  // Reset happens on open/close, not on tab change.
+  it('tab ping-pong does not recompute estimates within one session', async () => {
+    const getExportEstimates = vi.fn(() => ({ capsule: '100 KB', full: '1 MB' }));
+    act(() => {
+      installWithPublish({});
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          onExportHistory: vi.fn(async () => 'saved' as const),
+          onPublishCapsule: vi.fn(async () => ({ shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPauseForExport: vi.fn(() => true),
+          onResumeFromExport: vi.fn(),
+          getExportEstimates,
+        },
+        'active',
+        { full: true, capsule: true },
+      );
+      setActiveRange();
+    });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+
+    function clickTab(label: 'Download' | 'Share') {
+      act(() => {
+        const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+        tabs.find((t) => t.textContent?.trim() === label)?.click();
+      });
+    }
+
+    clickTab('Download');
+    await act(async () => { await Promise.resolve(); });
+    clickTab('Share');
+    await act(async () => { await Promise.resolve(); });
+    clickTab('Download');
+    await act(async () => { await Promise.resolve(); });
+    clickTab('Share');
+    await act(async () => { await Promise.resolve(); });
+    clickTab('Download');
+    await act(async () => { await Promise.resolve(); });
+
+    expect(getExportEstimates).toHaveBeenCalledTimes(1);
+  });
+
+  // Download-only first open (the worst remaining INP path — the dialog
+  // opens directly to Download, so the tab guard is already satisfied
+  // and the only thing protecting the click is the after-paint
+  // schedule). Lock in the "dialog renders before heavy work" guarantee.
+  it('Download-only open renders pending state before running estimate', async () => {
+    const getExportEstimates = vi.fn(() => ({ capsule: '100 KB', full: '1 MB' }));
+    const sched = captureScheduledWork();
+
+    act(() => {
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          onExportHistory: vi.fn(async () => 'saved' as const),
+          // NO onPublishCapsule — dialog opens directly to Download.
+          onPauseForExport: vi.fn(() => true),
+          onResumeFromExport: vi.fn(),
+          getExportEstimates,
+        },
+        'active',
+        { full: true, capsule: true },
+      );
+      setActiveRange();
+    });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+
+    // Precondition: dialog opened directly to Download.
+    expect(document.querySelector('[role="tabpanel"][aria-label="Download"]')).not.toBeNull();
+
+    // Estimate slots must render the pending (Estimating…) state.
+    const slots = Array.from(document.querySelectorAll('.timeline-transfer-dialog__estimate'));
+    expect(slots.length).toBeGreaterThan(0);
+    expect(slots.every((s) => s.classList.contains('timeline-transfer-dialog__estimate--muted'))).toBe(true);
+
+    // Heavy work must not have run yet — only scheduled.
+    expect(getExportEstimates).not.toHaveBeenCalled();
+    const pending = sched.get();
+    expect(typeof pending).toBe('function');
+
+    // Simulate the post-paint tick → work fires, estimate populates.
+    act(() => { pending?.(); });
+    expect(getExportEstimates).toHaveBeenCalledTimes(1);
+
+    // DOM contract: slots must drop the muted class and render the
+    // computed sizes. Verifies the pending→resolved transition.
+    const resolved = Array.from(document.querySelectorAll('.timeline-transfer-dialog__estimate'));
+    expect(resolved.some((s) => s.textContent === '100 KB')).toBe(true);
+    expect(resolved.some((s) => s.textContent === '1 MB')).toBe(true);
+    expect(resolved.some((s) => s.classList.contains('timeline-transfer-dialog__estimate--muted'))).toBe(false);
+  });
+
+  // Unmount-after-schedule: if the component unmounts between the effect
+  // scheduling work and the after-paint tick firing, the captured work
+  // must NOT set state. This is the case the effect's `cancelled` flag
+  // exists for (cancelAnimationFrame is a no-op once the rAF has fired,
+  // so only the flag prevents a post-unmount setState).
+  it('unmounting cancels a pending estimate schedule', async () => {
+    const getExportEstimates = vi.fn(() => ({ capsule: '100 KB', full: '1 MB' }));
+    const sched = captureScheduledWork();
+
+    act(() => {
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          onExportHistory: vi.fn(async () => 'saved' as const),
+          onPauseForExport: vi.fn(() => true),
+          onResumeFromExport: vi.fn(),
+          getExportEstimates,
+        },
+        'active',
+        { full: true, capsule: true },
+      );
+      setActiveRange();
+    });
+    const { unmount } = render(<TimelineBar />);
+
+    // Open — Download-only, schedule captured.
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    const captured = sched.get();
+    expect(typeof captured).toBe('function');
+
+    // Unmount → effect cleanup must set cancelled = true AND invoke
+    // the canceller (which in this mock resets the captured pointer).
+    unmount();
+    expect(sched.get()).toBeNull();
+
+    // Firing the previously-captured work must be a no-op — the
+    // `cancelled` flag inside the effect closure suppresses the write.
+    // We also verify the estimate callback was not invoked.
+    act(() => { captured?.(); });
+    expect(getExportEstimates).not.toHaveBeenCalled();
+  });
+
+  // Session-cache reset: closing then reopening the dialog must
+  // recompute estimates. Without this, the "one-compute-per-session"
+  // guard could silently regress to "compute once ever."
+  it('reopening the dialog recomputes estimates (cache resets per session)', async () => {
+    const getExportEstimates = vi.fn(() => ({ capsule: '100 KB', full: '1 MB' }));
+    act(() => {
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          onExportHistory: vi.fn(async () => 'saved' as const),
+          onPauseForExport: vi.fn(() => true),
+          onResumeFromExport: vi.fn(),
+          getExportEstimates,
+        },
+        'active',
+        { full: true, capsule: true },
+      );
+      setActiveRange();
+    });
+    render(<TimelineBar />);
+
+    // First open → first compute (Download-only flow).
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    expect(getExportEstimates).toHaveBeenCalledTimes(1);
+
+    // Close.
+    act(() => {
+      const cancel = document.querySelector('.timeline-transfer-dialog__cancel') as HTMLButtonElement | null;
+      cancel?.click();
+    });
+    expect(document.querySelector('.timeline-transfer-dialog')).toBeNull();
+
+    // Reopen → second compute (session cache was reset by
+    // openTransfer()/closeTransferSession()'s setEstimates({}) calls).
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    expect(getExportEstimates).toHaveBeenCalledTimes(2);
+  });
+
+  // Robustness: if onPauseForExport throws, the Transfer click must NOT
+  // be aborted — the dialog must still open, and the caller must treat
+  // the pause as "did not happen" so closeTransferSession doesn't
+  // resume a never-paused simulation. Without this guard, a throwing
+  // pause callback would make the Transfer button appear unresponsive
+  // with no user-visible signal.
+  it('Transfer click still opens the dialog when onPauseForExport throws', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onPause = vi.fn(() => { throw new Error('pause handler blew up'); });
+    act(() => {
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          onExportHistory: vi.fn(async () => 'saved' as const),
+          onPauseForExport: onPause,
+          onResumeFromExport: vi.fn(),
+        },
+        'active',
+        { full: true, capsule: true },
+      );
+      setActiveRange();
+    });
+    render(<TimelineBar />);
+
+    // Clicking must not throw, despite the pause callback throwing.
+    expect(() => {
+      act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+    }).not.toThrow();
+
+    // Dialog is open — user has a usable surface.
+    expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
+    // Failure was logged (diagnosable), not silently swallowed.
+    expect(warnSpy).toHaveBeenCalled();
+    const warnArgs = warnSpy.mock.calls.find((args) =>
+      typeof args[0] === 'string' && args[0].includes('onPauseForExport threw'),
+    );
+    expect(warnArgs).toBeDefined();
+
+    warnSpy.mockRestore();
+  });
+
+  // Robustness: a failed estimate run (both fields null) must NOT be
+  // cached like a successful run. Tab-switching Download → Share →
+  // Download should retry. This covers transient failures (e.g. a
+  // momentary store-state race) without locking the user into
+  // "Unavailable" for the entire dialog session.
+  it('failed estimates retry on tab switch (not cached like successes)', async () => {
+    let callCount = 0;
+    const getExportEstimates = vi.fn(() => {
+      callCount++;
+      if (callCount === 1) throw new Error('transient failure');
+      return { capsule: '100 KB', full: '1 MB' };
+    });
+    act(() => {
+      installWithPublish({});
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          onExportHistory: vi.fn(async () => 'saved' as const),
+          onPublishCapsule: vi.fn(async () => ({ shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPauseForExport: vi.fn(() => true),
+          onResumeFromExport: vi.fn(),
+          getExportEstimates,
+        },
+        'active',
+        { full: true, capsule: true },
+      );
+      setActiveRange();
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+
+    // First Download visit → throws → UI shows "Unavailable".
+    act(() => {
+      const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      tabs.find((t) => t.textContent?.trim() === 'Download')?.click();
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(getExportEstimates).toHaveBeenCalledTimes(1);
+
+    // Switch to Share, then back to Download → retry (cache not held
+    // on failures). Second call succeeds and populates real sizes.
+    act(() => {
+      const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      tabs.find((t) => t.textContent?.trim() === 'Share')?.click();
+    });
+    act(() => {
+      const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      tabs.find((t) => t.textContent?.trim() === 'Download')?.click();
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(getExportEstimates).toHaveBeenCalledTimes(2);
+
+    // Successful result must populate the DOM.
+    const resolved = Array.from(document.querySelectorAll('.timeline-transfer-dialog__estimate'));
+    expect(resolved.some((s) => s.textContent === '100 KB')).toBe(true);
+    expect(resolved.some((s) => s.textContent === '1 MB')).toBe(true);
+
+    // After success, further toggles must NOT recompute (normal cache).
+    act(() => {
+      const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      tabs.find((t) => t.textContent?.trim() === 'Share')?.click();
+    });
+    act(() => {
+      const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      tabs.find((t) => t.textContent?.trim() === 'Download')?.click();
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(getExportEstimates).toHaveBeenCalledTimes(2);
+
+    warnSpy.mockRestore();
+  });
+
+  // Pause-lifecycle coverage for the OAuth-return Share resume path.
+  // After a signed-out user completes OAuth from the Share tab, main.ts
+  // calls requestShareTabOpen() to carry the resume intent back through
+  // the store. The effect in TimelineBar consumes the flag, opens the
+  // dialog on Share, AND re-invokes pauseForTransfer(). If a future
+  // refactor removed the pause call from that effect, the Share-default
+  // open tests would still pass but the resume path would silently
+  // stop pausing the simulation before publish.
+  it('pause fires on the OAuth-return Share resume path', async () => {
+    const onPause = vi.fn(() => true);
+    act(() => {
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          onExportHistory: vi.fn(async () => 'saved' as const),
+          onPublishCapsule: vi.fn(async () => ({ shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' })),
+          onPauseForExport: onPause,
+          onResumeFromExport: vi.fn(),
+        },
+        'active',
+        { full: true, capsule: true },
+      );
+      useAppStore.getState().setAuthSignedIn({ userId: 'test-user', displayName: 'Test User' });
+      setActiveRange();
+    });
+    render(<TimelineBar />);
+
+    // Precondition: dialog NOT open yet (user has not clicked Transfer).
+    expect(document.querySelector('.timeline-transfer-dialog')).toBeNull();
+    expect(onPause).not.toHaveBeenCalled();
+
+    // Simulate the OAuth-return flow: the returning-from-auth handler
+    // in main.ts flips the store flag. The TimelineBar effect observes
+    // it, consumes it, opens Share, and calls pauseForTransfer().
+    act(() => { useAppStore.getState().requestShareTabOpen(); });
+    await act(async () => { await Promise.resolve(); });
+
+    // The flag must have been consumed (idempotent across re-renders).
+    expect(useAppStore.getState().shareTabOpenRequested).toBe(false);
+    // Share panel must be rendered.
+    expect(document.querySelector('[role="tabpanel"][aria-label="Share"]')).not.toBeNull();
+    // Pause must have fired exactly once on this path — not zero,
+    // not twice.
+    expect(onPause).toHaveBeenCalledTimes(1);
+  });
+
+  // Pause-lifecycle coverage for the Share-default open path. The
+  // deferred-pause hardening in Phase 2b relies on pauseForTransfer()
+  // being called from BOTH open paths — if the Share-default path
+  // silently stopped calling it, the transfer-pause User Timing entry
+  // would be missing there and a future deferred-pause split would
+  // regress.
+  it('pause fires on the Share-default open path (not only Download-only)', () => {
+    const onPause = vi.fn(() => true);
+    act(() => {
+      useAppStore.getState().installTimelineUI(
+        {
+          ...defaultCallbacks,
+          onExportHistory: vi.fn(async () => 'saved' as const),
+          onPublishCapsule: vi.fn(async () => ({ shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' })),
+          onPauseForExport: onPause,
+          onResumeFromExport: vi.fn(),
+        },
+        'active',
+        { full: true, capsule: true },
+      );
+      useAppStore.getState().setAuthSignedIn({ userId: 'test-user', displayName: 'Test User' });
+      setActiveRange();
+    });
+    render(<TimelineBar />);
+
+    act(() => { (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click(); });
+
+    // Precondition: dialog defaulted to Share (both destinations wired).
+    expect(document.querySelector('[role="tabpanel"][aria-label="Share"]')).not.toBeNull();
+    // Pause must still have fired — the open-dialog lifecycle is
+    // destination-agnostic; pauseForTransfer() is called before the
+    // tab is chosen.
+    expect(onPause).toHaveBeenCalledTimes(1);
   });
 
   // ── Restart anchor layout regression ──

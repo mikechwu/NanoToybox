@@ -48,6 +48,7 @@ These checks require a real browser with WebGL and cannot run in headless CI. Ru
 - [ ] Placement camera framing: preview does not cause camera snap, drag past boundary works
 - [ ] Review mode UI lock: enter review → dock Add/mode/Pause disabled with hints → Settings Add Molecule/Clear disabled → Live/Restart exit re-enables
 - [ ] History export: record a timeline with 2+ molecules → open export dialog → export capsule (`.atomdojo`) or full (`.atomdojo-history`) → verify file contains stable atom IDs and metadata
+- [ ] Transfer click INP: on the Download tab, click Transfer → dialog appears immediately (before file sizes fill in); size estimates populate after first paint
 - [ ] Dock stability: Pause ↔ Resume toggle does not shift neighboring controls
 - [ ] Bonded groups: panel expanded by default with Collapse/Expand disclosure hint visible; per-row inline color chip opens preset swatch popover with responsive layout; authored color overrides persist across theme/structure changes; persistent tracked highlight is feature-gated off (hover preview remains active)
 - [ ] Verify bonded-group color persists across topology changes (group merge/split)
@@ -168,7 +169,7 @@ src/ui/ (13 files):             │    sheet, bonded-groups panel,
 - **React UI** — all UI components are React-authoritative with Zustand store, glassmorphic CSS, responsive layout (phone/tablet/desktop); panel fixed width 250px with scrollbar-gutter stable
 - **Performance optimized** — InstancedMesh rendering (2 draw calls), on-the-fly Tersoff kernel (45% faster), spatial-hash neighbor/bond search (O(N))
 - **Wasm Tersoff kernel** — deployed and enabled by default, automatic JS fallback
-- **CI/CD** — GitHub Actions: typecheck, unit tests, build, E2E, deploy smoke, Python physics tests (120 test files, 2130 tests; run `npx vitest run` for the authoritative live total)
+- **CI/CD** — GitHub Actions: typecheck, unit tests, build, E2E, deploy smoke, Python physics tests (120 test files, 2208 tests; run `npx vitest run` for the authoritative live total)
 - **Containment boundary** — dynamic soft wall with Contain/Remove modes, live atom count, auto-scaling radius
 - **Placement camera framing** — smooth camera assist keeps scene + preview visible during molecule placement; continuous drag with pointer capture and per-frame cursor-lock reprojection
 - **Review mode UI lock** — display-only enforcement across all React surfaces during timeline review; centralized selector, runtime guards, ActionHint tooltips (desktop), transient status hints (mobile)

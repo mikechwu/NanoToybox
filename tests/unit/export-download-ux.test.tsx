@@ -12,11 +12,33 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, act, fireEvent } from '@testing-library/react';
+
+// Mock the after-paint scheduler so the estimate effect fires
+// synchronously under test. Real production code yields a paint via
+// rAF + setTimeout; that timing is covered by manual verification.
+// MUST be a vi.fn so individual tests can override the implementation.
+vi.mock('../../lab/js/components/timeline-after-paint', () => ({
+  scheduleAfterNextPaint: vi.fn((work: () => void) => {
+    work();
+    return () => {};
+  }),
+}));
+
+import { scheduleAfterNextPaint } from '../../lab/js/components/timeline-after-paint';
 import { formatBytes, generateExportFileName, saveHistoryFile } from '../../lab/js/runtime/history-export';
 import { useAppStore } from '../../lab/js/store/app-store';
 import type { TimelineCallbacks } from '../../lab/js/store/app-store';
 import { TimelineBar } from '../../lab/js/components/TimelineBar';
 import { TimelineExportDialog, useExportDialog } from '../../lab/js/components/timeline-export-dialog';
+
+// Reset the scheduler mock to synchronous default before each test so
+// per-case overrides do not leak into the next test.
+beforeEach(() => {
+  vi.mocked(scheduleAfterNextPaint).mockImplementation((work) => {
+    work();
+    return () => {};
+  });
+});
 
 // ── formatBytes ──
 
@@ -358,6 +380,11 @@ describe('TimelineBar export pause lifecycle', () => {
   });
 
   it('computes and displays estimates after dialog opens', async () => {
+    // Invariant: NO onPublishCapsule — dialog opens directly to
+    // Download. If a future refactor adds a default publish callback
+    // and flips this to Share-default, the Download-panel precondition
+    // assertion below will fail first with a clear signal instead of
+    // the estimate assertions failing for a misleading reason.
     const cbs = makeCallbacks({
       onPauseForExport: () => true,
       onResumeFromExport: noop,
@@ -370,12 +397,14 @@ describe('TimelineBar export pause lifecycle', () => {
     // Open
     act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
 
-    // Before microtask: should show Estimating
-    expect(document.querySelectorAll('.timeline-transfer-dialog__estimate--muted').length).toBeGreaterThan(0);
+    // Precondition: dialog opened on Download (no publish available).
+    expect(document.querySelector('[role="tabpanel"][aria-label="Download"]')).not.toBeNull();
 
-    // After microtask: estimates should populate
-    await act(async () => { await Promise.resolve(); });
-
+    // Mocked scheduler fires work synchronously, so estimates should
+    // already be populated — the muted (Estimating…) state is
+    // covered by the Download-only render-before-compute test in
+    // timeline-bar-lifecycle.test.tsx (which overrides the mock to
+    // capture without firing).
     const slots = document.querySelectorAll('.timeline-transfer-dialog__estimate');
     const texts = Array.from(slots).map((s) => s.textContent);
     expect(texts).toContain('256 KB');
@@ -383,6 +412,7 @@ describe('TimelineBar export pause lifecycle', () => {
   });
 
   it('estimates clear on dialog close', async () => {
+    // Invariant: Download-only setup (see sibling test for rationale).
     const cbs = makeCallbacks({
       onPauseForExport: () => true,
       onResumeFromExport: noop,
@@ -392,9 +422,9 @@ describe('TimelineBar export pause lifecycle', () => {
     act(() => { setupActiveTimeline(cbs); });
     render(<TimelineBar />);
 
-    // Open and let estimates populate
+    // Open and let estimates populate (scheduler mock fires synchronously).
     act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
-    await act(async () => { await Promise.resolve(); });
+    expect(document.querySelector('[role="tabpanel"][aria-label="Download"]')).not.toBeNull();
     expect(document.querySelectorAll('.timeline-transfer-dialog__estimate').length).toBeGreaterThan(0);
 
     // Cancel
@@ -422,6 +452,7 @@ describe('TimelineBar export pause lifecycle', () => {
   });
 
   it('shows "Unavailable" when getExportEstimates returns null for a kind', async () => {
+    // Invariant: Download-only setup (no onPublishCapsule).
     const cbs = makeCallbacks({
       onPauseForExport: () => true,
       onResumeFromExport: noop,
@@ -432,7 +463,7 @@ describe('TimelineBar export pause lifecycle', () => {
     render(<TimelineBar />);
 
     act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
-    await act(async () => { await Promise.resolve(); });
+    expect(document.querySelector('[role="tabpanel"][aria-label="Download"]')).not.toBeNull();
 
     const slots = document.querySelectorAll('.timeline-transfer-dialog__estimate');
     const texts = Array.from(slots).map((s) => s.textContent);
@@ -465,6 +496,10 @@ describe('TimelineBar export pause lifecycle', () => {
   });
 
   it('shows "Unavailable" when getExportEstimates throws', async () => {
+    // Invariant: Download-only setup (no onPublishCapsule). The try/catch
+    // in the estimate effect catches the throw synchronously under the
+    // mocked scheduler and falls back to { capsule: null, full: null },
+    // which EstimateSlot renders as "Unavailable".
     const cbs = makeCallbacks({
       onPauseForExport: () => true,
       onResumeFromExport: noop,
@@ -475,8 +510,7 @@ describe('TimelineBar export pause lifecycle', () => {
     render(<TimelineBar />);
 
     act(() => { fireEvent.click(document.querySelector('.timeline-transfer-trigger')!); });
-    // Let the microtask with .catch() settle
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(document.querySelector('[role="tabpanel"][aria-label="Download"]')).not.toBeNull();
 
     const slots = document.querySelectorAll('.timeline-transfer-dialog__estimate');
     const texts = Array.from(slots).map((s) => s.textContent);

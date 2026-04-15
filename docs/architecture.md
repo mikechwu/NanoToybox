@@ -115,11 +115,14 @@ NanoToybox/
 │   │   │   ├── ActionHint.tsx     # Shared hover/focus tooltip (supporting component); anchorClassName/anchorStyle props for layout-aware wrapping
 │   │   │   ├── ReviewLockedControl.tsx    # Review-lock wrapper (span-based, for dock/chooser controls)
 │   │   │   ├── ReviewLockedListItem.tsx   # Review-lock list item (li-native, for settings rows)
-│   │   │   ├── TimelineBar.tsx       # Composition layer: 2-column shell (mode rail + timeline lane), imports from 3 helper modules
+│   │   │   ├── TimelineBar.tsx       # Composition layer: 2-column shell (mode rail + timeline lane), imports from 8 helper modules
 │   │   │   ├── timeline-format.ts   # formatTime, getTimelineProgress, getRestartAnchorStyle
 │   │   │   ├── timeline-mode-switch.tsx # TimelineModeSwitch: label (off/ready) or bidirectional 2-segment switch (live/review)
 │   │   │   ├── timeline-clear-dialog.tsx # TimelineClearDialog, useClearConfirm hook, ClearTrigger icon button
 │   │   │   ├── timeline-export-dialog.tsx # TimelineExportDialog, TimelineExportKind ('full' | 'capsule'), export trigger and confirmation UI
+│   │   │   ├── timeline-transfer-dialog.tsx # Unified Transfer dialog (Download + Share tabs), five-state Share panel + popup-blocked sub-panel
+│   │   │   ├── timeline-after-paint.ts # scheduleAfterNextPaint(work) → canceller; rAF+setTimeout(0) yields a paint before expensive work, with paired rAF/cAF fallback to setTimeout/clearTimeout via globalThis
+│   │   │   ├── timeline-performance.ts # measureSync<T>(name, work) User Timing wrapper; mark/measure/clear failures never replace work()'s return value or thrown error
 │   │   │   └── timeline-hints.ts     # Single source of truth for all timeline tooltip copy (TIMELINE_HINTS constant)
 │   │   ├── store/
 │   │   │   ├── app-store.ts      # Zustand store for UI state; BondedGroupColorAssignment has atomIds (canonical) + atomIndices (authoring snapshot); export capabilities: { full, capsule }; BondedGroupSummary re-exported from src/history/bonded-group-projection
@@ -383,7 +386,7 @@ Trajectory → Force Decomposition → NPY Export → Descriptors → MLP → Pr
 
 ### TimelineBar Layout
 
-`TimelineBar.tsx` is a composition layer that imports from three helper modules and renders one of three mode-specific sub-components (`TimelineBarOff`, `TimelineBarReady`, `TimelineBarActive`) based on `timelineRecordingMode`.
+`TimelineBar.tsx` is a composition layer that imports from eight helper modules and renders one of three mode-specific sub-components (`TimelineBarOff`, `TimelineBarReady`, `TimelineBarActive`) based on `timelineRecordingMode`.
 
 **2-column shell** (`TimelineShell`):
 ```
@@ -401,6 +404,11 @@ CSS variables: `--tl-rail-width` (96px desktop, 84px mobile), `--tl-time-width` 
 - `timeline-format.ts` — `formatTime(ps)` (unit-adaptive: fs/ps/ns/us), `getTimelineProgress()` (clamped 0-1 ratio), `getRestartAnchorStyle()` (clamped left %). Width-fit enforced by `--tl-time-width`.
 - `timeline-mode-switch.tsx` — `TimelineModeSwitch` renders a simple label (`ModeLabel`) for off/ready, or a bidirectional 2-segment vertical switch (`ModeSwitch`) for live/review. In active states, both segments are clickable: live→review via `onEnterReview` (gated by `hasRange`), review→live via `onReturnToLive` (gated by `canReturnToLive`). The `onEnterReview` callback wires to `coordinator.enterReviewAtCurrentTime()`.
 - `timeline-clear-dialog.tsx` — `useClearConfirm` hook (open/request/cancel/confirm/reset), `TimelineClearDialog` (alertdialog with focus trap and Escape handling), `ClearTrigger` (close-icon button).
+- `timeline-export-dialog.tsx` — `TimelineExportDialog` + `TimelineExportKind` (`'full' | 'capsule'`); export trigger and confirmation UI for Download-tab artifact flow.
+- `timeline-transfer-dialog.tsx` — unified Transfer dialog hosting Download and Share tabs; five Share-panel states (success / loading / unverified / signed-out / signed-in) plus popup-blocked sub-panel and `ShareActions` sub-component.
+- `timeline-after-paint.ts` — `scheduleAfterNextPaint(work) → canceller`: `requestAnimationFrame(() => setTimeout(work, 0))` yields a paint before expensive work runs. Globals read through `globalThis` with a paired rAF/cAF fallback to `setTimeout`/`clearTimeout` so cancellation semantics stay correct in non-browser environments.
+- `timeline-performance.ts` — `measureSync<T>(name, work)`: wraps `work` in `performance.mark`/`measure`/`clearMarks` for DevTools User Timing. Instrumentation is diagnostic-only — a throw in any mark/measure/clear call never replaces `work()`'s return value or thrown error.
+- `timeline-hints.ts` — single source of truth for all timeline tooltip copy (`TIMELINE_HINTS` constant).
 
 **Mode-specific rendering:**
 - **Off:** "Start Recording" overlay button on the track (ActionHint-wrapped), no action slot.
@@ -592,7 +600,7 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - **placement-camera-framing.ts** — pure camera-basis framing solver for placement preview: camera-space projection, adaptive target-shift search (5×5 grid + refinement), overflow deadband, visible-anchor filtering. No THREE/renderer/store imports.
 - **review-mode-action-hints.ts** — transient status hint for review-locked actions; uses `REVIEW_LOCK_STATUS` (fuller copy) via store `setStatusText` with auto-clear timer from `CONFIG.reviewModeUi.statusHintMs`
 
-**Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, AccountControl, TopRightControls, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons, ActionHint. **Hint infrastructure:** ActionHint wraps 5 timeline controls (Start Recording, Restart here, Simulation segment, Review segment, ClearTrigger) plus ReviewLockedControl and Segmented; desktop/keyboard only (touch hidden via CSS media query). timeline-hints.ts is the single source of truth for all timeline tooltip copy (`TIMELINE_HINTS` constant). **Timeline helper modules** (composed by TimelineBar): timeline-format.ts (time formatting + progress), timeline-mode-switch.tsx (mode rail widget), timeline-clear-dialog.tsx (clear confirmation dialog + trigger), timeline-hints.ts (tooltip copy). Imperative controllers remain only for PlacementController and StatusController (hint-only).
+**Primary user-facing surfaces** (in the React tree): DockLayout, DockBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay, AccountControl, TopRightControls, CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineBar. **Supporting subcomponents** (composed by primary surfaces): Segmented, Icons, ActionHint. **Hint infrastructure:** ActionHint wraps 5 timeline controls (Start Recording, Restart here, Simulation segment, Review segment, ClearTrigger) plus ReviewLockedControl and Segmented; desktop/keyboard only (touch hidden via CSS media query). timeline-hints.ts is the single source of truth for all timeline tooltip copy (`TIMELINE_HINTS` constant). **Timeline helper modules** (composed by TimelineBar): timeline-format.ts (time formatting + progress), timeline-mode-switch.tsx (mode rail widget), timeline-clear-dialog.tsx (clear confirmation dialog + trigger), timeline-export-dialog.tsx (Download-tab artifact UI), timeline-transfer-dialog.tsx (unified Download/Share dialog), timeline-after-paint.ts (paint-deferred scheduler for INP-sensitive work), timeline-performance.ts (User Timing `measureSync` wrapper), timeline-hints.ts (tooltip copy). Imperative controllers remain only for PlacementController and StatusController (hint-only).
 
 **Camera callbacks** registered by main.ts via `cameraCallbacks` in the store:
 - `onCenterObject()` — one-shot camera center

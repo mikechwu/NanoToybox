@@ -170,7 +170,7 @@ npm run dev          # Vite dev server with HMR (frontend only)
 npm run build        # production build → dist/
 npm run preview      # preview built output
 npm run typecheck    # TypeScript type-check (frontend + functions + cron)
-npm run test:unit    # Vitest unit tests (2130 tests across 120 files)
+npm run test:unit    # Vitest unit tests (2208 tests across 120 files)
 npm run test:e2e     # Playwright E2E against Vite dev (frontend only)
 npm run test:e2e:pages-dev  # Playwright E2E against `wrangler pages dev` (Functions + D1/R2 bindings)
 ```

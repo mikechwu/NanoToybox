@@ -129,7 +129,7 @@ Phase 5 introduced the Cloudflare-backed share/publish stack (Pages Functions + 
 | Audit | `audit.test.ts` | Day-keyed counters, `hashIp` properties, and the `MAX_AUDIT_REASON_LENGTH` defensive-truncation path. |
 | Pages Functions handlers | `admin-gate.test.ts`, `publish-endpoint.test.ts`, `report-endpoint.test.ts`, `admin-delete-endpoint.test.ts`, `admin-orphans-endpoint.test.ts`, `admin-sessions-endpoint.test.ts` | Handler-level tests for `functions/**`. Need Cloudflare Workers globals (`PagesFunction`, `R2Bucket`, `D1Database`) — typechecked under `tsconfig.functions.json`. |
 | Cron Worker | `cron-sweeper.test.ts` | The scheduled Worker that sweeps expired/orphaned records. Shares the functions tsconfig for Workers types. |
-| Lab publish UI | `timeline-bar-lifecycle.test.tsx` | Transfer dialog, tab availability, busy-guard, warnings pill — the lab-side publish UX attached to the timeline bar. |
+| Lab publish UI | `timeline-bar-lifecycle.test.tsx` | Transfer dialog, tab availability, busy-guard, warnings pill — plus the Transfer-dialog performance contract (Share-default no-estimate, Download-tab JIT compute, tab-switch cancellation, one-compute-per-session cache, OAuth-resume pause, `scheduleAfterNextPaint` mock pattern) for the lab-side publish UX attached to the timeline bar. |
 | Lab layout regression | `timeline-layout.spec.ts` (E2E) | Bounding-box checks for the restart anchor vs. action-zone geometry. Playwright, not Vitest. |
 
 #### Share Stack E2E Tests (`tests/e2e/`)
@@ -350,12 +350,12 @@ That means `pages-dev-flows.spec.ts` is harmless to `npm run test:e2e` (it self-
 
 `tests/e2e/worker-integration.spec.ts` has a timing-sensitive stall-detection test that is intermittently flaky under cumulative CPU/GC pressure from earlier specs in the same run (notably `smoke.spec.ts`'s bench-wasm path and the React UI suite). It was classified on 2026-04-13 and is **not** a Phase 2 or Phase 5 regression. See the file-header comment in that spec for the full reproduction/isolation notes, bisection result, and retry guidance — do not treat full-suite failures here as signals for share-stack work.
 
-### Timeline Subsystem (~122 tests across 9 files)
+### Timeline Subsystem (~200 tests across 11 files)
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
 | `simulation-timeline.test.ts` | 28+ | Core SimulationTimeline: recording frames, retention limits, review mode entry/exit, scrub to arbitrary frame, restart from timeline, truncation on re-record, motion preservation across restore, arming lifecycle |
-| `timeline-bar-lifecycle.test.tsx` | 32 | TimelineBar unified shell: invariant lane skeleton across all modes (time + overlay-zone + track + action-zone), off/ready use simple label not segmented switch, active uses two-segment mode switch, bidirectional mode switch (onEnterReview, onReturnToLive), Review segment disabled when no recorded range, restart anchor edge clamping (0% at 5%, 100% at 95%), clear confirmation dialog flow (confirm fires, cancel safe), format correctness across all unit ranges (fs/ps/ns/µs with exact string assertions), mode transitions (off→ready→active store changes, startup null→installed), accessibility labels (return-to-sim, restart-with-time, clear trigger), no old row1/row2 layout remnants, thick track across all states, lane structure identical for short and long time values, hint tooltip visibility (6 tests: start recording hint on hover+delay, simulation segment hint in review, review segment hint with range, disabled review hint via focus when no range, restart anchor hint on hover, clear trigger hint on hover — all use `vi.useFakeTimers()` + `fireEvent.mouseEnter` + `vi.advanceTimersByTime(HINT_DELAY_MS)` and assert `timeline-hint--visible` class), export dialog tests use capsule/full format options (no replay) |
+| `timeline-bar-lifecycle.test.tsx` | 87 | TimelineBar unified shell: invariant lane skeleton across all modes (time + overlay-zone + track + action-zone), off/ready use simple label not segmented switch, active uses two-segment mode switch, bidirectional mode switch (onEnterReview, onReturnToLive), Review segment disabled when no recorded range, restart anchor edge clamping (0% at 5%, 100% at 95%), clear confirmation dialog flow (confirm fires, cancel safe), format correctness across all unit ranges (fs/ps/ns/µs with exact string assertions), mode transitions (off→ready→active store changes, startup null→installed), accessibility labels (return-to-sim, restart-with-time, clear trigger), no old row1/row2 layout remnants, thick track across all states, lane structure identical for short and long time values, hint tooltip visibility (6 tests: start recording hint on hover+delay, simulation segment hint in review, review segment hint with range, disabled review hint via focus when no range, restart anchor hint on hover, clear trigger hint on hover — all use `vi.useFakeTimers()` + `fireEvent.mouseEnter` + `vi.advanceTimersByTime(HINT_DELAY_MS)` and assert `timeline-hint--visible` class), export dialog tests use capsule/full format options (no replay). Also covers the Transfer-dialog performance contract (Transfer INP fix): Share-default no-compute, Download-tab JIT compute, close/tab-switch/unmount cancel of scheduled work, one-compute-per-session cache + reset on reopen, pause-fires-on-Share-default / on-OAuth-resume, Transfer-click-survives-pause-throw, failed-estimates-retry-on-tab-switch. Uses top-of-file `vi.mock('.../timeline-after-paint', ...)` exporting a `vi.fn` with a `beforeEach` synchronous-default reset so individual tests can override via `mockImplementation` and a `captureScheduledWork()` helper for cancellation tests. |
 | `timeline-recording-orchestrator.test.ts` | 9 | Orchestrator arming, recording cadence (frame capture rate), review-mode blocking of new recordings, sim-time advancement during recording, reset behavior |
 | `timeline-recording-policy.test.ts` | 5 | Arm/disarm/re-arm lifecycle, policy state transitions |
 | `timeline-subsystem.test.ts` | 11 | Subsystem boundary isolation, clearAndDisarm, teardown cleanup, isInReview predicate, installStoreCallbacks wiring, placement-does-not-arm regression tests |
@@ -363,6 +363,8 @@ That means `pages-dev-flows.spec.ts` is harmless to `npm run test:e2e` (it self-
 | `interaction-dispatch-arming.test.ts` | 16 | Real createInteractionDispatch: arming on startDrag/startMove/startRotate/flick regardless of worker state; continuation events do not arm; worker mirroring independent of arming |
 | `store-callbacks-arming.test.ts` | 7 | Real registerStoreCallbacks: chooser, dock, and settings callbacks verified through actual store surface |
 | `reconciled-steps.test.ts` | 4 | Snapshot deduplication — ensures reconciled steps don't produce duplicate frames |
+| `timeline-after-paint.test.ts` | 8 | `scheduleAfterNextPaint` helper behind the Transfer INP fix: synchronous return, rAF-then-setTimeout ordering (proves the paint yield), cancel before rAF, cancel between rAF and setTimeout, cancel after completion is a no-op, exactly one rAF per schedule, partial-global fallback to setTimeout pair when rAF is missing, atomic pair-selection when only one of rAF/cAF is present |
+| `timeline-performance.test.ts` | 15 | `measureSync` wrapper: success path (returns value, emits `performance.measure`, clears marks), failure path (rethrows, emits measure on throw, clears marks on throw), API-missing fallback, and the invariant that instrumentation failures never replace the work() result or the rethrown error |
 
 ### Restart & State Restore (11 tests across 2 files)
 
@@ -572,7 +574,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **End-to-end pipeline:** load → import → playback → groups.
 
-*As of Phase 7, 2130 unit tests pass across 120 test files (lab + watch + share + auth + account-erasure). Run `npx vitest run` for the authoritative live total.*
+*As of Phase 7, 2208 unit tests pass across 120 test files (lab + watch + share + auth + account-erasure). Run `npx vitest run` for the authoritative live total.*
 
 ### Bond Topology Parity (23 tests)
 
