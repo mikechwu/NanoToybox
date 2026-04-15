@@ -15,14 +15,35 @@
    Scoped to .watch-workspace (the watch-owned root rendered by WatchApp when
    a file is loaded) — not global :root. Keeps watch-specific layout policy
    local to the watch UI and avoids polluting global CSS namespace.
-   The responsive breakpoint (768px) mirrors dock-shell.css. */
+
+   Three tiers, not two. Watch has seven interactive controls vs. lab's four,
+   so the same 56 px slot that fits lab's dock comfortably overflows watch's
+   on phone widths (3×56 transport + ~190 utility + 56 settings ≈ 414 px).
+   Mobile tier trims the slot to 44 px (the WCAG hit-target minimum) and
+   tightens the utility cluster; tablet tier restores 56 px once the row
+   fits; desktop tier adds the extra breathing room lab already enjoys. */
 .watch-workspace {
+  /* Mobile (< 480 px) — compact tap targets, tight slider, narrow labels.
+     Overrides the global --dock-slot-action (56 px) at watch scope only,
+     so lab's slot sizing is unaffected. */
+  --dock-slot-action: 44px;
   --watch-dock-utility-gap: 2px;
-  --watch-dock-smooth-min-w: 58px;
-  --watch-dock-speed-slider-w: 60px;
+  --watch-dock-smooth-min-w: 44px;
+  --watch-dock-speed-slider-w: 44px;
+  --watch-dock-speed-label-min-w: 32px;
+}
+@media (min-width: 480px) {
+  .watch-workspace {
+    /* Tablet portrait and up — restore lab-parity slot + comfortable slider. */
+    --dock-slot-action: 56px;
+    --watch-dock-smooth-min-w: 58px;
+    --watch-dock-speed-slider-w: 60px;
+    --watch-dock-speed-label-min-w: 36px;
+  }
 }
 @media (min-width: 768px) {
   .watch-workspace {
+    /* Desktop — same extra spacing lab uses for the centered pill. */
     --watch-dock-utility-gap: 4px;
     --watch-dock-smooth-min-w: 64px;
     --watch-dock-speed-slider-w: 80px;
@@ -57,9 +78,17 @@
    Zone 2 (utility): repeat toggle + compact speed — subordinate
    Zone 3 (settings): right-edge anchor */
 /* Watch dock: 3-zone grid. Dock IS the primary painted pill (from dock-shell.css).
-   Only override grid columns for watch's playback layout. */
+   Only override grid columns for watch's playback layout.
+
+   `minmax(0, …)` on zones 1 and 2 lets both columns shrink below their
+   intrinsic content width at sub-400 px viewports — without it the grid
+   floors at the children's min-widths and overflows the right edge. The
+   last column stays fixed so Settings never drifts off-axis. The bar's
+   `overflow: hidden` is a safety net for hypothetical sub-320 px widths
+   we don't test; at normal phone widths (≥ 360 px) the content fits. */
 .watch-dock-bar {
-  grid-template-columns: 1fr auto var(--dock-slot-action, 56px);
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) var(--dock-slot-action, 56px);
+  overflow: hidden;
 }
 
 /* Transport cluster: fixed-width 3-column grid — no layout shift on Play↔Pause label swap */
@@ -85,6 +114,10 @@
   align-items: center;
   gap: var(--watch-dock-utility-gap, 2px);
   padding: 0 var(--watch-dock-utility-gap, 2px);
+  /* Lets the utility cluster compress inside its grid cell on mobile —
+     without this the cluster claims its intrinsic width and pushes the
+     Settings column off-screen. */
+  min-width: 0;
 }
 /* Left subgroup: repeat (icon) + smooth (text label), tightly packed. */
 .watch-dock__utility-left {
@@ -115,17 +148,23 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  /* Allow the slider to shrink inside a compressed utility cluster. */
+  min-width: 0;
 }
 /* Speed slider: width from --watch-dock-speed-slider-w token.
    Log-mapped — both phone and desktop widths are usable. */
 .watch-dock__speed-slider {
   width: var(--watch-dock-speed-slider-w, 60px);
+  /* The slider is the most shrink-tolerant element in the row — it can
+     lose 10–20 px of width and still be usable, unlike the tap targets
+     on either side. `min-width: 0` lets it do that on sub-360 px widths. */
+  min-width: 0;
   accent-color: var(--color-accent);
 }
 .watch-dock__speed-label {
   font-size: var(--font-xs, 12px);
   font-variant-numeric: tabular-nums;
-  min-width: 36px;
+  min-width: var(--watch-dock-speed-label-min-w, 36px);
   text-align: center;
   cursor: pointer;
   color: var(--color-text);

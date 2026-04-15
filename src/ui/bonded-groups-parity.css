@@ -6,20 +6,27 @@
  */
 
 .bg-panel {
-  --panel-width: 260px;
-  /* Surface tokens match the lab .bonded-groups-panel + the chip +
-   * FPS pill, so the watch top-bar family reads identically to lab.
-   * (Was `--panel-bg` + `saturate(180%)` — slightly grayer/glassier
-   * than the sibling chrome.) */
-  background: var(--color-surface);
+  /* Width is inherited from the right-rail flex container
+   * (`.watch-analysis` sets `width: min(260px, calc(100vw - 24px))`);
+   * `--panel-width` is no longer a tuning point here. */
+  /* Surface uses `--panel-bg` (92 % opacity) so this panel reads as
+   * part of the same opaque chrome family as watch's info panel and
+   * sheet. Was `--color-surface` (72–85 %) which made the panel feel
+   * like a glassy overlay separate from the other watch surfaces;
+   * switching here keeps watch internally consistent. Lab's
+   * `.bonded-groups-panel` is a separate selector and retains its
+   * own glassy `--color-surface` — no lab regression. */
+  background: var(--panel-bg);
   backdrop-filter: blur(var(--glass-blur, 8px));
   -webkit-backdrop-filter: blur(var(--glass-blur, 8px));
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm, 6px);
   padding: 8px 10px;
-  /* Mobile safety: never wider than the viewport minus side anchors
-   * (12 px each). Identical contract to lab. */
-  width: min(var(--panel-width), calc(100vw - 24px));
+  /* Width is now inherited from the right-rail flex container
+   * (`.watch-analysis`) so info panel and bonded-clusters align at
+   * exactly the same right edge. `width: 100%` stretches to the
+   * parent without re-deriving the min() formula here. */
+  width: 100%;
   min-width: 0;
   max-height: 60vh;
   overflow-y: auto;
@@ -29,6 +36,7 @@
   color: var(--color-text, #ccc);
   user-select: none;
   -webkit-user-select: none;
+  box-sizing: border-box;
 }
 .bg-panel__header {
   display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;

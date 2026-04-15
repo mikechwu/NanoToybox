@@ -340,11 +340,28 @@ describe('WatchApp React integration', () => {
     expect(g2FollowBtn?.getAttribute('title')).toBe('Follow');
   });
 
-  it('top bar shows file kind badge', () => {
+  it('info panel shows file kind chip — full → history', () => {
     const ctrl = createMockController({ loaded: true, endTimePs: 100, fileKind: 'full' });
     const { container } = render(<WatchApp controller={ctrl} />);
-    const badge = container.querySelector('.review-topbar__badge');
-    expect(badge).not.toBeNull();
-    expect(badge!.textContent).toBe('Full History');
+    const kind = container.querySelector('.watch-info-panel__kind');
+    expect(kind).not.toBeNull();
+    expect(kind!.textContent).toBe('history');
+  });
+
+  it('info panel shows file kind chip — reduced → preview', () => {
+    const ctrl = createMockController({ loaded: true, endTimePs: 100, fileKind: 'reduced' });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const kind = container.querySelector('.watch-info-panel__kind');
+    expect(kind).not.toBeNull();
+    expect(kind!.textContent).toBe('preview');
+  });
+
+  it('info panel shows file kind chip — capsule passes through', () => {
+    const ctrl = createMockController({ loaded: true, endTimePs: 100, fileKind: 'capsule' });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const kind = container.querySelector('.watch-info-panel__kind');
+    expect(kind).not.toBeNull();
+    // Not in the mapping table — render the raw value.
+    expect(kind!.textContent).toBe('capsule');
   });
 });

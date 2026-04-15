@@ -345,17 +345,17 @@ test.describe('Watch share — top bar', () => {
       expect(state?.loaded).toBe(true)
     }).toPass({ timeout: 10000 })
 
-    // Top bar should have an "Open Share" action
-    const openShareBtn = page.locator('.review-topbar__action', { hasText: 'Open Share' })
+    // Info panel should have an "Open Link" action (formerly "Open Share").
+    const openShareBtn = page.locator('.watch-info-panel__action', { hasText: 'Open Link' })
     await expect(openShareBtn).toBeVisible()
 
     // Click it → inline share input should appear
     await openShareBtn.click()
-    const shareInput = page.locator('.review-topbar__share-input')
+    const shareInput = page.locator('.watch-info-panel__input')
     await expect(shareInput).toBeVisible()
 
     // Cancel returns to buttons
-    const cancelBtn = page.locator('.review-topbar__action', { hasText: 'Cancel' })
+    const cancelBtn = page.locator('.watch-info-panel__action', { hasText: 'Cancel' })
     await cancelBtn.click()
     await expect(shareInput).not.toBeAttached()
     await expect(openShareBtn).toBeVisible()
@@ -390,12 +390,12 @@ test.describe('Watch share — state preservation on error', () => {
     // Now try to open a share code that 404s
     await installShareMocks(page, { metadataStatus: 404 })
 
-    // Use the top bar share input
-    const openShareBtn = page.locator('.review-topbar__action', { hasText: 'Open Share' })
+    // Use the info panel's share input ("Open Link" + paste).
+    const openShareBtn = page.locator('.watch-info-panel__action', { hasText: 'Open Link' })
     await openShareBtn.click()
-    const shareInput = page.locator('.review-topbar__share-input')
+    const shareInput = page.locator('.watch-info-panel__input')
     await shareInput.fill(SHARE_CODE)
-    await page.locator('.review-topbar__share-form').locator('button[type="submit"]').click()
+    await page.locator('.watch-info-panel__form').locator('button[type="submit"]').click()
 
     // Wait for error
     await expect(async () => {

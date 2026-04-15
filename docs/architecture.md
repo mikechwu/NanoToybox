@@ -212,7 +212,7 @@ NanoToybox/
 │           ├── WatchApp.tsx              # Top-level shell: landing vs workspace switching
 │           ├── WatchCanvas.tsx           # Renderer lifecycle via useEffect + ref (create/destroy only)
 │           ├── WatchLanding.tsx          # File-open landing with drag/drop
-│           ├── WatchTopBar.tsx           # File badge + file name + open-file action
+│           ├── WatchTopBar.tsx           # Top-left info panel (`.watch-info-panel`): kind chip + filename + Open Link / Open File actions
 │           ├── WatchDock.tsx             # 3-zone hierarchical dock: transport (tap=step, hold=directional play), speed (log slider), repeat + Smooth toggle + settings
 │           ├── WatchTimeline.tsx         # Custom scrubber track using shared timeline-track.css primitives (full-width, no mode rail)
 │           ├── WatchSettingsSheet.tsx    # Settings sheet: Smooth Playback (toggle + method picker from registry), Appearance (theme, text-size via Segmented), File Info, Help. Uses shared useSheetLifecycle + sheet-shell.css
@@ -302,7 +302,7 @@ Shared CSS and React hooks consumed by both `lab/` and `watch/`. CSS files are f
 
 - **`src/ui/text-size-tokens.css`** — text-size preference tokens (`normal` / `large`). Applied by both apps when the user toggles text-size in settings.
 
-- **`src/ui/review-parity.css`** — shared neutral-class CSS layer for review-like viewer surfaces. Uses `.review-*` prefix. Owns: playback-bar chrome (`.review-playback-bar`), compact panel chrome (`.review-panel`), status/message tones (`.review-status-msg`), list row rhythm (`.review-panel-row`), top bar chrome (`.review-topbar`). Does NOT own page layout, dock layout, or lab-specific rules. All values reference CSS custom properties (`--panel-bg`, `--color-border`, `--color-accent`, etc.) for theming.
+- **`src/ui/review-parity.css`** — shared neutral-class CSS layer for review-like viewer surfaces. Uses `.review-*` prefix. Owns: playback-bar chrome (`.review-playback-bar`), compact panel chrome (`.review-panel`), status/message tones (`.review-status-msg`), list row rhythm (`.review-panel-row`). Does NOT own page layout, dock layout, or lab-specific rules. All values reference CSS custom properties (`--panel-bg`, `--color-border`, `--color-accent`, etc.) for theming.
 
 - **`src/ui/bonded-groups-parity.css`** — bonded-groups panel CSS shared between lab and watch. Extended with color popover rules (honeycomb swatch layout, chip positioning).
 
@@ -837,7 +837,7 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
        ├── WatchLanding              ← file open / drag-drop landing (shown when !loaded)
        │
        └── [workspace]               ← shown when loaded:
-           ├── WatchTopBar           ← file kind badge, filename, open-another action
+           ├── WatchTopBar           ← top-left corner info panel (kind chip + filename + Open Link / Open File)
            ├── WatchCanvas           ← owns renderer create/destroy lifecycle only
            │                            (controller's RAF loop pushes frames to renderer)
            ├── WatchBondedGroupsPanel ← collapsible bonded-group inspector with color chips/popover
@@ -881,7 +881,7 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
 - **WatchSettingsSheet** — settings surface with four sections: Smooth Playback (on/off toggle + interpolation method picker driven from registry metadata via `getRegisteredInterpolationMethods()`, with per-frame diagnostic note when active method diverges from selection), Appearance (theme + text-size via shared `Segmented` component), File Info (atom count, frame count, duration), Help (viewer-specific sections from `settings-content.ts`). Method picker shows product methods only (filtered via `availability === 'product'` discriminant); stable methods first, then experimental. Uses shared `useSheetLifecycle` hook for mount/animate/escape lifecycle, shared `sheet-shell.css` and `segmented.css` for styling.
 - **PlaybackSpeedControl** — compact log-mapped speed slider with numeric readout. Click readout to reset to 1x. Uses `sliderToSpeed`, `speedToSlider`, `formatSpeed` from shared `playback-speed-constants.ts`.
 - **WatchBondedGroupsPanel** — collapsible bonded-group inspector with two-level display (large/small clusters via `partitionBondedGroups` from `src/history/bonded-group-utils.ts`). Includes color chip + popover for per-group color assignment. Uses shared `review-parity.css` and `bonded-groups-parity.css`.
-- **WatchTopBar** — file kind badge, filename, open-another action. Uses `.review-topbar` class names from shared `review-parity.css`.
+- **WatchTopBar** — top-left corner info panel (`.watch-info-panel` in `watch/css/watch.css`). Renders the file-kind chip, truncated filename, and two parallel actions: **Open Link** (paste a share URL/code) and **Open File** (local file picker). Surface tokens mirror `.bg-panel` so both canvas-corner panels read as one family.
 - **WatchLanding** — drag-drop zone and open-file button for initial file selection.
 
 **State model:** watch/ has no Zustand store. The `WatchController` holds all mutable state across its domain services as plain local variables in closures. React components subscribe via `useSyncExternalStore` -- the controller publishes immutable `WatchControllerSnapshot` objects and notifies listeners on change. Local UI state (panel expanded, small clusters expanded, sheet open) lives in React `useState`.

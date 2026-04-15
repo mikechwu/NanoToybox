@@ -64,10 +64,20 @@ export function WatchApp({ controller }: WatchAppProps) {
     });
   }, [controller]);
 
-  const handleOpenShareCode = useCallback((input: string) => {
-    controller.openSharedCapsule(input).catch(e => {
+  /** Returns true iff the controller finished the open without setting
+   *  `snapshot.error`. WatchTopBar uses the return value to decide
+   *  whether to dismiss its share-input form: on failure we keep the
+   *  form mounted with the user's input intact so they can edit + retry
+   *  (previously the form cleared + closed unconditionally, trashing
+   *  the pasted code on recoverable failures like a 404 typo). */
+  const handleOpenShareCode = useCallback(async (input: string): Promise<boolean> => {
+    try {
+      await controller.openSharedCapsule(input);
+    } catch (e) {
       console.error('[watch] share open error:', e);
-    });
+      return false;
+    }
+    return !controller.getSnapshot().error;
   }, [controller]);
 
   // Global error banner (visible in both states)
@@ -95,15 +105,19 @@ export function WatchApp({ controller }: WatchAppProps) {
     <>
       {errorBanner}
       <div className="watch-workspace">
-        <WatchTopBar
-          fileKind={snapshot.fileKind}
-          fileName={snapshot.fileName}
-          onOpenFile={handleOpenFile}
-          onOpenShareCode={handleOpenShareCode}
-        />
         <div className="watch-canvas-area">
           <WatchCanvas controller={controller} />
+          {/* Right rail — stacked panels share surface tokens and right
+              inset so they read as one column. Info panel (what am I
+              watching) sits above the bonded-clusters inspector. */}
           <div className="watch-analysis">
+            <WatchTopBar
+              fileKind={snapshot.fileKind}
+              fileName={snapshot.fileName}
+              loadingShareCode={snapshot.loadingShareCode}
+              onOpenFile={handleOpenFile}
+              onOpenShareCode={handleOpenShareCode}
+            />
             <WatchBondedGroupsPanel
               groups={snapshot.groups}
               expanded={panelExpanded}

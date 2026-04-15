@@ -55,14 +55,107 @@ body {
 .watch-share-input:focus { border-color: var(--color-accent, #6dc); }
 .watch-share-input:disabled { opacity: 0.5; }
 
-/* ── Share input (top bar inline) ── */
-.review-topbar__share-form { display: flex; gap: 4px; align-items: center; }
-.review-topbar__share-input {
-  background: rgba(255,255,255,0.06); border: 1px solid var(--color-border, rgba(255,255,255,0.12));
-  border-radius: 4px; padding: 4px 8px; font-size: 0.8rem; color: var(--color-text, #ccc);
-  width: 180px; outline: none;
+/* ── Info panel (right rail, above bonded-clusters) ──
+   The user's at-a-glance "what am I watching" chrome. Shares the
+   right-rail column with the bonded-clusters panel — same width,
+   same right inset (via .watch-analysis), same surface tokens — so
+   the two read as one stacked column rather than two floating islands.
+
+   Surface uses `--panel-bg` (92 % opacity) instead of `--color-surface`
+   (72–85 %); the heavier fill matches the sheet / dock chrome family
+   that lab already uses and removes the "glassy floater" look that
+   made the info panel feel out-of-family with lab. */
+.watch-info-panel {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--panel-bg);
+  backdrop-filter: blur(var(--glass-blur, 8px));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 8px));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+  font-family: var(--font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: var(--font-sm, 0.8rem);
+  color: var(--color-text, #ccc);
+  box-sizing: border-box;
 }
-.review-topbar__share-input:focus { border-color: var(--color-accent, #6dc); }
+.watch-info-panel__identity {
+  display: flex; align-items: center; gap: 6px;
+  min-width: 0;
+}
+/* Kind chip — tiny lowercase pill (capsule / history / preview).
+   Muted accent tone so the filename remains the dominant glyph. */
+.watch-info-panel__kind {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--color-accent-soft, rgba(100,180,140,0.15));
+  color: var(--color-accent-text, #6dc);
+  font-size: var(--font-xs, 11px);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.watch-info-panel__filename {
+  min-width: 0;
+  flex: 1 1 auto;
+  opacity: 0.75;
+  font-size: var(--font-xs, 12px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.watch-info-panel__actions {
+  display: flex; gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+.watch-info-panel__action {
+  flex: 1 1 0;
+  min-width: 0;
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--font-xs, 12px);
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: background var(--duration-fast, 0.15s), border-color var(--duration-fast, 0.15s);
+}
+.watch-info-panel__action:hover {
+  background: var(--color-surface-hover, rgba(255,255,255,0.06));
+  border-color: var(--color-text-secondary);
+}
+.watch-info-panel__action:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.watch-info-panel__form {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+.watch-info-panel__input {
+  width: 100%;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--font-xs, 12px);
+  padding: 4px 8px;
+  box-sizing: border-box;
+  outline: none;
+}
+.watch-info-panel__input:focus { border-color: var(--color-accent, #6dc); }
+/* Reset margin-top for the form's nested actions — the form already
+   provides the divider + spacing above. */
+.watch-info-panel__form .watch-info-panel__actions {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
 
 /* ── Global error banner ──
    Centered fixed banner. max-width 500px keeps it readable on desktop.
@@ -73,9 +166,12 @@ body {
   width: calc(100vw - 32px);
 }
 
-/* ── Workspace grid ── */
+/* ── Workspace grid ──
+   Two rows: canvas (1fr) + bottom chrome (auto). The former third
+   row held `.review-topbar`; the info panel now overlays the canvas
+   top-left instead of claiming a grid row. */
 .watch-workspace {
-  display: grid; grid-template-rows: auto 1fr auto;
+  display: grid; grid-template-rows: 1fr auto;
   height: 100vh; width: 100vw;
 }
 .watch-canvas-area {
@@ -85,12 +181,24 @@ body {
   width: 100% !important; height: 100% !important; display: block;
 }
 
-/* ── Analysis panel (overlaid on canvas, right side) ──
+/* ── Right rail (overlaid on canvas) ──
    12px inset matches lab's review panel placement.
-   max-height reserves 120px for top bar + bottom chrome clearance. */
+   Flex column with a gap so the info panel and the bonded-clusters
+   panel read as one stacked surface family rather than two floaters.
+   Width is fixed at the panel width so every child stretches to the
+   same right-aligned edge. */
 .watch-analysis {
   position: absolute; top: 12px; right: 12px;
-  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(260px, calc(100vw - 24px));
   max-height: calc(100vh - 120px);
+  /* Rail-level scroll — the info panel has no inner scroll, and the
+     bonded-clusters panel's own 60 vh cap doesn't know about the info
+     panel above it. Without this, on short viewports (landscape phones,
+     split-screen tablets) the bottom of .bg-panel silently clips
+     behind the rail's max-height. */
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
