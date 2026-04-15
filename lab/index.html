@@ -887,15 +887,31 @@ canvas { display: block; touch-action: none; }
   gap: 8px;
   min-width: 260px;
 }
-/* Narrow-viewport fallback: right-anchored 260 px popover plus the
- * trigger's right edge can overflow the left edge on < 320-360 px
- * screens. Drop the min-width and let the menu shrink to the
- * viewport minus a small gutter. */
+/* Narrow-viewport fallback: AccountControl sits to the LEFT of the
+ * FPS display inside .topbar-right, so its right edge is ~70–90 px
+ * from the viewport right. A 260 px popover anchored `right: 0` to
+ * the trigger's right edge therefore overflows the viewport's LEFT
+ * edge on sub-360 px phones. Best-practice fix: detach the popover
+ * from the trigger and pin it to the viewport with equal 12 px
+ * gutters, so the panel can never be cropped regardless of where
+ * the trigger lands inside the top-bar row. Click-outside and
+ * escape-to-close keep working — both match against DOM ancestry /
+ * keypresses, not layout position. */
 @media (max-width: 480px) {
   .account-control__menu--signin {
+    position: fixed;
+    /* 12 px matches .topbar-right's own top inset (line 629); 40 px is
+       the trigger's intrinsic height (font-sm · 1.4 + 12 px vertical
+       padding + 2 px border ≈ 34 px, with ~6 px slack); 6 px is the
+       gap between trigger and popover. No `--topbar-*` token exists
+       yet — refactor candidate when one lands. */
+    top: calc(12px + 40px + 6px);
+    left: 12px;
+    right: 12px;
+    /* Only min-width is load-bearing (the base rule sets 260 px).
+       `width` and `max-width` default to auto/none for a fixed
+       element with both insets set. */
     min-width: 0;
-    width: calc(100vw - 24px);
-    max-width: 260px;
   }
 }
 .account-control__menu--signin .account-control__hint {

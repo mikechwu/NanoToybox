@@ -61,14 +61,14 @@ body {
    same right inset (via .watch-analysis), same surface tokens — so
    the two read as one stacked column rather than two floating islands.
 
-   Surface uses `--panel-bg` (92 % opacity) instead of `--color-surface`
-   (72–85 %); the heavier fill matches the sheet / dock chrome family
-   that lab already uses and removes the "glassy floater" look that
-   made the info panel feel out-of-family with lab. */
+   Surface uses `--color-surface` so the watch info panel reads as
+   the same glassy chrome family as lab's `.bonded-groups-panel` and
+   the account chip / FPS pill — keeps watch visually consistent
+   with lab's top-right surfaces. */
 .watch-info-panel {
   width: 100%;
   padding: 8px 10px;
-  background: var(--panel-bg);
+  background: var(--color-surface);
   backdrop-filter: blur(var(--glass-blur, 8px));
   -webkit-backdrop-filter: blur(var(--glass-blur, 8px));
   border: 1px solid var(--color-border);

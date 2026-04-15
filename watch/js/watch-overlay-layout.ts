@@ -9,10 +9,19 @@
  *   - phone:   min(140, max(96,  floor(viewportW * 0.15)))
  *   - default: min(200, max(120, floor(viewportW * 0.10)))
  *
- * Triad positioning replicates lab/js/runtime/overlay-layout.ts:83-91:
- *   - phone:   bottom = barTopFromBottom + 8
- *   - default: bottom = 12
- *   - left    = safeLeft + 6
+ * Triad positioning (diverges intentionally from lab on tablet):
+ *   - phone / tablet: bottom = barTopFromBottom + 8
+ *   - desktop:        bottom = 12
+ *   - left          = safeLeft + 6
+ *
+ * Why diverge on tablet? Lab places the triad at `bottom = 12` on
+ * tablet because lab's iPad dock is a compact, centered control
+ * that doesn't reach the bottom-left corner where the triad lives.
+ * Watch's bottom chrome is full-width (timeline + dock) on every
+ * breakpoint, so a fixed 12 px offset overlaps the chrome on iPad.
+ * Clearing the bottom chrome on tablet keeps the triad visually
+ * above the playback bar — matching lab's INTENT (triad not
+ * obscured by dock) rather than its literal phone-only formula.
  *
  * Layout hook: [data-watch-bottom-chrome] on the bottom chrome wrapper in WatchApp.tsx.
  * Stable data attribute — does not depend on styling class names.
@@ -31,10 +40,15 @@ const PLAYBACK_BAR_SELECTOR = '[data-watch-bottom-chrome]';
 /**
  * Startup fallback triad bottom position (px) when [data-watch-bottom-chrome]
  * is not yet in DOM during initial mount. Temporary — replaced by measured
- * position once the retry loop finds the bar. Derived from minimum expected
- * playback bar height (~60px) + 8px gap.
+ * position on the next RAF once the retry loop finds the bar. Derived from
+ * minimum expected playback bar height (~60 px) + 8 px gap.
+ *
+ * Used on phone AND tablet (both clear the bottom chrome). In practice the
+ * bar mounts in the same commit as the canvas (see WatchApp.tsx), so the
+ * fallback window is a single frame on every path we exercise — named
+ * `…STARTUP_FALLBACK` (not `PHONE_…`) to track that shared use.
  */
-const PHONE_TRIAD_BOTTOM_FALLBACK = 68;
+const TRIAD_BOTTOM_STARTUP_FALLBACK = 68;
 
 export interface WatchOverlayLayout {
   /** Run layout computation. */
@@ -86,9 +100,10 @@ export function createWatchOverlayLayout(renderer: WatchRenderer): WatchOverlayL
       triadSize = Math.min(200, Math.max(120, Math.floor(viewportW * 0.10)));
     }
 
-    // Triad bottom positioning — phone clears the playback bar, desktop uses fixed offset
+    // Triad bottom positioning — phone + tablet clear the watch's
+    // full-width bottom chrome; desktop uses a fixed 12 px offset.
     let triadBottom: number;
-    if (mode === 'phone') {
+    if (mode === 'phone' || mode === 'tablet') {
       const bar = document.querySelector(PLAYBACK_BAR_SELECTOR) as HTMLElement | null;
       if (bar) {
         const barTopFromBottom = viewportH - bar.getBoundingClientRect().top;
@@ -96,7 +111,7 @@ export function createWatchOverlayLayout(renderer: WatchRenderer): WatchOverlayL
         if (bar !== _observedBar) attachObserver(bar);
       } else {
         // Bar not yet in DOM — use temporary fallback and schedule retry
-        triadBottom = PHONE_TRIAD_BOTTOM_FALLBACK;
+        triadBottom = TRIAD_BOTTOM_STARTUP_FALLBACK;
         requestLayout(); // re-enters via coalesced RAF → retries until bar appears
       }
     } else {

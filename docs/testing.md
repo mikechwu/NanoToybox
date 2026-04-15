@@ -733,7 +733,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **Triad sizing formulas:** desktop formula `min(200, max(120, floor(W * 0.10)))` with clamp to min 120 and max 200, phone formula `min(140, max(96, floor(W * 0.15)))` with clamp to max 140.
 
-**Triad bottom positioning:** desktop fixed bottom = 12, phone clears playback bar when `[data-watch-bottom-chrome]` is in DOM, phone uses PHONE_TRIAD_BOTTOM_FALLBACK when playback bar is not in DOM.
+**Triad bottom positioning:** desktop fixed bottom = 12; phone and tablet both clear the playback bar when `[data-watch-bottom-chrome]` is in DOM (tablet parity added because watch's full-width bottom chrome overlaps lab's fixed-12 offset); phone uses `TRIAD_BOTTOM_STARTUP_FALLBACK` when the playback bar is not yet in the DOM.
 
 **Triad left inset:** uses `--safe-left` CSS variable + 6, defaults to 6 when variable not set.
 

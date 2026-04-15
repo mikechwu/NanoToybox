@@ -206,7 +206,38 @@ describe('Triad bottom positioning', () => {
     bar.remove();
   });
 
-  it('phone: uses PHONE_TRIAD_BOTTOM_FALLBACK when playback bar is not in DOM', () => {
+  it('tablet: clears playback bar (iPad parity — watch has full-width bottom chrome lab lacks)', () => {
+    // iPad-style environment: coarse pointer + no hover → tablet mode
+    // even at 1024 px width. Match queries explicitly (not substring) so a
+    // future device-mode.ts refactor to `(hover: none)` doesn't silently
+    // flip this test into the desktop branch.
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn((q: string) => ({
+        matches: q === '(pointer: coarse)',
+      })),
+    });
+    setViewport(1024, 1366);
+    const bar = document.createElement('div');
+    bar.setAttribute('data-watch-bottom-chrome', '');
+    Object.defineProperty(bar, 'getBoundingClientRect', {
+      value: () => ({ top: 1266, bottom: 1366, left: 0, right: 1024, width: 1024, height: 100 }),
+    });
+    document.body.appendChild(bar);
+
+    const mockRenderer = createMockRenderer();
+    const layout = createWatchOverlayLayout(mockRenderer);
+    layout.doLayout();
+
+    const call = mockRenderer.setOverlayLayout.mock.calls[0][0];
+    // barTopFromBottom = 1366 - 1266 = 100, triadBottom = 100 + 8 = 108
+    expect(call.triadBottom).toBe(108);
+
+    layout.destroy();
+    bar.remove();
+  });
+
+  it('phone: uses TRIAD_BOTTOM_STARTUP_FALLBACK when playback bar is not in DOM', () => {
     setViewport(400, 800);
     const mockRenderer = createMockRenderer();
     const layout = createWatchOverlayLayout(mockRenderer);

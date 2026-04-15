@@ -23,13 +23,16 @@
    tightens the utility cluster; tablet tier restores 56 px once the row
    fits; desktop tier adds the extra breathing room lab already enjoys. */
 .watch-workspace {
-  /* Mobile (< 480 px) — compact tap targets, compact slider. Scoped
-     override of the global --dock-slot-action so lab is unaffected.
-     Smooth lives in Settings now, so the slider gets all the space
-     that the Smooth toggle used to claim. */
+  /* Mobile (< 480 px) — compact tap targets, generous slider.
+     Scoped override of the global --dock-slot-action so lab is
+     unaffected. Smooth lives in Settings now, so the slider gets
+     all the space that the Smooth toggle used to claim.
+     Slider is 84 px (not 60): the transport cluster is anchored
+     flush-left (see `.watch-dock__transport` below), which frees
+     roughly 30 px of prior centering slack for the slider. */
   --dock-slot-action: 44px;
   --watch-dock-utility-gap: 2px;
-  --watch-dock-speed-slider-w: 60px;
+  --watch-dock-speed-slider-w: 84px;
   --watch-dock-speed-label-min-w: 32px;
 }
 @media (min-width: 480px) {
@@ -85,18 +88,43 @@
 .watch-dock-bar {
   grid-template-columns: minmax(0, 1fr) minmax(0, auto) var(--dock-slot-action, 56px);
   overflow: hidden;
+  /* Symmetric horizontal gutter on phone so "room left of Back"
+     equals "room right of Settings". The transport cluster below
+     uses `justify-self: start` so its left edge sits flush against
+     this padding, and Settings (fixed right column) sits flush
+     against the right padding. Tablet/desktop restore zero padding
+     (the pill radius takes over) in the 480 px media query below. */
+  padding: 0 12px;
+}
+@media (min-width: 480px) {
+  .watch-dock-bar {
+    padding: 0;
+  }
 }
 
 /* Transport cluster: fixed-width 4-column grid (Back, Play, Fwd, Repeat).
    Repeat joins the transport row so playback-semantic controls sit
    together and adopt the icon+label column format. No layout shift on
-   Play↔Pause label swap thanks to the fixed-column grid. */
+   Play↔Pause label swap thanks to the fixed-column grid.
+
+   `justify-self: start` (not the default `stretch`/`center`) anchors
+   the cluster to the LEFT edge of its 1fr grid cell. On phone this
+   aligns Back with the bar's left gutter — the slack that used to
+   sit between Back and the viewport edge (from an earlier
+   `justify-content: center`) now belongs to the utility cell, giving
+   the speed slider a longer travel. Tablet/desktop revert to centered
+   alignment inside the (wider) 1fr cell via the media override. */
 .watch-dock__transport {
   display: grid;
   grid-template-columns: repeat(4, var(--dock-slot-action, 56px));
-  justify-content: center;
+  justify-self: start;
   align-items: center;
   column-gap: 2px;
+}
+@media (min-width: 480px) {
+  .watch-dock__transport {
+    justify-self: center;
+  }
 }
 .watch-dock__transport .dock-item {
   width: var(--dock-slot-action, 56px);
