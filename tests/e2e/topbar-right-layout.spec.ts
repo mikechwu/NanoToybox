@@ -32,19 +32,34 @@ async function setAuthState(page: Page, next: { status: 'loading' | 'signed-in' 
   }, next)
 }
 
-/** Get the bounding rect of an element matching selector, or null. */
-async function rectOf(page: Page, selector: string) {
-  return page.evaluate((sel) => {
-    const el = document.querySelector(sel) as HTMLElement | null
-    if (!el) return null
-    const r = el.getBoundingClientRect()
-    return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom, top: r.top, left: r.left }
-  }, selector)
-}
-
-type Rect = {
-  x: number; y: number; width: number; height: number;
-  left: number; right: number; top: number; bottom: number;
+/** Pin every store field that feeds `formatStatusText()` to a constant
+ *  value so the FPS readout's rendered text width stops churning. This
+ *  is the "freeze the source" half of the fix pair below; the atomic
+ *  snapshot is the "trust only one frame" half. Without this, the frame
+ *  loop keeps writing `fps` / `rafIntervalMs` / `effectiveSpeed` at up
+ *  to 5 Hz and shifts the right-anchored `.topbar-right` row between
+ *  measurements — the CI-only failure mode where two rect reads from
+ *  the same element landed 2–9 px apart.
+ *
+ *  The frame loop may still overwrite these fields after we pin; the
+ *  atomic snapshot below is what actually guarantees consistency. Pin
+ *  is the churn-reducer, snapshot is the correctness guarantee. */
+async function pinFpsState(page: Page) {
+  await page.evaluate(() => {
+    const store = (window as any).__useAppStore
+    if (!store) throw new Error('useAppStore not exposed to window — is ?e2e=1 active?')
+    store.setState({
+      fps: 60,
+      rafIntervalMs: 16.67,
+      workerStalled: false,
+      paused: false,
+      placementActive: false,
+      placementStale: false,
+      warmUpComplete: true,
+      overloaded: false,
+      effectiveSpeed: 1,
+    })
+  })
 }
 
 /** Wait until all listed elements have non-zero rects AND two consecutive
@@ -105,6 +120,16 @@ function rectsOverlap(a: { left: number; right: number; top: number; bottom: num
  *     still catches real regressions (a 10 px slip would fail); only
  *     platform-subpixel variance is absorbed.
  *
+ *     Historical note: earlier CI flakes in the 2–9 px range looked
+ *     font-subpixel at first glance but were ultimately a measurement-
+ *     atomicity race — a 5 Hz status tick changed `.react-fps`'s text
+ *     width between two separate `page.evaluate` rect reads, shifting
+ *     the right-anchored row. That class of failure is now fixed at
+ *     the test layer (`getLayoutSnapshot` + `pinFpsState` below), not
+ *     absorbed by this slack. This number is for genuine subpixel drift
+ *     only; if a future CI drift exceeds 2 px while the atomicity
+ *     guards are in place, investigate CSS, not tolerance.
+ *
  *   ORDERING_SLACK_PX — ordering / anchoring assertions (chip sits left
  *     of FPS; menu anchors below trigger). Same flex layout can shift
  *     sub-pixel, but the bound should be tight: if a chip visibly
@@ -122,10 +147,13 @@ const CONTAINER_EDGE_SLACK_PX = 2
 const ORDERING_SLACK_PX = 1
 const VIEWPORT_FIT_SLACK_PX = 1
 
-/** Format a rect for diagnostic messages. Accepts the narrower
- *  `BoundsRect` so the layout-diagnostics helper (which omits the
- *  redundant `x`/`y` aliases) can reuse the same formatter. */
-type RectLike = Pick<Rect, 'left' | 'right' | 'top' | 'bottom' | 'width' | 'height'>
+/** Rectangle shape shared by every measurement site. Mirrors the
+ *  fields `getBoundingClientRect()` returns, minus the redundant
+ *  `x`/`y` aliases for `left`/`top` — nothing in this spec reads them. */
+type RectLike = {
+  left: number; right: number; top: number; bottom: number;
+  width: number; height: number;
+}
 function fmtRect(label: string, r: RectLike | null): string {
   if (!r) return `${label}=null`
   return `${label}{l:${r.left.toFixed(3)} r:${r.right.toFixed(3)} t:${r.top.toFixed(3)} b:${r.bottom.toFixed(3)} w:${r.width.toFixed(3)} h:${r.height.toFixed(3)}}`
@@ -136,7 +164,7 @@ function fmtRect(label: string, r: RectLike | null): string {
  *  logs are immediately diagnostic — no round-trip needed to reproduce
  *  the failing numbers. Use this instead of hand-rolling the four
  *  comparisons at every site. */
-function expectWithinContainer(child: Rect, container: Rect, slack: number, ctx: string) {
+function expectWithinContainer(child: RectLike, container: RectLike, slack: number, ctx: string) {
   const msg = `${ctx}: child not within container (slack=${slack}px). ${fmtRect('child', child)} vs ${fmtRect('container', container)}`
   expect(child.left, msg).toBeGreaterThanOrEqual(container.left - slack)
   expect(child.right, msg).toBeLessThanOrEqual(container.right + slack)
@@ -155,18 +183,13 @@ async function getComputedFontFamilies(page: Page, selectors: string[]) {
   }, selectors)
 }
 
-/** Read the layout-shaping computed properties for a set of selectors.
- *  Cross-platform layout drift in this top-right row is almost always
- *  caused by a difference in how Linux Chromium resolves intrinsic
- *  sizing for `display`/`width`/`min-width`/`max-width`/`box-sizing`/
- *  `flex` — capturing the four together turns "the rect was wrong"
- *  into "this property differs from local". Stringified into the
- *  failure message so the CI log alone is enough to triage. */
-/** Subset of `Rect` actually returned by the diagnostics helper. We
- *  don't read `x`/`y` (DOMRect's redundant aliases for left/top), so
- *  declaring the narrower shape lets us drop the previous cast and
- *  catch any future drift between the producer and consumer.
- *  `RectLike` (defined alongside `fmtRect` above) is the same shape. */
+/** Layout-shaping computed-style snapshot per selector. Cross-platform
+ *  drift in this top-right row is almost always caused by a difference
+ *  in how Linux Chromium resolves intrinsic sizing for `display` /
+ *  `width` / `min-width` / `max-width` / `box-sizing` / `flex` —
+ *  capturing the five together turns "the rect was wrong" into "this
+ *  property differs from local." Produced by `getLayoutSnapshot` below
+ *  and stitched into every failure message. */
 type LayoutDiag = {
   selector: string
   display: string | null
@@ -176,38 +199,6 @@ type LayoutDiag = {
   boxSizing: string | null
   flex: string | null
   rect: RectLike | null
-}
-async function getLayoutDiagnostics(
-  page: Page,
-  selectors: string[],
-): Promise<LayoutDiag[]> {
-  return page.evaluate((sels) => {
-    return sels.map((sel): LayoutDiag => {
-      const el = document.querySelector(sel) as HTMLElement | null
-      if (!el) {
-        return {
-          selector: sel,
-          display: null, width: null, minWidth: null, maxWidth: null,
-          boxSizing: null, flex: null, rect: null,
-        }
-      }
-      const cs = getComputedStyle(el)
-      const r = el.getBoundingClientRect()
-      return {
-        selector: sel,
-        display: cs.display,
-        width: cs.width,
-        minWidth: cs.minWidth,
-        maxWidth: cs.maxWidth,
-        boxSizing: cs.boxSizing,
-        flex: cs.flex,
-        rect: {
-          left: r.left, right: r.right, top: r.top, bottom: r.bottom,
-          width: r.width, height: r.height,
-        },
-      }
-    })
-  }, selectors)
 }
 
 /** One-line summary per element for failure messages. */
@@ -222,6 +213,65 @@ function fmtDiag(d: LayoutDiag): string {
   )
 }
 
+/** Atomic layout snapshot — every rect and computed-style reading
+ *  returned by this helper comes from a single `page.evaluate(...)`
+ *  call, so all measurements share one layout pass and one script
+ *  tick. This is the fix for a CI-only flake where rects gathered from
+ *  separate round-trips could be split across a `.react-fps` status
+ *  tick (up to 5 Hz); because `.topbar-right` is right-anchored, any
+ *  FPS text-width change shifted the whole row between reads,
+ *  producing "child outside parent" failures whose own diagnostic
+ *  snapshot still showed agreement. Rule for callers: NEVER compare
+ *  rects gathered from separate evaluate calls for this row — always
+ *  read from one snapshot. The `rects` map is keyed by the caller's
+ *  selector strings so assertion sites are grep-friendly. */
+type LayoutSnapshot = {
+  rects: Record<string, RectLike | null>
+  diags: LayoutDiag[]
+  /** Precomputed `fmtDiag` join — stitched into assertion messages so
+   *  a CI failure tells us WHY from the same snapshot that produced
+   *  the failing rects. */
+  summary: string
+}
+async function getLayoutSnapshot(page: Page, selectors: string[]): Promise<LayoutSnapshot> {
+  const { rects, diags } = await page.evaluate((sels) => {
+    const rects: Record<string, RectLike | null> = {}
+    const diags: LayoutDiag[] = sels.map((sel) => {
+      const el = document.querySelector(sel) as HTMLElement | null
+      if (!el) {
+        rects[sel] = null
+        return {
+          selector: sel,
+          display: null, width: null, minWidth: null, maxWidth: null,
+          boxSizing: null, flex: null, rect: null,
+        }
+      }
+      const cs = getComputedStyle(el)
+      const r = el.getBoundingClientRect()
+      const rect: RectLike = {
+        left: r.left, right: r.right, top: r.top, bottom: r.bottom,
+        width: r.width, height: r.height,
+      }
+      rects[sel] = rect
+      return {
+        selector: sel,
+        display: cs.display,
+        width: cs.width,
+        minWidth: cs.minWidth,
+        maxWidth: cs.maxWidth,
+        boxSizing: cs.boxSizing,
+        flex: cs.flex,
+        rect,
+      }
+    })
+    return { rects, diags }
+  // Inline the RectLike / LayoutDiag shapes inside the browser context
+  // (types are erased by the Playwright serializer; names are ours).
+  }, selectors) as { rects: Record<string, RectLike | null>; diags: LayoutDiag[] }
+  const summary = diags.map(fmtDiag).join('\n  ')
+  return { rects, diags, summary }
+}
+
 test.describe('Top-right layout — AccountControl + FPSDisplay flex container', () => {
   test('signed-in chip and FPS display sit inside one .topbar-right container and do not overlap', async ({ page, baseURL }) => {
     await gotoApp(page, baseURL!, '/lab/')
@@ -230,48 +280,53 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
       status: 'signed-in',
       session: { userId: 'u1', displayName: 'Alice Smith' },
     })
+    // Freeze the FPS text inputs so the right-anchored row stops
+    // shifting between reads — the primary root cause of the CI-only
+    // flake was a 5 Hz status tick landing mid-measurement.
+    await pinFpsState(page)
 
-    // Wait on every link in the wrapper chain — without `.account-control`
+    // Wait on every link in the wrapper chain — without the wrapper
     // here the wrapper-vs-trigger boundary slipped silently in CI.
+    // Matches the signed-out spec's data-testid selector so both
+    // paths use the same targeting contract.
     await waitForStableRects(page, [
       '[data-testid="account-chip"]',
-      '.account-control',
+      '[data-testid="account-control"]',
       '.react-fps',
       '.topbar-right',
     ])
 
-    // Capture computed styles + rects up front. Stitched into every
-    // assertion message below so a CI failure tells us WHY in one log
-    // (display / width / min-width / max-width / box-sizing / flex)
-    // instead of just the offending rect.
-    const diag = await getLayoutDiagnostics(page, [
-      '[data-testid="account-chip"]',
-      '.account-control',
-      '.topbar-right',
-      '.react-fps',
-    ])
-    const diagSummary = diag.map(fmtDiag).join('\n  ')
-
-    const container = await rectOf(page, '.topbar-right')
-    const wrapper = await rectOf(page, '.account-control')
-    const chip = await rectOf(page, '[data-testid="account-chip"]')
-    const fps = await rectOf(page, '.react-fps')
-    expect(container, `container missing. diag:\n  ${diagSummary}`).not.toBeNull()
-    expect(wrapper, `wrapper missing. diag:\n  ${diagSummary}`).not.toBeNull()
-    expect(chip, `chip missing. diag:\n  ${diagSummary}`).not.toBeNull()
-    expect(fps, `fps missing. diag:\n  ${diagSummary}`).not.toBeNull()
+    // ONE atomic snapshot — every rect and computed-style reading
+    // compared below comes from the same layout pass. Historical failures
+    // came from comparing rects gathered by separate `page.evaluate`
+    // round-trips that a mid-frame FPS tick could split across.
+    const SELECTORS = {
+      chip: '[data-testid="account-chip"]',
+      wrapper: '[data-testid="account-control"]',
+      container: '.topbar-right',
+      fps: '.react-fps',
+    }
+    const snap = await getLayoutSnapshot(page, Object.values(SELECTORS))
+    const chip = snap.rects[SELECTORS.chip]
+    const wrapper = snap.rects[SELECTORS.wrapper]
+    const container = snap.rects[SELECTORS.container]
+    const fps = snap.rects[SELECTORS.fps]
+    expect(chip, `chip missing. diag:\n  ${snap.summary}`).not.toBeNull()
+    expect(wrapper, `wrapper missing. diag:\n  ${snap.summary}`).not.toBeNull()
+    expect(container, `container missing. diag:\n  ${snap.summary}`).not.toBeNull()
+    expect(fps, `fps missing. diag:\n  ${snap.summary}`).not.toBeNull()
 
     // Three-step chain mirroring the signed-out spec — pinpoints which
     // boundary slipped if the layout regresses again. Diagnostics
     // appended so the CI message is self-contained.
     expectWithinContainer(chip!, wrapper!, CONTAINER_EDGE_SLACK_PX,
-      `chip inside .account-control [diag]\n  ${diagSummary}`)
+      `chip inside .account-control [diag]\n  ${snap.summary}`)
     expectWithinContainer(wrapper!, container!, CONTAINER_EDGE_SLACK_PX,
-      `.account-control inside .topbar-right [diag]\n  ${diagSummary}`)
+      `.account-control inside .topbar-right [diag]\n  ${snap.summary}`)
     expectWithinContainer(chip!, container!, CONTAINER_EDGE_SLACK_PX,
-      `chip inside .topbar-right [diag]\n  ${diagSummary}`)
+      `chip inside .topbar-right [diag]\n  ${snap.summary}`)
     expectWithinContainer(fps!, container!, CONTAINER_EDGE_SLACK_PX,
-      `FPS inside .topbar-right [diag]\n  ${diagSummary}`)
+      `FPS inside .topbar-right [diag]\n  ${snap.summary}`)
 
     // Chip sits to the LEFT of FPS (flex row, natural order). Tight
     // tolerance: a chip that visibly overlaps FPS by 2 px IS a regression.
@@ -297,11 +352,16 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
       },
     })
 
+    await pinFpsState(page)
     await waitForStableRects(page, ['[data-testid="account-chip"]', '.react-fps'])
-    const chip = await rectOf(page, '[data-testid="account-chip"]')
-    const fps = await rectOf(page, '.react-fps')
-    expect(chip).not.toBeNull()
-    expect(fps).not.toBeNull()
+    // ONE atomic snapshot — chip-vs-FPS overlap is a single-frame
+    // question, so comparing rects from separate round-trips would
+    // reintroduce the CI flake mode.
+    const snap = await getLayoutSnapshot(page, ['[data-testid="account-chip"]', '.react-fps'])
+    const chip = snap.rects['[data-testid="account-chip"]']
+    const fps = snap.rects['.react-fps']
+    expect(chip, `chip missing. diag:\n  ${snap.summary}`).not.toBeNull()
+    expect(fps, `fps missing. diag:\n  ${snap.summary}`).not.toBeNull()
 
     // Overlap check — the whole point of the flex container is to keep
     // these two rectangles disjoint even with pathological label widths.
@@ -323,6 +383,8 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
     await gotoApp(page, baseURL!, '/lab/')
     await waitForUIState(page)
     await setAuthState(page, { status: 'signed-out', session: null })
+    // Freeze the FPS text inputs — see pinFpsState for the "why".
+    await pinFpsState(page)
 
     // Wait on every link in the chain — `[data-testid="account-control"]`
     // (stricter than the class selector) catches the wrapper.
@@ -333,32 +395,29 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
       '.react-fps',
     ])
 
-    // Capture computed styles + rects up front. Stitched into every
-    // assertion message below so a CI failure tells us WHY in one log
-    // (display / width / min-width / max-width / box-sizing / flex)
-    // instead of just the offending rect — mirrors the signed-in spec.
-    const diag = await getLayoutDiagnostics(page, [
-      '[data-testid="account-signin"]',
-      '[data-testid="account-control"]',
-      '.topbar-right',
-      '.react-fps',
-    ])
-    const diagSummary = diag.map(fmtDiag).join('\n  ')
+    // ONE atomic snapshot for the pre-click geometry chain — see the
+    // matching comment in the signed-in spec. Historical flake had
+    // trigger.left ~9 px outside .account-control.left because a 5 Hz
+    // status tick shifted `.react-fps`'s text width between two
+    // separate `page.evaluate` calls; anchoring all reads to one
+    // snapshot removes the race.
+    const SELECTORS = {
+      trigger: '[data-testid="account-signin"]',
+      wrapper: '[data-testid="account-control"]',
+      container: '.topbar-right',
+      fps: '.react-fps',
+    }
+    const snap = await getLayoutSnapshot(page, Object.values(SELECTORS))
+    const trigger = snap.rects[SELECTORS.trigger]
+    const wrapper = snap.rects[SELECTORS.wrapper]
+    const container = snap.rects[SELECTORS.container]
+    expect(trigger, `trigger missing. diag:\n  ${snap.summary}`).not.toBeNull()
+    expect(wrapper, `wrapper missing. diag:\n  ${snap.summary}`).not.toBeNull()
+    expect(container, `container missing. diag:\n  ${snap.summary}`).not.toBeNull()
 
-    const trigger = await rectOf(page, '[data-testid="account-signin"]')
-    const wrapper = await rectOf(page, '[data-testid="account-control"]')
-    const container = await rectOf(page, '.topbar-right')
-    expect(trigger, `trigger missing. diag:\n  ${diagSummary}`).not.toBeNull()
-    expect(wrapper, `wrapper missing. diag:\n  ${diagSummary}`).not.toBeNull()
-    expect(container, `container missing. diag:\n  ${diagSummary}`).not.toBeNull()
-
-    // History: a previous Linux-Chromium flake had trigger.left ~1 px
-    // outside container.left. After it grew to ~9 px (signed-out) and
-    // then ~8 px (signed-in chip variant) in CI, the root cause was
-    // tracked first to shrink-to-fit ambiguity inside an absolute-
-    // positioned auto-width row, then to a wrapper-vs-trigger
-    // alignment quirk on the signed-out path (same widths, ~9 px
-    // position drift). Current contract:
+    // Three-step chain below pinpoints which boundary slipped on a
+    // future regression; diagnostics tell us which CSS property
+    // diverged. Current contract:
     //   .topbar-right            display: inline-flex
     //                            max-width: calc(100vw - 24px)
     //   .account-control         display: flex (NOT inline-flex)
@@ -373,20 +432,26 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
     //                            box-sizing: border-box
     //   .account-control__trigger--signin justify-content: flex-start
     //   .account-control__trigger--chip   min-width: max-content
-    // Three-step chain below pinpoints which boundary slipped on
-    // future regression; diagnostics tell us which CSS property
-    // diverged.
     expectWithinContainer(trigger!, wrapper!, CONTAINER_EDGE_SLACK_PX,
-      `signin trigger inside .account-control [diag]\n  ${diagSummary}`)
+      `signin trigger inside .account-control [diag]\n  ${snap.summary}`)
     expectWithinContainer(wrapper!, container!, CONTAINER_EDGE_SLACK_PX,
-      `.account-control inside .topbar-right [diag]\n  ${diagSummary}`)
+      `.account-control inside .topbar-right [diag]\n  ${snap.summary}`)
     expectWithinContainer(trigger!, container!, CONTAINER_EDGE_SLACK_PX,
-      `signin trigger inside .topbar-right [diag]\n  ${diagSummary}`)
+      `signin trigger inside .topbar-right [diag]\n  ${snap.summary}`)
 
-    // Open the menu and verify it stays within the viewport.
+    // Open the menu and verify it stays within the viewport. This is a
+    // separate measurement phase (the menu doesn't exist until click);
+    // the menu ↔ trigger relationship is reasserted from one fresh
+    // snapshot so the comparison is atomic.
     await page.click('[data-testid="account-signin"]')
-    const menu = await rectOf(page, '.account-control__menu')
-    expect(menu).not.toBeNull()
+    const post = await getLayoutSnapshot(page, [
+      '.account-control__menu',
+      '[data-testid="account-signin"]',
+    ])
+    const menu = post.rects['.account-control__menu']
+    const triggerAfter = post.rects['[data-testid="account-signin"]']
+    expect(menu, `menu missing. diag:\n  ${post.summary}`).not.toBeNull()
+    expect(triggerAfter, `trigger missing after click. diag:\n  ${post.summary}`).not.toBeNull()
     const vp = page.viewportSize()
     expect(menu!.left).toBeGreaterThanOrEqual(0)
     expect(menu!.right).toBeLessThanOrEqual(vp!.width + VIEWPORT_FIT_SLACK_PX)
@@ -396,8 +461,8 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
     // a regression.
     expect(
       menu!.top,
-      `menu must be anchored below trigger. ${fmtRect('menu', menu)} vs ${fmtRect('trigger', trigger)}`,
-    ).toBeGreaterThanOrEqual(trigger!.bottom - ORDERING_SLACK_PX)
+      `menu must be anchored below trigger. ${fmtRect('menu', menu)} vs ${fmtRect('trigger', triggerAfter)}`,
+    ).toBeGreaterThanOrEqual(triggerAfter!.bottom - ORDERING_SLACK_PX)
   })
 
   test('mobile viewport: chip and FPS remain disjoint and inside viewport', async ({ page, baseURL }) => {
@@ -408,14 +473,22 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
       status: 'signed-in',
       session: { userId: 'u1', displayName: 'Alice' },
     })
+    await pinFpsState(page)
     await waitForStableRects(page, ['[data-testid="account-chip"]', '.react-fps', '.topbar-right'])
 
-    const chip = await rectOf(page, '[data-testid="account-chip"]')
-    const fps = await rectOf(page, '.react-fps')
-    const container = await rectOf(page, '.topbar-right')
-    expect(chip).not.toBeNull()
-    expect(fps).not.toBeNull()
-    expect(container).not.toBeNull()
+    // ONE atomic snapshot so the overlap + viewport-fit assertions
+    // read the same layout frame.
+    const snap = await getLayoutSnapshot(page, [
+      '[data-testid="account-chip"]',
+      '.react-fps',
+      '.topbar-right',
+    ])
+    const chip = snap.rects['[data-testid="account-chip"]']
+    const fps = snap.rects['.react-fps']
+    const container = snap.rects['.topbar-right']
+    expect(chip, `chip missing. diag:\n  ${snap.summary}`).not.toBeNull()
+    expect(fps, `fps missing. diag:\n  ${snap.summary}`).not.toBeNull()
+    expect(container, `container missing. diag:\n  ${snap.summary}`).not.toBeNull()
 
     // No overlap at 375px width.
     expect(rectsOverlap(chip!, fps!)).toBe(false)
