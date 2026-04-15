@@ -274,7 +274,7 @@ export function AccountControl() {
   return (
     <div className="account-control" ref={rootRef} data-testid="account-control" data-auth-status={status}>
       <button
-        className="account-control__trigger"
+        className="account-control__trigger account-control__trigger--signin"
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}

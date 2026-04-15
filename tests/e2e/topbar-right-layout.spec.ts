@@ -324,40 +324,64 @@ test.describe('Top-right layout — AccountControl + FPSDisplay flex container',
     await waitForUIState(page)
     await setAuthState(page, { status: 'signed-out', session: null })
 
-    await waitForStableRects(page, ['[data-testid="account-signin"]', '.topbar-right', '.account-control'])
+    // Wait on every link in the chain — `[data-testid="account-control"]`
+    // (stricter than the class selector) catches the wrapper.
+    await waitForStableRects(page, [
+      '[data-testid="account-signin"]',
+      '[data-testid="account-control"]',
+      '.topbar-right',
+      '.react-fps',
+    ])
+
+    // Capture computed styles + rects up front. Stitched into every
+    // assertion message below so a CI failure tells us WHY in one log
+    // (display / width / min-width / max-width / box-sizing / flex)
+    // instead of just the offending rect — mirrors the signed-in spec.
+    const diag = await getLayoutDiagnostics(page, [
+      '[data-testid="account-signin"]',
+      '[data-testid="account-control"]',
+      '.topbar-right',
+      '.react-fps',
+    ])
+    const diagSummary = diag.map(fmtDiag).join('\n  ')
+
     const trigger = await rectOf(page, '[data-testid="account-signin"]')
-    expect(trigger).not.toBeNull()
-    const wrapper = await rectOf(page, '.account-control')
-    expect(wrapper).not.toBeNull()
+    const wrapper = await rectOf(page, '[data-testid="account-control"]')
     const container = await rectOf(page, '.topbar-right')
-    expect(container).not.toBeNull()
+    expect(trigger, `trigger missing. diag:\n  ${diagSummary}`).not.toBeNull()
+    expect(wrapper, `wrapper missing. diag:\n  ${diagSummary}`).not.toBeNull()
+    expect(container, `container missing. diag:\n  ${diagSummary}`).not.toBeNull()
+
     // History: a previous Linux-Chromium flake had trigger.left ~1 px
     // outside container.left. After it grew to ~9 px (signed-out) and
     // then ~8 px (signed-in chip variant) in CI, the root cause was
-    // tracked to shrink-to-fit ambiguity inside an absolute-positioned
-    // auto-width row — both the wrapper AND the trigger had implicit
-    // intrinsic-sizing behaviour that Linux Chromium resolved
-    // narrower than other engines. Current contract:
+    // tracked first to shrink-to-fit ambiguity inside an absolute-
+    // positioned auto-width row, then to a wrapper-vs-trigger
+    // alignment quirk on the signed-out path (same widths, ~9 px
+    // position drift). Current contract:
     //   .topbar-right            display: inline-flex
     //                            max-width: calc(100vw - 24px)
-    //   .account-control         display: inline-flex
+    //   .account-control         display: flex (NOT inline-flex)
     //                            flex: 0 0 auto
     //                            width: max-content
     //   .account-control__trigger appearance: none
+    //                            margin: 0
+    //                            display: flex (NOT inline-flex)
     //                            flex: 0 0 auto
     //                            width: max-content
+    //                            min-width: max-content
     //                            box-sizing: border-box
-    //   .account-control__trigger--chip min-width: max-content
-    // The chain is asserted three steps below so a future regression
-    // names the offending boundary in the failure message.
-    //
-    // Asserting the chain in three steps — trigger ⊂ wrapper ⊂ container
-    // — pinpoints which boundary slipped if the layout regresses again,
-    // instead of leaving us guessing whether the flex item or the
-    // container miscomputed.
-    expectWithinContainer(trigger!, wrapper!, CONTAINER_EDGE_SLACK_PX, 'signin trigger inside .account-control')
-    expectWithinContainer(wrapper!, container!, CONTAINER_EDGE_SLACK_PX, '.account-control inside .topbar-right')
-    expectWithinContainer(trigger!, container!, CONTAINER_EDGE_SLACK_PX, 'signin trigger inside .topbar-right')
+    //   .account-control__trigger--signin justify-content: flex-start
+    //   .account-control__trigger--chip   min-width: max-content
+    // Three-step chain below pinpoints which boundary slipped on
+    // future regression; diagnostics tell us which CSS property
+    // diverged.
+    expectWithinContainer(trigger!, wrapper!, CONTAINER_EDGE_SLACK_PX,
+      `signin trigger inside .account-control [diag]\n  ${diagSummary}`)
+    expectWithinContainer(wrapper!, container!, CONTAINER_EDGE_SLACK_PX,
+      `.account-control inside .topbar-right [diag]\n  ${diagSummary}`)
+    expectWithinContainer(trigger!, container!, CONTAINER_EDGE_SLACK_PX,
+      `signin trigger inside .topbar-right [diag]\n  ${diagSummary}`)
 
     // Open the menu and verify it stays within the viewport.
     await page.click('[data-testid="account-signin"]')

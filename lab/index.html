@@ -671,12 +671,16 @@ canvas { display: block; touch-action: none; }
    * control's right edge; `position: relative` gives it one without
    * coupling to viewport coordinates.
    *
-   * `display: inline-flex` + `flex: 0 0 auto` + `width: max-content`
-   * pins the slot to the trigger's intrinsic width. This pairs with
-   * `width: max-content` on .topbar-right above to remove the cross-
-   * platform shrink-to-fit ambiguity that produced the CI flake. */
+   * `display: flex` (NOT `inline-flex`): .account-control is already a
+   * flex item of .topbar-right and doesn't need inline-level outer
+   * behaviour. Nested `inline-flex` chains in CI surfaced a Linux-only
+   * misalignment where the wrapper's reported left edge sat ~9 px to
+   * the right of its sole child trigger (same width, different
+   * position). Plain `flex` here removes one inline-formatting path.
+   * `flex: 0 0 auto; width: max-content` keeps the wrapper pinned to
+   * its trigger's intrinsic width. */
   position: relative;
-  display: inline-flex;
+  display: flex;
   flex: 0 0 auto;
   width: max-content;
   font-size: var(--font-xs);
@@ -686,22 +690,39 @@ canvas { display: block; touch-action: none; }
    * (Linux Chromium vs. macOS Chromium can disagree by several pixels
    * on a native <button>); the trigger is now a pure CSS box.
    *
-   * `flex: 0 0 auto; width: max-content; box-sizing: border-box`
-   * pins the trigger's contribution to the wrapper at its intrinsic
-   * width — no more residual UA/inline-formatting heuristics. The
-   * wrapper above already pins itself to its content; pinning the
-   * trigger as well closes the chain. */
+   * The CI failure presented as equal widths but different left edges
+   * (~9 px drift between trigger and its wrapper on Linux Chromium).
+   * Switching from `inline-flex` to `flex` and resetting button
+   * `margin` removed that drift in practice — recorded here as the
+   * observed successful fix, not the only possible lever (browser
+   * layout has plenty of other indirect position influences).
+   *
+   * `flex: 0 0 auto; width: max-content; min-width: max-content;
+   * box-sizing: border-box` floors and pins the trigger's
+   * contribution. */
   appearance: none;
   -webkit-appearance: none;
+  margin: 0;
+  display: flex;
   flex: 0 0 auto;
   width: max-content;
+  min-width: max-content;
   box-sizing: border-box;
+  align-items: center; gap: 6px;
   background: transparent; border: 1px solid transparent;
   color: var(--color-text-secondary);
   padding: 6px 10px; border-radius: var(--radius-sm);
   font-size: inherit; line-height: 1.3; cursor: pointer;
-  display: inline-flex; align-items: center; gap: 6px;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+/* Signed-out variant. Acknowledges that the signed-out and signed-in
+ * trigger have diverged in browser layout behaviour; declaring its
+ * own contract lets us harden the Sign-in path independently of the
+ * chip path and keeps future test failures easy to map to the
+ * right CSS rule. */
+.account-control__trigger--signin {
+  justify-content: flex-start;
+  text-align: left;
 }
 .account-control__trigger:hover,
 .account-control__trigger:focus-visible {
