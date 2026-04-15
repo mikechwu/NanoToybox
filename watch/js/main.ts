@@ -63,6 +63,13 @@ if (qp.get('e2e') === '1') {
       activeInterpolationMethod: snap.activeInterpolationMethod,
       lastFallbackReason: snap.lastFallbackReason,
       importDiagnosticCodes: snap.importDiagnostics.map(d => d.code),
+      // Open-flow progress: the discriminated union drives E2E
+      // assertions on stage transitions + progress-bar mode. Emit as
+      // a plain object so Playwright's page.evaluate can serialize it.
+      openProgress: snap.openProgress,
+      // Compatibility shim derived from openProgress — kept for short-
+      // term readers that haven't migrated to openProgress.stage yet.
+      loadingShareCode: snap.loadingShareCode,
     };
   };
   w._watchOpenFile = async (text: string, name: string) => {

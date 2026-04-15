@@ -212,9 +212,9 @@ NanoToybox/
 │       │   └── reconstructed-topology-source.ts # Reconstructs bonds from dense frames via buildBondTopologyFromPositions + resolveBondPolicy(); object-identity cache by dense-frame index
 │       ├── settings-content.ts       # Structured help section data for WatchSettingsSheet (viewer-specific, not cloned from lab)
 │       └── components/
-│           ├── WatchApp.tsx              # Top-level shell: landing vs workspace switching
+│           ├── WatchApp.tsx              # Top-level shell: always renders workspace; WatchOpenPanel overlays the canvas area until a file is loaded
 │           ├── WatchCanvas.tsx           # Renderer lifecycle via useEffect + ref (create/destroy only)
-│           ├── WatchLanding.tsx          # File-open landing with drag/drop
+│           ├── WatchOpenPanel.tsx        # Empty-state centered overlay (role=region): share-link primary, file secondary; renders loading progress bar during `?c=` open
 │           ├── WatchTopBar.tsx           # Top-left info panel (`.watch-info-panel`): kind chip + filename + Open Link / Open File actions
 │           ├── WatchDock.tsx             # 3-zone hierarchical dock: transport (tap=step, hold=directional play), speed (log slider), repeat + Smooth toggle + settings
 │           ├── WatchTimeline.tsx         # Custom scrubber track using shared timeline-track.css primitives (full-width, no mode rail)
@@ -842,9 +842,11 @@ react-root.tsx (mountWatchUI → createRoot)
        ▼
 WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
        │
-       ├── WatchLanding              ← file open / drag-drop landing (shown when !loaded)
+       ├── [workspace]               ← always rendered (canvas + bottom chrome)
+       ├── WatchOpenPanel            ← overlays .watch-canvas-area while !snapshot.loaded;
+       │                                drives share-link entry + stage-specific loading progress
        │
-       └── [workspace]               ← shown when loaded:
+       └── [loaded-only panels]      ← right rail (info + bonded clusters) only when loaded:
            ├── WatchTopBar           ← top-left corner info panel (kind chip + filename + Open Link / Open File)
            ├── WatchCanvas           ← owns renderer create/destroy lifecycle only
            │                            (controller's RAF loop pushes frames to renderer)
@@ -882,7 +884,7 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
 - **settings-content.ts** — structured help section data (`WATCH_HELP_SECTIONS`) for `WatchSettingsSheet`. Viewer-specific content (not cloned from lab simulation instructions). Separates content from presentation.
 
 **React components:**
-- **WatchApp** — top-level shell. Subscribes to controller via `useSyncExternalStore(controller.subscribe, controller.getSnapshot)`. Routes between `WatchLanding` (no file loaded) and the workspace layout (file loaded). Owns local panel expand/collapse and sheet open/close state.
+- **WatchApp** — top-level shell. Subscribes to controller via `useSyncExternalStore(controller.subscribe, controller.getSnapshot)`. Always renders the workspace (canvas area + bottom chrome); overlays `WatchOpenPanel` inside `.watch-canvas-area` while `!snapshot.loaded`, and mounts the right rail (`WatchTopBar` + `WatchBondedGroupsPanel`) only when a file is loaded. Passes `emptyStateBlocked={!snapshot.loaded}` into `WatchDock` so the dock's non-playback controls (Repeat, speed, Settings) are inert behind the open panel. Owns local panel expand/collapse and sheet open/close state.
 - **WatchCanvas** — owns Three.js renderer create/destroy lifecycle only. Creates the renderer via `controller.createRenderer()` on mount, destroys and detaches on unmount. Does NOT own the playback clock or frame updates -- the controller's RAF loop pushes frames into the renderer directly.
 - **WatchDock** — 3-zone playback dock with consistent icon+label columns at every breakpoint. Transport zone (4-column grid): Back, Play, Fwd, Repeat. Back/Play/Fwd use tap=step, hold=directional play via pointer capture (`HOLD_PLAY_THRESHOLD_MS` from shared speed constants); Repeat is a preference toggle that stays enabled even when no file is loaded. Speed zone: `PlaybackSpeedControl` (log-mapped slider + "Speed · 1.0x" meta row). Settings zone: Settings button. Smooth playback lives in Settings only (default ON). Uses shared `dock-shell.css` and `dock-tokens.css` plus watch-specific `watch-dock.css`.
 - **WatchTimeline** — custom scrubber using shared `timeline-track.css` primitives (`.timeline-track`, `.timeline-fill`, `.timeline-thumb`). Full-width track (no mode rail -- watch advantage over lab). Drag resilience via pointer capture with fallback. Uses `formatTime` from lab's `timeline-format.ts`.
@@ -890,7 +892,7 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
 - **PlaybackSpeedControl** — column-shaped speed control: log-mapped slider on top inside a fixed 18 px row (`.watch-dock__speed-slider-row`) so the thumb centerline aligns with `.dock-icon` glyphs in neighboring columns across browsers; "Speed · 1.0x" meta row below. The numeric readout (`.watch-dock__speed-value`) is a click-to-reset button, disabled at default to make the no-op visible. Uses `sliderToSpeed`, `speedToSlider`, `formatSpeed`, `SPEED_DEFAULT` from shared `playback-speed-constants.ts`.
 - **WatchBondedGroupsPanel** — collapsible bonded-group inspector with two-level display (large/small clusters via `partitionBondedGroups` from `src/history/bonded-group-utils.ts`). Includes color chip + popover for per-group color assignment. Uses shared `review-parity.css` and `bonded-groups-parity.css`.
 - **WatchTopBar** — top-left corner info panel (`.watch-info-panel` in `watch/css/watch.css`). Renders the file-kind chip, truncated filename, and two parallel actions: **Open Link** (paste a share URL/code) and **Open File** (local file picker). Surface tokens mirror `.bg-panel` so both canvas-corner panels read as one family.
-- **WatchLanding** — drag-drop zone and open-file button for initial file selection.
+- **WatchOpenPanel** — centered empty-state overlay that replaces the former `WatchLanding` page. Renders a share-link form as the primary CTA and an "Open local file" button plus drag/drop as the secondary path. While `openProgress.kind !== 'idle'` (share or local file in flight), swaps to stage copy (`Finding shared capsule…` / `Downloading capsule… 42%` / `Preparing interactive playback…`) and a slim progress bar whose mode is `determinate` only when `totalBytes` is known (hybrid progress model; no fabricated percent). Accessibility: `role="region" aria-labelledby` — the workspace behind the panel is non-interactive in empty state (right rail hidden; WatchTimeline drops slider role; WatchDock's non-playback controls disabled via `emptyStateBlocked`), so no focus trap is required.
 
 **State model:** watch/ has no Zustand store. The `WatchController` holds all mutable state across its domain services as plain local variables in closures. React components subscribe via `useSyncExternalStore` -- the controller publishes immutable `WatchControllerSnapshot` objects and notifies listeners on change. Local UI state (panel expanded, small clusters expanded, sheet open) lives in React `useState`.
 

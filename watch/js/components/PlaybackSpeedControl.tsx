@@ -16,9 +16,13 @@ import {
 interface PlaybackSpeedControlProps {
   speed: number;
   onSpeedChange: (speed: number) => void;
+  /** When true, disables BOTH the range input AND the reset-to-1x
+   *  button regardless of `isAtDefault`. Set by callers that own an
+   *  empty-state gate (e.g. WatchDock's `emptyStateBlocked`). */
+  disabled?: boolean;
 }
 
-export function PlaybackSpeedControl({ speed, onSpeedChange }: PlaybackSpeedControlProps) {
+export function PlaybackSpeedControl({ speed, onSpeedChange, disabled = false }: PlaybackSpeedControlProps) {
   const isAtDefault = speed === SPEED_DEFAULT;
   return (
     <div className="watch-dock__speed">
@@ -39,18 +43,20 @@ export function PlaybackSpeedControl({ speed, onSpeedChange }: PlaybackSpeedCont
           value={speedToSlider(speed)}
           onChange={(e) => onSpeedChange(sliderToSpeed(parseFloat(e.target.value)))}
           aria-label="Playback speed"
+          disabled={disabled}
         />
       </div>
       {/* Meta row — "Speed · 1.0x" centered under the slider.
           The label is static; the value is the click-to-reset button.
-          Disabled at default so the no-op click is visually honest. */}
+          Disabled at default so the no-op click is visually honest —
+          plus the caller-driven `disabled` gate for empty-state. */}
       <div className="watch-dock__speed-meta">
         <span className="watch-dock__speed-label" aria-hidden="true">Speed</span>
         <span className="watch-dock__speed-sep" aria-hidden="true">·</span>
         <button
           className="watch-dock__speed-value"
           onClick={() => onSpeedChange(SPEED_DEFAULT)}
-          disabled={isAtDefault}
+          disabled={disabled || isAtDefault}
           title={isAtDefault ? 'Already at 1x' : 'Reset to 1x'}
           aria-label={
             isAtDefault

@@ -6,7 +6,7 @@
 
 import React, { useState, useCallback, useSyncExternalStore } from 'react';
 import type { WatchController } from '../watch-controller';
-import { WatchLanding } from './WatchLanding';
+import { WatchOpenPanel } from './WatchOpenPanel';
 import { WatchTopBar } from './WatchTopBar';
 import { WatchCanvas } from './WatchCanvas';
 import { WatchBondedGroupsPanel } from './WatchBondedGroupsPanel';
@@ -87,19 +87,15 @@ export function WatchApp({ controller }: WatchAppProps) {
     </div>
   ) : null;
 
-  if (!snapshot.loaded) {
-    return (
-      <>
-        {errorBanner}
-        <WatchLanding
-          onOpenFile={handleOpenFile}
-          onDrop={handleDrop}
-          onOpenShareCode={handleOpenShareCode}
-          loadingShareCode={snapshot.loadingShareCode}
-        />
-      </>
-    );
-  }
+  // Workspace-first rendering: canvas area + bottom chrome are always
+  // mounted. Right-rail info panel + bonded-groups inspector are
+  // conditionally rendered only when a file is loaded (they have no
+  // content or context in empty state). The open panel overlays
+  // `.watch-canvas-area` while `!snapshot.loaded`. The dock's
+  // non-playback controls are disabled via `emptyStateBlocked` so the
+  // open panel's `role="region"` a11y claim (nothing behind it to
+  // trap) actually holds.
+  const isLoaded = snapshot.loaded;
 
   return (
     <>
@@ -107,34 +103,48 @@ export function WatchApp({ controller }: WatchAppProps) {
       <div className="watch-workspace">
         <div className="watch-canvas-area">
           <WatchCanvas controller={controller} />
-          {/* Right rail — stacked panels share surface tokens and right
-              inset so they read as one column. Info panel (what am I
-              watching) sits above the bonded-clusters inspector. */}
-          <div className="watch-analysis">
-            <WatchTopBar
-              fileKind={snapshot.fileKind}
-              fileName={snapshot.fileName}
-              loadingShareCode={snapshot.loadingShareCode}
-              onOpenFile={handleOpenFile}
-              onOpenShareCode={handleOpenShareCode}
-            />
-            <WatchBondedGroupsPanel
-              groups={snapshot.groups}
-              expanded={panelExpanded}
-              smallExpanded={smallExpanded}
-              onToggleExpanded={() => setPanelExpanded(e => !e)}
-              onToggleSmallExpanded={() => setSmallExpanded(e => !e)}
-              following={snapshot.following}
-              followedGroupId={snapshot.followedGroupId}
-              onHover={(id) => controller.hoverGroup(id)}
-              onCenter={(id) => controller.centerOnGroup(id)}
-              onFollow={(id) => controller.followGroup(id)}
-              onUnfollow={() => controller.unfollowGroup()}
-              onApplyGroupColor={(id, hex) => controller.applyGroupColor(id, hex)}
-              onClearGroupColor={(id) => controller.clearGroupColor(id)}
-              getGroupColorState={(id) => controller.getGroupColorState(id)}
-            />
-          </div>
+          {isLoaded && (
+            /* Right rail — stacked panels share surface tokens and right
+               inset so they read as one column. Info panel (what am I
+               watching) sits above the bonded-clusters inspector. */
+            <div className="watch-analysis">
+              <WatchTopBar
+                fileKind={snapshot.fileKind}
+                fileName={snapshot.fileName}
+                loadingShareCode={snapshot.loadingShareCode}
+                onOpenFile={handleOpenFile}
+                onOpenShareCode={handleOpenShareCode}
+              />
+              <WatchBondedGroupsPanel
+                groups={snapshot.groups}
+                expanded={panelExpanded}
+                smallExpanded={smallExpanded}
+                onToggleExpanded={() => setPanelExpanded(e => !e)}
+                onToggleSmallExpanded={() => setSmallExpanded(e => !e)}
+                following={snapshot.following}
+                followedGroupId={snapshot.followedGroupId}
+                onHover={(id) => controller.hoverGroup(id)}
+                onCenter={(id) => controller.centerOnGroup(id)}
+                onFollow={(id) => controller.followGroup(id)}
+                onUnfollow={() => controller.unfollowGroup()}
+                onApplyGroupColor={(id, hex) => controller.applyGroupColor(id, hex)}
+                onClearGroupColor={(id) => controller.clearGroupColor(id)}
+                getGroupColorState={(id) => controller.getGroupColorState(id)}
+              />
+            </div>
+          )}
+          {/* Empty-state open panel overlays the canvas area (inside
+              the 1fr grid row so it is naturally bounded above the
+              bottom chrome). `visible={!isLoaded}` returns null
+              otherwise. */}
+          <WatchOpenPanel
+            visible={!isLoaded}
+            openProgress={snapshot.openProgress}
+            error={snapshot.error}
+            onOpenShareCode={handleOpenShareCode}
+            onOpenFile={handleOpenFile}
+            onDrop={handleDrop}
+          />
         </div>
         {/* Bottom region: positioning-only root. Timeline + dock are sibling shells. */}
         <div className="bottom-region" data-watch-bottom-chrome>
@@ -158,6 +168,7 @@ export function WatchApp({ controller }: WatchAppProps) {
             onOpenSettings={handleOpenSettings}
             onStartDirectionalPlayback={handleStartDirectional}
             onStopDirectionalPlayback={handleStopDirectional}
+            emptyStateBlocked={!isLoaded}
           />
         </div>
       </div>

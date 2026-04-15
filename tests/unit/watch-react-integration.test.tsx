@@ -48,6 +48,7 @@ function makeSnapshot(overrides: Partial<WatchControllerSnapshot> = {}): WatchCo
     activeInterpolationMethod: 'linear',
     lastFallbackReason: 'none',
     importDiagnostics: [],
+    openProgress: { kind: 'idle' },
     loadingShareCode: null,
     ...overrides,
   };
@@ -109,27 +110,272 @@ function createMockController(initialSnapshot?: Partial<WatchControllerSnapshot>
 // ── Tests ──
 
 describe('WatchApp React integration', () => {
-  it('shows landing page when not loaded', () => {
+  it('renders Watch workspace and open panel when not loaded', () => {
     const ctrl = createMockController();
     const { container } = render(<WatchApp controller={ctrl} />);
-    expect(container.querySelector('.watch-landing')).not.toBeNull();
-    expect(container.querySelector('.watch-workspace')).toBeNull();
+    // Workspace shell is ALWAYS rendered now — the former
+    // `.watch-landing` page is deleted and the open panel overlays
+    // the canvas area instead.
+    expect(container.querySelector('.watch-workspace')).not.toBeNull();
+    expect(container.querySelector('.watch-open-panel')).not.toBeNull();
+    expect(container.querySelector('.watch-landing')).toBeNull();
+    // Right-rail panels are withheld in empty state.
+    expect(container.querySelector('.watch-analysis')).toBeNull();
   });
 
   it('shows workspace when loaded', () => {
     const ctrl = createMockController({ loaded: true, atomCount: 60, frameCount: 34, endTimePs: 100, fileKind: 'full' });
     const { container } = render(<WatchApp controller={ctrl} />);
-    expect(container.querySelector('.watch-landing')).toBeNull();
     expect(container.querySelector('.watch-workspace')).not.toBeNull();
+    expect(container.querySelector('.watch-open-panel')).toBeNull();
+    expect(container.querySelector('.watch-landing')).toBeNull();
+    // Right rail returns when a file is loaded.
+    expect(container.querySelector('.watch-analysis')).not.toBeNull();
   });
 
-  it('shows error banner on landing page', () => {
+  it('shows error banner while empty-state open panel is visible', () => {
     const ctrl = createMockController({ error: 'Bad file' });
     const { container } = render(<WatchApp controller={ctrl} />);
-    expect(container.querySelector('.watch-landing')).not.toBeNull();
+    expect(container.querySelector('.watch-open-panel')).not.toBeNull();
+    expect(container.querySelector('.watch-landing')).toBeNull();
     const banner = container.querySelector('.review-status-msg--error');
     expect(banner).not.toBeNull();
     expect(banner!.textContent).toBe('Bad file');
+  });
+
+  // ── Empty-state UX + open panel ──
+
+  it('empty state renders share input as primary and local file as secondary', () => {
+    const ctrl = createMockController();
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const panel = container.querySelector('.watch-open-panel');
+    expect(panel).not.toBeNull();
+    expect(panel!.querySelector('.watch-open-panel__input')).not.toBeNull();
+    expect(panel!.querySelector('.watch-open-panel__primary')).not.toBeNull();
+    // Secondary "Open local file" button lives below the primary form.
+    const secondary = panel!.querySelector('.watch-open-panel__secondary');
+    expect(secondary).not.toBeNull();
+    expect(secondary!.textContent?.trim()).toBe('Open local file');
+  });
+
+  it('submitting the share input invokes openSharedCapsule', async () => {
+    const openSharedCapsule = vi.fn(async () => { /* no-op success */ });
+    const ctrl = createMockController();
+    (ctrl as any).openSharedCapsule = openSharedCapsule;
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const input = container.querySelector<HTMLInputElement>('.watch-open-panel__input');
+    const form = container.querySelector<HTMLFormElement>('.watch-open-panel__form');
+    expect(input).not.toBeNull();
+    expect(form).not.toBeNull();
+    await act(async () => {
+      fireEvent.change(input!, { target: { value: 'ABC123DEF456' } });
+      fireEvent.submit(form!);
+    });
+    expect(openSharedCapsule).toHaveBeenCalledWith('ABC123DEF456');
+  });
+
+  it('failed share open preserves input and panel remains visible', async () => {
+    // The adapter resolves `false` when controller left an error.
+    const openSharedCapsule = vi.fn(async () => {
+      (ctrl as any).setSnapshot({ error: 'Shared capsule not found' });
+    });
+    const ctrl = createMockController();
+    (ctrl as any).openSharedCapsule = openSharedCapsule;
+    const { container, rerender } = render(<WatchApp controller={ctrl} />);
+    const input = container.querySelector<HTMLInputElement>('.watch-open-panel__input');
+    const form = container.querySelector<HTMLFormElement>('.watch-open-panel__form');
+    await act(async () => {
+      fireEvent.change(input!, { target: { value: 'BAD1234567AB' } });
+      fireEvent.submit(form!);
+    });
+    rerender(<WatchApp controller={ctrl} />);
+    // Input draft survives the 404.
+    const inputAfter = container.querySelector<HTMLInputElement>('.watch-open-panel__input');
+    expect(inputAfter!.value).toBe('BAD1234567AB');
+    // Panel still visible and error is surfaced.
+    expect(container.querySelector('.watch-open-panel')).not.toBeNull();
+    expect(container.querySelector('.review-status-msg--error')!.textContent).toBe('Shared capsule not found');
+  });
+
+  it('loading state disables input/buttons and shows Opening copy', () => {
+    const ctrl = createMockController({
+      openProgress: { kind: 'share', code: 'ABC123DEF456', stage: 'metadata' },
+      loadingShareCode: 'ABC123DEF456',
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    expect(container.querySelector('.watch-open-panel__title')!.textContent).toBe('Opening shared capsule');
+    expect(container.querySelector<HTMLInputElement>('.watch-open-panel__input')!.disabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>('.watch-open-panel__primary')!.disabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>('.watch-open-panel__secondary')!.disabled).toBe(true);
+    // Stage copy for metadata.
+    expect(container.querySelector('.watch-open-panel__body')!.textContent).toContain('Finding shared capsule');
+  });
+
+  it('local-file loading shows source-aware title "Opening local file"', () => {
+    const ctrl = createMockController({
+      openProgress: { kind: 'file', fileName: 'capsule.atomdojo', stage: 'prepare' },
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    // Title reflects the source path — NOT "Opening shared capsule".
+    expect(container.querySelector('.watch-open-panel__title')!.textContent).toBe('Opening local file');
+    // Body stage copy is shared ("Preparing interactive playback…").
+    expect(container.querySelector('.watch-open-panel__body')!.textContent).toContain('Preparing interactive playback');
+    // Share-code status line is NOT rendered for local-file opens
+    // (no code to display).
+    expect(container.querySelector('.watch-open-panel__status')).toBeNull();
+  });
+
+  it('download stage with known totalBytes renders a determinate bar with percent', () => {
+    const ctrl = createMockController({
+      openProgress: {
+        kind: 'share', code: 'ABC123DEF456', stage: 'download',
+        loadedBytes: 256_000, totalBytes: 1_000_000,
+      },
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const bar = container.querySelector<HTMLElement>('.watch-open-panel__progress');
+    expect(bar).not.toBeNull();
+    expect(bar!.getAttribute('data-progress-mode')).toBe('determinate');
+    expect(bar!.getAttribute('aria-valuenow')).toBe('26');
+    expect(container.querySelector('.watch-open-panel__body')!.textContent).toContain('26%');
+  });
+
+  it('aria-live announces only the stable stage label (percent is visual-only)', () => {
+    // The live region would otherwise chatter "Downloading 10%…
+    // 13%… 17%…" at ~3 fps — unacceptable for screen readers. The
+    // stable label lives inside aria-live; the detail (percent or
+    // loaded-bytes) renders OUTSIDE as a separate aria-hidden span.
+    const ctrl = createMockController({
+      openProgress: {
+        kind: 'share', code: 'ABC123DEF456', stage: 'download',
+        loadedBytes: 256_000, totalBytes: 1_000_000,
+      },
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const liveRegion = container.querySelector('.watch-open-panel__body [aria-live="polite"]');
+    expect(liveRegion).not.toBeNull();
+    // Live region text is the stable label — no numbers.
+    expect(liveRegion!.textContent).toBe('Downloading capsule…');
+    expect(liveRegion!.textContent).not.toMatch(/%|\d/);
+    // Detail span carries the percent but is aria-hidden so screen
+    // readers ignore it; the progressbar's aria-valuenow is the
+    // correct a11y channel for the numeric value.
+    const detail = container.querySelector('.watch-open-panel__detail');
+    expect(detail).not.toBeNull();
+    expect(detail!.getAttribute('aria-hidden')).toBe('true');
+    expect(detail!.textContent).toBe('26%');
+  });
+
+  it('download stage with null totalBytes renders indeterminate bar with bytes-loaded copy', () => {
+    const ctrl = createMockController({
+      openProgress: {
+        kind: 'share', code: 'ABC123DEF456', stage: 'download',
+        loadedBytes: 1_536_000, totalBytes: null,
+      },
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const bar = container.querySelector<HTMLElement>('.watch-open-panel__progress');
+    expect(bar!.getAttribute('data-progress-mode')).toBe('indeterminate');
+    expect(bar!.hasAttribute('aria-valuenow')).toBe(false);
+    // Body copy falls back to formatBytes output (e.g. "1.5 MB").
+    const body = container.querySelector('.watch-open-panel__body')!.textContent ?? '';
+    expect(body).toMatch(/Downloading capsule/);
+    expect(body).not.toMatch(/%/);
+  });
+
+  it('local-file button clicks the hidden file input', () => {
+    const ctrl = createMockController();
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const secondary = container.querySelector<HTMLButtonElement>('.watch-open-panel__secondary');
+    expect(secondary).not.toBeNull();
+    expect(secondary!.disabled).toBe(false);
+    expect(secondary!.textContent?.trim()).toBe('Open local file');
+
+    // Intercept the synthetic <input type="file"> created by
+    // WatchApp.handleOpenFile. We replace input.click() with a spy
+    // BEFORE the component's synchronous input.click() call runs,
+    // so the spy actually fires. (jsdom would throw trying to open
+    // a native picker anyway, so replacing .click is also necessary
+    // for the test to finish cleanly.)
+    const originalCreate = document.createElement.bind(document);
+    const inputClicks: HTMLInputElement[] = [];
+    const createSpy = vi.spyOn(document, 'createElement').mockImplementation(
+      ((tag: string, ...rest: any[]) => {
+        const el = (originalCreate as any)(tag, ...rest);
+        if (tag === 'input') {
+          const clickSpy = vi.fn(function (this: HTMLInputElement) { inputClicks.push(this); });
+          (el as HTMLInputElement).click = clickSpy as unknown as HTMLInputElement['click'];
+        }
+        return el;
+      }) as typeof document.createElement,
+    );
+
+    try {
+      fireEvent.click(secondary!);
+      expect(inputClicks.length).toBe(1);
+      expect(inputClicks[0].type).toBe('file');
+      expect(inputClicks[0].accept).toContain('.atomdojo');
+    } finally {
+      createSpy.mockRestore();
+    }
+  });
+
+  it('drag/drop is ignored while loading (no concurrent openFile)', async () => {
+    const openFile = vi.fn(async () => {});
+    const ctrl = createMockController({
+      openProgress: { kind: 'share', code: 'ABC123DEF456', stage: 'metadata' },
+      loadingShareCode: 'ABC123DEF456',
+    });
+    (ctrl as any).openFile = openFile;
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const panel = container.querySelector<HTMLElement>('.watch-open-panel');
+    expect(panel).not.toBeNull();
+
+    const file = new File(['{}'], 'test.atomdojo', { type: 'application/json' });
+    await act(async () => {
+      fireEvent.drop(panel!, { dataTransfer: { files: [file] } });
+    });
+
+    // The loading-disabled contract must apply across all input
+    // methods — drop-during-load must NOT kick off a concurrent
+    // openFile racing the in-flight share pipeline.
+    expect(openFile).not.toHaveBeenCalled();
+  });
+
+  it('stage-copy element is aria-live="polite" during loading (announces stage transitions)', () => {
+    const ctrl = createMockController({
+      openProgress: { kind: 'share', code: 'ABC123DEF456', stage: 'metadata' },
+      loadingShareCode: 'ABC123DEF456',
+    });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    // The body paragraph wraps the stage copy in a live span. The
+    // live attribute must be on the span that actually changes
+    // content between stages — not on the static share-code line.
+    const body = container.querySelector('.watch-open-panel__body');
+    expect(body).not.toBeNull();
+    const liveSpan = body!.querySelector('[aria-live="polite"]');
+    expect(liveSpan).not.toBeNull();
+    expect(liveSpan!.textContent).toContain('Finding shared capsule');
+    // Share-code status line is static across stages — no aria-live.
+    const status = container.querySelector('.watch-open-panel__status');
+    expect(status?.getAttribute('aria-live')).toBeNull();
+  });
+
+  it('dropping a file on the panel invokes controller.openFile', async () => {
+    const openFile = vi.fn(async () => {});
+    const ctrl = createMockController();
+    (ctrl as any).openFile = openFile;
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const panel = container.querySelector<HTMLElement>('.watch-open-panel');
+    expect(panel).not.toBeNull();
+    const file = new File(['{}'], 'test.atomdojo', { type: 'application/json' });
+    await act(async () => {
+      fireEvent.drop(panel!, {
+        dataTransfer: { files: [file] },
+      });
+    });
+    expect(openFile).toHaveBeenCalled();
+    expect((openFile.mock.calls as any[])[0][0]).toBe(file);
   });
 
   it('shows error banner while workspace remains visible (transactional failure)', () => {

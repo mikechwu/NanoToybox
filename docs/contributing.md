@@ -376,7 +376,7 @@ Watch (`watch/`) does **not** use Zustand. It uses a controller pattern where `w
 | Interpolation | `watch-trajectory-interpolation.ts` | Strategy registry, bracket lookup with cursor-cache fast path, preallocated output buffer, linear/Hermite/Catmull-Rom built-in strategies |
 | Renderer | `watch-renderer.ts` | Adapter over lab Renderer |
 
-**React components** (`watch/js/components/`): WatchApp, WatchCanvas, WatchDock, WatchTimeline, WatchTopBar, WatchBondedGroupsPanel, WatchLanding, WatchSettingsSheet, PlaybackSpeedControl.
+**React components** (`watch/js/components/`): WatchApp, WatchCanvas, WatchDock, WatchTimeline, WatchTopBar, WatchBondedGroupsPanel, WatchOpenPanel, WatchSettingsSheet, PlaybackSpeedControl.
 
 **Key rules:**
 - All state mutations go through the controller facade. Components call controller commands (e.g., `controller.togglePlay()`, `controller.hoverGroup(id)`).

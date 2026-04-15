@@ -58,22 +58,30 @@ export function WatchTimeline({ currentTimePs, startTimePs, endTimePs, onScrub }
     dragActive.current = false;
   }, []);
 
+  // Empty-state a11y: when no file is loaded (or the range is
+  // degenerate), drop the `role="slider"` + aria-value* attributes.
+  // Screen readers would otherwise announce a slider with valuemin ==
+  // valuemax == 0. Pointer handlers already no-op under `duration <= 0`,
+  // so removing the role has no behavior effect.
+  const isEmpty = duration <= 0;
+
   return (
     <div className="watch-timeline-lane">
       <span className="timeline-time">{formatTime(currentTimePs)}</span>
       <div
         ref={trackRef}
-        className="timeline-track timeline-track--thick"
+        className={`timeline-track timeline-track--thick${isEmpty ? ' timeline-track--empty' : ''}`}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
         onPointerLeave={handlePointerLeave}
-        role="slider"
-        aria-label="Timeline"
-        aria-valuemin={startTimePs}
-        aria-valuemax={endTimePs}
-        aria-valuenow={currentTimePs}
+        role={isEmpty ? undefined : 'slider'}
+        aria-label={isEmpty ? undefined : 'Timeline'}
+        aria-disabled={isEmpty || undefined}
+        aria-valuemin={isEmpty ? undefined : startTimePs}
+        aria-valuemax={isEmpty ? undefined : endTimePs}
+        aria-valuenow={isEmpty ? undefined : currentTimePs}
       >
         <div className="timeline-fill" style={{ width: `${progress * 100}%` }} />
         <div className="timeline-thumb" style={{ left: `${progress * 100}%` }} />

@@ -254,6 +254,37 @@ describe('WatchDock behavioral', () => {
     expect(repeat.disabled).toBe(false);
   });
 
+  // Sibling contract for the new empty-state a11y prop — covers the
+  // case the previous test does NOT: when the Watch open panel is
+  // visible (no file loaded), the dock's non-playback controls MUST
+  // be disabled too, so the panel's role="region" "nothing behind me
+  // to trap" claim actually holds. `speed=2` is load-bearing: it
+  // takes the reset-to-1x button out of its auto-disabled state so
+  // the `emptyStateBlocked` gate is what's under test.
+  it('emptyStateBlocked disables Repeat, speed range/reset, and Settings', () => {
+    const { container } = renderDock({ canPlay: false, emptyStateBlocked: true, speed: 2 });
+    const transport = container.querySelector('.watch-dock__transport');
+
+    const repeat = transport!.querySelector('button[aria-label="Repeat"]') as HTMLButtonElement;
+    expect(repeat).not.toBeNull();
+    expect(repeat.disabled).toBe(true);
+
+    const rangeInput = container.querySelector('input.watch-dock__speed-slider') as HTMLInputElement;
+    expect(rangeInput).not.toBeNull();
+    expect(rangeInput.disabled).toBe(true);
+
+    const resetBtn = container.querySelector('button.watch-dock__speed-value') as HTMLButtonElement;
+    expect(resetBtn).not.toBeNull();
+    // With speed=2 the auto-disabled (isAtDefault) branch is NOT the
+    // cause of disable — emptyStateBlocked is.
+    expect(resetBtn.disabled).toBe(true);
+
+    // Settings is always the last dock-item.
+    const allButtons = container.querySelectorAll('.dock-item');
+    const settings = allButtons[allButtons.length - 1] as HTMLButtonElement;
+    expect(settings.disabled).toBe(true);
+  });
+
   // Smooth playback is configured in Settings only (on by default);
   // dock-level Smooth tests were removed with the toggle itself.
   // Coverage for the toggle's behaviour lives in the WatchSettingsSheet

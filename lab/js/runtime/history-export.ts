@@ -149,12 +149,12 @@ export function buildFullHistoryFile(deps: HistoryExportDeps): AtomDojoHistoryFi
 }
 
 // ── Byte formatting ──
-
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+//
+// Re-exported from `src/format/bytes` so existing Lab callers keep
+// their import path while Watch consumes the canonical shared
+// implementation directly. Both apps used to reach into this file;
+// shared utilities belong in `src/` per docs/contributing.md.
+export { formatBytes } from '../../../src/format/bytes';
 
 // ── Filename generation ──
 

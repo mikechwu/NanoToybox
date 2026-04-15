@@ -103,9 +103,13 @@ test.describe('Watch Round 6 — file load + initial state', () => {
     expect(state.fileName).toBe('test.atomdojo')
     expect(state.error).toBeNull()
 
-    // Landing should be gone, workspace visible
+    // Workspace-first contract (post-WatchLanding removal): the
+    // workspace is always attached; the open-panel overlay
+    // disappears once a file is loaded; the loaded-state right
+    // rail returns.
     await expect(page.locator('.watch-workspace')).toBeAttached({ timeout: 3000 })
-    await expect(page.locator('.watch-landing')).not.toBeAttached()
+    await expect(page.locator('.watch-open-panel')).not.toBeAttached()
+    await expect(page.locator('.watch-analysis')).toBeAttached()
     expect(errors).toEqual([])
   })
 

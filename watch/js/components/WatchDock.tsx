@@ -27,6 +27,15 @@ interface WatchDockProps {
   onOpenSettings: () => void;
   onStartDirectionalPlayback: (direction: 1 | -1) => void;
   onStopDirectionalPlayback: () => void;
+  /** Empty-state a11y gate. When true, the non-playback dock
+   *  controls (Repeat, speed range input + reset-to-1x button,
+   *  Settings) are disabled regardless of `canPlay`. Set by
+   *  `WatchApp` as `!snapshot.loaded` so the `role="region"`
+   *  open-panel's "nothing behind me to trap" claim actually holds.
+   *  Back/Play/Fwd are unaffected — they're already disabled via
+   *  `canPlay=false`. When false (loaded files), all current
+   *  behavior is preserved including Repeat pre-arm. */
+  emptyStateBlocked?: boolean;
 }
 
 /**
@@ -134,6 +143,7 @@ export function WatchDock({
   onTogglePlay, onStepForward, onStepBackward,
   onSpeedChange, onToggleRepeat, onOpenSettings,
   onStartDirectionalPlayback, onStopDirectionalPlayback,
+  emptyStateBlocked = false,
 }: WatchDockProps) {
   const backHandlers = useTransportButton(-1, canPlay, onStepBackward, onStartDirectionalPlayback, onStopDirectionalPlayback);
   const fwdHandlers = useTransportButton(1, canPlay, onStepForward, onStartDirectionalPlayback, onStopDirectionalPlayback);
@@ -167,15 +177,19 @@ export function WatchDock({
           <span className="dock-icon"><IconStepForward /></span>
           <span className="dock-label">Fwd</span>
         </button>
-        {/* Repeat is a preference toggle, not a playback control — it
-            stays enabled even when canPlay is false so the user can
-            pre-arm the loop before loading a file. */}
+        {/* Repeat is a preference toggle, not a playback control —
+            it stays enabled under canPlay=false so users can pre-arm
+            the loop before loading a file. `emptyStateBlocked` is a
+            stricter empty-state gate (no file loaded AND open panel
+            visible) that also disables Repeat so nothing is focusable
+            behind the role="region" panel. */}
         <button
           className={`dock-item${repeat ? ' active' : ''}`}
           onClick={onToggleRepeat}
           aria-pressed={repeat}
           aria-label="Repeat"
           type="button"
+          disabled={emptyStateBlocked}
         >
           <span className="dock-icon"><IconRepeat /></span>
           <span className="dock-label">Repeat</span>
@@ -184,12 +198,21 @@ export function WatchDock({
 
       {/* Zone 2: Speed column — PlaybackSpeedControl owns the slider + meta row. */}
       <div className="dock-slot watch-dock__utility">
-        <PlaybackSpeedControl speed={speed} onSpeedChange={onSpeedChange} />
+        <PlaybackSpeedControl
+          speed={speed}
+          onSpeedChange={onSpeedChange}
+          disabled={emptyStateBlocked}
+        />
       </div>
 
       {/* Zone 3: Settings */}
       <div className="dock-slot">
-        <button className="dock-item" onClick={onOpenSettings} type="button">
+        <button
+          className="dock-item"
+          onClick={onOpenSettings}
+          type="button"
+          disabled={emptyStateBlocked}
+        >
           <span className="dock-icon"><IconSettings /></span>
           <span className="dock-label">Settings</span>
         </button>

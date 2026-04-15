@@ -8,7 +8,7 @@
  *   _getWatchState()                → snapshot fields
  *
  * Covers:
- *   - Landing page shows share input section
+ *   - Empty state renders workspace + open panel (no landing page)
  *   - Paste a share code → mock API → capsule loads
  *   - Paste a full share URL → capsule loads
  *   - ?c= query param auto-opens shared capsule on bootstrap
@@ -120,22 +120,31 @@ async function installShareMocks(
   })
 }
 
-// ── Landing page UI ──
+// ── Empty-state open panel UI ──
 
-test.describe('Watch share — landing page UI', () => {
-  test('landing page shows share input section', async ({ page, baseURL }) => {
+test.describe('Watch share — empty-state open panel', () => {
+  test('empty state shows open panel with share input and workspace shell', async ({ page, baseURL }) => {
     const errors = collectErrors(page)
     await page.goto(`${baseURL}/watch/?e2e=1`)
     await waitForWatchState(page)
 
-    const shareSection = page.locator('.watch-share-input-section')
-    await expect(shareSection).toBeVisible()
+    // Workspace shell is ALWAYS rendered now — the former
+    // `.watch-landing` page is deleted. The open panel overlays
+    // the canvas area until a file is loaded.
+    const workspace = page.locator('.watch-workspace')
+    await expect(workspace).toBeVisible()
 
-    const label = page.locator('.watch-share-input-label')
-    await expect(label).toContainText('Open Share Link or Code')
+    const panel = page.locator('.watch-open-panel')
+    await expect(panel).toBeVisible()
 
-    const input = page.locator('.watch-share-input')
+    const title = panel.locator('.watch-open-panel__title')
+    await expect(title).toContainText('Open a shared capsule')
+
+    const input = panel.locator('.watch-open-panel__input')
     await expect(input).toBeVisible()
+
+    // Right rail is hidden in empty state.
+    await expect(page.locator('.watch-analysis')).not.toBeAttached()
 
     expect(errors).toEqual([])
   })
@@ -151,11 +160,11 @@ test.describe('Watch share — open via share code', () => {
     await installShareMocks(page)
 
     // Type share code into the input
-    const input = page.locator('.watch-share-input')
+    const input = page.locator('.watch-open-panel__input')
     await input.fill(SHARE_CODE)
 
     // Submit the form
-    const form = page.locator('.watch-share-input-form')
+    const form = page.locator('.watch-open-panel__form')
     await form.locator('button[type="submit"]').click()
 
     // Wait for the capsule to load
@@ -180,10 +189,10 @@ test.describe('Watch share — open via share code', () => {
     await waitForWatchState(page)
     await installShareMocks(page)
 
-    const input = page.locator('.watch-share-input')
+    const input = page.locator('.watch-open-panel__input')
     await input.fill(`https://atomdojo.pages.dev/c/${SHARE_CODE}`)
 
-    const form = page.locator('.watch-share-input-form')
+    const form = page.locator('.watch-open-panel__form')
     await form.locator('button[type="submit"]').click()
 
     await expect(async () => {
@@ -204,11 +213,11 @@ test.describe('Watch share — open via share code', () => {
     await waitForWatchState(page)
     await installShareMocks(page)
 
-    const input = page.locator('.watch-share-input')
+    const input = page.locator('.watch-open-panel__input')
     // Grouped format: 7M4K-2D8Q-9T1V
     await input.fill('7M4K-2D8Q-9T1V')
 
-    const form = page.locator('.watch-share-input-form')
+    const form = page.locator('.watch-open-panel__form')
     await form.locator('button[type="submit"]').click()
 
     await expect(async () => {
@@ -242,14 +251,69 @@ test.describe('Watch share — ?c= bootstrap auto-open', () => {
     expect(state.frameCount).toBe(3)
     expect(state.fileKind).toBe('capsule')
 
-    // Should show the workspace, not the landing page
+    // Workspace stays rendered; the open panel disappears after load.
     const workspace = page.locator('.watch-workspace')
     await expect(workspace).toBeVisible({ timeout: 3000 })
 
-    const landing = page.locator('.watch-landing')
-    await expect(landing).not.toBeAttached()
+    const panel = page.locator('.watch-open-panel')
+    await expect(panel).not.toBeAttached()
 
     expect(errors).toEqual([])
+  })
+
+  test('?c= auto-open shows workspace + loading panel BEFORE blob resolves', async ({ page, baseURL }) => {
+    // Gated blob route: holds the response until we signal release.
+    // Without gating, fast mocks race past the loading phase and the
+    // AC "/watch/?c= shows workspace and loading panel immediately"
+    // would be unobservable.
+    const capsuleJson = fs.readFileSync(CAPSULE_FIXTURE, 'utf-8')
+    let releaseBlob: ((value: void) => void) | null = null
+    const blobGate = new Promise<void>((resolve) => { releaseBlob = resolve })
+
+    await page.route(`**/api/capsules/**`, async (route) => {
+      const url = new URL(route.request().url())
+      if (url.pathname === `/api/capsules/${SHARE_CODE}`) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(MOCK_METADATA),
+        })
+      }
+      if (url.pathname === `/api/capsules/${SHARE_CODE}/blob`) {
+        await blobGate
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: capsuleJson,
+        })
+      }
+      return route.continue()
+    })
+
+    await page.goto(`${baseURL}/watch/?e2e=1&c=${SHARE_CODE}`)
+
+    // While the blob is still deferred: the workspace shell must
+    // already be present AND the open panel must be visible AND the
+    // snapshot must report loading in progress.
+    await expect(page.locator('.watch-workspace')).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('.watch-open-panel')).toBeVisible()
+    await expect(page.locator('.watch-open-panel__title')).toContainText('Opening shared capsule')
+
+    await expect(async () => {
+      const state = await page.evaluate(() => (window as any)._getWatchState?.())
+      expect(state?.loaded).toBe(false)
+      expect(state?.openProgress?.kind).toBe('share')
+    }).toPass({ timeout: 3000 })
+
+    // Release the blob; panel disappears, state flips to loaded.
+    releaseBlob!()
+
+    await expect(async () => {
+      const state = await page.evaluate(() => (window as any)._getWatchState?.())
+      expect(state?.loaded).toBe(true)
+    }).toPass({ timeout: 10000 })
+
+    await expect(page.locator('.watch-open-panel')).not.toBeAttached()
   })
 })
 
@@ -261,9 +325,9 @@ test.describe('Watch share — error handling', () => {
     await waitForWatchState(page)
     await installShareMocks(page, { metadataStatus: 404 })
 
-    const input = page.locator('.watch-share-input')
+    const input = page.locator('.watch-open-panel__input')
     await input.fill(SHARE_CODE)
-    const form = page.locator('.watch-share-input-form')
+    const form = page.locator('.watch-open-panel__form')
     await form.locator('button[type="submit"]').click()
 
     // Wait for error to appear
@@ -280,9 +344,10 @@ test.describe('Watch share — error handling', () => {
     const errorBanner = page.locator('.watch-error-banner')
     await expect(errorBanner).toBeVisible()
 
-    // Landing page should still be showing (not crashed)
-    const landing = page.locator('.watch-landing')
-    await expect(landing).toBeVisible()
+    // Open panel remains visible in empty state after a 404 (the
+    // failed load did not wipe the input; user can correct + retry).
+    const panel = page.locator('.watch-open-panel')
+    await expect(panel).toBeVisible()
   })
 
   test('blob fetch failure → error banner', async ({ page, baseURL }) => {
@@ -290,9 +355,9 @@ test.describe('Watch share — error handling', () => {
     await waitForWatchState(page)
     await installShareMocks(page, { blobStatus: 500 })
 
-    const input = page.locator('.watch-share-input')
+    const input = page.locator('.watch-open-panel__input')
     await input.fill(SHARE_CODE)
-    const form = page.locator('.watch-share-input-form')
+    const form = page.locator('.watch-open-panel__form')
     await form.locator('button[type="submit"]').click()
 
     await expect(async () => {
@@ -309,9 +374,9 @@ test.describe('Watch share — error handling', () => {
     await page.goto(`${baseURL}/watch/?e2e=1`)
     await waitForWatchState(page)
 
-    const input = page.locator('.watch-share-input')
+    const input = page.locator('.watch-open-panel__input')
     await input.fill('not-a-valid-code')
-    const form = page.locator('.watch-share-input-form')
+    const form = page.locator('.watch-open-panel__form')
     await form.locator('button[type="submit"]').click()
 
     await expect(async () => {
@@ -335,9 +400,9 @@ test.describe('Watch share — top bar', () => {
     await installShareMocks(page)
 
     // First load a capsule via share code
-    const input = page.locator('.watch-share-input')
+    const input = page.locator('.watch-open-panel__input')
     await input.fill(SHARE_CODE)
-    const form = page.locator('.watch-share-input-form')
+    const form = page.locator('.watch-open-panel__form')
     await form.locator('button[type="submit"]').click()
 
     await expect(async () => {
