@@ -30,20 +30,26 @@ describe('Hold threshold constant', () => {
 // ── Dock structure ──
 
 describe('WatchDock structure', () => {
-  it('dock source has transport cluster, utility cluster (with text-label Smooth), and settings zones', async () => {
+  it('dock source has transport cluster, utility cluster (speed column), and settings zones', async () => {
     const fs = await import('fs');
     const source = fs.readFileSync('watch/js/components/WatchDock.tsx', 'utf-8');
     expect(source).toContain('watch-dock__transport');
     expect(source).toContain('watch-dock__utility');
-    expect(source).toContain('watch-dock__smooth');
     expect(source).toContain('IconSettings');
+    // Smooth toggle moved out of the dock into Settings — dock source
+    // no longer references the Smooth icon/class. IconSmooth was never
+    // imported (Smooth was a text button, not icon); assertion kept
+    // for historical regression coverage.
     expect(source).not.toContain('IconSmooth');
+    expect(source).not.toContain('watch-dock__smooth');
   });
 
   it('dock CSS uses fixed-width grid for transport cluster (no layout shift)', async () => {
     const fs = await import('fs');
     const css = fs.readFileSync('watch/css/watch-dock.css', 'utf-8');
-    expect(css).toContain('grid-template-columns: repeat(3');
+    // 4 columns: Back, Play, Fwd, Repeat (Repeat moved into the
+    // transport cluster alongside the playback controls).
+    expect(css).toContain('grid-template-columns: repeat(4');
     expect(css).toContain('--dock-slot-action');
   });
 });
@@ -172,7 +178,6 @@ function renderDock(overrides: Partial<React.ComponentProps<typeof WatchDock>> =
     speed: 1,
     repeat: false,
     playDirection: 0,
-    smoothPlayback: false,
     onTogglePlay: vi.fn(),
     onStepForward: vi.fn(),
     onStepBackward: vi.fn(),
@@ -181,7 +186,6 @@ function renderDock(overrides: Partial<React.ComponentProps<typeof WatchDock>> =
     onOpenSettings: vi.fn(),
     onStartDirectionalPlayback: vi.fn(),
     onStopDirectionalPlayback: vi.fn(),
-    onToggleSmoothPlayback: vi.fn(),
     ...overrides,
   };
   return { ...render(<WatchDock {...props} />), props };
@@ -217,7 +221,9 @@ describe('WatchDock behavioral', () => {
 
   it('Repeat button calls onToggleRepeat and reflects active state', () => {
     const { container, props, rerender } = renderDock({ repeat: false });
-    const repeatBtn = container.querySelector('.watch-dock__small');
+    // Repeat now sits in the transport cluster with the icon+label
+    // column format. Target via aria-label (semantic, class-agnostic).
+    const repeatBtn = container.querySelector('button[aria-label="Repeat"]');
     expect(repeatBtn).not.toBeNull();
     fireEvent.click(repeatBtn!);
     expect(props.onToggleRepeat).toHaveBeenCalledTimes(1);
@@ -225,52 +231,43 @@ describe('WatchDock behavioral', () => {
     // Re-render with repeat=true — button should have .active class
     cleanup();
     const { container: c2 } = renderDock({ repeat: true });
-    const repeatBtn2 = c2.querySelector('.watch-dock__small');
+    const repeatBtn2 = c2.querySelector('button[aria-label="Repeat"]');
     expect(repeatBtn2!.classList.contains('active')).toBe(true);
   });
 
-  it('disabled when canPlay is false', () => {
+  it('disabled when canPlay is false (Back / Play / Fwd) — Repeat stays enabled', () => {
     const { container } = renderDock({ canPlay: false });
     const transport = container.querySelector('.watch-dock__transport');
-    const buttons = transport!.querySelectorAll('.dock-item');
-    for (const btn of buttons) {
+    // Playback-gated controls: Back / Play / Fwd are disabled.
+    const playbackButtons = transport!.querySelectorAll('.dock-item:not([aria-label="Repeat"])');
+    expect(playbackButtons.length).toBe(3);
+    for (const btn of playbackButtons) {
       expect((btn as HTMLButtonElement).disabled).toBe(true);
     }
+    // Positive contract: Repeat is a preference toggle, not a playback
+    // control — it must stay enabled regardless of canPlay so users can
+    // pre-arm the loop before a file is loaded. Asserting the not-disabled
+    // state explicitly catches a future regression where someone gates
+    // Repeat with `disabled={!canPlay}` for misplaced consistency.
+    const repeat = transport!.querySelector('button[aria-label="Repeat"]') as HTMLButtonElement;
+    expect(repeat).not.toBeNull();
+    expect(repeat.disabled).toBe(false);
   });
 
-  // ── Round 6: Smooth toggle (text-label button, not icon) ──
+  // Smooth playback is configured in Settings only (on by default);
+  // dock-level Smooth tests were removed with the toggle itself.
+  // Coverage for the toggle's behaviour lives in the WatchSettingsSheet
+  // tests further down in this file.
 
-  it('Smooth toggle calls onToggleSmoothPlayback when clicked', () => {
-    const { container, props } = renderDock({ smoothPlayback: false });
-    const toggle = container.querySelector('[data-testid="watch-smooth-toggle"]');
-    expect(toggle).not.toBeNull();
-    fireEvent.click(toggle!);
-    expect(props.onToggleSmoothPlayback).toHaveBeenCalledTimes(1);
-  });
-
-  it('Smooth toggle shows visible "Smooth" text label', () => {
-    const { container } = renderDock({ smoothPlayback: true });
-    const toggle = container.querySelector('[data-testid="watch-smooth-toggle"]') as HTMLButtonElement;
-    expect(toggle.textContent?.trim()).toBe('Smooth');
-  });
-
-  it('Smooth toggle uses watch-dock__smooth class (not icon-only watch-dock__small)', () => {
-    const { container } = renderDock({ smoothPlayback: false });
-    const toggle = container.querySelector('[data-testid="watch-smooth-toggle"]') as HTMLButtonElement;
-    expect(toggle.classList.contains('watch-dock__smooth')).toBe(true);
-    expect(toggle.classList.contains('watch-dock__small')).toBe(false);
-  });
-
-  it('Smooth toggle reflects active state via aria-pressed + .active class', () => {
-    const { container: off } = renderDock({ smoothPlayback: false });
-    const toggleOff = off.querySelector('[data-testid="watch-smooth-toggle"]') as HTMLButtonElement;
-    expect(toggleOff.getAttribute('aria-pressed')).toBe('false');
-    expect(toggleOff.classList.contains('active')).toBe(false);
-    cleanup();
-    const { container: on } = renderDock({ smoothPlayback: true });
-    const toggleOn = on.querySelector('[data-testid="watch-smooth-toggle"]') as HTMLButtonElement;
-    expect(toggleOn.getAttribute('aria-pressed')).toBe('true');
-    expect(toggleOn.classList.contains('active')).toBe(true);
+  it('utility zone shows the "Speed · <value>" meta row beneath the slider', () => {
+    const { container } = renderDock({ speed: 1 });
+    const utility = container.querySelector('.watch-dock__utility');
+    expect(utility).not.toBeNull();
+    const label = utility!.querySelector('.watch-dock__speed-label');
+    const value = utility!.querySelector('.watch-dock__speed-value');
+    expect(label?.textContent).toBe('Speed');
+    // formatSpeed(1) renders "1.0x" (see playback-speed-constants).
+    expect(value?.textContent).toMatch(/\d+(\.\d+)?x/);
   });
 });
 
@@ -508,11 +505,9 @@ describe('WatchDock hold-to-play', () => {
     const { container, rerender } = render(
       <WatchDock
         playing={false} canPlay={true} speed={1} repeat={false} playDirection={0}
-        smoothPlayback={false}
         onTogglePlay={vi.fn()} onStepForward={onStep} onStepBackward={vi.fn()}
         onSpeedChange={vi.fn()} onToggleRepeat={vi.fn()} onOpenSettings={vi.fn()}
         onStartDirectionalPlayback={onStart} onStopDirectionalPlayback={onStop}
-        onToggleSmoothPlayback={vi.fn()}
       />
     );
     const transport = container.querySelector('.watch-dock__transport');
@@ -528,11 +523,9 @@ describe('WatchDock hold-to-play', () => {
     rerender(
       <WatchDock
         playing={true} canPlay={true} speed={1} repeat={false} playDirection={1}
-        smoothPlayback={false}
         onTogglePlay={vi.fn()} onStepForward={vi.fn()} onStepBackward={vi.fn()}
         onSpeedChange={vi.fn()} onToggleRepeat={vi.fn()} onOpenSettings={vi.fn()}
         onStartDirectionalPlayback={vi.fn()} onStopDirectionalPlayback={onStop}
-        onToggleSmoothPlayback={vi.fn()}
       />
     );
 

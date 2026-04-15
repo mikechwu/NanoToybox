@@ -841,10 +841,10 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
            ├── WatchCanvas           ← owns renderer create/destroy lifecycle only
            │                            (controller's RAF loop pushes frames to renderer)
            ├── WatchBondedGroupsPanel ← collapsible bonded-group inspector with color chips/popover
-           ├── WatchDock             ← 3-zone hierarchical playback dock:
-           │   ├── [transport]          tap=step, hold=directional play (pointer capture)
-           │   ├── PlaybackSpeedControl log-mapped 0.5x–20x slider + readout
-           │   └── [meta]              repeat + Smooth toggle (.watch-dock__smooth) + settings
+           ├── WatchDock             ← 3-zone playback dock (consistent icon+label columns):
+           │   ├── [transport]          Back, Play, Fwd, Repeat (tap=step, hold=directional play)
+           │   ├── PlaybackSpeedControl log-mapped 0.5x–20x slider + "Speed · 1.0x" meta row
+           │   └── [settings]           Settings button (Smooth lives here, default ON)
            ├── WatchTimeline         ← full-width scrubber (no mode rail — watch advantage over lab)
            └── WatchSettingsSheet    ← Smooth Playback (toggle + method picker),
                                        Appearance (theme, text-size), File Info, Help
@@ -876,10 +876,10 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
 **React components:**
 - **WatchApp** — top-level shell. Subscribes to controller via `useSyncExternalStore(controller.subscribe, controller.getSnapshot)`. Routes between `WatchLanding` (no file loaded) and the workspace layout (file loaded). Owns local panel expand/collapse and sheet open/close state.
 - **WatchCanvas** — owns Three.js renderer create/destroy lifecycle only. Creates the renderer via `controller.createRenderer()` on mount, destroys and detaches on unmount. Does NOT own the playback clock or frame updates -- the controller's RAF loop pushes frames into the renderer directly.
-- **WatchDock** — 3-zone hierarchical dock. Transport zone: tap=step, hold=directional play using pointer capture; uses `HOLD_PLAY_THRESHOLD_MS` from shared speed constants. Speed zone: `PlaybackSpeedControl` (log-mapped slider + readout). Meta zone: left subgroup (repeat icon + Smooth text-label toggle `.watch-dock__smooth` with `aria-pressed`), right subgroup (settings button). Uses shared `dock-shell.css` and `dock-tokens.css` plus watch-specific `watch-dock.css`.
+- **WatchDock** — 3-zone playback dock with consistent icon+label columns at every breakpoint. Transport zone (4-column grid): Back, Play, Fwd, Repeat. Back/Play/Fwd use tap=step, hold=directional play via pointer capture (`HOLD_PLAY_THRESHOLD_MS` from shared speed constants); Repeat is a preference toggle that stays enabled even when no file is loaded. Speed zone: `PlaybackSpeedControl` (log-mapped slider + "Speed · 1.0x" meta row). Settings zone: Settings button. Smooth playback lives in Settings only (default ON). Uses shared `dock-shell.css` and `dock-tokens.css` plus watch-specific `watch-dock.css`.
 - **WatchTimeline** — custom scrubber using shared `timeline-track.css` primitives (`.timeline-track`, `.timeline-fill`, `.timeline-thumb`). Full-width track (no mode rail -- watch advantage over lab). Drag resilience via pointer capture with fallback. Uses `formatTime` from lab's `timeline-format.ts`.
 - **WatchSettingsSheet** — settings surface with four sections: Smooth Playback (on/off toggle + interpolation method picker driven from registry metadata via `getRegisteredInterpolationMethods()`, with per-frame diagnostic note when active method diverges from selection), Appearance (theme + text-size via shared `Segmented` component), File Info (atom count, frame count, duration), Help (viewer-specific sections from `settings-content.ts`). Method picker shows product methods only (filtered via `availability === 'product'` discriminant); stable methods first, then experimental. Uses shared `useSheetLifecycle` hook for mount/animate/escape lifecycle, shared `sheet-shell.css` and `segmented.css` for styling.
-- **PlaybackSpeedControl** — compact log-mapped speed slider with numeric readout. Click readout to reset to 1x. Uses `sliderToSpeed`, `speedToSlider`, `formatSpeed` from shared `playback-speed-constants.ts`.
+- **PlaybackSpeedControl** — column-shaped speed control: log-mapped slider on top inside a fixed 18 px row (`.watch-dock__speed-slider-row`) so the thumb centerline aligns with `.dock-icon` glyphs in neighboring columns across browsers; "Speed · 1.0x" meta row below. The numeric readout (`.watch-dock__speed-value`) is a click-to-reset button, disabled at default to make the no-op visible. Uses `sliderToSpeed`, `speedToSlider`, `formatSpeed`, `SPEED_DEFAULT` from shared `playback-speed-constants.ts`.
 - **WatchBondedGroupsPanel** — collapsible bonded-group inspector with two-level display (large/small clusters via `partitionBondedGroups` from `src/history/bonded-group-utils.ts`). Includes color chip + popover for per-group color assignment. Uses shared `review-parity.css` and `bonded-groups-parity.css`.
 - **WatchTopBar** — top-left corner info panel (`.watch-info-panel` in `watch/css/watch.css`). Renders the file-kind chip, truncated filename, and two parallel actions: **Open Link** (paste a share URL/code) and **Open File** (local file picker). Surface tokens mirror `.bg-panel` so both canvas-corner panels read as one family.
 - **WatchLanding** — drag-drop zone and open-file button for initial file selection.

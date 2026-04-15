@@ -122,36 +122,9 @@ test.describe('Watch Round 6 — file load + initial state', () => {
   })
 })
 
-test.describe('Watch Round 6 — Dock Smooth toggle', () => {
-  test('smooth toggle button exists in the dock with correct default state (on)', async ({ page, baseURL }) => {
-    await page.goto(`${baseURL}/watch/?e2e=1`)
-    await waitForWatchState(page)
-    await loadFixture(page)
-
-    const toggle = page.locator('[data-testid="watch-smooth-toggle"]')
-    await expect(toggle).toBeAttached({ timeout: 3000 })
-    await expect(toggle).toHaveAttribute('aria-pressed', 'true')
-  })
-
-  test('clicking smooth toggle flips state and updates aria-pressed', async ({ page, baseURL }) => {
-    await page.goto(`${baseURL}/watch/?e2e=1`)
-    await waitForWatchState(page)
-    await loadFixture(page)
-
-    const toggle = page.locator('[data-testid="watch-smooth-toggle"]')
-    // Default is ON — first click turns OFF
-    await toggle.click()
-    const state: any = await page.evaluate(() => (window as any)._getWatchState())
-    expect(state.smoothPlayback).toBe(false)
-    await expect(toggle).toHaveAttribute('aria-pressed', 'false')
-
-    // Toggle back on
-    await toggle.click()
-    const state2: any = await page.evaluate(() => (window as any)._getWatchState())
-    expect(state2.smoothPlayback).toBe(true)
-    await expect(toggle).toHaveAttribute('aria-pressed', 'true')
-  })
-})
+/* The Smooth toggle lives only in Settings now (on by default); its
+ * dock-level tests have been removed. Settings-sheet tests further
+ * down in this file still cover the toggle's behaviour. */
 
 test.describe('Watch Round 6 — Settings sheet', () => {
   test('settings sheet opens, contains Smooth Playback group and experimental note', async ({ page, baseURL }) => {
@@ -235,7 +208,7 @@ test.describe('Watch Round 6 — Settings sheet', () => {
 })
 
 test.describe('Watch Round 6 — dock layout', () => {
-  test('dock utility zone: repeat (icon) + smooth (text label) + speed', async ({ page, baseURL }) => {
+  test('dock utility zone: speed slider + "Speed" label column', async ({ page, baseURL }) => {
     await page.goto(`${baseURL}/watch/?e2e=1`)
     await waitForWatchState(page)
     await loadFixture(page)
@@ -243,29 +216,17 @@ test.describe('Watch Round 6 — dock layout', () => {
     const utility = page.locator('.watch-dock__utility')
     await expect(utility).toBeAttached()
 
-    // Repeat: icon-only (.watch-dock__small)
-    const repeat = utility.locator('button.watch-dock__small')
+    // Repeat is in the transport cluster with icon + label (Back / Play /
+    // Fwd / Repeat column format), not in the utility zone.
+    const repeat = page.locator('.watch-dock__transport button[aria-label="Repeat"]')
     expect(await repeat.count()).toBe(1)
-    await expect(repeat.nth(0)).toHaveAttribute('aria-label', 'Repeat')
+    await expect(repeat).toContainText('Repeat')
 
-    // Smooth: text label button (.watch-dock__smooth), NOT icon-only
-    const smooth = utility.locator('button.watch-dock__smooth')
-    expect(await smooth.count()).toBe(1)
-    await expect(smooth).toContainText('Smooth')
-
-    // Speed control exists
+    // Utility zone: slider on top, "Speed · <value>" meta row below.
     const speedCtrl = utility.locator('.watch-dock__speed')
     await expect(speedCtrl).toBeAttached()
-  })
-
-  test('dock smooth toggle shows visible "Smooth" text', async ({ page, baseURL }) => {
-    await page.goto(`${baseURL}/watch/?e2e=1`)
-    await waitForWatchState(page)
-    await loadFixture(page)
-
-    const toggle = page.locator('[data-testid="watch-smooth-toggle"]')
-    await expect(toggle).toContainText('Smooth')
-    await expect(toggle).toHaveAttribute('aria-pressed', 'true') // default ON
+    await expect(utility.locator('.watch-dock__speed-label')).toContainText('Speed')
+    await expect(utility.locator('.watch-dock__speed-value')).toContainText(/\d+(\.\d+)?x/)
   })
 })
 
@@ -324,10 +285,10 @@ test.describe('Watch Round 6 — responsive dock (phone emulation)', () => {
       })
       expect(noOverlap.ok).toBe(true)
 
-      // 5. Smooth text label and repeat icon are both visible
-      await expect(page.locator('[data-testid="watch-smooth-toggle"]')).toBeAttached()
-      await expect(page.locator('[data-testid="watch-smooth-toggle"]')).toContainText('Smooth')
-      await expect(page.locator('.watch-dock__small[aria-label="Repeat"]')).toBeAttached()
+      // 5. Repeat (transport, icon+label) and Speed (utility, slider+meta)
+      // are both visible — the dock's consistent icon+label column format.
+      await expect(page.locator('.watch-dock__transport button[aria-label="Repeat"]')).toBeAttached()
+      await expect(page.locator('.watch-dock__utility .watch-dock__speed-label')).toContainText('Speed')
     } finally {
       await context.close()
     }

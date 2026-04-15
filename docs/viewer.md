@@ -574,17 +574,17 @@ The dock (`WatchDock`) is a 3-zone hierarchical toolbar using shared `dock-shell
 
 | Zone | Content |
 |------|---------|
-| **Transport** (Zone 1) | Step Back, Play/Pause, Step Forward — fixed-width 3-column grid, no layout shift on label swap |
-| **Utility** (Zone 2) | Left subgroup: Repeat toggle (icon-only 32 px button) + Smooth text-label toggle. Right subgroup: continuous speed control |
+| **Transport** (Zone 1) | Step Back, Play/Pause, Step Forward, Repeat — fixed-width 4-column grid of icon+label buttons, no layout shift on label swap |
+| **Utility** (Zone 2) | Speed column: continuous logarithmic slider on top, "Speed · 1.0x" meta row below |
 | **Settings** (Zone 3) | Settings button (opens settings sheet) |
 
 **Transport buttons (Step Back / Step Forward):** Dual-mode gesture — tap triggers a single dense-frame step; hold (past `HOLD_PLAY_THRESHOLD_MS` = 160 ms) initiates continuous directional playback with an immediate nudge frame. Release stops directional playback. The `useTransportButton` hook stores callbacks in refs so React re-renders do not kill active hold gestures. Pointer capture is attempted but optional; global fallback listeners (pointerup, pointercancel, blur, visibilitychange) ensure release is always detected.
 
-**Speed control:** `PlaybackSpeedControl` — a continuous logarithmic slider (0.5x to 20x) plus a speed readout button. The slider maps `[0,1]` to `[SPEED_MIN, SPEED_MAX]` via `sliderToSpeed()`/`speedToSlider()` (shared from `src/config/playback-speed-constants.ts`). Logarithmic mapping gives ~37% of slider travel to the 0.5x-2x range where fine control matters most. Clicking the speed readout resets to 1x.
+**Repeat:** Icon+label toggle button in the transport cluster — when active, playback wraps around (modulo) at file boundaries in both forward and backward directions. Stays enabled even when no file is loaded so users can pre-arm the loop.
 
-**Repeat:** Toggle button — when active, playback wraps around (modulo) at file boundaries in both forward and backward directions.
+**Speed control:** `PlaybackSpeedControl` owns the full Zone 2 column: a continuous logarithmic slider (0.5x to 20x) on top, and a centered "Speed · 1.0x" meta row below. The slider maps `[0,1]` to `[SPEED_MIN, SPEED_MAX]` via `sliderToSpeed()`/`speedToSlider()` (shared from `src/config/playback-speed-constants.ts`). Logarithmic mapping gives ~37% of slider travel to the 0.5x-2x range where fine control matters most. The numeric readout (`.watch-dock__speed-value`) is a click-to-reset button (disabled at default to make the no-op visible). The slider sits inside a fixed-height row (`.watch-dock__speed-slider-row`, 18 px = `.dock-icon` baseline) so its thumb centerline aligns with the icon centerlines in neighboring columns across browsers (native range height varies 16–24 px).
 
-**Smooth:** Text-label toggle button (no icon). When active, positions between recorded dense frames are interpolated at render time using the strategy selected in settings (Linear by default). When off, the renderer displays discrete at-or-before frames only. The toggle re-renders immediately so the change is visible even when paused. CSS class `.watch-dock__smooth` with responsive min-width via `--watch-dock-smooth-min-w`.
+**Smooth playback** is configured in **Settings only** (default ON via `_smoothPlayback = true` in `watch/js/watch-settings.ts`). It was previously a dock toggle but moved to Settings to give the speed slider room and to keep the dock format uniform (every column = icon+label).
 
 ### Timeline
 

@@ -19,8 +19,6 @@ interface WatchDockProps {
   speed: number;
   repeat: boolean;
   playDirection: 1 | -1 | 0;
-  /** Round 6: smooth playback toggle state. */
-  smoothPlayback: boolean;
   onTogglePlay: () => void;
   onStepForward: () => void;
   onStepBackward: () => void;
@@ -29,8 +27,6 @@ interface WatchDockProps {
   onOpenSettings: () => void;
   onStartDirectionalPlayback: (direction: 1 | -1) => void;
   onStopDirectionalPlayback: () => void;
-  /** Round 6: called when the Smooth toggle is clicked. */
-  onToggleSmoothPlayback: () => void;
 }
 
 /**
@@ -134,18 +130,20 @@ function useTransportButton(
 }
 
 export function WatchDock({
-  playing, canPlay, speed, repeat, playDirection, smoothPlayback,
+  playing, canPlay, speed, repeat, playDirection,
   onTogglePlay, onStepForward, onStepBackward,
   onSpeedChange, onToggleRepeat, onOpenSettings,
   onStartDirectionalPlayback, onStopDirectionalPlayback,
-  onToggleSmoothPlayback,
 }: WatchDockProps) {
   const backHandlers = useTransportButton(-1, canPlay, onStepBackward, onStartDirectionalPlayback, onStopDirectionalPlayback);
   const fwdHandlers = useTransportButton(1, canPlay, onStepForward, onStartDirectionalPlayback, onStopDirectionalPlayback);
 
   return (
     <div className="dock-bar watch-dock-bar" role="toolbar" aria-label="Playback controls">
-      {/* Zone 1: Transport cluster */}
+      {/* Zone 1: Transport cluster — Back, Play, Fwd, Repeat.
+          Repeat sits adjacent to Fwd (playback-semantic grouping) and
+          adopts the icon+label column format of the other transport
+          items for visual parity. */}
       <div className="dock-slot watch-dock__transport">
         <button
           className={`dock-item${playDirection === -1 ? ' active' : ''}`}
@@ -169,34 +167,23 @@ export function WatchDock({
           <span className="dock-icon"><IconStepForward /></span>
           <span className="dock-label">Fwd</span>
         </button>
+        {/* Repeat is a preference toggle, not a playback control — it
+            stays enabled even when canPlay is false so the user can
+            pre-arm the loop before loading a file. */}
+        <button
+          className={`dock-item${repeat ? ' active' : ''}`}
+          onClick={onToggleRepeat}
+          aria-pressed={repeat}
+          aria-label="Repeat"
+          type="button"
+        >
+          <span className="dock-icon"><IconRepeat /></span>
+          <span className="dock-label">Repeat</span>
+        </button>
       </div>
 
-      {/* Zone 2: Utility cluster — two subgroups for stable alignment.
-          Left subgroup (repeat + smooth): anchored nearest the transport cluster.
-          Right subgroup (speed): flex-end, fills remaining space.
-          Repeat is icon-only; Smooth is a text-label button. */}
+      {/* Zone 2: Speed column — PlaybackSpeedControl owns the slider + meta row. */}
       <div className="dock-slot watch-dock__utility">
-        <div className="watch-dock__utility-left">
-          <button
-            className={`dock-item watch-dock__small${repeat ? ' active' : ''}`}
-            onClick={onToggleRepeat}
-            aria-pressed={repeat}
-            aria-label="Repeat"
-            type="button"
-          >
-            <span className="dock-icon"><IconRepeat /></span>
-          </button>
-          <button
-            className={`dock-item watch-dock__smooth${smoothPlayback ? ' active' : ''}`}
-            onClick={onToggleSmoothPlayback}
-            aria-pressed={smoothPlayback}
-            aria-label="Smooth playback"
-            type="button"
-            data-testid="watch-smooth-toggle"
-          >
-            Smooth
-          </button>
-        </div>
         <PlaybackSpeedControl speed={speed} onSpeedChange={onSpeedChange} />
       </div>
 

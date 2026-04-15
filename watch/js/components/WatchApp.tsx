@@ -150,7 +150,6 @@ export function WatchApp({ controller }: WatchAppProps) {
             speed={snapshot.speed}
             repeat={snapshot.repeat}
             playDirection={snapshot.playDirection}
-            smoothPlayback={snapshot.smoothPlayback}
             onTogglePlay={handleTogglePlay}
             onStepForward={handleStepForward}
             onStepBackward={handleStepBackward}
@@ -159,7 +158,6 @@ export function WatchApp({ controller }: WatchAppProps) {
             onOpenSettings={handleOpenSettings}
             onStartDirectionalPlayback={handleStartDirectional}
             onStopDirectionalPlayback={handleStopDirectional}
-            onToggleSmoothPlayback={handleToggleSmoothPlayback}
           />
         </div>
       </div>

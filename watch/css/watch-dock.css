@@ -23,30 +23,26 @@
    tightens the utility cluster; tablet tier restores 56 px once the row
    fits; desktop tier adds the extra breathing room lab already enjoys. */
 .watch-workspace {
-  /* Mobile (< 480 px) — compact tap targets, tight slider, narrow labels.
-     Overrides the global --dock-slot-action (56 px) at watch scope only,
-     so lab's slot sizing is unaffected. */
+  /* Mobile (< 480 px) — compact tap targets, compact slider. Scoped
+     override of the global --dock-slot-action so lab is unaffected.
+     Smooth lives in Settings now, so the slider gets all the space
+     that the Smooth toggle used to claim. */
   --dock-slot-action: 44px;
   --watch-dock-utility-gap: 2px;
-  --watch-dock-smooth-min-w: 44px;
-  --watch-dock-speed-slider-w: 44px;
+  --watch-dock-speed-slider-w: 60px;
   --watch-dock-speed-label-min-w: 32px;
 }
 @media (min-width: 480px) {
   .watch-workspace {
-    /* Tablet portrait and up — restore lab-parity slot + comfortable slider. */
     --dock-slot-action: 56px;
-    --watch-dock-smooth-min-w: 58px;
-    --watch-dock-speed-slider-w: 60px;
+    --watch-dock-speed-slider-w: 100px;
     --watch-dock-speed-label-min-w: 36px;
   }
 }
 @media (min-width: 768px) {
   .watch-workspace {
-    /* Desktop — same extra spacing lab uses for the centered pill. */
     --watch-dock-utility-gap: 4px;
-    --watch-dock-smooth-min-w: 64px;
-    --watch-dock-speed-slider-w: 80px;
+    --watch-dock-speed-slider-w: 140px;
   }
 }
 
@@ -91,10 +87,13 @@
   overflow: hidden;
 }
 
-/* Transport cluster: fixed-width 3-column grid — no layout shift on Play↔Pause label swap */
+/* Transport cluster: fixed-width 4-column grid (Back, Play, Fwd, Repeat).
+   Repeat joins the transport row so playback-semantic controls sit
+   together and adopt the icon+label column format. No layout shift on
+   Play↔Pause label swap thanks to the fixed-column grid. */
 .watch-dock__transport {
   display: grid;
-  grid-template-columns: repeat(3, var(--dock-slot-action, 56px));
+  grid-template-columns: repeat(4, var(--dock-slot-action, 56px));
   justify-content: center;
   align-items: center;
   column-gap: 2px;
@@ -104,75 +103,99 @@
 }
 /* All icons use shared default size (16px from Icons.tsx) — no watch overrides. */
 
-/* Utility cluster: two subgroups for stable alignment.
-   Left subgroup (repeat + smooth) anchors nearest the transport cluster.
-   Speed fills the remaining space to the right.
-   Gap and padding use --watch-dock-utility-gap with a fallback for isolated
-   rendering outside .watch-workspace (e.g., Storybook, unit tests). */
+/* Utility cluster: speed slider on top, "Speed" label below. The
+   column format matches every other dock-item (Back / Play / Fwd /
+   Repeat / Settings) — icon row + label row with a 2 px gap — so the
+   whole dock reads as one consistent row of labelled columns.
+
+   Stacked at every breakpoint (no responsive flip) because Smooth
+   moved to Settings; the speed slider now owns the utility cell at
+   every width.
+
+   `min-width: 0` lets the cluster compress inside its grid cell
+   without pushing the Settings column off-screen. */
 .watch-dock__utility {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--watch-dock-utility-gap, 2px);
-  padding: 0 var(--watch-dock-utility-gap, 2px);
-  /* Lets the utility cluster compress inside its grid cell on mobile —
-     without this the cluster claims its intrinsic width and pushes the
-     Settings column off-screen. */
+  justify-content: center;
+  gap: 2px;
+  padding: var(--space-xs, 4px) var(--space-sm, 8px);
   min-width: 0;
 }
-/* Left subgroup: repeat (icon) + smooth (text label), tightly packed. */
-.watch-dock__utility-left {
-  display: flex;
-  align-items: center;
-  gap: var(--watch-dock-utility-gap, 2px);
-  flex-shrink: 0;
-}
-/* Small utility toggle (repeat) — icon only, no label.
-   32px is compact variant of --tap-target (44px), acceptable for secondary controls. */
-.watch-dock__small {
-  min-width: 32px;
-  min-height: 32px;
-  padding: 4px;
-}
-/* Smooth toggle — text label, no icon. Uses --watch-dock-smooth-min-w token. */
-.watch-dock__smooth {
-  min-width: var(--watch-dock-smooth-min-w, 58px);
-  min-height: 32px;
-  padding: 4px 8px;
-  font-size: var(--font-xs, 12px);
-  font-family: var(--font-family, inherit);
-  white-space: nowrap;
-}
+/* The "Speed · 1.0x" meta row lives inside PlaybackSpeedControl
+   (.watch-dock__speed-meta) and plays the role that .dock-label
+   plays for the other dock columns — same size, same muted tone. */
 
-/* ── Speed control ── */
+/* ── Speed control ──
+   Column layout: slider on top, "Speed · 1.0x" meta row below. The
+   meta row is the dock-label of this column, matching Back / Play /
+   Fwd / Repeat / Settings. Centered to stay visually anchored under
+   the slider thumb at any slider width. */
 .watch-dock__speed {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 6px;
-  /* Allow the slider to shrink inside a compressed utility cluster. */
+  gap: 2px;
   min-width: 0;
 }
-/* Speed slider: width from --watch-dock-speed-slider-w token.
-   Log-mapped — both phone and desktop widths are usable. */
+/* Slider row — 18 px to match .dock-icon, slider centered inside.
+   See PlaybackSpeedControl.tsx for the cross-browser rationale. */
+.watch-dock__speed-slider-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  width: 100%;
+  overflow: visible;
+}
 .watch-dock__speed-slider {
   width: var(--watch-dock-speed-slider-w, 60px);
-  /* The slider is the most shrink-tolerant element in the row — it can
-     lose 10–20 px of width and still be usable, unlike the tap targets
-     on either side. `min-width: 0` lets it do that on sub-360 px widths. */
+  /* Shrink-tolerant — slider can lose 10–20 px and still be usable. */
   min-width: 0;
+  margin: 0;
+  padding: 0;
+  display: block;
   accent-color: var(--color-accent);
 }
-.watch-dock__speed-label {
+/* Meta row — "Speed · 1.0x" on one centered baseline. */
+.watch-dock__speed-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 4px;
   font-size: var(--font-xs, 12px);
+  line-height: 1;
+}
+.watch-dock__speed-label {
+  color: var(--color-text-secondary, #888);
+  user-select: none;
+}
+.watch-dock__speed-sep {
+  color: var(--color-text-secondary, #888);
+  opacity: 0.5;
+}
+.watch-dock__speed-value {
   font-variant-numeric: tabular-nums;
   min-width: var(--watch-dock-speed-label-min-w, 36px);
-  text-align: center;
+  text-align: left;
   cursor: pointer;
   color: var(--color-text);
   user-select: none;
   background: none; border: none; padding: 0;
   font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  transition: color var(--duration-fast, 0.15s);
 }
-.watch-dock__speed-label:hover { color: var(--color-accent); }
+.watch-dock__speed-value:hover { color: var(--color-accent); }
+/* At default (no-op click) — dim and disable the cursor so the user
+   sees the button is currently inert. */
+.watch-dock__speed-value:disabled {
+  opacity: 0.5;
+  cursor: default;
+  color: var(--color-text);
+}
 
 /* Responsive values for the utility cluster are handled entirely by the
    --watch-dock-* custom properties defined on .watch-workspace above. No per-component
