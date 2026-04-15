@@ -358,7 +358,10 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
         aria-busy={transferBusy}
         ref={dialogRef}
       >
-        <p className="timeline-transfer-dialog__title">Transfer History</p>
+        {/* No visible heading — the Download / Share tab row is
+         *  itself the dialog's header, and the dialog's accessible
+         *  name is carried by `aria-label` on the outer `role="dialog"`
+         *  above. Saves a row of vertical chrome on mobile. */}
 
         {/* Tab bar (omitted when only one destination is available) */}
         {showTabBar && (
