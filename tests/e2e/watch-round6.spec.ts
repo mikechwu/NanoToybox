@@ -214,7 +214,11 @@ test.describe('Watch Round 6 — Settings sheet', () => {
     await expect(sheet).toHaveClass(/open/, { timeout: 3000 })
 
     await page.keyboard.press('Escape')
-    await expect(sheet).not.toBeAttached({ timeout: 3000 })
+    // The sheet lifecycle removes .open → waits transitionend → unmounts.
+    // Safety timeout in useSheetLifecycle (2× duration) ensures unmount
+    // even when headless CI doesn't fire transitionend for off-screen
+    // transforms.
+    await expect(sheet).not.toBeAttached({ timeout: 5000 })
   })
 })
 

@@ -48,13 +48,19 @@ export function useSheetLifecycle(isOpen: boolean, onClose?: () => void): SheetL
     if (!isOpen) setMounted(false);
   }, [isOpen]);
 
-  // Reduced motion: skip transition, unmount immediately
+  // Reduced motion or headless CI: skip transition if duration is 0,
+  // or set a safety timeout if transitionend doesn't fire within 2×
+  // the declared duration (headless browsers may not fire transitionend
+  // for off-screen transforms).
   useEffect(() => {
     if (!isOpen && mounted) {
       const el = ref.current;
       if (!el) { setMounted(false); return; }
       const duration = parseFloat(getComputedStyle(el).transitionDuration);
-      if (duration === 0) setMounted(false);
+      if (duration === 0) { setMounted(false); return; }
+      const safetyMs = Math.max(duration * 2000, 1000);
+      const timer = setTimeout(() => { if (!isOpen) setMounted(false); }, safetyMs);
+      return () => clearTimeout(timer);
     }
   }, [isOpen, mounted]);
 
