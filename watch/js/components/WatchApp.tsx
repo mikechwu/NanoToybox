@@ -119,8 +119,7 @@ export function WatchApp({ controller }: WatchAppProps) {
               <WatchCinematicCameraToggle
                 enabled={snapshot.cinematicCameraEnabled}
                 active={snapshot.cinematicCameraActive}
-                pausedForUserInput={snapshot.cinematicCameraPausedForUserInput}
-                eligibleClusterCount={snapshot.cinematicCameraEligibleClusterCount}
+                status={snapshot.cinematicCameraStatus}
                 onToggle={() => controller.setCinematicCameraEnabled(!snapshot.cinematicCameraEnabled)}
               />
               <WatchBondedGroupsPanel

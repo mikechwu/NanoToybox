@@ -2,34 +2,28 @@
  * WatchCinematicCameraToggle — compact pill between the info panel
  * and the bonded-clusters panel.
  *
- * The label is always "Cinematic Camera". The status line swaps
- * based on the (enabled, pausedForUserInput, eligibleClusterCount)
- * triple:
- *   - pausedForUserInput → "Paused while you adjust the camera"
- *   - eligibleClusterCount === 0 → "Waiting for major clusters"
- *   - otherwise → "Keeps major clusters framed"
- *
- * When `enabled === false` the status line reads "Off" so the
- * panel's collapsed state is self-explanatory. `active` is surfaced
- * as `data-active` for test hooks and (future) CSS animations.
+ * Status text is driven by the controller-owned `status` enum so the
+ * component doesn't re-derive status logic from individual booleans.
  */
 
 import React from 'react';
+import type { SnapshotCinematicCameraStatus } from '../watch-cinematic-camera';
 
 interface Props {
   enabled: boolean;
   active: boolean;
-  pausedForUserInput: boolean;
-  eligibleClusterCount: number;
+  status: SnapshotCinematicCameraStatus;
   onToggle: () => void;
 }
 
-function statusText(p: Props): string {
-  if (!p.enabled) return 'Off';
-  if (p.pausedForUserInput) return 'Paused while you adjust the camera';
-  if (p.eligibleClusterCount === 0) return 'Waiting for major clusters';
-  return 'Keeps major clusters framed';
-}
+const STATUS_TEXT: Record<SnapshotCinematicCameraStatus, string> = {
+  off: 'Off',
+  paused: 'Paused while you adjust the camera',
+  waiting_major_clusters: 'Waiting for major clusters',
+  waiting_topology: 'Waiting for topology',
+  tracking: 'Keeps major clusters framed',
+  suppressed_by_follow: 'Off while Follow is active',
+};
 
 export function WatchCinematicCameraToggle(props: Props) {
   const label = 'Cinematic Camera';
@@ -43,11 +37,13 @@ export function WatchCinematicCameraToggle(props: Props) {
       data-testid="watch-cinematic-camera-toggle"
       data-enabled={props.enabled}
       data-active={props.active}
-      data-paused={props.pausedForUserInput}
+      data-status={props.status}
     >
       <div className="watch-cinematic-camera-toggle__copy">
         <div className="watch-cinematic-camera-toggle__label">{label}</div>
-        <div className="watch-cinematic-camera-toggle__status">{statusText(props)}</div>
+        <div className="watch-cinematic-camera-toggle__status">
+          {STATUS_TEXT[props.status]}
+        </div>
       </div>
       <button
         type="button"

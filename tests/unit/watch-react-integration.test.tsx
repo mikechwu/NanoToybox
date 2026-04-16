@@ -52,8 +52,7 @@ function makeSnapshot(overrides: Partial<WatchControllerSnapshot> = {}): WatchCo
     loadingShareCode: null,
     cinematicCameraEnabled: true,
     cinematicCameraActive: false,
-    cinematicCameraPausedForUserInput: false,
-    cinematicCameraEligibleClusterCount: 0,
+    cinematicCameraStatus: 'waiting_major_clusters' as const,
     ...overrides,
   };
 }

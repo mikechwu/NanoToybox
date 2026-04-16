@@ -8,12 +8,17 @@
 import { describe, it, expect } from 'vitest';
 import {
   cinematicSpeedProfile,
+  cinematicCenterRefreshProfile,
   clamp,
   DEFAULT_CINEMATIC_CONFIG,
   DEFAULT_CINEMATIC_SPEED_TUNING,
+  DEFAULT_CINEMATIC_CENTER_REFRESH_TUNING,
   isUserInputCooldownActive,
   normalizeCinematicSpeedTuning,
+  normalizeCinematicCenterRefreshTuning,
   resolveCinematicTarget,
+  resolveCinematicSelectionSnapshot,
+  computeCinematicCenterFromAtomIndices,
   type CinematicClusterCandidate,
 } from '../../src/camera/cinematic-camera';
 
@@ -397,11 +402,147 @@ describe('isUserInputCooldownActive', () => {
   });
 
   it('clamps non-monotonic clock (nowMs < lastInteraction) to elapsed=0', () => {
-    // If the clock somehow moved backwards (worker drift, system
-    // time adjustment), a negative delta must NOT bypass the
-    // cooldown in either direction. elapsed is clamped to [0, ∞).
     expect(isUserInputCooldownActive(2_000_000, 1_000_000)).toBe(true);
-    // Still inside the window when `now` is equal to last.
     expect(isUserInputCooldownActive(1_000_000, 1_000_000)).toBe(true);
+  });
+});
+
+// ── Center-refresh profile ──────────────────────────────────────────
+
+describe('cinematicCenterRefreshProfile', () => {
+  it('baseline 10 Hz at 1× → ~100ms interval', () => {
+    const p = cinematicCenterRefreshProfile(1);
+    expect(p.centerRefreshIntervalMs).toBeCloseTo(100, 0);
+  });
+
+  it('scales with speed and clamps to [8, 16] Hz range', () => {
+    const fast = cinematicCenterRefreshProfile(20);
+    expect(fast.centerRefreshIntervalMs).toBeGreaterThanOrEqual(1000 / 16);
+    expect(fast.centerRefreshIntervalMs).toBeLessThanOrEqual(1000 / 8);
+  });
+
+  it('degenerate speed defaults to 1×', () => {
+    const base = cinematicCenterRefreshProfile(1);
+    expect(cinematicCenterRefreshProfile(0).centerRefreshIntervalMs).toBe(base.centerRefreshIntervalMs);
+    expect(cinematicCenterRefreshProfile(NaN).centerRefreshIntervalMs).toBe(base.centerRefreshIntervalMs);
+  });
+
+  it('honors custom tuning', () => {
+    const p = cinematicCenterRefreshProfile(1, {
+      ...DEFAULT_CINEMATIC_CENTER_REFRESH_TUNING,
+      baselineCenterRefreshHz: 20,
+      maxCenterRefreshHz: 30,
+    });
+    // 20 Hz × scale(1^0.3=1) = 20 Hz → 50ms.
+    expect(p.centerRefreshIntervalMs).toBeCloseTo(50, 0);
+  });
+});
+
+describe('normalizeCinematicCenterRefreshTuning', () => {
+  it('preserves valid tuning', () => {
+    const result = normalizeCinematicCenterRefreshTuning(DEFAULT_CINEMATIC_CENTER_REFRESH_TUNING);
+    expect(result).toEqual(DEFAULT_CINEMATIC_CENTER_REFRESH_TUNING);
+  });
+
+  it('fixes min > max inversion', () => {
+    const result = normalizeCinematicCenterRefreshTuning({
+      ...DEFAULT_CINEMATIC_CENTER_REFRESH_TUNING,
+      minCenterRefreshHz: 20,
+      maxCenterRefreshHz: 5,
+    });
+    expect(result.maxCenterRefreshHz).toBeGreaterThanOrEqual(result.minCenterRefreshHz);
+  });
+
+  it('falls back on NaN exponent', () => {
+    const result = normalizeCinematicCenterRefreshTuning({
+      ...DEFAULT_CINEMATIC_CENTER_REFRESH_TUNING,
+      centerRefreshScaleExponent: NaN,
+    });
+    expect(result.centerRefreshScaleExponent).toBe(DEFAULT_CINEMATIC_CENTER_REFRESH_TUNING.centerRefreshScaleExponent);
+  });
+});
+
+// ── computeCinematicCenterFromAtomIndices ────────────────────────────
+
+describe('computeCinematicCenterFromAtomIndices', () => {
+  it('computes correct centroid for known coordinates', () => {
+    const center = computeCinematicCenterFromAtomIndices(
+      [0, 1, 2],
+      (i) => [i * 3, 0, 0],
+      1,
+    );
+    expect(center).not.toBeNull();
+    // (0 + 3 + 6) / 3 = 3
+    expect(center![0]).toBeCloseTo(3, 5);
+    expect(center![1]).toBeCloseTo(0, 5);
+  });
+
+  it('returns null when no atoms resolve', () => {
+    const center = computeCinematicCenterFromAtomIndices(
+      [0, 1, 2],
+      () => null,
+      1,
+    );
+    expect(center).toBeNull();
+  });
+
+  it('returns null when resolved count < minStableResolvedCount', () => {
+    const center = computeCinematicCenterFromAtomIndices(
+      [0, 1, 2, 3, 4],
+      (i) => (i < 2 ? [i, 0, 0] : null), // 2 of 5 resolve
+      3, // threshold: need at least 3
+    );
+    expect(center).toBeNull();
+  });
+
+  it('succeeds when resolved count >= minStableResolvedCount', () => {
+    const center = computeCinematicCenterFromAtomIndices(
+      [0, 1, 2, 3, 4],
+      (i) => (i < 3 ? [i, 0, 0] : null), // 3 of 5 resolve
+      3,
+    );
+    expect(center).not.toBeNull();
+    expect(center![0]).toBeCloseTo(1, 5); // (0+1+2)/3
+  });
+});
+
+// ── resolveCinematicSelectionSnapshot ────────────────────────────────
+
+describe('resolveCinematicSelectionSnapshot', () => {
+  it('returns snapshot with atomIndices + expectedAtomCount + threshold', () => {
+    const result = resolveCinematicSelectionSnapshot(
+      makeCandidates([10, 8]),
+      (id) => (id === 'g0' ? [0, 1, 2, 3] : [4, 5, 6]),
+      (i) => [i, 0, 0],
+    );
+    expect(result.snapshot).not.toBeNull();
+    expect(result.eligibleClusterCount).toBe(2);
+    const s = result.snapshot!;
+    expect(s.atomIndices).toHaveLength(7); // 4 + 3
+    expect(s.expectedAtomCount).toBe(7);
+    expect(s.minFastStableResolvedCount).toBe(Math.max(1, Math.floor(0.5 * 7)));
+    expect(s.center[0]).toBeCloseTo((0 + 1 + 2 + 3 + 4 + 5 + 6) / 7, 5);
+  });
+
+  it('preserves eligible count when groups are unreconciled', () => {
+    const result = resolveCinematicSelectionSnapshot(
+      makeCandidates([10]),
+      () => null,
+      () => [0, 0, 0],
+    );
+    expect(result.snapshot).toBeNull();
+    expect(result.eligibleClusterCount).toBe(1);
+  });
+
+  it('resolveCinematicTarget wraps correctly (backward compat)', () => {
+    const result = resolveCinematicTarget(
+      makeCandidates([10]),
+      () => [0, 1],
+      (i) => [i * 5, 0, 0],
+    );
+    expect(result.target).not.toBeNull();
+    expect(result.target!.atomCount).toBe(2);
+    expect(result.target!.center[0]).toBeCloseTo(2.5, 5);
+    expect(result.eligibleClusterCount).toBe(1);
   });
 });

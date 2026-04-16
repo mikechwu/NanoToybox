@@ -31,6 +31,8 @@ import { createWatchCameraInput, type WatchCameraInput } from './watch-camera-in
 import {
   createWatchCinematicCameraService,
   type WatchCinematicCameraService,
+  type ServiceCinematicCameraStatus,
+  type SnapshotCinematicCameraStatus,
 } from './watch-cinematic-camera';
 import { createWatchOverlayLayout, type WatchOverlayLayout } from './watch-overlay-layout';
 import { createWatchBondedGroupAppearance, type WatchBondedGroupAppearance } from './watch-bonded-group-appearance';
@@ -157,12 +159,11 @@ export interface WatchControllerSnapshot {
   /** UI-truth: `enabled && !pausedForUserInput && eligibleClusterCount > 0
    *  && !viewService.isFollowing()`. Computed once per `buildSnapshot`. */
   cinematicCameraActive: boolean;
-  /** True within the configured cooldown window after user camera
-   *  input (see `CinematicCameraConfig.userIdleResumeMs`). */
-  cinematicCameraPausedForUserInput: boolean;
-  /** Number of large clusters feeding the current framing target. 0 →
-   *  "Waiting for major clusters". */
-  cinematicCameraEligibleClusterCount: number;
+  /** Controller-owned status enum derived from the service + follow
+   *  state. The toggle component keys its status text off this —
+   *  presentation logic must not re-derive status from individual
+   *  booleans. */
+  cinematicCameraStatus: SnapshotCinematicCameraStatus;
 }
 
 export interface WatchController {
@@ -226,13 +227,27 @@ const EMPTY_SNAPSHOT: WatchControllerSnapshot = {
   loadingShareCode: null,
   cinematicCameraEnabled: false,
   cinematicCameraActive: false,
-  cinematicCameraPausedForUserInput: false,
-  cinematicCameraEligibleClusterCount: 0,
+  cinematicCameraStatus: 'off' as SnapshotCinematicCameraStatus,
 };
 
 /** Derive the compatibility shim from the authoritative field. */
 function deriveLoadingShareCode(progress: WatchOpenProgress): string | null {
   return progress.kind === 'share' ? progress.code : null;
+}
+
+/**
+ * Pure derivation: widen the service's runtime status to the
+ * snapshot-level status by overriding every non-'off' value to
+ * 'suppressed_by_follow' when Follow owns the camera. Exported for
+ * direct unit testing — the controller calls this inline in
+ * `buildSnapshot()`.
+ */
+export function deriveCinematicCameraStatus(
+  serviceStatus: ServiceCinematicCameraStatus,
+  isFollowing: boolean,
+): SnapshotCinematicCameraStatus {
+  if (isFollowing && serviceStatus !== 'off') return 'suppressed_by_follow';
+  return serviceStatus;
 }
 
 export function createWatchController(): WatchController {
@@ -386,8 +401,7 @@ export function createWatchController(): WatchController {
       loadingShareCode: deriveLoadingShareCode(_snapshot.openProgress),
       cinematicCameraEnabled: cs.enabled,
       cinematicCameraActive: computeCinematicCameraActive(),
-      cinematicCameraPausedForUserInput: cs.pausedForUserInput,
-      cinematicCameraEligibleClusterCount: cs.eligibleClusterCount,
+      cinematicCameraStatus: deriveCinematicCameraStatus(cs.status, viewService.isFollowing()),
     };
   }
 
@@ -431,8 +445,7 @@ export function createWatchController(): WatchController {
       loadingShareCode: deriveLoadingShareCode(_snapshot.openProgress),
       cinematicCameraEnabled: cs.enabled,
       cinematicCameraActive,
-      cinematicCameraPausedForUserInput: cs.pausedForUserInput,
-      cinematicCameraEligibleClusterCount: cs.eligibleClusterCount,
+      cinematicCameraStatus: deriveCinematicCameraStatus(cs.status, viewService.isFollowing()),
     };
   }
 
@@ -461,8 +474,7 @@ export function createWatchController(): WatchController {
       || a.loadingShareCode !== b.loadingShareCode
       || a.cinematicCameraEnabled !== b.cinematicCameraEnabled
       || a.cinematicCameraActive !== b.cinematicCameraActive
-      || a.cinematicCameraPausedForUserInput !== b.cinematicCameraPausedForUserInput
-      || a.cinematicCameraEligibleClusterCount !== b.cinematicCameraEligibleClusterCount;
+      || a.cinematicCameraStatus !== b.cinematicCameraStatus;
   }
 
   /**

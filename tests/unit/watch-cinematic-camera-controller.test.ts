@@ -128,4 +128,88 @@ describe('WatchController cinematic wiring (real controller, mocked factories)',
 
     ctrl.dispose();
   });
+
+  it('snapshot.cinematicCameraStatus reflects service status when not following', () => {
+    const ctrl = createWatchController();
+    const service = createServiceSpy.mock.calls[0][0] as {
+      getState: ReturnType<typeof vi.fn>;
+      setEnabled: ReturnType<typeof vi.fn>;
+    };
+
+    // Service reports waiting_topology.
+    service.getState.mockReturnValue({
+      enabled: true, active: false, pausedForUserInput: false,
+      eligibleClusterCount: 2, status: 'waiting_topology',
+    });
+    // Force a snapshot rebuild.
+    ctrl.setCinematicCameraEnabled(true);
+    expect(ctrl.getSnapshot().cinematicCameraStatus).toBe('waiting_topology');
+
+    // Switch to tracking.
+    service.getState.mockReturnValue({
+      enabled: true, active: true, pausedForUserInput: false,
+      eligibleClusterCount: 2, status: 'tracking',
+    });
+    ctrl.setCinematicCameraEnabled(true);
+    expect(ctrl.getSnapshot().cinematicCameraStatus).toBe('tracking');
+
+    // Switch to paused.
+    service.getState.mockReturnValue({
+      enabled: true, active: false, pausedForUserInput: true,
+      eligibleClusterCount: 1, status: 'paused',
+    });
+    ctrl.setCinematicCameraEnabled(true);
+    expect(ctrl.getSnapshot().cinematicCameraStatus).toBe('paused');
+
+    ctrl.dispose();
+  });
+
+  it('deriveCinematicCameraStatus overrides all non-off statuses when following', async () => {
+    // Behavioral test of the extracted pure helper — tests the actual
+    // function the controller calls in buildSnapshot, not source text.
+    const { deriveCinematicCameraStatus } = await import('../../watch/js/watch-controller');
+
+    // Not following: all statuses pass through.
+    expect(deriveCinematicCameraStatus('tracking', false)).toBe('tracking');
+    expect(deriveCinematicCameraStatus('paused', false)).toBe('paused');
+    expect(deriveCinematicCameraStatus('waiting_topology', false)).toBe('waiting_topology');
+    expect(deriveCinematicCameraStatus('waiting_major_clusters', false)).toBe('waiting_major_clusters');
+    expect(deriveCinematicCameraStatus('off', false)).toBe('off');
+
+    // Following: every non-off status becomes suppressed_by_follow.
+    expect(deriveCinematicCameraStatus('tracking', true)).toBe('suppressed_by_follow');
+    expect(deriveCinematicCameraStatus('paused', true)).toBe('suppressed_by_follow');
+    expect(deriveCinematicCameraStatus('waiting_topology', true)).toBe('suppressed_by_follow');
+    expect(deriveCinematicCameraStatus('waiting_major_clusters', true)).toBe('suppressed_by_follow');
+
+    // Following + off stays off (cinematic disabled by user).
+    expect(deriveCinematicCameraStatus('off', true)).toBe('off');
+  });
+
+  it('snapshotChanged fires when only status changes', () => {
+    const ctrl = createWatchController();
+    const service = createServiceSpy.mock.calls[0][0] as {
+      getState: ReturnType<typeof vi.fn>;
+    };
+    const listener = vi.fn();
+    ctrl.subscribe(listener);
+
+    service.getState.mockReturnValue({
+      enabled: true, active: true, pausedForUserInput: false,
+      eligibleClusterCount: 2, status: 'tracking',
+    });
+    // Force a snapshot rebuild by toggling cinematic (which publishes).
+    ctrl.setCinematicCameraEnabled(true);
+    listener.mockClear();
+
+    // Now change ONLY the status.
+    service.getState.mockReturnValue({
+      enabled: true, active: false, pausedForUserInput: true,
+      eligibleClusterCount: 2, status: 'paused',
+    });
+    ctrl.setCinematicCameraEnabled(true); // triggers publishSnapshot
+    expect(listener).toHaveBeenCalled();
+
+    ctrl.dispose();
+  });
 });

@@ -169,25 +169,86 @@ export const DEFAULT_CINEMATIC_SPEED_TUNING: CinematicSpeedTuning = Object.freez
   allowDistanceShrink: true,
 });
 
+// ── Center-refresh tuning (fast cadence) ────────────────────────────
+
+export interface CinematicCenterRefreshTuning {
+  baselineCenterRefreshHz: number;
+  minCenterRefreshHz: number;
+  maxCenterRefreshHz: number;
+  centerRefreshScaleExponent: number;
+  minCenterRefreshScale: number;
+  maxCenterRefreshScale: number;
+}
+
+export const DEFAULT_CINEMATIC_CENTER_REFRESH_TUNING: CinematicCenterRefreshTuning = Object.freeze({
+  baselineCenterRefreshHz: 10,
+  minCenterRefreshHz: 8,
+  maxCenterRefreshHz: 16,
+  centerRefreshScaleExponent: 0.3,
+  minCenterRefreshScale: 0.85,
+  maxCenterRefreshScale: 2.0,
+});
+
+export function normalizeCinematicCenterRefreshTuning(
+  tuning: CinematicCenterRefreshTuning,
+  fallback: CinematicCenterRefreshTuning = DEFAULT_CINEMATIC_CENTER_REFRESH_TUNING,
+): CinematicCenterRefreshTuning {
+  const baselineCenterRefreshHz = positiveFinite(tuning.baselineCenterRefreshHz, fallback.baselineCenterRefreshHz);
+  const minCenterRefreshHz = positiveFinite(tuning.minCenterRefreshHz, fallback.minCenterRefreshHz);
+  const maxCenterRefreshHz = Math.max(
+    positiveFinite(tuning.maxCenterRefreshHz, fallback.maxCenterRefreshHz),
+    minCenterRefreshHz,
+  );
+  const minCenterRefreshScale = positiveFinite(tuning.minCenterRefreshScale, fallback.minCenterRefreshScale);
+  const maxCenterRefreshScale = Math.max(
+    positiveFinite(tuning.maxCenterRefreshScale, fallback.maxCenterRefreshScale),
+    minCenterRefreshScale,
+  );
+  return {
+    baselineCenterRefreshHz,
+    minCenterRefreshHz,
+    maxCenterRefreshHz,
+    centerRefreshScaleExponent: finiteOr(tuning.centerRefreshScaleExponent, fallback.centerRefreshScaleExponent),
+    minCenterRefreshScale,
+    maxCenterRefreshScale,
+  };
+}
+
+export interface CinematicCenterRefreshProfile {
+  centerRefreshIntervalMs: number;
+}
+
+export function cinematicCenterRefreshProfile(
+  playbackSpeed: number,
+  tuning: CinematicCenterRefreshTuning = DEFAULT_CINEMATIC_CENTER_REFRESH_TUNING,
+): CinematicCenterRefreshProfile {
+  const t = normalizeCinematicCenterRefreshTuning(tuning);
+  const s = Number.isFinite(playbackSpeed) && playbackSpeed > 0 && playbackSpeed !== Infinity
+    ? playbackSpeed : 1;
+  const scale = clamp(
+    Math.pow(s, t.centerRefreshScaleExponent),
+    t.minCenterRefreshScale,
+    t.maxCenterRefreshScale,
+  );
+  const hz = clamp(
+    t.baselineCenterRefreshHz * scale,
+    t.minCenterRefreshHz,
+    t.maxCenterRefreshHz,
+  );
+  return { centerRefreshIntervalMs: 1000 / hz };
+}
+
+// ── Config ──────────────────────────────────────────────────────────
+
 export interface CinematicCameraConfig {
   enabledByDefault: boolean;
   smallClusterThreshold: number;
-  /** Wall-clock idle-resume window. NOT scaled by playback speed —
-   *  human interaction recovery is the same 1.5s whether playback
-   *  is 0.5× or 20×. */
   userIdleResumeMs: number;
-  /** Padding factor applied to the max-eligible-atom distance when
-   *  computing framing radius. */
   radiusPaddingFactor: number;
-  /** Lower clamp on framing radius — prevents over-zoom on tiny
-   *  molecules where the computed radius would otherwise collapse
-   *  to near-zero. */
   minRadius: number;
-  /** Optional upper clamp — prevents excessive zoom-out on
-   *  unreasonably large scenes. */
   maxRadius?: number;
-  /** Speed-profile tuning coefficients. See `CinematicSpeedTuning`. */
   speedTuning: CinematicSpeedTuning;
+  centerRefreshTuning: CinematicCenterRefreshTuning;
 }
 
 export const DEFAULT_CINEMATIC_CONFIG: CinematicCameraConfig = Object.freeze({
@@ -198,6 +259,7 @@ export const DEFAULT_CINEMATIC_CONFIG: CinematicCameraConfig = Object.freeze({
   minRadius: 1.5,
   maxRadius: undefined,
   speedTuning: DEFAULT_CINEMATIC_SPEED_TUNING,
+  centerRefreshTuning: DEFAULT_CINEMATIC_CENTER_REFRESH_TUNING,
 });
 
 /** Minimal shape the resolver needs from a bonded cluster. */
@@ -343,88 +405,107 @@ export type GroupAtomIndicesResolver = (
   groupId: string,
 ) => readonly number[] | null;
 
+// ── Selection snapshot (two-cadence support) ────────────────────────
+
+export interface CinematicSelectionSnapshot {
+  atomIndices: readonly number[];
+  expectedAtomCount: number;
+  minFastStableResolvedCount: number;
+  center: readonly [number, number, number];
+  radius: number;
+}
+
+export interface CinematicSelectionResult {
+  snapshot: CinematicSelectionSnapshot | null;
+  eligibleClusterCount: number;
+}
+
 /**
- * Resolve the aggregate framing target for the current tick.
- *
- * Null-handling per the Selection Rule:
- *   - Small clusters (`atomCount <= threshold`) are filtered out
- *     before resolution — they never contribute.
- *   - `getAtomIndicesForGroup` returning null → the group is
- *     unreconciled; skip it silently.
- *   - `resolveAtomPosition` returning null → atom unresolved; sum
- *     over the resolved subset.
- *   - If `resolvedAtomCount === 0` OR
- *     `resolvedAtomCount < max(2, 0.5 × expectedAtomCount)` →
- *     return null (unstable resolve; caller must idle-hold this tick).
- *   - If no eligible clusters exist at all → return null (caller
- *     may apply a whole-scene fallback elsewhere; this module
- *     explicitly does not invent a target).
- *
- * Center is per-atom weighted (not per-group), so one dominant
- * cluster is not overruled by many medium ones.
+ * Fast-path center recompute from a previously-selected atom set.
+ * Resolves positions, skips nulls, returns the per-atom-weighted
+ * centroid. Returns null if fewer than `minStableResolvedCount` atoms
+ * resolve — the caller then coasts on the prior live target.
  */
-export function resolveCinematicTarget(
+export function computeCinematicCenterFromAtomIndices(
+  atomIndices: readonly number[],
+  resolveAtomPosition: AtomPositionResolver,
+  minStableResolvedCount: number,
+): readonly [number, number, number] | null {
+  let sumX = 0, sumY = 0, sumZ = 0;
+  let resolvedCount = 0;
+  for (const i of atomIndices) {
+    const p = resolveAtomPosition(i);
+    if (p === null) continue;
+    sumX += p[0];
+    sumY += p[1];
+    sumZ += p[2];
+    resolvedCount++;
+  }
+  if (resolvedCount === 0 || resolvedCount < minStableResolvedCount) return null;
+  return [sumX / resolvedCount, sumY / resolvedCount, sumZ / resolvedCount];
+}
+
+/**
+ * Full slow-cadence selection: eligible-cluster filter + atom resolve
+ * + aggregate center/radius + collected atomIndices. Returns the
+ * snapshot needed by the fast center-refresh path.
+ *
+ * Same null-handling as `resolveCinematicTarget` — the function is
+ * factored so `resolveCinematicTarget` is a thin backward-compatible
+ * wrapper that drops `atomIndices`.
+ */
+export function resolveCinematicSelectionSnapshot(
   candidates: readonly CinematicClusterCandidate[],
   getAtomIndices: GroupAtomIndicesResolver,
   resolveAtomPosition: AtomPositionResolver,
   config: CinematicCameraConfig = DEFAULT_CINEMATIC_CONFIG,
-): CinematicResolveResult {
-  // Large-cluster filter (strict: atomCount > threshold).
+): CinematicSelectionResult {
   const eligible: CinematicClusterCandidate[] = [];
   for (const c of candidates) {
     if (c.atomCount > config.smallClusterThreshold) eligible.push(c);
   }
   const eligibleClusterCount = eligible.length;
   if (eligibleClusterCount === 0) {
-    return { target: null, eligibleClusterCount: 0 };
+    return { snapshot: null, eligibleClusterCount: 0 };
   }
 
-  // Resolve atom positions across all eligible groups.
-  let sumX = 0;
-  let sumY = 0;
-  let sumZ = 0;
+  let sumX = 0, sumY = 0, sumZ = 0;
   let resolvedCount = 0;
   let expectedCount = 0;
-  const resolved: Array<readonly [number, number, number]> = [];
+  const resolvedPositions: Array<readonly [number, number, number]> = [];
+  const resolvedIndices: number[] = [];
 
   for (const g of eligible) {
     const indices = getAtomIndices(g.id);
-    if (indices === null) continue; // group unreconciled — skip
+    if (indices === null) continue;
     expectedCount += indices.length;
     for (const i of indices) {
       const p = resolveAtomPosition(i);
-      if (p === null) continue; // atom unresolved — skip
+      if (p === null) continue;
       sumX += p[0];
       sumY += p[1];
       sumZ += p[2];
       resolvedCount++;
-      resolved.push(p);
+      resolvedPositions.push(p);
+      resolvedIndices.push(i);
     }
   }
 
-  // Stability gate — target is null, but the eligible count is
-  // preserved so the caller can distinguish "unreconciled" (count>0,
-  // target=null) from "empty" (count=0).
   if (resolvedCount === 0) {
-    return { target: null, eligibleClusterCount };
+    return { snapshot: null, eligibleClusterCount };
   }
   const minStable = Math.max(2, Math.floor(0.5 * expectedCount));
   if (resolvedCount < minStable) {
-    return { target: null, eligibleClusterCount };
+    return { snapshot: null, eligibleClusterCount };
   }
 
-  // Weighted center (per-atom, not per-group).
   const cx = sumX / resolvedCount;
   const cy = sumY / resolvedCount;
   const cz = sumZ / resolvedCount;
 
-  // Radius: farthest eligible atom distance + atomVisualRadius,
-  // padded and clamped.
   let maxDistSq = 0;
-  for (const p of resolved) {
-    const dx = p[0] - cx;
-    const dy = p[1] - cy;
-    const dz = p[2] - cz;
+  for (const p of resolvedPositions) {
+    const dx = p[0] - cx, dy = p[1] - cy, dz = p[2] - cz;
     const d2 = dx * dx + dy * dy + dz * dz;
     if (d2 > maxDistSq) maxDistSq = d2;
   }
@@ -436,12 +517,35 @@ export function resolveCinematicTarget(
   }
 
   return {
-    target: {
+    snapshot: {
+      atomIndices: resolvedIndices,
+      expectedAtomCount: expectedCount,
+      minFastStableResolvedCount: Math.max(1, Math.floor(0.5 * expectedCount)),
       center: [cx, cy, cz],
       radius,
-      atomCount: resolvedCount,
     },
     eligibleClusterCount,
+  };
+}
+
+/**
+ * Backward-compatible aggregate framing target resolver. Thin wrapper
+ * around `resolveCinematicSelectionSnapshot()` that drops the atom
+ * indices (callers that don't need the fast center-refresh path use
+ * this simpler return shape).
+ */
+export function resolveCinematicTarget(
+  candidates: readonly CinematicClusterCandidate[],
+  getAtomIndices: GroupAtomIndicesResolver,
+  resolveAtomPosition: AtomPositionResolver,
+  config: CinematicCameraConfig = DEFAULT_CINEMATIC_CONFIG,
+): CinematicResolveResult {
+  const result = resolveCinematicSelectionSnapshot(candidates, getAtomIndices, resolveAtomPosition, config);
+  return {
+    target: result.snapshot
+      ? { center: result.snapshot.center, radius: result.snapshot.radius, atomCount: result.snapshot.atomIndices.length }
+      : null,
+    eligibleClusterCount: result.eligibleClusterCount,
   };
 }
 
