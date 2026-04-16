@@ -176,7 +176,7 @@ function renderDock(overrides: Partial<React.ComponentProps<typeof WatchDock>> =
     playing: false,
     canPlay: true,
     speed: 1,
-    repeat: false,
+    repeat: true,
     playDirection: 0,
     onTogglePlay: vi.fn(),
     onStepForward: vi.fn(),

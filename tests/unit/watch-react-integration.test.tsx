@@ -38,7 +38,7 @@ function makeSnapshot(overrides: Partial<WatchControllerSnapshot> = {}): WatchCo
     following: false,
     followedGroupId: null,
     speed: 1,
-    repeat: false,
+    repeat: true,
     playDirection: 0 as 1 | -1 | 0,
     theme: 'light',
     textSize: 'normal',

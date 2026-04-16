@@ -81,7 +81,7 @@ export function createWatchPlaybackModel(): WatchPlaybackModel {
   // isPlaying() is derived from this. No separate _playing boolean.
   let _playDirection: 1 | -1 | 0 = 0;
   let _speedMultiplier = SPEED_DEFAULT;
-  let _repeat = false;
+  let _repeat = true;
 
   function clampTime(timePs: number): number {
     if (!_history || _history.denseFrames.length === 0) return 0;
@@ -97,7 +97,7 @@ export function createWatchPlaybackModel(): WatchPlaybackModel {
       _currentTimePs = file.denseFrames[0]?.timePs ?? 0;
       _playDirection = 0;
       _speedMultiplier = SPEED_DEFAULT;
-      _repeat = false;
+      _repeat = true;
       // Select topology source based on file kind
       if (file.kind === 'full') {
         _topologySource = createStoredTopologySource(file.restartFrames);
@@ -112,7 +112,7 @@ export function createWatchPlaybackModel(): WatchPlaybackModel {
       _currentTimePs = 0;
       _playDirection = 0;
       _speedMultiplier = SPEED_DEFAULT;
-      _repeat = false;
+      _repeat = true;
     },
 
     isLoaded: () => _history !== null,

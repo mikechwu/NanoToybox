@@ -218,7 +218,7 @@ const EMPTY_SNAPSHOT: WatchControllerSnapshot = {
   groups: [], atomCount: 0, frameCount: 0, maxAtomCount: 0,
   fileKind: null, fileName: null, error: null,
   hoveredGroupId: null, following: false, followedGroupId: null,
-  speed: 1, repeat: false, playDirection: 0, theme: VIEWER_DEFAULTS.defaultTheme, textSize: 'normal',
+  speed: 1, repeat: true, playDirection: 0, theme: VIEWER_DEFAULTS.defaultTheme, textSize: 'normal',
   smoothPlayback: true, interpolationMode: 'linear',
   activeInterpolationMethod: 'linear', lastFallbackReason: 'none',
   importDiagnostics: EMPTY_DIAGNOSTICS,
@@ -765,6 +765,14 @@ export function createWatchController(): WatchController {
       // flipped to true, so `buildSnapshot`'s domain delta guarantees
       // `snapshotChanged` fires even though the helper compares
       // against the previously-published snapshot.
+      // Auto-play: start forward playback so the user sees motion as
+      // soon as the workspace appears. Must run BEFORE the snapshot
+      // commit so the first published snapshot has `playing: true`.
+      // Guard against single-frame files where start === end
+      // (advance() would produce NaN via modulo-zero with repeat on).
+      if (playback.getEndTimePs() > playback.getStartTimePs()) {
+        playback.startPlayback();
+      }
       commitOpenProgress({ kind: 'idle' }, { error: null });
       startRAF();
     } catch (e) {

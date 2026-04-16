@@ -152,9 +152,9 @@ describe('WatchPlaybackModel speed', () => {
 // ── Repeat ──
 
 describe('WatchPlaybackModel repeat', () => {
-  it('default repeat is false', () => {
+  it('default repeat is true', () => {
     const pm = loadModel();
-    expect(pm.getRepeat()).toBe(false);
+    expect(pm.getRepeat()).toBe(true);
   });
 
   it('repeat wraps time at end using modulo', () => {
@@ -180,11 +180,11 @@ describe('WatchPlaybackModel repeat', () => {
     expect(pm.getCurrentTimePs()).toBe(100);
   });
 
-  it('load resets repeat to false', () => {
+  it('load resets repeat to true (default on)', () => {
     const pm = loadModel();
-    pm.setRepeat(true);
+    pm.setRepeat(false);
     pm.load(importFullHistory(JSON.parse(makeHistory())));
-    expect(pm.getRepeat()).toBe(false);
+    expect(pm.getRepeat()).toBe(true);
   });
 });
 
@@ -267,6 +267,7 @@ describe('WatchPlaybackModel directional playback', () => {
 
   it('backward playback clamps to start when not repeating', () => {
     const pm = loadModel();
+    pm.setRepeat(false);
     pm.setCurrentTimePs(0.01);
     pm.startDirectionalPlayback(-1);
     pm.setSpeed(SPEED_MAX);

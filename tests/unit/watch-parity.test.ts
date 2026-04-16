@@ -172,16 +172,17 @@ describe('WatchController with valid file', () => {
     controller.dispose();
   });
 
-  it('togglePlay works after load', async () => {
+  it('togglePlay works after load (auto-play starts on open)', async () => {
     const controller = createWatchController();
     const file = new File([makeValidFileText()], 'test.atomdojo');
     await controller.openFile(file);
 
-    expect(controller.getSnapshot().playing).toBe(false);
-    controller.togglePlay();
+    // Auto-play: playing is true immediately after file open.
     expect(controller.getSnapshot().playing).toBe(true);
     controller.togglePlay();
     expect(controller.getSnapshot().playing).toBe(false);
+    controller.togglePlay();
+    expect(controller.getSnapshot().playing).toBe(true);
     controller.dispose();
   });
 

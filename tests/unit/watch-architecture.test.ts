@@ -129,8 +129,9 @@ describe('WatchPlaybackModel policy commands', () => {
     expect(model.getCurrentTimePs()).toBe(before);
   });
 
-  it('advance() auto-pauses at end', () => {
+  it('advance() auto-pauses at end (repeat off)', () => {
     const model = loadModel();
+    model.setRepeat(false);
     model.startPlayback();
     model.setSpeed(20); // high speed to reach end fast
     // Advance in capped steps (gap clamp = 250ms) until end
@@ -194,10 +195,12 @@ describe('WatchController facade delegation', () => {
     const file = new File([makeValidFileText()], 'test.atomdojo');
     await controller.openFile(file);
 
-    controller.togglePlay();
+    // Auto-play starts on file open; first toggle pauses.
     expect(controller.getSnapshot().playing).toBe(true);
     controller.togglePlay();
     expect(controller.getSnapshot().playing).toBe(false);
+    controller.togglePlay();
+    expect(controller.getSnapshot().playing).toBe(true);
     controller.dispose();
   });
 
