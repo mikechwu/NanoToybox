@@ -1,8 +1,6 @@
 /**
- * WatchInfoPanel — top panel that names the current source and exposes
- * Open Link / Open File. Replaces the previous full-width `.review-topbar`
- * that consumed its own grid row. Surface tokens are documented at
- * `.watch-info-panel` in watch.css.
+ * WatchTopBar — compact inline file-identity bar with Open Link / Open File
+ * actions. Sits in the bottom-chrome toolbar strip (left side).
  */
 
 import React, { useState, useCallback, useRef } from 'react';
@@ -10,27 +8,53 @@ import React, { useState, useCallback, useRef } from 'react';
 interface WatchTopBarProps {
   fileKind: string | null;
   fileName: string | null;
-  /** Non-null while a share open is in flight. Drives disabled states
-   *  + the "Loading…" submit label, and gates the post-submit form
-   *  dismissal (we only clear the input + close the form on success). */
   loadingShareCode: string | null;
   onOpenFile: () => void;
-  /** Resolves `true` when the open succeeded (no `snapshot.error` set),
-   *  `false` on any failure path. WatchApp's adapter wires this to
-   *  `controller.openSharedCapsule` + `getSnapshot().error`. */
   onOpenShareCode: (input: string) => Promise<boolean>;
 }
 
-/** Map raw file-kind identifiers to user-facing words. Unknown values
- *  pass through — the loader already rejects unsupported kinds
- *  ('replay' etc.) before they reach here, so `string | null` in
- *  practice is one of 'full' / 'capsule' / 'reduced'. */
 const KIND_LABELS: Record<string, string> = {
   full: 'history',
   reduced: 'preview',
 };
 function formatKind(kind: string): string {
   return KIND_LABELS[kind] ?? kind;
+}
+
+/**
+ * Extract a short display name from the full filename.
+ *
+ * Capsule files from share downloads have the pattern:
+ *   atomdojo-capsule-{SHARE_CODE}.atomdojo
+ * where SHARE_CODE is 12 Crockford Base32 chars. Show as grouped
+ * code: "7M4K-2D8Q-9T1V".
+ *
+ * Local files with embedded timestamps have the pattern:
+ *   atomdojo-capsule-YYYYMMDD-HHMMSS.atomdojo
+ * Show as "YYYY-MM-DD HH:MM".
+ *
+ * Everything else: strip the .atomdojo extension and truncate.
+ */
+function formatDisplayName(fileName: string): string {
+  const base = fileName.replace(/\.atomdojo$/i, '').replace(/\.json$/i, '');
+
+  // Share-code capsule: atomdojo-capsule-{12 alphanum chars}
+  const shareMatch = base.match(/^atomdojo-capsule-([0-9A-Za-z]{12})$/);
+  if (shareMatch) {
+    const c = shareMatch[1].toUpperCase();
+    return `${c.slice(0, 4)}-${c.slice(4, 8)}-${c.slice(8, 12)}`;
+  }
+
+  // Timestamped capsule: atomdojo-capsule-YYYYMMDD-HHMMSS
+  const tsMatch = base.match(/^atomdojo-capsule-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
+  if (tsMatch) {
+    const [, y, m, d, hh, mm] = tsMatch;
+    return `${y}-${m}-${d} ${hh}:${mm}`;
+  }
+
+  // Generic: strip common prefix, keep short
+  const short = base.replace(/^atomdojo-/, '');
+  return short.length > 20 ? short.slice(0, 20) + '…' : short;
 }
 
 export function WatchTopBar({
@@ -40,12 +64,6 @@ export function WatchTopBar({
   const [showShareInput, setShowShareInput] = useState(false);
 
   const isLoading = loadingShareCode !== null;
-
-  // Ref-level re-entry guard — closes the microtask gap between the
-  // first submit firing `onOpenShareCode` (which updates the store
-  // synchronously) and React re-rendering with `disabled={true}`. A
-  // rapid second click before the re-render would otherwise slip past
-  // the `isLoading` closure value and fire a parallel fetch.
   const submittingRef = useRef(false);
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
@@ -55,9 +73,6 @@ export function WatchTopBar({
     submittingRef.current = true;
     try {
       const success = await onOpenShareCode(trimmed);
-      // Only dismiss on success. On failure the error banner surfaces
-      // the reason and the form stays mounted with the input intact
-      // so the user can edit + retry without re-pasting.
       if (success) {
         setShareInput('');
         setShowShareInput(false);
@@ -67,24 +82,14 @@ export function WatchTopBar({
     }
   }, [shareInput, isLoading, onOpenShareCode]);
 
+  const displayName = fileName ? formatDisplayName(fileName) : null;
+
   return (
-    <div className="watch-info-panel" role="region" aria-label="Currently watching">
-      <div className="watch-info-panel__identity">
-        {fileKind && <span className="watch-info-panel__kind">{formatKind(fileKind)}</span>}
-        {fileName && (
-          <span
-            className="watch-info-panel__filename"
-            title={fileName}
-            aria-label={fileName}
-          >
-            {fileName}
-          </span>
-        )}
-      </div>
+    <div className="watch-topbar" role="region" aria-label="Currently watching">
       {showShareInput ? (
-        <form className="watch-info-panel__form" onSubmit={handleSubmit}>
+        <form className="watch-topbar__form" onSubmit={handleSubmit}>
           <input
-            className="watch-info-panel__input"
+            className="watch-topbar__input"
             type="text"
             placeholder="Paste share link or code"
             value={shareInput}
@@ -93,43 +98,60 @@ export function WatchTopBar({
             aria-label="Share link or code"
             disabled={isLoading}
           />
-          <div className="watch-info-panel__actions">
-            <button
-              className="watch-info-panel__action"
-              type="submit"
-              disabled={!shareInput.trim() || isLoading}
-            >
-              {isLoading ? 'Loading…' : 'Open'}
-            </button>
-            <button
-              className="watch-info-panel__action"
-              type="button"
-              onClick={() => setShowShareInput(false)}
-              disabled={isLoading}
-            >
-              Cancel
-            </button>
-          </div>
+          <button
+            className="watch-topbar__action"
+            type="submit"
+            disabled={!shareInput.trim() || isLoading}
+          >
+            {isLoading ? '…' : 'Go'}
+          </button>
+          <button
+            className="watch-topbar__action"
+            type="button"
+            onClick={() => setShowShareInput(false)}
+            disabled={isLoading}
+          >
+            ✕
+          </button>
         </form>
       ) : (
-        <div className="watch-info-panel__actions">
-          <button
-            className="watch-info-panel__action"
-            type="button"
-            onClick={() => setShowShareInput(true)}
-            disabled={isLoading}
-          >
-            Open Link
-          </button>
-          <button
-            className="watch-info-panel__action"
-            type="button"
-            onClick={onOpenFile}
-            disabled={isLoading}
-          >
-            Open File
-          </button>
-        </div>
+        <>
+          <div className="watch-topbar__identity">
+            {fileKind && <span className="watch-topbar__kind">{formatKind(fileKind)}</span>}
+            {displayName && (
+              <span className="watch-topbar__filename" title={fileName ?? ''}>
+                {displayName}
+              </span>
+            )}
+          </div>
+          <div className="watch-topbar__actions">
+            <button
+              className="watch-topbar__action"
+              type="button"
+              onClick={() => setShowShareInput(true)}
+              disabled={isLoading}
+              aria-label="Open share link"
+              title="Open Link"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+              </svg>
+            </button>
+            <button
+              className="watch-topbar__action"
+              type="button"
+              onClick={onOpenFile}
+              disabled={isLoading}
+              aria-label="Open file"
+              title="Open File"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+            </button>
+          </div>
+        </>
       )}
     </div>
   );

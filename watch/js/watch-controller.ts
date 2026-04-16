@@ -122,6 +122,10 @@ export interface WatchControllerSnapshot {
   fileKind: string | null;
   fileName: string | null;
   error: string | null;
+  /** Monotonic counter bumped on every error-set call. Allows the UI
+   *  to detect repeated identical errors (same string) for auto-
+   *  dismiss re-trigger without relying on string identity. */
+  errorGeneration: number;
   // ── Round 2: interaction state ──
   hoveredGroupId: string | null;
   following: boolean;
@@ -217,7 +221,7 @@ const IDLE_OPEN_PROGRESS: WatchOpenProgress = Object.freeze({ kind: 'idle' as co
 const EMPTY_SNAPSHOT: WatchControllerSnapshot = {
   loaded: false, playing: false, currentTimePs: 0, startTimePs: 0, endTimePs: 0,
   groups: [], atomCount: 0, frameCount: 0, maxAtomCount: 0,
-  fileKind: null, fileName: null, error: null,
+  fileKind: null, fileName: null, error: null, errorGeneration: 0,
   hoveredGroupId: null, following: false, followedGroupId: null,
   speed: 1, repeat: true, playDirection: 0, theme: VIEWER_DEFAULTS.defaultTheme, textSize: 'normal',
   smoothPlayback: true, interpolationMode: 'linear',
@@ -278,6 +282,7 @@ export function createWatchController(): WatchController {
   const _listeners = new Set<() => void>();
   let _rafId = 0;
   let _lastTimestamp = 0;
+  let _errorGeneration = 0;
   /** Monotonic counter bumped on every open start (local `openFile`
    *  AND remote `openSharedCapsule`). Each open captures its own
    *  value and rechecks at every async boundary to detect a
@@ -389,7 +394,7 @@ export function createWatchController(): WatchController {
     const cs = cinematicCamera.getState();
     return {
       ...EMPTY_SNAPSHOT,
-      error: _snapshot.error,
+      error: _snapshot.error, errorGeneration: _errorGeneration,
       theme: settings.getTheme(),
       textSize: settings.getTextSize(),
       smoothPlayback: settings.getSmoothPlayback(),
@@ -425,7 +430,7 @@ export function createWatchController(): WatchController {
       maxAtomCount: meta.maxAtomCount,
       fileKind: meta.fileKind,
       fileName: meta.fileName,
-      error: _snapshot.error,
+      error: _snapshot.error, errorGeneration: _errorGeneration,
       hoveredGroupId: bondedGroups.getHoveredGroupId(),
       following: viewService.isFollowing(),
       followedGroupId: viewService.isFollowing()
@@ -454,7 +459,7 @@ export function createWatchController(): WatchController {
       || a.currentTimePs !== b.currentTimePs || a.startTimePs !== b.startTimePs
       || a.endTimePs !== b.endTimePs || a.frameCount !== b.frameCount
       || a.maxAtomCount !== b.maxAtomCount || a.fileKind !== b.fileKind
-      || a.fileName !== b.fileName || a.error !== b.error
+      || a.fileName !== b.fileName || a.error !== b.error || a.errorGeneration !== b.errorGeneration
       || a.groups !== b.groups || a.atomCount !== b.atomCount
       || a.hoveredGroupId !== b.hoveredGroupId
       || a.following !== b.following || a.followedGroupId !== b.followedGroupId
@@ -511,6 +516,7 @@ export function createWatchController(): WatchController {
   }
 
   function setErrorKeepingCurrentState(error: string) {
+    _errorGeneration++;
     // Terminal failure of the open flow: clear `openProgress` AND
     // set `error` atomically. The derived `loadingShareCode` clears
     // automatically via `buildSnapshot`, and `commitSnapshotMutation`
@@ -596,7 +602,8 @@ export function createWatchController(): WatchController {
     } catch (e) {
       stopRAF();
       console.error('[watch] playback tick error:', e);
-      _snapshot = { ...EMPTY_SNAPSHOT, error: `Playback error: ${e instanceof Error ? e.message : String(e)}` };
+      _errorGeneration++;
+      _snapshot = { ...EMPTY_SNAPSHOT, error: `Playback error: ${e instanceof Error ? e.message : String(e)}`, errorGeneration: _errorGeneration };
       notify();
       return;
     }

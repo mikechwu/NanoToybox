@@ -410,18 +410,18 @@ test.describe('Watch share — top bar', () => {
       expect(state?.loaded).toBe(true)
     }).toPass({ timeout: 10000 })
 
-    // Info panel should have an "Open Link" action (formerly "Open Share").
-    const openShareBtn = page.locator('.watch-info-panel__action', { hasText: 'Open Link' })
+    // Toolbar should have an "Open share link" action (icon button).
+    const openShareBtn = page.locator('.watch-topbar__action[aria-label="Open share link"]')
     await expect(openShareBtn).toBeVisible()
 
     // Click it → inline share input should appear
     await openShareBtn.click()
-    const shareInput = page.locator('.watch-info-panel__input')
+    const shareInput = page.locator('.watch-topbar__input')
     await expect(shareInput).toBeVisible()
 
-    // Cancel returns to buttons
-    const cancelBtn = page.locator('.watch-info-panel__action', { hasText: 'Cancel' })
-    await cancelBtn.click()
+    // Close (✕) returns to buttons
+    const closeBtn = page.locator('.watch-topbar__form .watch-topbar__action').last()
+    await closeBtn.click()
     await expect(shareInput).not.toBeAttached()
     await expect(openShareBtn).toBeVisible()
 
@@ -455,12 +455,12 @@ test.describe('Watch share — state preservation on error', () => {
     // Now try to open a share code that 404s
     await installShareMocks(page, { metadataStatus: 404 })
 
-    // Use the info panel's share input ("Open Link" + paste).
-    const openShareBtn = page.locator('.watch-info-panel__action', { hasText: 'Open Link' })
+    // Use the toolbar's share input (link icon + paste).
+    const openShareBtn = page.locator('.watch-topbar__action[aria-label="Open share link"]')
     await openShareBtn.click()
-    const shareInput = page.locator('.watch-info-panel__input')
+    const shareInput = page.locator('.watch-topbar__input')
     await shareInput.fill(SHARE_CODE)
-    await page.locator('.watch-info-panel__form').locator('button[type="submit"]').click()
+    await page.locator('.watch-topbar__form').locator('button[type="submit"]').click()
 
     // Wait for error
     await expect(async () => {

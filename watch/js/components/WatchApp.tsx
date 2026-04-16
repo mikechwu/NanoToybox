@@ -4,7 +4,7 @@
  * Round 5: dock + timeline in bottom chrome, settings sheet, transport commands.
  */
 
-import React, { useState, useCallback, useSyncExternalStore } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import type { WatchController } from '../watch-controller';
 import { WatchOpenPanel } from './WatchOpenPanel';
 import { WatchTopBar } from './WatchTopBar';
@@ -81,10 +81,38 @@ export function WatchApp({ controller }: WatchAppProps) {
     return !controller.getSnapshot().error;
   }, [controller]);
 
-  // Global error banner (visible in both states)
-  const errorBanner = snapshot.error ? (
-    <div className="watch-error-banner">
-      <div className="review-status-msg review-status-msg--error">{snapshot.error}</div>
+  // Auto-dismiss error banner: show for 5s then fade out over 0.4s.
+  const [visibleError, setVisibleError] = useState<string | null>(null);
+  const [errorFading, setErrorFading] = useState(false);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (errorTimerRef.current) {
+      clearTimeout(errorTimerRef.current);
+      errorTimerRef.current = null;
+    }
+    if (snapshot.error) {
+      setVisibleError(snapshot.error);
+      setErrorFading(false);
+      errorTimerRef.current = setTimeout(() => {
+        setErrorFading(true);
+        errorTimerRef.current = setTimeout(() => {
+          setVisibleError(null);
+          setErrorFading(false);
+        }, 400);
+      }, 5000);
+    } else {
+      setVisibleError(null);
+      setErrorFading(false);
+    }
+    return () => {
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    };
+  }, [snapshot.error, snapshot.errorGeneration]);
+
+  const errorBanner = visibleError ? (
+    <div className={`watch-error-banner${errorFading ? ' watch-error-banner--fading' : ''}`}>
+      <div className="review-status-msg review-status-msg--error">{visibleError}</div>
     </div>
   ) : null;
 
@@ -105,23 +133,9 @@ export function WatchApp({ controller }: WatchAppProps) {
         <div className="watch-canvas-area">
           <WatchCanvas controller={controller} />
           {isLoaded && (
-            /* Right rail — stacked panels share surface tokens and right
-               inset so they read as one column. Info panel (what am I
-               watching) sits above the bonded-clusters inspector. */
+            /* Right rail — bonded-clusters panel only (file info +
+               cinematic toggle moved to the bottom chrome toolbar). */
             <div className="watch-analysis">
-              <WatchTopBar
-                fileKind={snapshot.fileKind}
-                fileName={snapshot.fileName}
-                loadingShareCode={snapshot.loadingShareCode}
-                onOpenFile={handleOpenFile}
-                onOpenShareCode={handleOpenShareCode}
-              />
-              <WatchCinematicCameraToggle
-                enabled={snapshot.cinematicCameraEnabled}
-                active={snapshot.cinematicCameraActive}
-                status={snapshot.cinematicCameraStatus}
-                onToggle={() => controller.setCinematicCameraEnabled(!snapshot.cinematicCameraEnabled)}
-              />
               <WatchBondedGroupsPanel
                 groups={snapshot.groups}
                 expanded={panelExpanded}
@@ -140,10 +154,6 @@ export function WatchApp({ controller }: WatchAppProps) {
               />
             </div>
           )}
-          {/* Empty-state open panel overlays the canvas area (inside
-              the 1fr grid row so it is naturally bounded above the
-              bottom chrome). `visible={!isLoaded}` returns null
-              otherwise. */}
           <WatchOpenPanel
             visible={!isLoaded}
             openProgress={snapshot.openProgress}
@@ -153,8 +163,27 @@ export function WatchApp({ controller }: WatchAppProps) {
             onDrop={handleDrop}
           />
         </div>
-        {/* Bottom region: positioning-only root. Timeline + dock are sibling shells. */}
+        {/* Bottom region: toolbar + timeline + dock stacked vertically. */}
         <div className="bottom-region" data-watch-bottom-chrome>
+          {isLoaded && (
+            <div className="watch-toolbar">
+              <div className="watch-toolbar__left">
+                <WatchTopBar
+                  fileKind={snapshot.fileKind}
+                  fileName={snapshot.fileName}
+                  loadingShareCode={snapshot.loadingShareCode}
+                  onOpenFile={handleOpenFile}
+                  onOpenShareCode={handleOpenShareCode}
+                />
+              </div>
+              <WatchCinematicCameraToggle
+                enabled={snapshot.cinematicCameraEnabled}
+                active={snapshot.cinematicCameraActive}
+                status={snapshot.cinematicCameraStatus}
+                onToggle={() => controller.setCinematicCameraEnabled(!snapshot.cinematicCameraEnabled)}
+              />
+            </div>
+          )}
           <WatchTimeline
             currentTimePs={snapshot.currentTimePs}
             startTimePs={snapshot.startTimePs}
@@ -180,7 +209,6 @@ export function WatchApp({ controller }: WatchAppProps) {
         </div>
       </div>
 
-      {/* Settings sheet — local open/close state */}
       <WatchSettingsSheet
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}

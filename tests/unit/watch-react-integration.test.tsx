@@ -33,7 +33,7 @@ function makeSnapshot(overrides: Partial<WatchControllerSnapshot> = {}): WatchCo
     maxAtomCount: 0,
     fileKind: null,
     fileName: null,
-    error: null,
+    error: null, errorGeneration: 0,
     hoveredGroupId: null,
     following: false,
     followedGroupId: null,
@@ -592,7 +592,7 @@ describe('WatchApp React integration', () => {
   it('info panel shows file kind chip — full → history', () => {
     const ctrl = createMockController({ loaded: true, endTimePs: 100, fileKind: 'full' });
     const { container } = render(<WatchApp controller={ctrl} />);
-    const kind = container.querySelector('.watch-info-panel__kind');
+    const kind = container.querySelector('.watch-topbar__kind');
     expect(kind).not.toBeNull();
     expect(kind!.textContent).toBe('history');
   });
@@ -600,7 +600,7 @@ describe('WatchApp React integration', () => {
   it('info panel shows file kind chip — reduced → preview', () => {
     const ctrl = createMockController({ loaded: true, endTimePs: 100, fileKind: 'reduced' });
     const { container } = render(<WatchApp controller={ctrl} />);
-    const kind = container.querySelector('.watch-info-panel__kind');
+    const kind = container.querySelector('.watch-topbar__kind');
     expect(kind).not.toBeNull();
     expect(kind!.textContent).toBe('preview');
   });
@@ -608,7 +608,7 @@ describe('WatchApp React integration', () => {
   it('info panel shows file kind chip — capsule passes through', () => {
     const ctrl = createMockController({ loaded: true, endTimePs: 100, fileKind: 'capsule' });
     const { container } = render(<WatchApp controller={ctrl} />);
-    const kind = container.querySelector('.watch-info-panel__kind');
+    const kind = container.querySelector('.watch-topbar__kind');
     expect(kind).not.toBeNull();
     // Not in the mapping table — render the raw value.
     expect(kind!.textContent).toBe('capsule');

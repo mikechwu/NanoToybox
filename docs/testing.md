@@ -955,13 +955,15 @@ Uses a 5-frame two-atom fixture (`tests/e2e/fixtures/watch-two-atom.json`) and `
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
-| `watch-cinematic-camera-toggle.test.tsx` | — | React toggle rendering for all 4 states, accessibility attributes, click handler (see breakdown below) |
+| `watch-cinematic-camera-toggle.test.tsx` | — | React toggle: label render, aria-pressed/aria-label, click handler, data-status attribute (see breakdown below) |
 
-**Status copy:** correct copy for all 4 states (active/paused/waiting/off).
+**Label:** renders "Cinematic Camera" text.
 
-**Accessibility:** aria-pressed flip, aria-label swap.
+**Accessibility:** aria-pressed reflects enabled state, aria-label flips on/off.
 
 **Click handler:** onClick fires onToggle.
+
+**Data attribute:** data-status reflects the status enum value.
 
 ### Watch Cinematic Camera Integration (tests across 1 file)
 
