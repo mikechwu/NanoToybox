@@ -195,6 +195,7 @@ NanoToybox/
 │       ├── watch-document-service.ts # File lifecycle: read, detect, validate, import (kind-based dispatch: full → full importer, capsule/reduced → capsule importer). Non-destructive prepare/commit.
 │       ├── watch-view-service.ts     # Camera target, follow state (frozen atom set), center/follow commands
 │       ├── watch-camera-input.ts     # DOM event binding for orbit + triad interaction (desktop orbit + mobile triad, no atom picking)
+│       ├── watch-cinematic-camera.ts # Cinematic Camera service: auto-framing adapter over src/camera/cinematic-camera.ts (phase-aware gesture tracking, per-file lifecycle, speed-profile-driven target refresh)
 │       ├── watch-overlay-layout.ts   # Triad sizing/positioning using lab-parity formulas (device-aware, dock-clearance)
 │       ├── watch-bonded-group-appearance.ts # Stable-atomId color model: authored assignments keyed by stable atomIds, per-frame projection to dense indices, renderer sync
 │       ├── watch-settings.ts         # Viewer preferences: theme, text-size, smoothPlayback, interpolationMode (session-only, survives file replacement)
@@ -216,6 +217,7 @@ NanoToybox/
 │           ├── WatchCanvas.tsx           # Renderer lifecycle via useEffect + ref (create/destroy only)
 │           ├── WatchOpenPanel.tsx        # Empty-state centered overlay (role=region): share-link primary, file secondary; renders loading progress bar during `?c=` open
 │           ├── WatchTopBar.tsx           # Top-left info panel (`.watch-info-panel`): kind chip + filename + Open Link / Open File actions
+│           ├── WatchCinematicCameraToggle.tsx # Compact toggle pill: Cinematic Camera on/off + status text (active/paused/waiting)
 │           ├── WatchDock.tsx             # 3-zone hierarchical dock: transport (tap=step, hold=directional play), speed (log slider), repeat + Smooth toggle + settings
 │           ├── WatchTimeline.tsx         # Custom scrubber track using shared timeline-track.css primitives (full-width, no mode rail)
 │           ├── WatchSettingsSheet.tsx    # Settings sheet: Smooth Playback (toggle + method picker from registry), Appearance (theme, text-size via Segmented), File Info, Help. Uses shared useSheetLifecycle + sheet-shell.css
@@ -266,6 +268,12 @@ Pure, framework-free modules consumed by both `lab/` and `watch/`. No Zustand, n
 #### `src/appearance/` — Shared visual model logic
 
 - **`src/appearance/bonded-group-color-assignments.ts`** — pure domain logic for bonded-group color projection. Defines `AtomColorOverrideMap` (dense slot index → color) and `GroupColorState` (per-group color state). Provides `rebuildOverridesFromDenseIndices()` (deterministic projection from assignments to atom-level overrides) and `computeGroupColorState()` (derives group-level color state from per-atom assignments). No framework dependencies. Both apps use stable `atomId`s as the canonical assignment key. Lab's `BondedGroupColorAssignment` has `atomIds` (canonical for rendering + export) and `atomIndices` (authoring snapshot only). Watch imports stable atomId assignments from capsule files. Both project to dense indices at render time before calling `rebuildOverridesFromDenseIndices()`.
+
+#### `src/camera/` — Shared cinematic camera logic
+
+- **`src/camera/cinematic-camera.ts`** — pure math module: speed-profile scaling (decoupled motion + refresh curves), target resolver (aggregate center/radius for eligible clusters with null-handling stability gate), cooldown predicate, tuning normalization. Framework-free / WebGL-free.
+
+- **`src/camera/camera-interaction-gate.ts`** — event-attribution gate for OrbitControls: distinguishes user gestures ('start'/'change'/'end') from programmatic `controls.update()` calls. Used by lab Renderer to prevent cinematic auto-framing from self-triggering cooldown.
 
 #### `src/config/` — Shared configuration constants
 
@@ -489,9 +497,10 @@ frame-runtime.ts (orchestration)
        │       computePlacementFramingGoal() — adaptive 5×5 search + refinement
        │       overflow deadband (0.02 NDC) prevents threshold jitter
        │
-       ├── 3. Apply camera assist (renderer.updatePlacementFraming)
+       ├── 3. Apply camera assist (renderer.updateOrientationPreservingFraming)
        │       smooth exponential ease, frame-rate independent
        │       distance shrink suppressed during drag
+       │       (shared method — also drives Watch's cinematic camera)
        │
        └── 4. Reproject drag preview (placement.updateDragFromLatestPointer)
                grabbed-point plane + stored screen coords → group displacement
@@ -607,6 +616,10 @@ Bonded groups are display-source-aware: `bonded-group-display-source.ts` resolve
 - `onEnableFollow?() → boolean` — resolve target via `ensureFollowTarget` + center; returns false if no molecules
 - `onReturnToObject?()` — fly back to orbit target *(Free-Look only, when `freeLookEnabled` is true)*
 - `onFreeze?()` — stop flight velocity *(Free-Look only)*
+
+**Renderer camera API:**
+- `onCameraInteraction(listener: (phase: CameraInteractionPhase) => void): () => void` — subscribe to user-driven camera interactions routed through OrbitControls. Phase-aware: `'start'` on gesture begin, `'change'` during motion, `'end'` on release. Returns a disposer. Programmatic camera updates (follow, cinematic framing, fit, reset) are suppressed via `camera-interaction-gate.ts`'s `runSilently()`.
+- `_updateControlsSilently()` — all renderer-owned programmatic `controls.update()` calls (10 sites: fit, reset, resetView, setCameraFocusTarget, updateOrbitFollow, updateOrientationPreservingFraming, esc recovery, _applyOrbitStep, animated view tween, render damping) route through this helper, which brackets the call with the interaction gate's suppress counter. Fails CLOSED when the gate is missing.
 
 `main.ts` must not be re-grown: new runtime logic goes into `lab/js/runtime/`, new UI surfaces into `lab/js/components/`.
 
@@ -762,7 +775,7 @@ bonded-group-highlight-runtime.ts          interaction-highlight-runtime.ts
 
 ### Watch App (`watch/`)
 
-`watch/` is a read-only history file viewer — it imports `.atomdojo` files exported by the lab and plays them back with full bidirectional playback (0.5x-20x speed, repeat, step forward/backward), with optional smooth inter-frame interpolation (Linear stable default; Hermite and Catmull-Rom experimental). No simulation, no editing, no Zustand store. React UI with a controller facade: `main.ts` creates the controller and mounts React; the controller orchestrates domain services (document, playback, view, camera, overlay, bonded groups, appearance, settings, interpolation) and owns the RAF clock; React components subscribe via `useSyncExternalStore`. Reuses the lab renderer via a narrow adapter.
+`watch/` is a read-only history file viewer — it imports `.atomdojo` files exported by the lab and plays them back with full bidirectional playback (0.5x-20x speed, repeat, step forward/backward), with optional smooth inter-frame interpolation (Linear stable default; Hermite and Catmull-Rom experimental). No simulation, no editing, no Zustand store. React UI with a controller facade: `main.ts` creates the controller and mounts React; the controller orchestrates domain services (document, playback, view, camera, overlay, bonded groups, appearance, settings, interpolation, cinematic camera) and owns the RAF clock; React components subscribe via `useSyncExternalStore`. Reuses the lab renderer via a narrow adapter.
 
 **Domain service architecture:**
 ```
@@ -804,13 +817,15 @@ watch-controller.ts (facade: orchestrates domains, RAF clock, snapshot publicati
        │                       └── buildBondTopologyFromPositions + resolveBondPolicy()
        │
        ├── watch-renderer.ts            ← thin adapter over lab Renderer
-       │       │                           (initForPlayback, updateReviewFrame, applyTheme)
+       │       │                           (initForPlayback, updateReviewFrame, applyTheme,
+       │       │                            updateCinematicFraming, onCameraInteraction)
        │       ▼
        │   lab/js/renderer.ts           (reused — review-frame display only;
        │                                 _getDisplayedAtomCount() for review-mode color)
        │
        ├── watch-camera-input.ts        ← DOM event binding for orbit + triad interaction
-       │       │                           (desktop orbit + mobile triad, no atom picking)
+       │       │                           (desktop orbit + mobile triad, no atom picking;
+       │       │                            phase-aware onUserCameraInteraction callback)
        │       └── src/input/camera-gesture-constants.ts (shared thresholds)
        │
        ├── watch-overlay-layout.ts      ← triad sizing/positioning using lab-parity formulas
@@ -830,6 +845,10 @@ watch-controller.ts (facade: orchestrates domains, RAF clock, snapshot publicati
        ├── watch-view-service.ts        ← camera target, follow state (frozen atom set),
        │                                   center/follow commands
        │
+       ├── watch-cinematic-camera.ts    ← service adapter over src/camera/cinematic-camera.ts;
+       │       │                           enabled flag, gesture tracking, speed-profile target refresh
+       │       └── src/camera/cinematic-camera.ts (shared cinematic camera core)
+       │
        └── watch-settings.ts            ← viewer preferences: theme, text-size,
                                            smoothPlayback, interpolationMode
                                            (session-only, survives file replacement)
@@ -848,6 +867,7 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
        │
        └── [loaded-only panels]      ← right rail (info + bonded clusters) only when loaded:
            ├── WatchTopBar           ← top-left corner info panel (kind chip + filename + Open Link / Open File)
+           ├── WatchCinematicCameraToggle ← compact pill between info panel and bonded-clusters panel
            ├── WatchCanvas           ← owns renderer create/destroy lifecycle only
            │                            (controller's RAF loop pushes frames to renderer)
            ├── WatchBondedGroupsPanel ← collapsible bonded-group inspector with color chips/popover
@@ -863,15 +883,16 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
 
 **Domain modules:**
 - **main.ts** — thin bootstrap: applies theme tokens, creates the `WatchController`, mounts the React UI via `mountWatchUI()`. Does NOT own DOM manipulation, playback logic, or renderer lifecycle.
-- **watch-controller.ts** — non-React facade that orchestrates domain services and bridges to React UI. Owns: RAF clock (playback timing + renderer frame application + follow tracking + appearance sync in the same `tick()`), `WatchControllerSnapshot` publication via `getSnapshot()`/`subscribe()`, interpolation runtime lifecycle (`installInterpolationRuntime`/`teardownInterpolationRuntime` — recreated on file load, disposed on unload/rollback). All render entry points (RAF tick, scrub/step, initial load, rollback) route through the single `applyReviewFrameAtTime()` helper, which is the sole caller of `interpolation.resolve()` and `renderer.updateReviewFrame()`. Snapshot fields include `smoothPlayback`, `interpolationMode`, `activeInterpolationMethod` (string `InterpolationMethodId`), `lastFallbackReason`, and `importDiagnostics`. Exposes `getRegisteredInterpolationMethods()` as a stable accessor (frozen array, reference changes only on registry mutation). Delegates file lifecycle to `watch-document-service.ts`, playback to `watch-playback-model.ts`, camera input to `watch-camera-input.ts`, overlay to `watch-overlay-layout.ts`, color to `watch-bonded-group-appearance.ts`, interpolation to `watch-trajectory-interpolation.ts`, and viewer preferences to `watch-settings.ts`. Coordinates commit/rollback across services on file open; during `openFile`, imports appearance (color assignments) from capsule files via `appearance.importColorAssignments()`.
+- **watch-controller.ts** — non-React facade that orchestrates domain services and bridges to React UI. Owns: RAF clock (playback timing + renderer frame application + follow tracking + appearance sync in the same `tick()`), `WatchControllerSnapshot` publication via `getSnapshot()`/`subscribe()`, interpolation runtime lifecycle (`installInterpolationRuntime`/`teardownInterpolationRuntime` — recreated on file load, disposed on unload/rollback). All render entry points (RAF tick, scrub/step, initial load, rollback) route through the single `applyReviewFrameAtTime()` helper, which is the sole caller of `interpolation.resolve()` and `renderer.updateReviewFrame()`. Snapshot fields include `smoothPlayback`, `interpolationMode`, `activeInterpolationMethod` (string `InterpolationMethodId`), `lastFallbackReason`, `importDiagnostics`, and 4 cinematic snapshot fields (`cinematicCameraEnabled`, `cinematicCameraActive`, `cinematicCameraPausedForUserInput`, `cinematicCameraEligibleClusterCount`). Exposes `getRegisteredInterpolationMethods()` as a stable accessor (frozen array, reference changes only on registry mutation) and `setCinematicCameraEnabled()` command. Delegates file lifecycle to `watch-document-service.ts`, playback to `watch-playback-model.ts`, camera input to `watch-camera-input.ts`, overlay to `watch-overlay-layout.ts`, color to `watch-bonded-group-appearance.ts`, interpolation to `watch-trajectory-interpolation.ts`, cinematic camera to `watch-cinematic-camera.ts`, and viewer preferences to `watch-settings.ts`. Coordinates commit/rollback across services on file open; during `openFile`, imports appearance (color assignments) from capsule files via `appearance.importColorAssignments()`. RAF tick uses narrowed error handling with separate try blocks for camera update, render, and publishSnapshot so a failure in one phase does not skip the others. `computeCinematicCameraActive()` helper provides single source of truth for the derived `cinematicCameraActive` field. `centerOnGroup` marks interaction (Follow/Unfollow do not).
 - **watch-document-service.ts** — file lifecycle service. Non-destructive `prepare()` (read, detect, validate, import -- no side effects) and `commit()` (apply to playback model). Kind-based importer dispatch: branches on `LoadDecision.kind` to route `full` to `full-history-import.ts`, and both `capsule` and `reduced` (legacy alias) to `capsule-history-import.ts`, producing `LoadedWatchHistory` (`LoadedFullHistory | LoadedCapsuleHistory`). Owns `DocumentMetadata` (fileName, fileKind, atomCount, frameCount, maxAtomCount). The controller coordinates commit/rollback around this service.
 - **watch-playback-model.ts** — defines `WatchTopologySource` interface and `LoadedWatchHistory` discriminated union (`LoadedFullHistory | LoadedCapsuleHistory`). Provides `getInteractionAtTime(timePs)` for time-indexed interaction state lookup from capsule interaction timelines. At load time, branches on `kind` to select the appropriate topology source: `StoredTopologySource` for full histories (restart-frame lookup), `ReconstructedTopologySource` for capsule/compact histories (bond reconstruction). Separated sampling channels for positions, topology, config, and boundary state. Bidirectional playback with speed 0.5x-20x (logarithmic mapping via shared `playback-speed-constants.ts`), repeat, step forward/backward. Gap clamp prevents huge jumps after tab-background return. All channels return exact recorded data (stepwise from nearest frame at or before `timePs`). Position interpolation is handled by the trajectory interpolation runtime in the controller pipeline, not in the playback model itself; topology/config/boundary remain stepwise.
-- **watch-camera-input.ts** — DOM event binding for orbit and triad interaction. Simpler than lab's `InputManager` because watch has no atoms to interact with -- only discriminates triad hit area vs. background. Desktop: left/right-drag orbit, scroll zoom. Mobile: 1-finger orbit via triad, 2-finger pinch zoom, tap to snap to axis, double-tap to reset. Uses shared `camera-gesture-constants.ts` for numerical thresholds.
+- **watch-camera-input.ts** — DOM event binding for orbit and triad interaction. Simpler than lab's `InputManager` because watch has no atoms to interact with -- only discriminates triad hit area vs. background. Desktop: left/right-drag orbit, scroll zoom. Mobile: 1-finger orbit via triad, 2-finger pinch zoom, tap to snap to axis, double-tap to reset. Uses shared `camera-gesture-constants.ts` for numerical thresholds. Exposes phase-aware `onUserCameraInteraction` callback (`'start'` / `'change'` / `'end'`) for cinematic camera pause; triad committed-drag emits `'start'` on commit and `'end'` on release; `resetGestureState` emits a synthetic `'end'` on blur/touchcancel.
 - **watch-overlay-layout.ts** — triad sizing and positioning using the same formulas as lab's `overlay-layout.ts`. Measures dock region, applies device-mode-aware sizing (phone/tablet/desktop via shared `device-mode.ts`). Phone clears full-width dock; tablet/desktop uses safe-area corner margins.
 - **watch-bonded-group-appearance.ts** — authored color assignments using stable atomIds (from history file frames), not dense slot indices. Each frame, stable atomIds are projected to current dense slot indices via `rebuildOverridesFromDenseIndices()` from the shared appearance module before passing to the renderer. Owns: authored color assignments, per-frame projection, renderer sync, import hydration via `importColorAssignments()`. Does NOT own: hover highlight, follow state, color editor UI state.
 - **watch-view-service.ts** — camera target and follow state. Follow model matches lab: follow freezes the atom membership at click time and tracks those specific atoms, not the live group-id projection. This prevents follow from drifting when group IDs or memberships change. Owns: camera target ref, follow target (frozen atom set), center/follow commands.
+- **watch-cinematic-camera.ts** — service adapter over `src/camera/cinematic-camera.ts`. Owns the enabled flag and phase-aware user-gesture tracking (`_userGestureActive` for held gestures such as orbit drag, cooldown timer for discrete actions such as scroll-zoom), speed-profile-driven target refresh, and cached framing target. Two lifecycles: `attachRenderer` (per-renderer subscription via `onCameraInteraction`, idempotent -- safe to call before or after enable) and `resetForFile` (clears target/cooldown, preserves subscription + enabled flag). `dispose` for final teardown. Object-param `update(args)` so future additions are non-breaking. Manual Follow suppresses cinematic via controller branch (not service logic).
 - **watch-settings.ts** — viewer preferences: theme, text-size, `smoothPlayback` (default ON), and `interpolationMode` (default `'linear'`). Session-only (no localStorage). Survives file replacement (viewer preferences, not transport). Exports the `WatchInterpolationMode` type (derived from `PRODUCT_INTERPOLATION_MODE_IDS` frozen tuple: `'linear' | 'hermite' | 'catmull-rom'`), the `isWatchInterpolationMode()` type guard, and the `PRODUCT_INTERPOLATION_MODE_IDS` tuple as single source of truth for productized mode IDs. Does NOT own speed or repeat (transport -- owned by playback model).
-- **watch-renderer.ts** — narrow adapter over the lab `Renderer`, exposing only `initForPlayback()`, `updateReviewFrame()`, `applyTheme()`, and canvas access. Shields watch code from the 2500+ line lab renderer surface. Lab's renderer provides `_getDisplayedAtomCount()` which uses `_reviewAtomCount` in review mode so that `_applyAtomColorOverrides()` iterates over the correct atom count for watch display.
+- **watch-renderer.ts** — narrow adapter over the lab `Renderer`, exposing only `initForPlayback()`, `updateReviewFrame()`, `applyTheme()`, and canvas access. Shields watch code from the 2500+ line lab renderer surface. Lab's renderer provides `_getDisplayedAtomCount()` which uses `_reviewAtomCount` in review mode so that `_applyAtomColorOverrides()` iterates over the correct atom count for watch display. Also exposes `updateCinematicFraming()` (orientation-preserving framing via `computeFramingDistance` + `updateOrientationPreservingFraming`) and `onCameraInteraction(listener)` (phase-aware subscription for OrbitControls-owned interactions).
 - **watch-bonded-groups.ts** — local adapter that computes bonded groups from imported topology using the shared `connected-components` and `bonded-group-projection` modules. Memoized by topology `frameId` -- skips recomputation when the frame has not changed. No Zustand dependency.
 - **react-root.tsx** — React mount/unmount entry point. Mounts `WatchApp` under `React.StrictMode` into `#watch-root`.
 - **history-file-loader.ts** — two-step file load: `detectHistoryFile()` (envelope) then kind-specific validation, delegated to the shared schema module. `LoadDecision` supports `full`, `capsule`, and `reduced` (legacy alias). Owns only `File` I/O and the user-facing load flow.
@@ -892,6 +913,7 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
 - **PlaybackSpeedControl** — column-shaped speed control: log-mapped slider on top inside a fixed 18 px row (`.watch-dock__speed-slider-row`) so the thumb centerline aligns with `.dock-icon` glyphs in neighboring columns across browsers; "Speed · 1.0x" meta row below. The numeric readout (`.watch-dock__speed-value`) is a click-to-reset button, disabled at default to make the no-op visible. Uses `sliderToSpeed`, `speedToSlider`, `formatSpeed`, `SPEED_DEFAULT` from shared `playback-speed-constants.ts`.
 - **WatchBondedGroupsPanel** — collapsible bonded-group inspector with two-level display (large/small clusters via `partitionBondedGroups` from `src/history/bonded-group-utils.ts`). Includes color chip + popover for per-group color assignment. Uses shared `review-parity.css` and `bonded-groups-parity.css`.
 - **WatchTopBar** — top-left corner info panel (`.watch-info-panel` in `watch/css/watch.css`). Renders the file-kind chip, truncated filename, and two parallel actions: **Open Link** (paste a share URL/code) and **Open File** (local file picker). Surface tokens mirror `.bg-panel` so both canvas-corner panels read as one family.
+- **WatchCinematicCameraToggle** — compact pill positioned between the info panel and bonded-clusters panel. Label "Cinematic Camera", status text swaps based on the `(enabled, pausedForUserInput, eligibleClusterCount)` triple. Uses `aria-pressed` toggle. Props driven by 4 snapshot fields (`cinematicCameraEnabled`, `cinematicCameraActive`, `cinematicCameraPausedForUserInput`, `cinematicCameraEligibleClusterCount`).
 - **WatchOpenPanel** — centered empty-state overlay that replaces the former `WatchLanding` page. Renders a share-link form as the primary CTA and an "Open local file" button plus drag/drop as the secondary path. While `openProgress.kind !== 'idle'` (share or local file in flight), swaps to stage copy (`Finding shared capsule…` / `Downloading capsule… 42%` / `Preparing interactive playback…`) and a slim progress bar whose mode is `determinate` only when `totalBytes` is known (hybrid progress model; no fabricated percent). Accessibility: `role="region" aria-labelledby` — the workspace behind the panel is non-interactive in empty state (right rail hidden; WatchTimeline drops slider role; WatchDock's non-playback controls disabled via `emptyStateBlocked`), so no focus trap is required.
 
 **State model:** watch/ has no Zustand store. The `WatchController` holds all mutable state across its domain services as plain local variables in closures. React components subscribe via `useSyncExternalStore` -- the controller publishes immutable `WatchControllerSnapshot` objects and notifies listeners on change. Local UI state (panel expanded, small clusters expanded, sheet open) lives in React `useState`.

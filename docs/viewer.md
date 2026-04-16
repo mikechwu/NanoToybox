@@ -568,6 +568,37 @@ Event ownership is split: `watch-camera-input.ts` owns orbit rotation and triad 
 
 **Overlay layout:** Triad sizing and positioning is driven by `watch-overlay-layout.ts`, which replicates lab's formulas. On phone, triad bottom position clears `[data-watch-bottom-chrome]` (the combined dock + timeline wrapper) with an 8 px gap, measured via ResizeObserver. On desktop, triad bottom is a fixed 12 px offset.
 
+### Cinematic Camera
+
+Cinematic camera is a default-on automatic framing system for Watch playback. It smoothly translates the orbit target and dollies along the view direction to keep major bonded clusters centered and well-framed throughout the timeline. It never rotates the camera — the user's chosen orientation is always preserved.
+
+**Framing target:** The framing target is computed from all bonded clusters that exceed a minimum size threshold. Small clusters (3 atoms or fewer) are excluded so isolated fragments and debris do not pull the frame. The target center is weighted per-atom, not per-group — a 200-atom cluster contributes proportionally more than a 10-atom cluster.
+
+**Motion model:** The camera translates the orbit target toward the computed framing center and dollies along the view direction to maintain appropriate framing distance. Motion is smoothed so the camera glides rather than snaps.
+
+**Speed-profile scaling:** Motion smoothing and the target-refresh rate adapt to the current playback speed (0.5x through 20x) via configurable tuning curves. At low speeds the camera moves gently; at high speeds refreshes are more frequent and tracking is more responsive.
+
+**User interaction pause:** Any user camera gesture — scroll, drag, pinch, orbit, triad snap — immediately pauses cinematic framing. After a configurable cooldown (default 1500 ms) with no further user input, cinematic framing resumes automatically.
+
+**Phase-aware gesture tracking:** Held gestures (pointerdown without a matching pointerup) keep cinematic paused indefinitely until the pointer is released. The cooldown window starts from the release timestamp, not the initial press. This prevents cinematic from resuming while the user is mid-drag.
+
+**Manual Follow wins:** When a specific bonded group is being followed via the Follow button in the bonded-groups panel, cinematic framing is suppressed — Follow takes precedence. On unfollow, the standard cooldown applies from the last user interaction timestamp. If that timestamp has already expired, cinematic resumes immediately.
+
+**Waiting for targets:** When no clusters exceed the minimum size threshold (e.g., early in a timeline before bonds form), cinematic is idle and reports "Waiting for major clusters" as its status.
+
+**UI toggle:** A "Cinematic Camera" pill is rendered between the info panel and the bonded-clusters panel. Clicking the pill toggles cinematic on or off. Status text beneath the pill reflects the current state:
+
+| Status text | Condition |
+|-------------|-----------|
+| "Keeps major clusters framed" | Cinematic is on and actively framing |
+| "Paused while you adjust the camera" | Cinematic is on but paused due to user interaction (cooldown running or gesture held) |
+| "Waiting for major clusters" | Cinematic is on but no eligible clusters exist in the current frame |
+| "Off" | Cinematic is toggled off by the user |
+
+### Camera Interaction Gate
+
+The lab Renderer distinguishes user OrbitControls gestures from programmatic camera updates using a source-attribution gate (`camera-interaction-gate.ts`). Programmatic camera mutations — follow tracking, cinematic framing, fit-to-view, reset, and view animations — call `controls.update()` as part of their work, which would otherwise fire OrbitControls change events indistinguishable from user input. The gate suppresses attribution for all 10 renderer-owned `controls.update()` call sites so these programmatic updates do not masquerade as user gestures. This is critical for cinematic camera in Watch: without the gate, every programmatic framing adjustment would re-trigger the user-interaction pause, preventing cinematic from ever running.
+
 ### Playback Dock
 
 The dock (`WatchDock`) is a 3-zone hierarchical toolbar using shared `dock-shell.css`:

@@ -82,6 +82,8 @@ function createMockRenderer(): WatchRenderer & { _canvas: HTMLCanvasElement } {
     cancelCameraAnimation: vi.fn(),
     setOverlayLayout: vi.fn(),
     setAtomColorOverrides: vi.fn(),
+    updateCinematicFraming: vi.fn(),
+    onCameraInteraction: vi.fn(() => () => {}),
   };
 }
 
@@ -178,6 +180,66 @@ describe('Desktop orbit', () => {
     canvas.dispatchEvent(new PointerEvent('pointerdown', { button: 1, clientX: 100, clientY: 100, pointerId: 1 }));
     expect(mockRenderer.startBackgroundOrbitCue).not.toHaveBeenCalled();
     expect(mockRenderer.applyOrbitDelta).not.toHaveBeenCalled();
+  });
+});
+
+// ── Cinematic camera notifier hook ──
+
+describe('onUserCameraInteraction notifier', () => {
+  let mockRenderer: ReturnType<typeof createMockRenderer>;
+  let canvas: HTMLCanvasElement;
+  let notify: ReturnType<typeof vi.fn<(phase: string) => void>>;
+  let input: ReturnType<typeof createWatchCameraInput>;
+
+  beforeEach(() => {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn().mockReturnValue({ matches: false }),
+    });
+    mockRenderer = createMockRenderer();
+    canvas = mockRenderer._canvas;
+    document.body.appendChild(canvas);
+    notify = vi.fn<(phase: string) => void>();
+    input = createWatchCameraInput(mockRenderer, { onUserCameraInteraction: notify });
+  });
+
+  afterEach(() => {
+    input.destroy();
+    canvas.remove();
+  });
+
+  it("fires 'start' on left-drag pointerdown", () => {
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { button: 0, clientX: 100, clientY: 100, pointerId: 1 }));
+    expect(notify).toHaveBeenCalledWith('start');
+  });
+
+  it("fires 'change' on pointermove while orbiting", () => {
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { button: 0, clientX: 100, clientY: 100, pointerId: 1 }));
+    notify.mockClear();
+    canvas.dispatchEvent(new PointerEvent('pointermove', { clientX: 110, clientY: 105, pointerId: 1 }));
+    expect(notify).toHaveBeenCalledWith('change');
+  });
+
+  it("fires 'end' on pointerup release", () => {
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { button: 0, clientX: 100, clientY: 100, pointerId: 1 }));
+    notify.mockClear();
+    canvas.dispatchEvent(new PointerEvent('pointerup', { button: 0, pointerId: 1 }));
+    expect(notify).toHaveBeenCalledWith('end');
+  });
+
+  it('full gesture emits start → change → end in order', () => {
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { button: 0, clientX: 100, clientY: 100, pointerId: 1 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { clientX: 110, clientY: 105, pointerId: 1 }));
+    canvas.dispatchEvent(new PointerEvent('pointerup', { button: 0, pointerId: 1 }));
+    const phases = notify.mock.calls.map(c => c[0]);
+    expect(phases[0]).toBe('start');
+    expect(phases).toContain('change');
+    expect(phases[phases.length - 1]).toBe('end');
+  });
+
+  it('does NOT fire on middle-click (OrbitControls owns)', () => {
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { button: 1, clientX: 100, clientY: 100, pointerId: 1 }));
+    expect(notify).not.toHaveBeenCalled();
   });
 });
 
@@ -405,6 +467,46 @@ describe('Mobile triad interaction', () => {
     touch('touchend', 10, 10, 0);
     expect(mockRenderer.animatedResetView).toHaveBeenCalled();
   });
+
+  it("triad drag committing emits 'start' once, then 'change' as motion continues, then 'end' on release", () => {
+    input.destroy();
+    canvas.remove();
+    mockRenderer = createMockRenderer();
+    mockRenderer.isInsideTriad = vi.fn(() => true);
+    canvas = mockRenderer._canvas;
+    document.body.appendChild(canvas);
+    const notify = vi.fn<(phase: string) => void>();
+    input = createWatchCameraInput(mockRenderer, { onUserCameraInteraction: notify });
+
+    // Initial touchstart on triad — no gesture phase yet (could
+    // still be a tap).
+    touch('touchstart', 10, 10);
+    expect(notify).not.toHaveBeenCalled();
+
+    // First move below commit threshold — no phase emit.
+    touch('touchmove', 12, 12);
+    expect(notify).not.toHaveBeenCalled();
+
+    // Motion crosses commit threshold — exactly one 'start', then
+    // 'change' for the same move handler.
+    touch('touchmove', 20, 20);
+    const phasesAfterCommit = notify.mock.calls.map(c => c[0]);
+    expect(phasesAfterCommit[0]).toBe('start');
+    expect(phasesAfterCommit).toContain('change');
+    const startCount = phasesAfterCommit.filter(p => p === 'start').length;
+    expect(startCount).toBe(1);
+
+    // Further motion emits only 'change', not another 'start'.
+    notify.mockClear();
+    touch('touchmove', 30, 30);
+    expect(notify).toHaveBeenCalledWith('change');
+    expect(notify.mock.calls.every(c => c[0] === 'change')).toBe(true);
+
+    // Release — 'end'.
+    notify.mockClear();
+    touch('touchend', 30, 30, 0);
+    expect(notify).toHaveBeenCalledWith('end');
+  });
 });
 
 // ── Mobile: touchcancel ──
@@ -450,6 +552,98 @@ describe('Mobile touchcancel', () => {
   });
 });
 
+// ── Cancellation / blur phase emission ──
+
+describe('Gesture cancellation emits end phase', () => {
+  let mockRenderer: ReturnType<typeof createMockRenderer>;
+  let canvas: HTMLCanvasElement;
+  let notify: ReturnType<typeof vi.fn<(phase: string) => void>>;
+  let input: ReturnType<typeof createWatchCameraInput>;
+
+  function setupMobile() {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn((q: string) => ({ matches: q === '(pointer: coarse)' })),
+    });
+    mockRenderer = createMockRenderer();
+    canvas = mockRenderer._canvas;
+    document.body.appendChild(canvas);
+    notify = vi.fn<(phase: string) => void>();
+    input = createWatchCameraInput(mockRenderer, { onUserCameraInteraction: notify });
+  }
+
+  function setupDesktop() {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn(() => ({ matches: false })),
+    });
+    mockRenderer = createMockRenderer();
+    canvas = mockRenderer._canvas;
+    document.body.appendChild(canvas);
+    notify = vi.fn<(phase: string) => void>();
+    input = createWatchCameraInput(mockRenderer, { onUserCameraInteraction: notify });
+  }
+
+  afterEach(() => {
+    input.destroy();
+    canvas.remove();
+  });
+
+  it("touchcancel during background orbit emits 'end'", () => {
+    setupMobile();
+    const touchObj = { clientX: 200, clientY: 200, identifier: 0 };
+    canvas.dispatchEvent(new TouchEvent('touchstart', {
+      cancelable: true, touches: [touchObj] as any, changedTouches: [touchObj] as any,
+    }));
+    expect(notify).toHaveBeenCalledWith('start');
+
+    notify.mockClear();
+    canvas.dispatchEvent(new TouchEvent('touchcancel', {
+      cancelable: true, touches: [] as any, changedTouches: [touchObj] as any,
+    }));
+    expect(notify).toHaveBeenCalledWith('end');
+  });
+
+  it("touchcancel during committed triad drag emits 'end'", () => {
+    setupMobile();
+    mockRenderer.isInsideTriad = vi.fn(() => true);
+
+    // touchstart on triad
+    canvas.dispatchEvent(new TouchEvent('touchstart', {
+      cancelable: true,
+      touches: [{ clientX: 10, clientY: 10, identifier: 0 }] as any,
+      changedTouches: [{ clientX: 10, clientY: 10, identifier: 0 }] as any,
+    }));
+    expect(notify).not.toHaveBeenCalled();
+
+    // Move past commit threshold → 'start'
+    canvas.dispatchEvent(new TouchEvent('touchmove', {
+      cancelable: true,
+      touches: [{ clientX: 30, clientY: 30, identifier: 0 }] as any,
+      changedTouches: [{ clientX: 30, clientY: 30, identifier: 0 }] as any,
+    }));
+    expect(notify.mock.calls.some(c => c[0] === 'start')).toBe(true);
+
+    notify.mockClear();
+    canvas.dispatchEvent(new TouchEvent('touchcancel', {
+      cancelable: true,
+      touches: [] as any,
+      changedTouches: [{ clientX: 30, clientY: 30, identifier: 0 }] as any,
+    }));
+    expect(notify).toHaveBeenCalledWith('end');
+  });
+
+  it("window blur during desktop pointer orbit emits 'end'", () => {
+    setupDesktop();
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { button: 0, clientX: 100, clientY: 100, pointerId: 1 }));
+    expect(notify).toHaveBeenCalledWith('start');
+
+    notify.mockClear();
+    window.dispatchEvent(new Event('blur'));
+    expect(notify).toHaveBeenCalledWith('end');
+  });
+});
+
 // ── Controller lifecycle integration (source-level verification) ──
 
 describe('Controller lifecycle wiring', () => {
@@ -457,8 +651,12 @@ describe('Controller lifecycle wiring', () => {
     const fs = await import('fs');
     const source = fs.readFileSync('watch/js/watch-controller.ts', 'utf-8');
     expect(source).toContain("import { createWatchCameraInput");
-    expect(source).toContain("createWatchCameraInput(renderer)");
+    expect(source).toContain("createWatchCameraInput(renderer,");
   });
+
+  // Phase-forwarding wiring is tested behaviorally by
+  // watch-cinematic-camera-controller.test.ts — no source-regex
+  // needed.
 
   it('watch-controller.ts imports and uses createWatchOverlayLayout', async () => {
     const fs = await import('fs');

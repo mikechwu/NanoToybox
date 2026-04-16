@@ -50,6 +50,10 @@ function makeSnapshot(overrides: Partial<WatchControllerSnapshot> = {}): WatchCo
     importDiagnostics: [],
     openProgress: { kind: 'idle' },
     loadingShareCode: null,
+    cinematicCameraEnabled: true,
+    cinematicCameraActive: false,
+    cinematicCameraPausedForUserInput: false,
+    cinematicCameraEligibleClusterCount: 0,
     ...overrides,
   };
 }

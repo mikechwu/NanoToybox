@@ -12,6 +12,7 @@
  */
 
 import type { WatchRenderer } from './watch-renderer';
+import type { CameraInteractionPhase } from '../../src/camera/camera-interaction-gate';
 import {
   TRIAD_DRAG_COMMIT_PX,
   TAP_INTENT_PREVIEW_MS,
@@ -24,8 +25,28 @@ export interface WatchCameraInput {
   destroy(): void;
 }
 
-export function createWatchCameraInput(renderer: WatchRenderer): WatchCameraInput {
+export interface WatchCameraInputOpts {
+  /** Called on any user-originated camera interaction. The phase
+   *  distinguishes held-gesture vs. discrete action so consumers can
+   *  gate automation correctly:
+   *    - 'start'  — background/triad orbit begins (pointerdown, touchstart)
+   *    - 'change' — orbit move delta applied; ALSO used for discrete
+   *                 taps (triad snap / animated reset) since they
+   *                 have no hold phase
+   *    - 'end'    — pointer released; orbit ended
+   *  OrbitControls-owned inputs (scroll/dolly/pinch) flow through
+   *  `Renderer.onCameraInteraction` with the same phase contract. */
+  onUserCameraInteraction?: (phase: CameraInteractionPhase) => void;
+}
+
+export function createWatchCameraInput(
+  renderer: WatchRenderer,
+  opts: WatchCameraInputOpts = {},
+): WatchCameraInput {
   const canvas = renderer.getCanvas();
+  const notifyInteraction = (phase: CameraInteractionPhase) => {
+    opts.onUserCameraInteraction?.(phase);
+  };
 
   // Interaction capability detection — uses shared helper (same as lab/js/config.ts:191)
   const isMobile = isTouchInteraction();
@@ -53,6 +74,12 @@ export function createWatchCameraInput(renderer: WatchRenderer): WatchCameraInpu
   // ── Helpers ──
 
   function resetGestureState() {
+    // If a gesture was in flight (blur / touchcancel while held),
+    // signal release so consumers don't stay paused forever waiting
+    // for an 'end' that will never come.
+    if (_orbiting || (_triadDragging && _triadDragCommitted)) {
+      notifyInteraction('end');
+    }
     _orbiting = false;
     _triadDragging = false;
     _triadDragCommitted = false;
@@ -68,6 +95,7 @@ export function createWatchCameraInput(renderer: WatchRenderer): WatchCameraInpu
 
   function startOrbit(x: number, y: number, pointerId?: number) {
     renderer.cancelCameraAnimation();
+    notifyInteraction('start');
     _orbiting = true;
     _orbitLastX = x;
     _orbitLastY = y;
@@ -79,6 +107,7 @@ export function createWatchCameraInput(renderer: WatchRenderer): WatchCameraInpu
   }
 
   function endOrbit(pointerId?: number) {
+    if (_orbiting) notifyInteraction('end');
     _orbiting = false;
     renderer.endBackgroundOrbitCue();
     if (pointerId !== undefined && canvas.hasPointerCapture(pointerId)) {
@@ -109,6 +138,7 @@ export function createWatchCameraInput(renderer: WatchRenderer): WatchCameraInpu
     const dy = e.clientY - _orbitLastY;
     _orbitLastX = e.clientX;
     _orbitLastY = e.clientY;
+    notifyInteraction('change');
     renderer.applyOrbitDelta(dx, dy);
   }
 
@@ -189,10 +219,16 @@ export function createWatchCameraInput(renderer: WatchRenderer): WatchCameraInpu
       const totalDy = touch.clientY - _triadStartY;
       if (!_triadDragCommitted && Math.sqrt(totalDx * totalDx + totalDy * totalDy) > TRIAD_DRAG_COMMIT_PX) {
         _triadDragCommitted = true;
+        // The triad gesture flipped from "maybe tap" to "held drag" —
+        // emit 'start' exactly once so the cinematic camera treats
+        // this as a real held gesture. Without this, a pause-mid-
+        // drag-while-still-holding would let cooldown expire.
+        notifyInteraction('start');
         if (_triadTapIntentTimer) { clearTimeout(_triadTapIntentTimer); _triadTapIntentTimer = null; }
         renderer.showAxisHighlight(null);
       }
       if (_triadDragCommitted) {
+        notifyInteraction('change');
         renderer.applyOrbitDelta(dx, dy);
       }
       return;
@@ -204,6 +240,7 @@ export function createWatchCameraInput(renderer: WatchRenderer): WatchCameraInpu
       const dy = touch.clientY - _orbitLastY;
       _orbitLastX = touch.clientX;
       _orbitLastY = touch.clientY;
+      notifyInteraction('change');
       renderer.applyOrbitDelta(dx, dy);
     }
   }
@@ -215,7 +252,11 @@ export function createWatchCameraInput(renderer: WatchRenderer): WatchCameraInpu
       if (_triadTapIntentTimer) { clearTimeout(_triadTapIntentTimer); _triadTapIntentTimer = null; }
       renderer.showAxisHighlight(null);
 
-      if (isTap) {
+      if (_triadDragCommitted) {
+        // Drag was committed → emit 'end' so cinematic cooldown
+        // starts from release (matches the pointer-orbit release path).
+        notifyInteraction('end');
+      } else if (isTap) {
         const nearest = renderer.getNearestAxisEndpoint(_triadLastX, _triadLastY);
         const isInCenter = nearest === null;
         const now = performance.now();
@@ -225,8 +266,12 @@ export function createWatchCameraInput(renderer: WatchRenderer): WatchCameraInpu
         _triadLastTapWasCenter = isInCenter;
 
         if (isDoubleTap) {
+          // Discrete action — 'change' refreshes cooldown without
+          // setting gesture-active (no hold to observe).
+          notifyInteraction('change');
           renderer.animatedResetView();
         } else if (nearest) {
+          notifyInteraction('change');
           renderer.snapToAxis(nearest);
         }
       }
@@ -234,6 +279,7 @@ export function createWatchCameraInput(renderer: WatchRenderer): WatchCameraInpu
     }
 
     if (_orbiting) {
+      notifyInteraction('end');
       _orbiting = false;
       renderer.endBackgroundOrbitCue();
     }

@@ -273,3 +273,59 @@ body {
   overflow-y: auto;
   scrollbar-gutter: stable;
 }
+
+/* Cinematic Camera toggle — same surface family as .watch-info-panel
+   / bonded-clusters panel. Short horizontal pill, quieter than the
+   file info panel but still a first-class rail citizen. */
+.watch-cinematic-camera-toggle {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--color-surface);
+  backdrop-filter: blur(var(--glass-blur, 8px));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 8px));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+  font-family: var(--font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text);
+}
+.watch-cinematic-camera-toggle__copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.watch-cinematic-camera-toggle__label {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.watch-cinematic-camera-toggle__status {
+  font-size: 11px;
+  opacity: 0.7;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.watch-cinematic-camera-toggle__btn {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.watch-cinematic-camera-toggle__btn[aria-pressed="true"] {
+  background: var(--color-accent, #3b82f6);
+  color: #fff;
+  border-color: transparent;
+}
+.watch-cinematic-camera-toggle__btn:focus-visible {
+  outline: 2px solid var(--color-focus, #3b82f6);
+  outline-offset: 2px;
+}

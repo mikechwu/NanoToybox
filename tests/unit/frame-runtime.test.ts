@@ -174,7 +174,7 @@ describe('frame-runtime: executeFrame', () => {
   // ── C. Placement camera framing integration tests ──
 
   it('C1: placement framing runs during placement', () => {
-    const updatePlacementFraming = vi.fn();
+    const updateOrientationPreservingFraming = vi.fn();
     const setAnchor = vi.fn();
     const s = makeStub({
       placement: { active: true, isDraggingPreview: false },
@@ -198,7 +198,7 @@ describe('frame-runtime: executeFrame', () => {
           position: { x: 0, y: 0, z: 20 },
           target: { x: 0, y: 0, z: 0 },
         })),
-        updatePlacementFraming,
+        updateOrientationPreservingFraming,
       } as any,
     });
 
@@ -206,7 +206,7 @@ describe('frame-runtime: executeFrame', () => {
 
     // Anchor must be captured on first frame
     expect(setAnchor).toHaveBeenCalled();
-    expect(updatePlacementFraming).toHaveBeenCalled();
+    expect(updateOrientationPreservingFraming).toHaveBeenCalled();
   });
 
   it('C2: orbit-follow suppressed during placement', () => {
@@ -229,7 +229,7 @@ describe('frame-runtime: executeFrame', () => {
           position: { x: 0, y: 0, z: 20 },
           target: { x: 0, y: 0, z: 0 },
         })),
-        updatePlacementFraming: vi.fn(),
+        updateOrientationPreservingFraming: vi.fn(),
       } as any,
     });
 
@@ -240,7 +240,7 @@ describe('frame-runtime: executeFrame', () => {
   });
 
   it('C3: idle placement allows distance shrink', () => {
-    const updatePlacementFraming = vi.fn();
+    const updateOrientationPreservingFraming = vi.fn();
     // Pre-set anchor so we skip capture (simulates second+ frame)
     const s = makeStub({
       placement: { active: true, isDraggingPreview: false },
@@ -264,20 +264,20 @@ describe('frame-runtime: executeFrame', () => {
           position: { x: 0, y: 0, z: 20 },
           target: { x: 0, y: 0, z: 0 },
         })),
-        updatePlacementFraming,
+        updateOrientationPreservingFraming,
       } as any,
     });
 
     executeFrame(1000, s);
 
     // Unconditional: framing MUST be called, and shrink MUST be allowed when not dragging
-    expect(updatePlacementFraming).toHaveBeenCalled();
-    const opts = updatePlacementFraming.mock.calls[0][3];
+    expect(updateOrientationPreservingFraming).toHaveBeenCalled();
+    const opts = updateOrientationPreservingFraming.mock.calls[0][3];
     expect(opts.allowDistanceShrink).toBe(true);
   });
 
   it('C4: framing runs during active drag + reprojection called after camera assist', () => {
-    const updatePlacementFraming = vi.fn();
+    const updateOrientationPreservingFraming = vi.fn();
     const updateDragFromLatestPointer = vi.fn();
     const s = makeStub({
       placement: { active: true, isDraggingPreview: true, updateDragFromLatestPointer },
@@ -301,18 +301,18 @@ describe('frame-runtime: executeFrame', () => {
           position: { x: 0, y: 0, z: 20 },
           target: { x: 0, y: 0, z: 0 },
         })),
-        updatePlacementFraming,
+        updateOrientationPreservingFraming,
       } as any,
     });
 
     executeFrame(1000, s);
 
     // Framing MUST run during drag (camera assist continues)
-    expect(updatePlacementFraming).toHaveBeenCalled();
+    expect(updateOrientationPreservingFraming).toHaveBeenCalled();
     // Drag reprojection MUST be called after camera assist
     expect(updateDragFromLatestPointer).toHaveBeenCalled();
     // Distance shrink suppressed during drag
-    const opts = updatePlacementFraming.mock.calls[0][3];
+    const opts = updateOrientationPreservingFraming.mock.calls[0][3];
     expect(opts.allowDistanceShrink).toBe(false);
   });
 
@@ -340,7 +340,7 @@ describe('frame-runtime: executeFrame', () => {
           position: { x: 0, y: 0, z: 20 },
           target: { x: 0, y: 0, z: 0 },
         })),
-        updatePlacementFraming: vi.fn(),
+        updateOrientationPreservingFraming: vi.fn(),
       } as any,
     });
 

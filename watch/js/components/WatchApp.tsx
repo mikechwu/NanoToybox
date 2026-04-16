@@ -10,6 +10,7 @@ import { WatchOpenPanel } from './WatchOpenPanel';
 import { WatchTopBar } from './WatchTopBar';
 import { WatchCanvas } from './WatchCanvas';
 import { WatchBondedGroupsPanel } from './WatchBondedGroupsPanel';
+import { WatchCinematicCameraToggle } from './WatchCinematicCameraToggle';
 import { WatchDock } from './WatchDock';
 import { WatchTimeline } from './WatchTimeline';
 import { WatchSettingsSheet } from './WatchSettingsSheet';
@@ -114,6 +115,13 @@ export function WatchApp({ controller }: WatchAppProps) {
                 loadingShareCode={snapshot.loadingShareCode}
                 onOpenFile={handleOpenFile}
                 onOpenShareCode={handleOpenShareCode}
+              />
+              <WatchCinematicCameraToggle
+                enabled={snapshot.cinematicCameraEnabled}
+                active={snapshot.cinematicCameraActive}
+                pausedForUserInput={snapshot.cinematicCameraPausedForUserInput}
+                eligibleClusterCount={snapshot.cinematicCameraEligibleClusterCount}
+                onToggle={() => controller.setCinematicCameraEnabled(!snapshot.cinematicCameraEnabled)}
               />
               <WatchBondedGroupsPanel
                 groups={snapshot.groups}

@@ -81,6 +81,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 - Shared Bond Topology Refactor — extraction of bond-topology computation from PhysicsEngine into reusable shared modules (`src/topology/`): naive builder (loader path), accelerated builder (physics hot path with buffer reuse), shared `BondRuleSet` contract (`bond-rules.ts`), bond-policy defaults (`src/config/bond-defaults.ts`), bond-policy resolver (`bond-policy-resolver.ts`), `lab/js/physics.ts` delegates bond building to shared topology builders
 - Watch Topology Reconstruction — topology-source abstraction with stored (full-history) and reconstructed (reduced-file) sources, reduced-file schema and import with semantic validation, bond-policy metadata and resolution (`src/history/bond-policy-v1.ts`), stable `atomId` element lookup, watch now supports reduced files with on-import topology reconstruction
 - Playback Capsule (Phases 1-4) — capsule file format and shared types in `src/history/history-file-v1.ts`, capsule importer (`watch/js/capsule-history-import.ts` replacing `reduced-history-import.ts`), appearance export/import, sparse interaction data contract, Lab capsule export builder with capsule/full export kinds (replay removed from export UI), stable-ID appearance model (Lab renderer and export use stable `atomId`s), golden parity validation
+- Watch Cinematic Camera — default-on auto-framing: pure math module (`src/camera/cinematic-camera.ts`), camera-interaction-gate, service adapter (`watch-cinematic-camera.ts`), phase-aware gesture tracking, WatchCinematicCameraToggle UI, 4 snapshot fields, controller wiring with narrowed RAF error handling
 
 ## Architecture Rules
 
@@ -95,6 +96,7 @@ Shared TypeScript and CSS modules live in `src/` and are imported by both `lab/`
 | `src/ui/` | Design tokens and structural CSS (core-tokens, dock-shell, sheet-shell, segmented, timeline-track, bottom-region, text-size-tokens, bonded-groups-parity, device-mode helper), shared React hooks (`useSheetLifecycle`) |
 | `src/input/` | Camera gesture constants shared across both apps |
 | `src/appearance/` | Bonded-group color assignment logic (shared between lab appearance runtime and watch appearance domain) |
+| `src/camera/` | Cinematic camera speed profile, target resolver, cooldown predicate (`cinematic-camera.ts`); event-attribution gate distinguishing user OrbitControls gestures from programmatic updates (`camera-interaction-gate.ts`) |
 | `src/topology/` | Bond rules (`bond-rules.ts`), topology builders (`build-bond-topology.ts`: naive + accelerated), policy resolution (`bond-policy-resolver.ts`) |
 | `src/config/` | Playback speed constants, viewer defaults (base sim rate, etc.), bond-policy defaults (`bond-defaults.ts`) |
 | `src/history/` | History file v1 types/validation (including capsule types), connected components, bonded-group projection/utils, physical unit constants (`units.ts`: `FS_PER_PS`, `IMPLAUSIBLE_VELOCITY_A_PER_FS`), bond-policy wire types (`bond-policy-v1.ts`) |
@@ -376,7 +378,7 @@ Watch (`watch/`) does **not** use Zustand. It uses a controller pattern where `w
 | Interpolation | `watch-trajectory-interpolation.ts` | Strategy registry, bracket lookup with cursor-cache fast path, preallocated output buffer, linear/Hermite/Catmull-Rom built-in strategies |
 | Renderer | `watch-renderer.ts` | Adapter over lab Renderer |
 
-**React components** (`watch/js/components/`): WatchApp, WatchCanvas, WatchDock, WatchTimeline, WatchTopBar, WatchBondedGroupsPanel, WatchOpenPanel, WatchSettingsSheet, PlaybackSpeedControl.
+**React components** (`watch/js/components/`): WatchApp, WatchCanvas, WatchDock, WatchTimeline, WatchTopBar, WatchCinematicCameraToggle, WatchBondedGroupsPanel, WatchOpenPanel, WatchSettingsSheet, PlaybackSpeedControl.
 
 **Key rules:**
 - All state mutations go through the controller facade. Components call controller commands (e.g., `controller.togglePlay()`, `controller.hoverGroup(id)`).

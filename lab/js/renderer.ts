@@ -11,6 +11,11 @@ import { THEMES } from './themes';
 import { CONFIG, DEFAULT_THEME } from './config';
 import { computeOrbitDelta, applyOrbitRotation, TRIAD_CAMERA_DISTANCE } from './orbit-math';
 import { isCoarsePointer } from '../../src/ui/device-mode';
+import {
+  createCameraInteractionGate,
+  type CameraInteractionGate,
+  type CameraInteractionPhase,
+} from '../../src/camera/camera-interaction-gate';
 
 export class Renderer {
   // Container
@@ -97,6 +102,25 @@ export class Renderer {
   // Resize handling
   _resizeHandler!: () => void;
   _deferredResizeTimer: ReturnType<typeof setTimeout> | null;
+
+  // User-interaction subscription (OrbitControls fan-out).
+  //
+  // Source-attribution invariant: listeners are invoked ONLY while a
+  // real OrbitControls user gesture is in flight (pointerdown →
+  // pointerup, wheel, pinch). Programmatic `controls.update()` calls
+  // routed through `_updateControlsSilently()` must NOT wake
+  // listeners, or auto-camera / follow / fit / cinematic framing
+  // would feedback-loop into their own cooldown.
+  //
+  // The event-attribution logic lives in
+  // `src/camera/camera-interaction-gate.ts` so both the renderer and
+  // its unit tests share the exact same implementation — no copy /
+  // paste drift.
+  _cameraInteractionListeners: Set<(phase: CameraInteractionPhase) => void> = new Set();
+  _cameraInteractionGate: CameraInteractionGate | null = null;
+  _controlsStartHandler: (() => void) | null = null;
+  _controlsChangeHandler: (() => void) | null = null;
+  _controlsEndHandler: (() => void) | null = null;
 
   // Axis triad
   _axisScene!: THREE.Scene;
@@ -207,6 +231,26 @@ export class Renderer {
       TWO: THREE.TOUCH.DOLLY_PAN,
     };
     this.controls.enabled = true;
+
+    // User-interaction subscription for OrbitControls-owned inputs
+    // (scroll zoom, middle-drag dolly, two-finger pinch/pan).
+    //
+    // OrbitControls 'change' is only forwarded while a real user
+    // gesture is active ('start' → 'end'). Programmatic
+    // `controls.update()` calls are bracketed by the gate's
+    // `runSilently()` helper so auto-camera / follow / fit /
+    // cinematic framing do not self-trigger user-input cooldown.
+    //
+    // We still bind 'change' (not just 'start') because the cinematic
+    // service needs continuous pause during the gesture — wheel and
+    // pinch fire many 'change' events between 'start' and 'end'.
+    this._cameraInteractionGate = createCameraInteractionGate((phase) => this._emitCameraInteraction(phase));
+    this._controlsStartHandler = () => this._cameraInteractionGate?.onStart();
+    this._controlsChangeHandler = () => this._cameraInteractionGate?.onChange();
+    this._controlsEndHandler = () => this._cameraInteractionGate?.onEnd();
+    this.controls.addEventListener('start', this._controlsStartHandler);
+    this.controls.addEventListener('change', this._controlsChangeHandler);
+    this.controls.addEventListener('end', this._controlsEndHandler);
 
     this._defaultCamPos = new THREE.Vector3(0, 0, 15);
     this._defaultCamTarget = new THREE.Vector3(0, 0, 0);
@@ -1440,7 +1484,7 @@ export class Renderer {
     this.camera.position.set(cx, cy, cz + dist);
     this.camera.up.set(0, 1, 0); // Level the camera on fit
     this.controls.target.set(cx, cy, cz);
-    this.controls.update();
+    this._updateControlsSilently();
 
     // Save for resetView
     this._defaultCamPos.set(cx, cy, cz + dist);
@@ -1457,7 +1501,7 @@ export class Renderer {
     this.camera.position.set(0, 0, 15);
     this.camera.up.set(0, 1, 0);
     this.controls.target.set(0, 0, 0);
-    this.controls.update();
+    this._updateControlsSilently();
     this._defaultCamPos.set(0, 0, 15);
     this._defaultCamTarget.set(0, 0, 0);
     this._defaultCamUp.set(0, 1, 0);
@@ -1548,6 +1592,70 @@ export class Renderer {
    * ever supports remounting or embedded use. Currently the browser reclaims GPU
    * resources on page unload.
    */
+  /**
+   * Subscribe to user-driven camera interactions routed through
+   * OrbitControls ('change'): scroll zoom, middle-drag dolly,
+   * two-finger pinch/pan. Returns a disposer. Also invoked by
+   * InputManager pointer-orbit, triad snap, and animated resets via
+   * Watch's `markUserCameraInteraction` — those emit explicitly.
+   */
+  onCameraInteraction(listener: (phase: CameraInteractionPhase) => void): () => void {
+    this._cameraInteractionListeners.add(listener);
+    return () => {
+      this._cameraInteractionListeners.delete(listener);
+    };
+  }
+
+  private _emitCameraInteraction(phase: CameraInteractionPhase): void {
+    for (const listener of this._cameraInteractionListeners) {
+      try {
+        listener(phase);
+      } catch (err) {
+        console.error('[renderer] onCameraInteraction listener threw:', err);
+      }
+    }
+  }
+
+  /**
+   * Run `this.controls.update()` without letting any 'change' event
+   * it emits be forwarded to `onCameraInteraction` subscribers.
+   *
+   * All renderer-owned programmatic camera motion (fit, reset,
+   * follow, focus, cinematic framing, view animations, per-frame
+   * damping) must route through this helper — otherwise the
+   * resulting 'change' event masquerades as user input and any
+   * cooldown-based consumer (cinematic camera) pauses itself.
+   *
+   * Fails CLOSED: if the gate is missing (pre-constructor state,
+   * post-destroy, partial-construction test harness), we skip the
+   * update entirely rather than emitting an unsuppressed raw
+   * `controls.update()`. Emitting would break the invariant
+   * "renderer-owned programmatic updates never wake interaction
+   * listeners" and reintroduce the self-cooldown loop.
+   *
+   * Skipping is a tradeoff: OrbitControls.update() also re-applies
+   * min/max distance + polar/azimuth clamps, normalizes
+   * `camera.position` into the controls' spherical basis, and
+   * refreshes `_lastPosition` / `_lastQuaternion` so the next real
+   * update doesn't emit a spurious 'change'. In the gate-missing
+   * states we actually hit (construction ordering, post-destroy),
+   * there are no listeners to mislead and the next non-skipped
+   * update normalizes state on its own. The warn below surfaces
+   * any state where listeners exist but the gate went missing —
+   * that would be a lifecycle bug, not a normal path.
+   */
+  private _updateControlsSilently(): void {
+    if (!this._cameraInteractionGate) {
+      if (this._cameraInteractionListeners.size > 0) {
+        console.warn(
+          '[renderer] controls.update skipped: camera interaction gate is not attached',
+        );
+      }
+      return;
+    }
+    this._cameraInteractionGate.runSilently(() => this.controls.update());
+  }
+
   destroy() {
     window.removeEventListener('resize', this._resizeHandler);
     if (window.visualViewport) {
@@ -1557,6 +1665,25 @@ export class Renderer {
       clearTimeout(this._deferredResizeTimer);
       this._deferredResizeTimer = null;
     }
+    if (this.controls) {
+      if (this._controlsStartHandler) {
+        this.controls.removeEventListener('start', this._controlsStartHandler);
+        this._controlsStartHandler = null;
+      }
+      if (this._controlsChangeHandler) {
+        this.controls.removeEventListener('change', this._controlsChangeHandler);
+        this._controlsChangeHandler = null;
+      }
+      if (this._controlsEndHandler) {
+        this.controls.removeEventListener('end', this._controlsEndHandler);
+        this._controlsEndHandler = null;
+      }
+    }
+    if (this._cameraInteractionGate) {
+      this._cameraInteractionGate.reset();
+      this._cameraInteractionGate = null;
+    }
+    this._cameraInteractionListeners.clear();
     if (this._pulseRafId != null) {
       cancelAnimationFrame(this._pulseRafId);
       this._pulseRafId = null;
@@ -1593,7 +1720,7 @@ export class Renderer {
     this.camera.position.copy(this._defaultCamPos);
     this.camera.up.copy(this._defaultCamUp);
     this.controls.target.copy(this._defaultCamTarget);
-    this.controls.update();
+    this._updateControlsSilently();
   }
 
   // ── Focus-aware pivot ──
@@ -1611,7 +1738,7 @@ export class Renderer {
    */
   setCameraFocusTarget(target: THREE.Vector3) {
     this.controls.target.copy(target);
-    this.controls.update();
+    this._updateControlsSilently();
     this._showFocusIndicator(target);
     // Update Esc recovery distance: use framing distance from return-target bounds
     // (consistent with animated framing) rather than raw camera standoff
@@ -1939,15 +2066,17 @@ export class Renderer {
     const blendFactor = 1 - Math.exp(-8 * (dtMs / 1000));
     this.controls.target.lerp(bounds.center, blendFactor);
     this.camera.position.lerp(desiredCamPos, blendFactor);
-    this.controls.update();
+    this._updateControlsSilently();
   }
 
   /**
-   * Smoothly apply placement framing goal to camera target + distance.
-   * Preserves camera orientation — only adjusts target and position along
-   * the current view direction.
+   * Smoothly apply an orientation-preserving framing goal:
+   * translate `controls.target` toward `desiredTarget` and dolly the
+   * camera along the current view direction to reach `desiredDistance`.
+   * View orientation is NEVER rotated here — used by the Lab
+   * placement-preview workflow AND by the Watch Cinematic Camera.
    */
-  updatePlacementFraming(
+  updateOrientationPreservingFraming(
     dtMs: number,
     desiredTarget: { x: number; y: number; z: number },
     desiredDistance: number,
@@ -1986,7 +2115,7 @@ export class Renderer {
 
     // Position camera at new distance from target along -dir (preserves orientation)
     this.camera.position.copy(this.controls.target).addScaledVector(dir, -newDist);
-    this.controls.update();
+    this._updateControlsSilently();
   }
 
   /** Update cached scene radius from atom positions. */
@@ -2090,7 +2219,7 @@ export class Renderer {
     const d = this._currentFocusDistance;
     this.controls.target.copy(this.camera.position).addScaledVector(viewDir.negate(), d);
     this.camera.up.set(0, 1, 0);
-    this.controls.update();
+    this._updateControlsSilently();
   }
 
   /**
@@ -2199,7 +2328,7 @@ export class Renderer {
   private _applyOrbitStep(dq: THREE.Quaternion) {
     applyOrbitRotation(dq, this.camera.position, this.controls.target, this.camera.up);
     this.camera.lookAt(this.controls.target);
-    this.controls.update();
+    this._updateControlsSilently();
   }
 
   // ── Canonical view snaps (Phase 2) ──
@@ -2313,7 +2442,7 @@ export class Renderer {
       this.controls.target.lerpVectors(fromTarget, toTarget, t);
       if (opts.levelUp) this.camera.up.set(0, 1, 0);
       this.camera.lookAt(this.controls.target);
-      this.controls.update();
+      this._updateControlsSilently();
 
       if (rawT < 1) {
         this._cameraAnimRafId = requestAnimationFrame(animate);
@@ -2563,7 +2692,7 @@ export class Renderer {
   }
 
   render() {
-    this.controls.update();
+    this._updateControlsSilently();
 
     // Must clear manually because autoClear is off (needed for axis overlay)
     this.renderer.clear();

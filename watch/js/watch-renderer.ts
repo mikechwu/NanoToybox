@@ -7,6 +7,7 @@
 
 import { Renderer } from '../../lab/js/renderer';
 import * as THREE from 'three';
+import type { CameraInteractionPhase } from '../../src/camera/camera-interaction-gate';
 
 export interface FramedTarget {
   center: [number, number, number];
@@ -43,6 +44,33 @@ export interface WatchRenderer {
   // ── Round 2: camera actions ──
   animateToFramedTarget(target: FramedTarget): void;
   updateOrbitFollow(dtMs: number, target: FramedTarget): void;
+
+  // ── Cinematic camera: orientation-preserving framing ──
+  /**
+   * Smoothly translates the orbit target to `target.center` and
+   * dollies along the current view direction to frame `target.radius`
+   * — never rotates. `opts` mirrors the underlying renderer's
+   * smoothing knobs (targetSmoothing, distanceGrowSmoothing,
+   * distanceShrinkSmoothing, allowDistanceShrink).
+   */
+  updateCinematicFraming(
+    dtMs: number,
+    target: FramedTarget,
+    opts?: {
+      targetSmoothing?: number;
+      distanceGrowSmoothing?: number;
+      distanceShrinkSmoothing?: number;
+      allowDistanceShrink?: boolean;
+    },
+  ): void;
+
+  /**
+   * Subscribe to user-driven camera interactions. Listener receives
+   * the gesture phase ('start' | 'change' | 'end') so the cinematic
+   * service can distinguish a still-held gesture from a released
+   * one. Returns a disposer.
+   */
+  onCameraInteraction(listener: (phase: CameraInteractionPhase) => void): () => void;
 
   // ── Round 3: triad interaction + orbit ──
   /** Check if a screen point is inside the triad hit rect (touch tolerance included). */
@@ -140,5 +168,13 @@ export function createWatchRenderer(container: HTMLElement): WatchRenderer {
         radius: target.radius,
       });
     },
+
+    updateCinematicFraming(dtMs, target, opts) {
+      const center = { x: target.center[0], y: target.center[1], z: target.center[2] };
+      const distance = renderer.computeFramingDistance(target.radius);
+      renderer.updateOrientationPreservingFraming(dtMs, center, distance, opts);
+    },
+
+    onCameraInteraction: (listener) => renderer.onCameraInteraction(listener),
   };
 }

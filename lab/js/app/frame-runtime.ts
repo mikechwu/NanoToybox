@@ -47,7 +47,7 @@ export interface FrameRendererSurface extends OrbitFollowRendererSurface, FocusR
   getPlacementPreviewWorldPoints?(): { x: number; y: number; z: number }[] | null;
   getDisplayedSceneWorldPoints?(): { x: number; y: number; z: number }[];
   getPlacementFramingCameraParams?(): { tanX: number; tanY: number; near: number; position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } };
-  updatePlacementFraming?(
+  updateOrientationPreservingFraming?(
     dtMs: number,
     desiredTarget: { x: number; y: number; z: number },
     desiredDistance: number,
@@ -351,7 +351,7 @@ export function executeFrame(timestamp: number, s: FrameRuntimeSurface): void {
     if (placementActive &&
         s.renderer.getCameraBasis && s.renderer.getDisplayedSceneWorldPoints &&
         s.renderer.getPlacementPreviewWorldPoints && s.renderer.getPlacementFramingCameraParams &&
-        s.renderer.updatePlacementFraming) {
+        s.renderer.updateOrientationPreservingFraming) {
       const previewPoints = s.renderer.getPlacementPreviewWorldPoints();
       if (previewPoints) {
         const cam = s.renderer.getPlacementFramingCameraParams();
@@ -386,7 +386,7 @@ export function executeFrame(timestamp: number, s: FrameRuntimeSurface): void {
         // Apply smoothing toward goal (continuous convergence, no hard stop)
         const isDragging = !!(s.placement!.isDraggingPreview);
         if (goal) {
-          s.renderer.updatePlacementFraming(frameDtMs, goal.desiredTarget, goal.desiredDistance, {
+          s.renderer.updateOrientationPreservingFraming(frameDtMs, goal.desiredTarget, goal.desiredDistance, {
             targetSmoothing: CONFIG.placementFraming.targetSmoothing,
             distanceGrowSmoothing: CONFIG.placementFraming.distanceGrowSmoothing,
             distanceShrinkSmoothing: CONFIG.placementFraming.distanceShrinkSmoothing,

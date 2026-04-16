@@ -903,6 +903,92 @@ Uses a 5-frame two-atom fixture (`tests/e2e/fixtures/watch-two-atom.json`) and `
 
 **Responsive dock (phone emulation at 375x812):** dock fits cleanly at phone width with no child overflow, no clipping, utility cluster has no internal scrollable overflow, every utility child stays within dock right edge, utility cluster does not overlap into transport cluster, Smooth text label and repeat icon are both visible.
 
+### Cinematic Camera Pure Module (tests across 1 file)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `cinematic-camera.test.ts` | — | Speed-profile scaling, clamp helper, target resolver, cooldown predicate, normalization, custom-tuning propagation (see breakdown below) |
+
+**Speed-profile scaling:** baseline 1x, 4x, 20x ceiling, 0.5x floor, degenerate inputs.
+
+**Clamp helper:** clamps values within specified bounds.
+
+**Target resolver:** small-cluster exclusion, null-group/atom handling, stability gate, unreconciled-clusters distinction, center/radius/min/max clamp.
+
+**Cooldown predicate:** window bounds, non-monotonic clock clamp.
+
+**Normalization:** invalid fields fall back, min <= max enforcement, boolean validation, exponent preservation.
+
+**Custom-tuning propagation:** custom speed tuning values propagate through the pipeline.
+
+### Renderer Camera Interaction Gate (tests across 1 file)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `renderer-camera-interaction.test.ts` | — | Gate contract (imports real `camera-interaction-gate.ts`, NOT a test-local copy), Renderer structural assertions, behavioral prototype test (see breakdown below) |
+
+**Gate contract (real module):** programmatic updates silent, user gestures emit phases, interleaved updates, stray post-damping changes ignored, nested suppress, phantom end guard, reset.
+
+**Renderer structural assertions:** import/callsite counts.
+
+**Behavioral prototype test:** `_updateControlsSilently` with synthetic `this`.
+
+### Watch Cinematic Camera Service (tests across 1 file)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-cinematic-camera.test.ts` | — | State/gating, gesture phase gating, setEnabled clears gesture state, continuity, config propagation, lifecycle (see breakdown below) |
+
+**State/gating:** defaults, setEnabled, manualFollow, cooldown, resume.
+
+**Gesture phase gating:** held gesture past cooldown, end releases, change-only semantics.
+
+**setEnabled clears gesture state:** toggling enabled off resets active gesture tracking.
+
+**Continuity:** no self-cooldown loop.
+
+**Config propagation:** custom speedTuning, custom userIdleResumeMs.
+
+**Lifecycle:** attachRenderer, idempotent swap, resetForFile, dispose.
+
+### Watch Cinematic Camera Toggle (tests across 1 file)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-cinematic-camera-toggle.test.tsx` | — | React toggle rendering for all 4 states, accessibility attributes, click handler (see breakdown below) |
+
+**Status copy:** correct copy for all 4 states (active/paused/waiting/off).
+
+**Accessibility:** aria-pressed flip, aria-label swap.
+
+**Click handler:** onClick fires onToggle.
+
+### Watch Cinematic Camera Integration (tests across 1 file)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-cinematic-camera-integration.test.ts` | — | Behavioral integration: real createWatchCameraInput + real service via stubbed renderer in jsdom (see breakdown below) |
+
+**Held-pointer drag:** keeps paused beyond cooldown, release starts cooldown window, resume after window.
+
+**Phase trace assertion:** verifies the correct sequence of phase transitions through the integration pipeline.
+
+### Watch Cinematic Camera Controller Wiring (tests across 1 file)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-cinematic-camera-controller.test.ts` | — | Controller-wiring: real createWatchController with mocked factories (see breakdown below) |
+
+**Phase forwarding:** camera-input opts forward phases to cinematic service's markUserCameraInteraction.
+
+**Lifecycle:** attachRenderer lifecycle wiring.
+
+### Cinematic Camera Shared Test Helper
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `tests/helpers/watch-renderer-stub.ts` | — | Shared WatchRenderer stub (jsdom + Node-safe). Used by service, integration, and controller tests. |
+
 ## Frontend Smoke Test
 
 Manual verification checklist for the interactive page (`lab/index.html`). Run after any changes to `lab/` code.

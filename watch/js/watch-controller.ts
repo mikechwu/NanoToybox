@@ -28,6 +28,10 @@ import { createWatchBondedGroups, type WatchBondedGroups } from './watch-bonded-
 import { createWatchViewService, type WatchViewService } from './watch-view-service';
 import { createWatchRenderer, type WatchRenderer } from './watch-renderer';
 import { createWatchCameraInput, type WatchCameraInput } from './watch-camera-input';
+import {
+  createWatchCinematicCameraService,
+  type WatchCinematicCameraService,
+} from './watch-cinematic-camera';
 import { createWatchOverlayLayout, type WatchOverlayLayout } from './watch-overlay-layout';
 import { createWatchBondedGroupAppearance, type WatchBondedGroupAppearance } from './watch-bonded-group-appearance';
 import { createWatchSettings, type WatchSettings, type WatchInterpolationMode } from './watch-settings';
@@ -146,6 +150,19 @@ export interface WatchControllerSnapshot {
    *  (WatchTopBar's submit guard). Do not write it directly — only
    *  write `openProgress` and let `buildSnapshot` derive this. */
   loadingShareCode: string | null;
+  // ── Cinematic Camera ──
+  /** User-controlled on/off. Defaults to true; survives file reload
+   *  within a session; resets to default on fresh page load. */
+  cinematicCameraEnabled: boolean;
+  /** UI-truth: `enabled && !pausedForUserInput && eligibleClusterCount > 0
+   *  && !viewService.isFollowing()`. Computed once per `buildSnapshot`. */
+  cinematicCameraActive: boolean;
+  /** True within the configured cooldown window after user camera
+   *  input (see `CinematicCameraConfig.userIdleResumeMs`). */
+  cinematicCameraPausedForUserInput: boolean;
+  /** Number of large clusters feeding the current framing target. 0 →
+   *  "Waiting for major clusters". */
+  cinematicCameraEligibleClusterCount: number;
 }
 
 export interface WatchController {
@@ -177,6 +194,8 @@ export interface WatchController {
   setSmoothPlayback(enabled: boolean): void;
   setInterpolationMode(mode: WatchInterpolationMode): void;
   getRegisteredInterpolationMethods(): readonly InterpolationMethodMetadata[];
+  // ── Cinematic Camera ──
+  setCinematicCameraEnabled(enabled: boolean): void;
   // ── Runtime access ──
   getPlaybackModel(): WatchPlaybackModel;
   getBondedGroups(): WatchBondedGroups;
@@ -205,6 +224,10 @@ const EMPTY_SNAPSHOT: WatchControllerSnapshot = {
   importDiagnostics: EMPTY_DIAGNOSTICS,
   openProgress: IDLE_OPEN_PROGRESS,
   loadingShareCode: null,
+  cinematicCameraEnabled: false,
+  cinematicCameraActive: false,
+  cinematicCameraPausedForUserInput: false,
+  cinematicCameraEligibleClusterCount: 0,
 };
 
 /** Derive the compatibility shim from the authoritative field. */
@@ -217,6 +240,7 @@ export function createWatchController(): WatchController {
   const playback = createWatchPlaybackModel();
   const bondedGroups = createWatchBondedGroups();
   const viewService = createWatchViewService();
+  const cinematicCamera = createWatchCinematicCameraService();
   const settings = createWatchSettings(VIEWER_DEFAULTS.defaultTheme);
   const appearance = createWatchBondedGroupAppearance({
     getBondedGroups: () => bondedGroups,
@@ -337,7 +361,17 @@ export function createWatchController(): WatchController {
    *  `openProgress` is preserved from `_snapshot` (not zeroed) so the
    *  `?c=` auto-open path reliably propagates the loading state while
    *  `!playback.isLoaded()`. `loadingShareCode` is derived. */
+  /** Single source of truth for the UI-truth `cinematicCameraActive`
+   *  field. `cs.active` already combines `enabled`, `pausedForUserInput`
+   *  and `eligibleClusterCount`; the controller AND's with
+   *  `!viewService.isFollowing()` because the service itself cannot
+   *  see the follow state. */
+  function computeCinematicCameraActive(): boolean {
+    return cinematicCamera.getState().active && !viewService.isFollowing();
+  }
+
   function baseEmptySnapshot(): WatchControllerSnapshot {
+    const cs = cinematicCamera.getState();
     return {
       ...EMPTY_SNAPSHOT,
       error: _snapshot.error,
@@ -350,6 +384,10 @@ export function createWatchController(): WatchController {
       importDiagnostics: _lastImportDiagnostics,
       openProgress: _snapshot.openProgress,
       loadingShareCode: deriveLoadingShareCode(_snapshot.openProgress),
+      cinematicCameraEnabled: cs.enabled,
+      cinematicCameraActive: computeCinematicCameraActive(),
+      cinematicCameraPausedForUserInput: cs.pausedForUserInput,
+      cinematicCameraEligibleClusterCount: cs.eligibleClusterCount,
     };
   }
 
@@ -357,6 +395,9 @@ export function createWatchController(): WatchController {
     if (!playback.isLoaded()) return baseEmptySnapshot();
     const meta = documentService.getMetadata();
     if (!meta.fileName) return baseEmptySnapshot();
+
+    const cs = cinematicCamera.getState();
+    const cinematicCameraActive = computeCinematicCameraActive();
 
     return {
       loaded: true,
@@ -388,6 +429,10 @@ export function createWatchController(): WatchController {
       importDiagnostics: _lastImportDiagnostics,
       openProgress: _snapshot.openProgress,
       loadingShareCode: deriveLoadingShareCode(_snapshot.openProgress),
+      cinematicCameraEnabled: cs.enabled,
+      cinematicCameraActive,
+      cinematicCameraPausedForUserInput: cs.pausedForUserInput,
+      cinematicCameraEligibleClusterCount: cs.eligibleClusterCount,
     };
   }
 
@@ -413,7 +458,11 @@ export function createWatchController(): WatchController {
       // it as a cheap defensive safety net against a future direct
       // write.
       || a.openProgress !== b.openProgress
-      || a.loadingShareCode !== b.loadingShareCode;
+      || a.loadingShareCode !== b.loadingShareCode
+      || a.cinematicCameraEnabled !== b.cinematicCameraEnabled
+      || a.cinematicCameraActive !== b.cinematicCameraActive
+      || a.cinematicCameraPausedForUserInput !== b.cinematicCameraPausedForUserInput
+      || a.cinematicCameraEligibleClusterCount !== b.cinematicCameraEligibleClusterCount;
   }
 
   /**
@@ -557,14 +606,40 @@ export function createWatchController(): WatchController {
       }
     }
 
-    try {
-      if (renderer && viewService.isFollowing()) {
-        viewService.updateFollow(dtMs, renderer);
+    // Narrow try blocks: a throw inside follow / cinematic / render /
+    // publish must not short-circuit the OTHER subsystems. A single
+    // outer catch was swallowing a cinematic failure + skipping the
+    // final render, leaving the user with a frozen scene AND no
+    // snapshot update.
+    if (renderer) {
+      try {
+        if (viewService.isFollowing()) {
+          viewService.updateFollow(dtMs, renderer);
+        } else if (cinematicCamera.getState().enabled) {
+          cinematicCamera.update({
+            dtMs,
+            nowMs: timestamp,
+            playbackSpeed: playback.getSpeed(),
+            renderer,
+            bondedGroups,
+            manualFollowActive: false,
+          });
+        }
+      } catch (e) {
+        console.error('[watch] camera update error (non-fatal):', e);
       }
-      if (renderer) renderer.render();
+
+      try {
+        renderer.render();
+      } catch (e) {
+        console.error('[watch] render error (non-fatal):', e);
+      }
+    }
+
+    try {
       publishSnapshot();
     } catch (e) {
-      console.error('[watch] snapshot error:', e);
+      console.error('[watch] publishSnapshot error (non-fatal):', e);
     }
   }
 
@@ -682,6 +757,7 @@ export function createWatchController(): WatchController {
       // This ensures rollback preserves prior follow/hover state naturally.
       bondedGroups.reset();
       viewService.reset();
+      cinematicCamera.resetForFile();
       updateAnalysis();
       // Success: clear error AND reset openProgress → idle in ONE
       // snapshot update so the subscriber fires exactly once with
@@ -986,6 +1062,9 @@ export function createWatchController(): WatchController {
 
     centerOnGroup(id) {
       if (!playback.isLoaded() || !renderer) return;
+      // Explicit user choice — cinematic must pause for the full
+      // cooldown so it doesn't immediately override the user's center.
+      cinematicCamera.markUserCameraInteraction();
       viewService.centerOnGroup(id, renderer, bondedGroups);
       publishSnapshot();
     },
@@ -1108,6 +1187,11 @@ export function createWatchController(): WatchController {
         : EMPTY_METHODS;
     },
 
+    setCinematicCameraEnabled(enabled) {
+      cinematicCamera.setEnabled(enabled);
+      publishSnapshot();
+    },
+
     getPlaybackModel: () => playback,
     getBondedGroups: () => bondedGroups,
     getInterpolationRuntime: () => interpolation,
@@ -1118,8 +1202,11 @@ export function createWatchController(): WatchController {
       renderer = createWatchRenderer(container);
       // Sync current theme into the new renderer (CSS tokens already set by settings)
       renderer.applyTheme(settings.getTheme());
-      cameraInput = createWatchCameraInput(renderer);
+      cameraInput = createWatchCameraInput(renderer, {
+        onUserCameraInteraction: (phase) => cinematicCamera.markUserCameraInteraction(phase),
+      });
       overlayLayout = createWatchOverlayLayout(renderer);
+      cinematicCamera.attachRenderer(renderer);
       if (playback.isLoaded()) {
         const meta = documentService.getMetadata();
         if (meta.maxAtomCount > 0) renderer.initForPlayback(meta.maxAtomCount);
@@ -1144,6 +1231,7 @@ export function createWatchController(): WatchController {
       playback.unload();
       bondedGroups.reset();
       viewService.reset();
+      cinematicCamera.dispose();
       appearance.reset();
       documentService.clear();
       teardownInterpolationRuntime();

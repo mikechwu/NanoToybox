@@ -41,6 +41,7 @@ Or visit the live demo at [atomdojo.pages.dev](https://atomdojo.pages.dev/lab/).
 - **Dock controls** — play/pause, speed, repeat, Smooth toggle, and interpolation method picker
 - **Capsule and full file support** — loads compact capsule files (position-only with authored appearance) or full simulation histories; reconstructs bond topology on the fly via shared topology builders
 - **Authored color import** — capsule files carry per-group color assignments from the lab; Watch applies them so playback colors match the original session
+- **Cinematic camera** — automatic camera framing for major bonded clusters during playback (default on, adapts to speed, pauses for user interaction)
 - **Shared rendering** — same PBR materials, camera orbit, XYZ triad, overlay layout, and theme system as the interactive lab
 
 ### Share links (capsule publishing)
