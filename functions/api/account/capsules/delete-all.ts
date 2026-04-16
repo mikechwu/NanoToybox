@@ -55,19 +55,21 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       if (!result) {
         failed.push({ code: row.share_code, reason: 'missing' });
       } else if (!result.r2Deleted) {
-        // Truncate the R2 error string — it can carry account-internal
-        // details (key paths, account IDs in some Cloudflare errors)
-        // that should not leak in a per-user response body.
-        failed.push({
-          code: row.share_code,
-          reason: `r2_failed: ${(result.r2Error ?? 'unknown').slice(0, 200)}`,
-        });
+        console.error(
+          `[account.delete-all] share=${row.share_code} r2_error="${result.r2Error ?? 'unknown'}"`,
+        );
+        failed.push({ code: row.share_code, reason: 'r2_failed' });
       } else {
         succeeded++;
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      failed.push({ code: row.share_code, reason: message.slice(0, 200) });
+      // Log full error for ops; return only a coarse code to the
+      // client to avoid leaking raw D1/SQLite constraint text.
+      const raw = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[account.delete-all] share=${row.share_code} error="${raw}"`,
+      );
+      failed.push({ code: row.share_code, reason: 'delete_failed' });
     }
   }
 

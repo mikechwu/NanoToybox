@@ -97,11 +97,16 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
           reason: 'account_delete_cascade',
         });
         if (!result) failed.push({ code, reason: 'missing' });
-        else if (!result.r2Deleted)
-          failed.push({ code, reason: `r2_failed: ${result.r2Error ?? 'unknown'}` });
+        else if (!result.r2Deleted) {
+          console.error(`[account.delete] capsule share=${code} r2_error="${result.r2Error ?? 'unknown'}"`);
+          failed.push({ code, reason: 'r2_failed' });
+        }
         else succeeded++;
       } catch (err) {
-        failed.push({ code, reason: errorMessage(err) });
+        console.error(
+          `[account.delete] capsule share=${code} error="${errorMessage(err)}"`,
+        );
+        failed.push({ code, reason: 'delete_failed' });
       }
     }
   };

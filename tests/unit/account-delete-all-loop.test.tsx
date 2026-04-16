@@ -132,7 +132,7 @@ describe('Account page — bulk delete loop cap-hit reporting', () => {
 
       // Banner reports drained-style summary.
       await waitFor(() =>
-        expect(document.body.textContent ?? '').toMatch(/Deleted 5 of 5/),
+        expect(document.body.textContent ?? '').toMatch(/Deleted 5 uploads/),
       );
       // No "Continue deleting" button.
       expect(screen.queryByText(/Continue deleting/i)).toBeNull();

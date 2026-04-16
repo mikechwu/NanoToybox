@@ -248,6 +248,32 @@ function AccountApp() {
     loadAll().then(setState);
   }, []);
 
+  /** Capsules-only refresh — awaitable, stays in the `ready` state.
+   *  Returns the refreshed capsule list, or null on failure.
+   *  Used by post-delete reconciliation so the page doesn't flash
+   *  to the global loading screen.
+   *
+   *  Pagination: intentionally resets to page 1 (no cursor). After a
+   *  destructive operation the server-side ordering may have shifted,
+   *  and stale cursors can produce gaps or duplicates. Accepting the
+   *  reset-to-page-1 tradeoff is the simplest correct behavior. */
+  const refreshCapsules = useCallback(async (): Promise<CapsuleSummary[] | null> => {
+    try {
+      const res = await fetch('/api/account/capsules', { credentials: 'include' });
+      if (!res.ok) return null;
+      const data = (await res.json()) as CapsulesPage;
+      setState(prev =>
+        prev.status === 'ready'
+          ? { ...prev, capsules: data.capsules, hasMore: data.hasMore ?? false, nextCursor: data.nextCursor ?? null }
+          : prev,
+      );
+      return data.capsules;
+    } catch (err) {
+      console.error('[account] capsule refresh failed:', err);
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
     reload();
   }, [reload]);
@@ -288,39 +314,49 @@ function AccountApp() {
     async (code: string) => {
       setDeletingCode(code);
       try {
-        const res = await fetch(`/api/account/capsules/${code}`, {
-          method: 'DELETE',
-          credentials: 'include',
-        });
-        if (!res.ok) {
-          setBanner(`Delete failed (${res.status}).`);
-        } else {
-          setBanner(`Deleted ${code}.`);
-          reload();
+        let httpOk = false;
+        let httpStatus = 0;
+        try {
+          const res = await fetch(`/api/account/capsules/${code}`, {
+            method: 'DELETE',
+            credentials: 'include',
+          });
+          httpOk = res.ok;
+          httpStatus = res.status;
+        } catch {
+          // Network error — httpOk stays false.
         }
-      } catch (err) {
-        setBanner(err instanceof Error ? err.message : String(err));
+        // Reconcile: refresh capsules list (stays in ready state).
+        const refreshed = await refreshCapsules();
+        const rowGone = refreshed ? !refreshed.some(c => c.shareCode === code) : null;
+
+        const statusLabel = httpStatus > 0 ? String(httpStatus) : 'network error';
+        if (rowGone === null && httpOk) {
+          setBanner('Delete request succeeded, but the list could not be refreshed. Please reload to confirm.');
+        } else if (rowGone === null && !httpOk) {
+          setBanner(`Delete failed (${statusLabel}). The list could not be refreshed.`);
+        } else if (httpOk && rowGone) {
+          setBanner(`Deleted ${code}.`);
+        } else if (!httpOk && rowGone) {
+          setBanner('Delete may have completed despite a server error.');
+        } else if (!httpOk && !rowGone) {
+          setBanner(`Delete failed (${statusLabel}).`);
+        } else {
+          setBanner('Delete reported success but the capsule is still listed.');
+        }
       } finally {
         setDeletingCode(null);
       }
     },
-    [reload],
+    [refreshCapsules],
   );
 
   const onDeleteAll = useCallback(async () => {
-    // Server caps each call at BATCH_LIMIT (200). For larger accounts,
-    // loop until `moreAvailable` is false, aggregating totals so the
-    // banner stays truthful for every account size.
     setBulkDeleting(true);
     let succeededTotal = 0;
     let failedTotal = 0;
     let attemptedTotal = 0;
     let batchIndex = 0;
-    // Distinguishes "nothing left to delete" (success summary) from
-    // "client-side cap reached while moreAvailable was still true"
-    // (partial-result banner + Continue option). Without this we'd
-    // render a success summary for accounts >MAX_BATCHES * 200, and
-    // the user would think the destructive action had completed.
     let exitReason: 'drained' | 'cap-hit' | 'http-error' = 'drained';
     try {
       const MAX_BATCHES = 100;
@@ -337,6 +373,8 @@ function AccountApp() {
         });
         if (!res.ok) {
           exitReason = 'http-error';
+          // Reconcile on HTTP error before showing failure.
+          await refreshCapsules();
           setBanner(`Bulk delete failed at batch ${batchIndex} (${res.status}).`);
           return;
         }
@@ -349,6 +387,10 @@ function AccountApp() {
         attemptedTotal += data.totalAttempted;
         succeededTotal += data.succeeded;
         failedTotal += data.failed.length;
+        // Per-batch reconciliation on failures.
+        if (data.failed.length > 0) {
+          await refreshCapsules();
+        }
         if (!data.moreAvailable) {
           exitReason = 'drained';
           break;
@@ -358,6 +400,10 @@ function AccountApp() {
         }
       }
 
+      // Terminal reconciliation — derive banner from refresh state.
+      const terminalRefresh = await refreshCapsules();
+      const remainingCount = terminalRefresh?.length ?? null;
+
       if (exitReason === 'cap-hit') {
         setBatchCapHit(true);
         setBanner(
@@ -365,23 +411,36 @@ function AccountApp() {
             (failedTotal > 0 ? ` (${failedTotal} failed)` : '') +
             '. More uploads remain — choose "Continue deleting" to remove the rest.',
         );
-        reload();
         return;
       }
 
       setBatchCapHit(false);
-      setBanner(
-        `Deleted ${succeededTotal} of ${attemptedTotal}` +
-          (failedTotal > 0 ? `; ${failedTotal} failed.` : '.'),
-      );
-      reload();
+      if (terminalRefresh === null) {
+        // Refresh failed — fall back to counts, note the gap.
+        setBanner(
+          `Deleted ${succeededTotal} of ${attemptedTotal}` +
+            (failedTotal > 0 ? `; ${failedTotal} failed` : '') +
+            '. The list could not be refreshed — please reload to confirm.',
+        );
+      } else if (failedTotal > 0 && remainingCount === 0) {
+        setBanner(
+          `Deleted ${succeededTotal} uploads. Some cleanup reported errors, but the list has been refreshed.`,
+        );
+      } else if (failedTotal > 0) {
+        setBanner(
+          `Deleted ${succeededTotal} uploads. ${failedTotal} could not be deleted.`,
+        );
+      } else {
+        setBanner(`Deleted ${succeededTotal} uploads.`);
+      }
     } catch (err) {
-      setBanner(err instanceof Error ? err.message : String(err));
+      console.error('[account] bulk delete error:', err);
+      setBanner('Bulk delete encountered an unexpected error. Please reload.');
     } finally {
       setBulkDeleting(false);
       if (exitReason !== 'cap-hit') setDeleteAllConfirm(false);
     }
-  }, [reload]);
+  }, [refreshCapsules]);
 
   const onDeleteAccount = useCallback(async () => {
     try {
