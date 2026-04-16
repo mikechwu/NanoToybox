@@ -1214,7 +1214,7 @@ describe('TimelineBar unified shell', () => {
     expect(urlInput.value).toBe('https://atomdojo.pages.dev/c/TEST12345678');
 
     // Should show share code
-    expect(document.querySelector('.timeline-transfer-dialog__code')?.textContent).toContain('TEST12345678');
+    expect(document.querySelector('.timeline-transfer-dialog__code-badge')?.textContent).toContain('TEST12345678');
 
     // No warnings in the response → no warning note rendered
     expect(document.querySelector('[data-testid="transfer-dialog-warning"]')).toBeNull();

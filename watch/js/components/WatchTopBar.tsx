@@ -35,13 +35,14 @@ function formatKind(kind: string): string {
  *
  * Everything else: strip the .atomdojo extension and truncate.
  */
-function formatDisplayName(fileName: string): string {
+function formatDisplayName(fileName: string, compact = false): string {
   const base = fileName.replace(/\.atomdojo$/i, '').replace(/\.json$/i, '');
 
   // Share-code capsule: atomdojo-capsule-{12 alphanum chars}
   const shareMatch = base.match(/^atomdojo-capsule-([0-9A-Za-z]{12})$/);
   if (shareMatch) {
     const c = shareMatch[1].toUpperCase();
+    if (compact) return `${c.slice(0, 4)}…${c.slice(8, 12)}`;
     return `${c.slice(0, 4)}-${c.slice(4, 8)}-${c.slice(8, 12)}`;
   }
 
@@ -49,12 +50,14 @@ function formatDisplayName(fileName: string): string {
   const tsMatch = base.match(/^atomdojo-capsule-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
   if (tsMatch) {
     const [, y, m, d, hh, mm] = tsMatch;
+    if (compact) return `${m}/${d} ${hh}:${mm}`;
     return `${y}-${m}-${d} ${hh}:${mm}`;
   }
 
   // Generic: strip common prefix, keep short
   const short = base.replace(/^atomdojo-/, '');
-  return short.length > 20 ? short.slice(0, 20) + '…' : short;
+  const limit = compact ? 12 : 20;
+  return short.length > limit ? short.slice(0, limit) + '…' : short;
 }
 
 export function WatchTopBar({
@@ -62,15 +65,18 @@ export function WatchTopBar({
 }: WatchTopBarProps) {
   const [shareInput, setShareInput] = useState('');
   const [showShareInput, setShowShareInput] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const isLoading = loadingShareCode !== null;
+  const busy = isLoading || submitting;
   const submittingRef = useRef(false);
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = shareInput.trim();
-    if (!trimmed || isLoading || submittingRef.current) return;
+    if (!trimmed || busy || submittingRef.current) return;
     submittingRef.current = true;
+    setSubmitting(true);
     try {
       const success = await onOpenShareCode(trimmed);
       if (success) {
@@ -79,10 +85,12 @@ export function WatchTopBar({
       }
     } finally {
       submittingRef.current = false;
+      setSubmitting(false);
     }
-  }, [shareInput, isLoading, onOpenShareCode]);
+  }, [shareInput, busy, onOpenShareCode]);
 
   const displayName = fileName ? formatDisplayName(fileName) : null;
+  const compactName = fileName ? formatDisplayName(fileName, true) : null;
 
   return (
     <div className="watch-topbar" role="region" aria-label="Currently watching">
@@ -96,20 +104,20 @@ export function WatchTopBar({
             onChange={(e) => setShareInput(e.target.value)}
             autoFocus
             aria-label="Share link or code"
-            disabled={isLoading}
+            disabled={busy}
           />
           <button
             className="watch-topbar__action"
             type="submit"
-            disabled={!shareInput.trim() || isLoading}
+            disabled={!shareInput.trim() || busy}
           >
-            {isLoading ? '…' : 'Go'}
+            {busy ? '…' : 'Go'}
           </button>
           <button
             className="watch-topbar__action"
             type="button"
             onClick={() => setShowShareInput(false)}
-            disabled={isLoading}
+            disabled={busy}
           >
             ✕
           </button>
@@ -119,9 +127,14 @@ export function WatchTopBar({
           <div className="watch-topbar__identity">
             {fileKind && <span className="watch-topbar__kind">{formatKind(fileKind)}</span>}
             {displayName && (
-              <span className="watch-topbar__filename" title={fileName ?? ''}>
-                {displayName}
-              </span>
+              <>
+                <span className="watch-topbar__filename watch-topbar__filename--full" title={fileName ?? ''}>
+                  {displayName}
+                </span>
+                <span className="watch-topbar__filename watch-topbar__filename--compact" title={fileName ?? ''}>
+                  {compactName}
+                </span>
+              </>
             )}
           </div>
           <div className="watch-topbar__actions">
@@ -129,11 +142,11 @@ export function WatchTopBar({
               className="watch-topbar__action"
               type="button"
               onClick={() => setShowShareInput(true)}
-              disabled={isLoading}
+              disabled={busy}
               aria-label="Open share link"
               title="Open Link"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
                 <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
               </svg>
@@ -142,11 +155,11 @@ export function WatchTopBar({
               className="watch-topbar__action"
               type="button"
               onClick={onOpenFile}
-              disabled={isLoading}
+              disabled={busy}
               aria-label="Open file"
               title="Open File"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
               </svg>
             </button>

@@ -442,7 +442,6 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
           <div role="tabpanel" aria-label="Share">
             {shareSuccess ? (
               <div className="timeline-transfer-dialog__success">
-                <p className="timeline-transfer-dialog__url-label">Share link:</p>
                 <div className="timeline-transfer-dialog__url-row">
                   <input
                     className="timeline-transfer-dialog__url-input"
@@ -450,15 +449,42 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                     value={shareUrl}
                     readOnly
                     onFocus={(e) => e.target.select()}
+                    aria-label="Share link"
                   />
-                  <button className="timeline-transfer-dialog__copy" onClick={handleCopy}>
-                    {copied ? 'Copied' : 'Copy'}
+                  <button
+                    className="timeline-transfer-dialog__copy"
+                    onClick={handleCopy}
+                    title="Copy link to clipboard"
+                  >
+                    {/* Clipboard icon */}
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                    <span>{copied ? 'Copied' : 'Copy'}</span>
                   </button>
                 </div>
                 {shareCode && (
-                  <p className="timeline-transfer-dialog__code">
-                    Code: <code>{shareCode}</code>
-                  </p>
+                  <div className="timeline-transfer-dialog__share-actions-row">
+                    <a
+                      className="timeline-transfer-dialog__watch-link"
+                      href={`/watch/?c=${shareCode}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-testid="transfer-open-in-watch"
+                      aria-label="Open in Watch (opens in new tab)"
+                    >
+                      {/* Play-circle icon */}
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10" />
+                        <polygon points="10,8 16,12 10,16" fill="currentColor" stroke="none" />
+                      </svg>
+                      <span>Open in Watch</span>
+                    </a>
+                    <span className="timeline-transfer-dialog__code-badge">
+                      {shareCode}
+                    </span>
+                  </div>
                 )}
                 {shareWarnings && shareWarnings.length > 0 && (
                   <p
@@ -470,17 +496,6 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                     {formatShareWarning(shareWarnings)}
                   </p>
                 )}
-                {/* No shareError render here — handleShareConfirm clears
-                 *  shareError before setting shareResult, and the auth-status
-                 *  effect in TimelineBar clears it on any status transition
-                 *  that could repaint this branch.
-                 *
-                 *  "Manage uploads" lives in the action row as a leading
-                 *  link, NOT as a floating paragraph between the code line
-                 *  and the divider — that earlier placement crowded the
-                 *  separator and read as an unfinished thought. As an
-                 *  action-row peer it's clearly a secondary navigation
-                 *  alongside Close, with the divider doing its proper job. */}
                 <ShareActions
                   onCancel={handleCancel}
                   transferBusy={transferBusy}
@@ -494,6 +509,12 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                       data-testid="transfer-manage-uploads"
                       aria-label="Manage uploads (opens in new tab)"
                     >
+                      {/* External link icon */}
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{verticalAlign: '-1px', marginRight: '4px'}}>
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                        <polyline points="15,3 21,3 21,9" />
+                        <line x1="10" y1="14" x2="21" y2="3" />
+                      </svg>
                       Manage uploads
                     </a>
                   }

@@ -117,6 +117,10 @@ export function WatchOpenPanel({
 }: WatchOpenPanelProps) {
   const [shareInput, setShareInput] = useState('');
   const [dragActive, setDragActive] = useState(false);
+  // Local submitting flag — gives instant button feedback before
+  // the controller snapshot propagates (avoids a 1-frame "freeze"
+  // where the button looks clickable but the async flow has started).
+  const [submitting, setSubmitting] = useState(false);
   const dragDepth = useRef(0);
   // Ref-level re-entry guard — closes the microtask gap between the
   // first submit firing `onOpenShareCode` (which updates the store
@@ -163,16 +167,13 @@ export function WatchOpenPanel({
     const trimmed = shareInput.trim();
     if (!trimmed || loading || submittingRef.current) return;
     submittingRef.current = true;
+    setSubmitting(true);
     try {
       const success = await onOpenShareCode(trimmed);
-      // Only clear the input on success. On failure, keep the draft
-      // so the user can correct a typo without re-pasting. This is a
-      // deliberate behavior change from the former WatchLanding, which
-      // cleared synchronously and discarded typos. Guard the setState
-      // against unmount — the parent unmounts the panel on success.
       if (success && mountedRef.current) setShareInput('');
     } finally {
       submittingRef.current = false;
+      if (mountedRef.current) setSubmitting(false);
     }
   }, [shareInput, loading, onOpenShareCode]);
 
@@ -260,17 +261,17 @@ export function WatchOpenPanel({
             placeholder="Paste share link or code"
             value={shareInput}
             onChange={(e) => setShareInput(e.target.value)}
-            disabled={loading}
+            disabled={loading || submitting}
             aria-label="Share link or code"
             aria-describedby={error ? SHARE_ERROR_ID : undefined}
-            autoFocus={!loading}
+            autoFocus={!loading && !submitting}
           />
           <button
             className="watch-open-panel__primary"
             type="submit"
-            disabled={!shareInput.trim() || loading}
+            disabled={!shareInput.trim() || loading || submitting}
           >
-            {loading ? 'Opening…' : 'Open in Watch'}
+            {loading || submitting ? 'Opening…' : 'Open in Watch'}
           </button>
         </form>
 

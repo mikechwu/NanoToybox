@@ -171,6 +171,12 @@ body {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
+/* Phone: show compact name; desktop: show full name. */
+.watch-topbar__filename--compact { display: none; }
+@media (max-width: 480px) {
+  .watch-topbar__filename--full { display: none; }
+  .watch-topbar__filename--compact { display: inline; }
+}
 .watch-topbar__actions {
   display: flex; gap: 2px; flex: 0 0 auto;
 }
@@ -307,7 +313,9 @@ body {
 .watch-cinematic-toggle[aria-pressed="true"] .watch-cinematic-toggle__thumb {
   transform: translateX(12px);
 }
-/* Narrow screens: shorten label */
-@media (max-width: 420px) {
+/* Phone: hide cinematic label (keep switch), hide kind chip
+   to maximize space for name + controls. */
+@media (max-width: 480px) {
   .watch-cinematic-toggle__label { display: none; }
+  .watch-topbar__kind { display: none; }
 }

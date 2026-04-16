@@ -1384,10 +1384,6 @@ canvas { display: block; touch-action: none; }
   margin-bottom: 16px; line-height: 1.4;
 }
 .timeline-transfer-dialog__success { margin-bottom: 16px; }
-.timeline-transfer-dialog__url-label {
-  font-size: var(--font-xs); color: var(--color-text-secondary);
-  margin-bottom: 6px;
-}
 .timeline-transfer-dialog__url-row {
   display: flex; gap: 6px; align-items: center;
 }
@@ -1399,23 +1395,32 @@ canvas { display: block; touch-action: none; }
 }
 .timeline-transfer-dialog__url-input:focus { border-color: var(--color-accent-text); }
 .timeline-transfer-dialog__copy {
-  padding: 6px 12px; border-radius: var(--radius-sm);
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 6px 10px; border-radius: var(--radius-sm);
   border: 1px solid var(--color-border); background: none;
   color: var(--color-text); font-family: var(--font-family);
   font-size: var(--font-xs); cursor: pointer; white-space: nowrap;
 }
 .timeline-transfer-dialog__copy:hover { background: var(--color-surface-hover); }
-.timeline-transfer-dialog__code {
-  font-size: var(--font-xs); color: var(--color-text-secondary);
-  margin-top: 10px;
-  /* Extra breathing room below so the actions divider doesn't crowd
-   * the code line. Was implicitly handled by the floating "Manage
-   * uploads" paragraph; that paragraph is gone (now an action-row
-   * peer of Close) so the spacing has to come from here. */
-  margin-bottom: 14px;
+.timeline-transfer-dialog__copy svg { flex: 0 0 auto; }
+/* Share actions row: Open in Watch + code badge */
+.timeline-transfer-dialog__share-actions-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 10px; margin-bottom: 10px;
 }
-.timeline-transfer-dialog__code code {
+.timeline-transfer-dialog__watch-link {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 12px; border-radius: var(--radius-sm);
+  background: var(--color-accent, #6ab89a); color: #111;
+  font-family: var(--font-family); font-size: var(--font-xs);
+  font-weight: 600; text-decoration: none; white-space: nowrap;
+}
+.timeline-transfer-dialog__watch-link:hover { filter: brightness(1.1); }
+.timeline-transfer-dialog__watch-link svg { flex: 0 0 auto; }
+.timeline-transfer-dialog__code-badge {
+  font-size: var(--font-xs); color: var(--color-text-secondary);
   font-family: var(--font-family); letter-spacing: 0.05em;
+  opacity: 0.7;
 }
 /* Leading link inside .timeline-transfer-dialog__actions for the
  * share-success branch. `margin-right: auto` floats it to the row's
