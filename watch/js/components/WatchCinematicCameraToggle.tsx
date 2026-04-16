@@ -31,7 +31,8 @@ export function WatchCinematicCameraToggle(props: Props) {
       aria-label={ariaLabel}
       onClick={props.onToggle}
     >
-      <span className="watch-cinematic-toggle__label">Cinematic Camera</span>
+      <span className="watch-cinematic-toggle__label watch-cinematic-toggle__label--full">Cinematic Camera</span>
+      <span className="watch-cinematic-toggle__label watch-cinematic-toggle__label--short">Cinema</span>
       {/* CSS-only toggle switch track + thumb */}
       <span className="watch-cinematic-toggle__switch" aria-hidden="true">
         <span className="watch-cinematic-toggle__thumb" />
