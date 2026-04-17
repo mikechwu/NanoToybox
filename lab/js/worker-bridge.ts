@@ -159,6 +159,16 @@ export class WorkerBridge {
     const commandId = this._nextId();
     this._registerMutation(commandId, 'restoreState');
 
+    // Clear the pre-mutation snapshot immediately (same pattern as
+    // `appendMolecule`). Without this, `getLatestSnapshot()` keeps
+    // returning the pre-restoreState frame (e.g. C60 during a Watch→Lab
+    // hydrate) until the worker emits its first post-restore
+    // `frameResult`. During that ~0.1 s race window the main-thread
+    // frame runtime's reconciler would clobber physics back to the
+    // pre-hydrate state, causing a "flash to default scene" after the
+    // arrival pill lands. See the 2026-04-16 bug report.
+    this.latestSnapshot = null;
+
     const promise = new Promise<RestoreStateResult>((resolve) => {
       this.pendingResolvers.set(commandId, resolve as (v: MutationAckEvent) => void);
     });
@@ -415,6 +425,18 @@ export class WorkerBridge {
       this.lastKnownSceneVersion = event.sceneVersion;
       if (event.ok) {
         this.lastAcceptedMutationVersion = event.sceneVersion;
+        // Invalidate any cached pre-mutation snapshot — without this,
+        // `getLatestSnapshot()` would return a pre-mutation frame
+        // (e.g. the pre-restoreState C60 state) until the worker's
+        // first post-mutation `frameResult` arrives. During that race
+        // window the reconciler clobbers main-thread physics back to
+        // the pre-mutation state (see the Watch→Lab hydrate
+        // ~0.1 s flash-to-default-C60 bug, 2026-04-16). Clearing here
+        // means `getLatestSnapshot()` returns null until a fresh
+        // frameResult lands, and the reconciler skips that frame.
+        if (this.latestSnapshot && this.latestSnapshot.sceneVersion < event.sceneVersion) {
+          this.latestSnapshot = null;
+        }
       }
     }
 

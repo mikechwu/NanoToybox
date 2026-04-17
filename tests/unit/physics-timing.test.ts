@@ -103,3 +103,52 @@ describe('PhysicsEngine timing parameterization', () => {
     expect(gamma1).toBeCloseTo(gamma2, 5);
   });
 });
+
+describe('setTimeConfig authoritative dampingRefDurationFs (audit rev 8 P1)', () => {
+  it('two-arg form preserves the boot-default reference duration', () => {
+    const eng = new PhysicsEngine({ skipWasmInit: true });
+    const bootDuration = eng.dampingRefDurationFs;
+    // Change dt + refSteps only — duration must stay at boot value.
+    eng.setTimeConfig(1.0, 8);
+    expect(eng.dampingRefDurationFs).toBe(bootDuration);
+  });
+
+  it('three-arg form restores an authoritative dampingRefDurationFs (handoff path)', () => {
+    // Simulates the Watch → Lab handoff arriving with a recording-time
+    // damping window that differs from Lab's boot default. Without the
+    // three-arg overload, the engine's `_recomputeDampingFactor` uses
+    // the boot-default window, silently drifting the decay rate even
+    // though every other config field matches.
+    const eng = new PhysicsEngine({ skipWasmInit: true });
+    const authoritativeDuration = 137; // fs — deliberately not a Lab default
+    eng.setTimeConfig(0.5, 274, authoritativeDuration);
+    expect(eng.dampingRefDurationFs).toBe(authoritativeDuration);
+  });
+
+  it('damping factor recomputes against the restored duration, not the boot default', () => {
+    const eng = new PhysicsEngine({ skipWasmInit: true });
+    eng.setDamping(0.1);
+    const bootFactor = eng._dampingFactor;
+    // Restore a non-default damping window.
+    eng.setTimeConfig(0.5, 500, 250);
+    // The same damping value (0.1) now computes a DIFFERENT per-step
+    // factor because the decay window (denominator in the gamma
+    // formula) changed from the boot default to 250 fs.
+    expect(eng._dampingFactor).not.toBeCloseTo(bootFactor, 6);
+    // Sanity: factor agrees with the formula at the restored window.
+    const gamma = -Math.log(1 - 0.1) / 250;
+    const expectedFactor = Math.exp(-gamma * 0.5);
+    expect(eng._dampingFactor).toBeCloseTo(expectedFactor, 9);
+  });
+
+  it('three-arg form ignores non-positive / non-finite durations (defensive)', () => {
+    const eng = new PhysicsEngine({ skipWasmInit: true });
+    const bootDuration = eng.dampingRefDurationFs;
+    eng.setTimeConfig(0.5, 100, 0);
+    expect(eng.dampingRefDurationFs).toBe(bootDuration);
+    eng.setTimeConfig(0.5, 100, -1);
+    expect(eng.dampingRefDurationFs).toBe(bootDuration);
+    eng.setTimeConfig(0.5, 100, Number.NaN);
+    expect(eng.dampingRefDurationFs).toBe(bootDuration);
+  });
+});

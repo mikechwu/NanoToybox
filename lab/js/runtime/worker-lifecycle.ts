@@ -30,8 +30,16 @@ import type { BondTuple } from '../../../src/types/interfaces';
 export interface WorkerRuntime {
   /** Initialize with a pre-built config from main.ts. */
   init(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[]): Promise<void>;
-  /** Dedicated state restore for restart — uses the full RestartState payload. */
-  restoreState(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[], velocities: Float64Array, boundary: Extract<WorkerCommand, { type: 'restoreState' }>['boundary']): Promise<void>;
+  /** Dedicated state restore for restart — uses the full RestartState
+   *  payload. Returns `{ok:true}` when the worker ack'd successfully,
+   *  `{ok:false}` when the worker reported a logical failure
+   *  (internal `onFailure` has already fired to tear down and recover
+   *  local state). Callers that care about the outcome (e.g. the
+   *  timeline subsystem's `reinitWorker`) should surface
+   *  `setStatusError` on `{ok:false}`; callers that don't care can
+   *  still ignore the return. Transport exceptions are caught and
+   *  mapped to `{ok:false}` to keep the void→failure seam closed. */
+  restoreState(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[], velocities: Float64Array, boundary: Extract<WorkerCommand, { type: 'restoreState' }>['boundary']): Promise<{ ok: boolean }>;
   /** Tear down worker transport. Does NOT recover local physics. */
   destroy(): void;
   isActive(): boolean;
@@ -137,47 +145,57 @@ export function createWorkerRuntime(deps: {
         bridge.setOnWallRemoval(deps.onWallRemoval);
       }
 
-      if (atoms.length > 0) {
-        try {
-          const result = await bridge.init(config, atoms, bonds);
-          // Guard: if destroy() was called during the await, abandon
-          if (_bridge !== bridge) return;
-          if (result.ok) {
-            _initialized = true;
-            _progressTs = performance.now();
-            _stalled = false;
-          } else {
-            console.warn('[worker] init failed:', result.error);
-            const snap = _teardown();
-            deps.onFailure('Worker init failed: ' + (result.error || 'unknown'), snap);
-          }
-        } catch (e) {
-          if (_bridge !== bridge) return; // destroyed mid-flight
-          console.warn('[worker] init error:', e);
-          const snap = _teardown();
-          deps.onFailure('Worker init error', snap);
-        }
-      }
-    },
-
-    async restoreState(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[], velocities: Float64Array, boundary: Extract<WorkerCommand, { type: 'restoreState' }>['boundary']) {
-      if (!_bridge) return;
+      // Always post `init` to the worker, even with zero atoms. The
+      // empty-init path is load-bearing for the Watch→Lab handoff
+      // boot: when a handoff is pending, main.ts defers the default
+      // C60 load and main-thread physics.n starts at 0. The worker
+      // still must be initialized so that `isActive()` flips true
+      // before the hydrate calls `clearScene + appendMolecule` —
+      // otherwise the hydrate waits for an ack that never comes.
+      // The worker's own `handleInit` is safe with n=0 (typed-array
+      // lengths, neighbor-list workspace, etc. all handle 0
+      // gracefully).
       try {
-        const result = await _bridge.restoreState(config, atoms, bonds, velocities, boundary);
-        if (_bridge === null) return; // destroyed during await
+        const result = await bridge.init(config, atoms, bonds);
+        // Guard: if destroy() was called during the await, abandon
+        if (_bridge !== bridge) return;
         if (result.ok) {
           _initialized = true;
           _progressTs = performance.now();
           _stalled = false;
         } else {
-          console.warn('[worker] restoreState failed:', result.error);
+          console.warn('[worker] init failed:', result.error);
           const snap = _teardown();
-          deps.onFailure('Worker restoreState failed: ' + (result.error || 'unknown'), snap);
+          deps.onFailure('Worker init failed: ' + (result.error || 'unknown'), snap);
         }
+      } catch (e) {
+        if (_bridge !== bridge) return; // destroyed mid-flight
+        console.warn('[worker] init error:', e);
+        const snap = _teardown();
+        deps.onFailure('Worker init error', snap);
+      }
+    },
+
+    async restoreState(config: PhysicsConfig, atoms: AtomXYZ[], bonds: BondTuple[], velocities: Float64Array, boundary: Extract<WorkerCommand, { type: 'restoreState' }>['boundary']): Promise<{ ok: boolean }> {
+      if (!_bridge) return { ok: false };
+      try {
+        const result = await _bridge.restoreState(config, atoms, bonds, velocities, boundary);
+        if (_bridge === null) return { ok: false }; // destroyed during await
+        if (result.ok) {
+          _initialized = true;
+          _progressTs = performance.now();
+          _stalled = false;
+          return { ok: true };
+        }
+        console.warn('[worker] restoreState failed:', result.error);
+        const snap = _teardown();
+        deps.onFailure('Worker restoreState failed: ' + (result.error || 'unknown'), snap);
+        return { ok: false };
       } catch (e) {
         console.warn('[worker] restoreState error:', e);
         const snap = _teardown();
         deps.onFailure('Worker restoreState error', snap);
+        return { ok: false };
       }
     },
 

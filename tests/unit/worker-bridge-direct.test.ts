@@ -300,6 +300,62 @@ describe('Direct WorkerBridge — #7 mutation-aware gating on real bridge', () =
 });
 
 describe('Direct WorkerBridge — append snapshot race regression', () => {
+  it('clears latestSnapshot when restoreState starts (Watch→Lab hydrate)', async () => {
+    // Pins the fix for the 2026-04-16 post-hydrate flash-to-default
+    // bug. Before this fix, the pre-restoreState `latestSnapshot`
+    // (e.g. C60) was still returned by `getLatestSnapshot()` until
+    // the worker emitted its first post-restore `frameResult`. The
+    // main-thread frame runtime's reconciler would read that stale
+    // snapshot and clobber physics back to the pre-hydrate scene,
+    // causing the user to see the hydrated scene for ~0.1 s and then
+    // watch it revert to the default C60.
+    const bridge = await createBridge();
+    const initP = bridge.init({ dt: 0.001 } as any, [], []);
+    mockWorkerInstance.respond({
+      type: 'initResult', replyTo: mockWorkerInstance.posted[0].commandId, ok: true,
+      sceneVersion: 1, atomCount: 60, wasmReady: true, kernel: 'wasm',
+    });
+    await initP;
+    // Seed a pre-mutation snapshot (simulating C60 steady-state frames).
+    bridge.sendRequestFrame(1);
+    mockWorkerInstance.respond({
+      type: 'frameResult', replyTo: mockWorkerInstance.posted[1].commandId,
+      sceneVersion: 1, snapshotVersion: 1,
+      positions: new Float64Array(180), n: 60,
+      stepsCompleted: 1, physStepMs: 1.0,
+    });
+    expect(bridge.getLatestSnapshot()!.n).toBe(60);
+    // Start restoreState — MUST clear the stale snapshot synchronously,
+    // not wait for the worker's ack + first post-restore frameResult.
+    const restoreP = bridge.restoreState(
+      { dt: 0.001, dampingReferenceSteps: 100, damping: 0.1, kDrag: 1, kRotate: 1, wallMode: 'contain', useWasm: true } as any,
+      [{ x: 0, y: 0, z: 0 }, { x: 1.42, y: 0, z: 0 }],
+      [[0, 1, 1.42]],
+      new Float64Array(6),
+      undefined,
+    );
+    expect(bridge.getLatestSnapshot()).toBeNull();
+    // The ack arrives but no frameResult yet → still null.
+    mockWorkerInstance.respond({
+      type: 'restoreStateResult', replyTo: mockWorkerInstance.posted[2].commandId, ok: true,
+      sceneVersion: 2, atomCount: 2, wasmReady: true, kernel: 'wasm',
+    });
+    await restoreP;
+    expect(bridge.getLatestSnapshot()).toBeNull();
+    // First post-restore frameResult populates the snapshot with seed state.
+    bridge.sendRequestFrame(1);
+    mockWorkerInstance.respond({
+      type: 'frameResult', replyTo: mockWorkerInstance.posted[3].commandId,
+      sceneVersion: 2, snapshotVersion: 1,
+      positions: new Float64Array(6), n: 2,
+      stepsCompleted: 1, physStepMs: 1.0,
+    });
+    const snap = bridge.getLatestSnapshot();
+    expect(snap).not.toBeNull();
+    expect(snap!.n).toBe(2);
+    expect(snap!.sceneVersion).toBe(2);
+  });
+
   it('clears latestSnapshot when appendMolecule starts', async () => {
     const bridge = await createBridge();
 

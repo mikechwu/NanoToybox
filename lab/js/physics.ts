@@ -487,17 +487,33 @@ export class PhysicsEngine {
     this.stepCount = 0;
     this.neighborList = null;
 
-    // Allocate cache buffers — right-size when switching to a smaller structure
-    if (this.n !== this._maxN) {
-      this._maxN = this.n;
-      // Pre-allocate neighbor list arrays (one Int32Array per atom, initial capacity 8)
-      this._nlArrays = new Array(this.n);
-      this._nlCounts = new Int32Array(this.n);
-      for (let i = 0; i < this.n; i++) this._nlArrays[i] = new Int32Array(8);
-    }
+    this._ensureNeighborListWorkspace();
 
     this.computeForces();
     this.rebuildComponents();
+  }
+
+  /** Ensure the cached neighbor-list workspace (`_nlCounts` /
+   *  `_nlArrays`) is allocated and sized for at least `this.n`
+   *  entries. Idempotent; no-op when already sized. Called from
+   *  `init` and `restoreCheckpoint` — the two paths that can land
+   *  on a fresh or cleared engine where the workspace is null or
+   *  smaller than the new atom count. The null check is load-bearing:
+   *  a fresh `PhysicsEngine` has `_maxN = 0` AND null workspace
+   *  buffers, so a `this._maxN < this.n` comparison alone would skip
+   *  allocation for an `init(atoms=[])` (the Watch→Lab pending-handoff
+   *  boot path — both zero), leaving `buildNeighborList()` to
+   *  null-deref `_nlCounts.fill(0)`.
+   *
+   *  Grow-only: `appendMolecule` and `_removeAtomsOutsideWall` have
+   *  their own inline allocation that handles resize + data migration
+   *  in one pass; they do not go through this helper. */
+  private _ensureNeighborListWorkspace(): void {
+    if (this._nlCounts != null && this._nlArrays != null && this._maxN >= this.n) return;
+    this._maxN = this.n;
+    this._nlArrays = new Array(this.n);
+    this._nlCounts = new Int32Array(this.n);
+    for (let i = 0; i < this.n; i++) this._nlArrays[i] = new Int32Array(8);
   }
 
   /** Spatial-hash construction for the NEIGHBOR-LIST path only. O(N) time and
@@ -1556,6 +1572,7 @@ export class PhysicsEngine {
     this.bonds = [];
     this._resetBondWorkspace();
     this.neighborList = null;  // force rebuild
+    this._ensureNeighborListWorkspace();
     this.computeForces();
     this.updateBondList();  // recomputes bonds from restored positions
     this.rebuildComponents();
@@ -1606,13 +1623,32 @@ export class PhysicsEngine {
   getDtFs() { return this.dtFs; }
 
   /** Set engine timing from protocol config.
-   *  Damping reference duration is pinned at first initialization and NOT
-   *  changed by setTimeConfig — this preserves the original damping
-   *  calibration while allowing the actual step size to change. */
-  setTimeConfig(dtFs: number, dampingRefSteps: number) {
+   *
+   *  Two-arg form (legacy, dt + dampingRefSteps only): preserves the
+   *  boot-time `dampingRefDurationFs`. This is the path the Lab runtime
+   *  uses during normal init — the reference duration was pinned at
+   *  construction and should not silently shift with every step-rate
+   *  change.
+   *
+   *  Three-arg form (authoritative, with `dampingRefDurationFs`): used
+   *  by restore paths that need to reinstate a previously-captured
+   *  damping calibration (Watch → Lab handoff, future timeline
+   *  restart). Without this overload, the engine's
+   *  `_recomputeDampingFactor` computes the decay rate against the
+   *  boot-default duration rather than the handed-off one — correct
+   *  TS shape, wrong physics. See `normalize-watch-seed.ts` for the
+   *  producer side.
+   */
+  setTimeConfig(dtFs: number, dampingRefSteps: number, dampingRefDurationFs?: number) {
     this.dtFs = dtFs;
     this.dampingRefSteps = dampingRefSteps;
-    // dampingRefDurationFs stays at boot value — intentionally not recalculated
+    if (dampingRefDurationFs !== undefined && Number.isFinite(dampingRefDurationFs) && dampingRefDurationFs > 0) {
+      this.dampingRefDurationFs = dampingRefDurationFs;
+    }
+    // else: dampingRefDurationFs stays at its current value (boot default
+    // OR a previously-restored authoritative value — never silently
+    // recomputed from dt * refSteps, which would break step-rate-
+    // invariant decay).
     this._recomputeDampingFactor();
   }
 

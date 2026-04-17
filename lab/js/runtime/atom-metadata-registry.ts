@@ -18,8 +18,23 @@ export interface AtomSource {
   label: string;
 }
 
+/** Opaque snapshot handle — plain array of entries so the restore path
+ *  rebuilds the Map deterministically without holding a reference to
+ *  the live internal state. See `snapshot()` / `restore()`. */
+export type AtomMetadataSnapshot = readonly AtomMetadataEntry[];
+
 export interface AtomMetadataRegistry {
-  /** Register metadata for newly appended atoms. */
+  /** Register metadata for newly appended atoms.
+   *
+   *  NOTE: the optional `source` argument is accepted for future use
+   *  but is NOT persisted in the registry's state today. The snapshot /
+   *  restore cycle round-trips only `{id, element}` per atom, so
+   *  rollback cannot restore source attribution that was never
+   *  captured. If a future feature needs rollback-safe source tags,
+   *  extend `AtomMetadataEntry` with a `source` field and update
+   *  `snapshot()` / `restore()` together — do NOT add a parallel
+   *  store that skips the snapshot path. Documented explicitly so
+   *  the silent drop isn't mistaken for an oversight. */
   registerAppendedAtoms(
     ids: number[],
     atoms: { element: string }[],
@@ -27,6 +42,15 @@ export interface AtomMetadataRegistry {
   ): void;
   /** Return the full atom table for export (all atoms ever registered). */
   getAtomTable(): AtomMetadataEntry[];
+  /** Capture a deep copy of the registry's current state. Used by the
+   *  Watch → Lab hydrate transaction (§7.1) to support rollback: the
+   *  transaction calls `snapshot()` before destructive commits, and
+   *  `restore(snap)` on any mid-transaction failure. Pure clone of the
+   *  `id → {id, element}` map — no references into live state. */
+  snapshot(): AtomMetadataSnapshot;
+  /** Atomically replace the registry's state with a prior snapshot.
+   *  Discards any state accumulated since `snapshot()` was called. */
+  restore(snapshot: AtomMetadataSnapshot): void;
   /** Reset all state (new scene / teardown). */
   reset(): void;
 }
@@ -50,6 +74,26 @@ export function createAtomMetadataRegistry(): AtomMetadataRegistry {
 
     getAtomTable(): AtomMetadataEntry[] {
       return Array.from(_entries.values()).sort((a, b) => a.id - b.id);
+    },
+
+    snapshot(): AtomMetadataSnapshot {
+      // Deep copy each entry so a later `registerAppendedAtoms` that
+      // writes `_entries.set(ids[i], { id, element })` cannot mutate
+      // the snapshotted objects. Order is irrelevant to restore since
+      // it rebuilds the Map keyed by id.
+      const out: AtomMetadataEntry[] = new Array(_entries.size);
+      let i = 0;
+      for (const entry of _entries.values()) {
+        out[i++] = { id: entry.id, element: entry.element };
+      }
+      return out;
+    },
+
+    restore(snapshot: AtomMetadataSnapshot): void {
+      _entries.clear();
+      for (const entry of snapshot) {
+        _entries.set(entry.id, { id: entry.id, element: entry.element });
+      }
     },
 
     reset(): void {

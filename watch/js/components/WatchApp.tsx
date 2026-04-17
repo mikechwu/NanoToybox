@@ -14,6 +14,8 @@ import { WatchCinematicCameraToggle } from './WatchCinematicCameraToggle';
 import { WatchDock } from './WatchDock';
 import { WatchTimeline } from './WatchTimeline';
 import { WatchSettingsSheet } from './WatchSettingsSheet';
+import { WatchLabEntryControl } from './WatchLabEntryControl';
+import { WatchLabHint } from './WatchLabHint';
 
 interface WatchAppProps {
   controller: WatchController;
@@ -110,8 +112,19 @@ export function WatchApp({ controller }: WatchAppProps) {
     };
   }, [snapshot.error, snapshot.errorGeneration]);
 
+  // Rev 6 Ax11 / pre-PR 2 audit: the error surface MUST be a live
+  // region so screen readers announce §10 failure toasts (private-
+  // mode, quota, stale-handoff, hydrate-failure). `role="status"` +
+  // `aria-live="polite"` follows the plan's §9.6 contract.
+  // `aria-atomic="true"` makes the whole message read as one unit
+  // (the banner copy is short and self-contained).
   const errorBanner = visibleError ? (
-    <div className={`watch-error-banner${errorFading ? ' watch-error-banner--fading' : ''}`}>
+    <div
+      className={`watch-error-banner${errorFading ? ' watch-error-banner--fading' : ''}`}
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
       <div className="review-status-msg review-status-msg--error">{visibleError}</div>
     </div>
   ) : null;
@@ -176,12 +189,35 @@ export function WatchApp({ controller }: WatchAppProps) {
                   onOpenShareCode={handleOpenShareCode}
                 />
               </div>
-              <WatchCinematicCameraToggle
-                enabled={snapshot.cinematicCameraEnabled}
-                active={snapshot.cinematicCameraActive}
-                status={snapshot.cinematicCameraStatus}
-                onToggle={() => controller.setCinematicCameraEnabled(!snapshot.cinematicCameraEnabled)}
-              />
+              <div className="watch-toolbar__right">
+                <div className="watch-lab-entry-anchor">
+                  <WatchLabEntryControl
+                    enabled={snapshot.labEntryEnabled}
+                    currentFrameAvailable={snapshot.labCurrentFrameAvailable}
+                    plainLabHref={snapshot.labHref}
+                    currentFrameLabHref={snapshot.labCurrentFrameHref}
+                    // No onOpenPlainLab — the anchor's target="_blank"
+                    // is the sole navigation owner for the primary
+                    // path (see WatchLabEntryControlProps docstring).
+                    // Wiring a controller nav call here would cause a
+                    // duplicate-tab regression. Add only non-
+                    // navigating side effects if ever needed.
+                    onOpenCurrentFrameLab={() => controller.openLabFromCurrentFrame()}
+                    onCaretOpen={() => controller.buildCurrentFrameLabHref()}
+                    onCaretClose={() => controller.notifyLabMenuClosed()}
+                  />
+                  <WatchLabHint
+                    hint={snapshot.labHint}
+                    onDismiss={(id) => controller.dismissLabHint(id)}
+                  />
+                </div>
+                <WatchCinematicCameraToggle
+                  enabled={snapshot.cinematicCameraEnabled}
+                  active={snapshot.cinematicCameraActive}
+                  status={snapshot.cinematicCameraStatus}
+                  onToggle={() => controller.setCinematicCameraEnabled(!snapshot.cinematicCameraEnabled)}
+                />
+              </div>
             </div>
           )}
           <WatchTimeline

@@ -75,4 +75,49 @@ describe('PhysicsEngine checkpoint/restore', () => {
     // Second atom at offset: (11.5, 20, 30)
     expect(cp.pos[3]).toBeCloseTo(11.5, 5);
   });
+
+  it('init with empty atoms does not null-deref neighbor-list workspace (pending-handoff boot path)', () => {
+    // When a Watch→Lab handoff is pending, the Lab boot DEFERS the
+    // default C60 load so we don't render a C60 flash before the
+    // hydrate replaces it with the seed. That means
+    // `physics.init([], [])` is called on a fresh engine — both
+    // `this.n` and `this._maxN` are 0, so the old
+    // `if (this.n !== this._maxN)` guard skipped workspace
+    // allocation. `buildNeighborList()`'s `_nlCounts.fill(0)` then
+    // null-dereferenced, failing the worker init ack and triggering
+    // fallback recovery. Regression lock: init with empty must not
+    // throw AND must leave the workspace non-null.
+    const engine = new PhysicsEngine();
+    expect(() => engine.init([], [])).not.toThrow();
+    expect(engine.n).toBe(0);
+    // Subsequent appendMolecule on the same engine must also work
+    // (the hydrate path does clearScene + appendMolecule against a
+    // 0-atom engine).
+    expect(() => engine.appendMolecule(DIMER_ATOMS, DIMER_BONDS, [0, 0, 0])).not.toThrow();
+    expect(engine.n).toBe(2);
+  });
+
+  it('restoreCheckpoint after clearScene allocates neighbor-list workspaces (Watch→Lab hydrate path)', () => {
+    // This is the exact sequence `hydrateFromWatchSeed` runs: clearScene
+    // nulls the `_nl*` / `_maxN` workspaces, then restoreCheckpoint
+    // commits the Watch seed. Without the workspace reallocation inside
+    // restoreCheckpoint, `computeForces` → `buildNeighborList` would
+    // null-dereference `_nlCounts.fill(0)`.
+    const engine = new PhysicsEngine();
+    engine.appendMolecule(DIMER_ATOMS, DIMER_BONDS, [0, 0, 0]);
+    // Now run the clearScene + restoreCheckpoint sequence from hydrate.
+    engine.clearScene();
+    expect(engine.n).toBe(0);
+    // Build a checkpoint that matches the Watch seed shape.
+    const seedCheckpoint = {
+      n: 2,
+      pos: new Float64Array([0, 0, 0, 1.4, 0, 0]),
+      vel: new Float64Array([0, 0, 0, 0, 0, 0]),
+      bonds: [[0, 1, 1.4]] as [number, number, number][],
+    };
+    expect(() => engine.restoreCheckpoint(seedCheckpoint)).not.toThrow();
+    expect(engine.n).toBe(2);
+    // And a subsequent step (computeForces path) must also not throw.
+    expect(() => engine.stepOnce?.() ?? engine.computeForces()).not.toThrow();
+  });
 });

@@ -59,6 +59,19 @@ export function createReconstructedTopologySource(
       return _cachedResult;
     },
 
+    /**
+     * Cheap frame-id probe. Reads ONLY the dense frame's `frameId` field —
+     * never materializes bonds. This is what `canBuildWatchLabSceneSeed`
+     * calls on the hot path so a UI availability check does not trigger
+     * `buildBondTopologyFromPositions` on a cache miss.
+     */
+    getTopologyFrameIdAtTime(timePs: number): number | null {
+      if (!_frames || _frames.length === 0) return null;
+      const idx = bsearchIndexAtOrBefore(_frames, timePs);
+      if (idx < 0) return null;
+      return _frames[idx].frameId;
+    },
+
     reset() {
       _frames = null;
       _elementById = null;

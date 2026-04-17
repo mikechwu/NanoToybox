@@ -991,6 +991,112 @@ Uses a 5-frame two-atom fixture (`tests/e2e/fixtures/watch-two-atom.json`) and `
 |------|------:|-------------------|
 | `tests/helpers/watch-renderer-stub.ts` | — | Shared WatchRenderer stub (jsdom + Node-safe). Used by service, integration, and controller tests. |
 
+### Watch→Lab Handoff Surface
+
+The Watch→Lab entry is a read-only-review-to-editable-scene handoff: Watch produces a seed payload, the URL carries an opaque entry token, and Lab boot consumes-or-falls-back. The test surface covers four layers — transport (write + read + URL composer + discovery), seed shape (normalize + build predicate + builder), Lab-side hydrate (transactional apply + rollback reasons + adapter wrapper), and UI surfaces (entry split-button + provenance pill + toast copy). Regression-lock invariants live in the E2E spec because the only reliable way to catch them is against the real Watch→Lab boot sequence.
+
+#### Handoff Transport (`tests/unit/`)
+
+| File | Purpose |
+|------|---------|
+| `watch-lab-handoff.test.ts` | Writer + consumer roundtrip; `WatchHandoffWriteError` classification (storage-unavailable vs. quota-exceeded); read-path `SecurityError` coverage; retry reclassification across the same key; Firefox `NS_ERROR_DOM_QUOTA_REACHED` detection (the Firefox DOMException name that Chromium's `QuotaExceededError` check misses). |
+| `watch-lab-href.test.ts` | URL composer: `?from=watch&entry=…` token encoding invariants. |
+| `watch-lab-discovery.test.ts` | Milestone triggers for the Watch-side "Open in Lab" discoverability pulse. |
+
+#### Seed Shape (`tests/unit/`)
+
+| File | Purpose |
+|------|---------|
+| `watch-lab-normalize-seed.test.ts` | `normalizeWatchSeed` shape invariants. Pins the collapsed payload view: `localStructureAtoms`, `velocities`, `bonds`, `boundary`, `workerConfig`, `provenance`, `n`. This is the single source of truth for what a seed is — new fields must be added here first. |
+| `watch-lab-seed-build.test.ts` | `canBuildWatchLabSceneSeed` predicate + seed builder coverage (what Watch states are eligible to produce a seed, and what the builder emits for each). |
+
+#### Entry Control UI (`tests/unit/`)
+
+| File | Purpose |
+|------|---------|
+| `watch-lab-entry-control.test.tsx` | Split-button React test for the "Open in Lab" control. Enforces the click-ownership contract (plain anchor vs. menuitem paths do not double-fire). |
+| `watch-lab-entry-new-tab.test.tsx` | `target=_blank` behavior on both surfaces. |
+| `watch-lab-entry-gate.test.ts` | P1 seed-identity cache invalidation (cache must flush when the underlying seed changes) + P2 fail-closed click (click path refuses to navigate when the seed build fails rather than leaking a stale href). |
+| `watch-lab-entry-href-cache.test.ts` | Cache + debounce contract: href is memoized per seed identity and recomputation is debounced across rapid state changes. |
+| `watch-lab-entry-write-failure.test.ts` | Storage-unavailable vs. quota-exceeded copy surfacing — the two `WatchHandoffWriteError` classes must render distinct user-facing strings. |
+| `watch-lab-toast-aria.test.tsx` | ARIA contract on both toast surfaces (live-region + role). |
+
+#### Playback + Document Helpers (`tests/unit/`)
+
+| File | Purpose |
+|------|---------|
+| `watch-lab-playback-helpers.test.ts` | Playback model helpers used by the seed builder to select the frame-at-time slice. |
+| `watch-lab-document-service.test.ts` | `shareCode` metadata plumbing through the document service (the seed preserves the originating capsule's share-code for the Lab provenance pill). |
+
+#### Lab-Side Hydrate (`tests/unit/`)
+
+| File | Purpose |
+|------|---------|
+| `lab-scene-hydrate-from-seed.test.ts` | Transactional hydrate against a seeded scene: success path plus **every rollback reason** (schema mismatch, worker-not-active, renderer-append failure, post-append invariant failure). Includes the worker not-active fail-fast rollback — if the worker is not ready when hydrate runs, the transaction must roll back cleanly without leaving a half-applied scene. |
+| `scene-runtime-hydrate-wrapper.test.ts` | Adapter layer that wraps the hydrate call for scene-runtime consumers. Covers deps missing, worker rejection, hydration-lock set/clear semantics, and the pause-sync-await contract (pause must be awaited before the mutate step; otherwise a pending physics tick can race the hydrate). |
+
+#### Provenance Pill + Registry Snapshots (`tests/unit/`)
+
+| File | Purpose |
+|------|---------|
+| `watch-handoff-provenance-pill.test.tsx` | The "From Watch · frame N · T.TT ps" pill rendered after a successful Lab hydrate: 4 copy variants across capsule / full-history / anonymous / shared sources; **1-based frame ordinal** (UI never shows frame 0); auto-dismiss timing; session-storage suppression (once dismissed, does not re-appear for the session); ARIA live-region; non-disclosure invariant (never leaks internal seed fields into the rendered string). |
+| `atom-metadata-registry-snapshot.test.ts` | Atom-metadata registry snapshot/restore roundtrip (used to re-seat authored atom metadata across a hydrate). |
+| `timeline-atom-identity-snapshot.test.ts` | Timeline atom-identity snapshot/restore roundtrip (stable IDs survive the seed → hydrate path). |
+
+#### Lab Entry Contrast (`tests/unit/`)
+
+| File | Purpose |
+|------|---------|
+| `lab-entry-contrast.test.ts` | §9.1.1 contrast table. Re-derives WCAG 2.1 contrast ratios from the live `THEMES` object under both light and dark themes and fails CI on any target regression. This is an algorithmic re-derivation, not a snapshot — palette edits that drop contrast below the §9.1.1 target will surface here rather than needing a manual audit. |
+
+#### Hydrate-Related Regression Guards (extensions to existing files)
+
+| File | What changed |
+|------|--------------|
+| `frame-runtime.test.ts` | Now includes a hydration-lock gating assertion: while the hydration lock is set, the per-frame pipeline must not advance physics (the lock is the atomic boundary for a seed-hydrate transaction). |
+| `physics-checkpoint.test.ts` | New tests for `clearScene + restoreCheckpoint` workspace allocation (ensures workspace is re-provisioned, not reused with stale sizes) and for empty-atoms init not null-dereffing (previously crashed on zero-atom restore). |
+| `physics-timing.test.ts` | Three-arg `setTimeConfig` damping-window fidelity: the damping window must be preserved exactly when the third argument is passed through the seed's `workerConfig`. |
+| `worker-bridge-direct.test.ts` | `latestSnapshot` cleared on `restoreState` start, and cleared again on mutation acknowledgement when `sceneVersion` advances. Prevents a hydrated scene from inheriting a stale pre-hydrate snapshot. |
+
+#### Watch→Lab Entry E2E (`tests/e2e/watch-lab-entry.spec.ts`)
+
+| File | Tests | What it validates |
+|------|------:|-------------------|
+| `watch-lab-entry.spec.ts` | 11 | Full Watch→Lab entry contract, including the two regression-lock invariants documented below. |
+
+Fixtures: `tests/e2e/fixtures/watch-two-atom.json` (full-history) and `tests/e2e/fixtures/watch-capsule-bug-repro.json` (capsule). The capsule fixture is the creative-seed variant that reproduced the original hydrate regression and is retained specifically to guard against re-introduction.
+
+Test hooks (all gated on `?e2e=1`): `_watchOpenFile(text, name)` and `_watchScrub(timePs)`.
+
+Covered cases:
+
+1. **Plain "Open in Lab" anchor targets `/lab/`** — baseline anchor wiring.
+2. **Stale handoff → toast + URL scrubbed + ARIA** — stale `?entry=…` token produces the recovery toast, the URL is scrubbed so reload does not re-trigger it, and the toast has correct ARIA.
+3. **Missing-entry → distinct "no longer available" toast** — the missing-entry path must use a different string than the stale path (users can tell them apart).
+4. **Malformed handoff → silent (console.warn only)** — garbage tokens do not pop a toast; they log and fall through to a clean default boot.
+5. **"From this frame" menuitem enabled as `<a>` for multi-frame fixture** — the menuitem is a real anchor (not a button) so middle-click / cmd-click produce the expected OS behavior.
+6. **Happy path full-history** — load → scrub → click → exact pill copy `"From Watch · frame N · T.TT ps"`. The pill string is asserted literally.
+7. **Pending-handoff stale-token fallback** — when the token is stale at boot, the fallback path loads the default scene (user is never stranded on a blank canvas).
+8. **Pending-handoff boot NEVER renders default C60 (no flash)** — regression-lock. Polls `atomCount` every 50ms through boot and asserts no sample ever equals 60 (the default-C60 size). Catches any transient render of the default scene between token consume and seed apply; even a single flashed frame of the wrong scene would fail this.
+9. **Worker init race regression** — regression-lock. After the provenance pill appears, polls `atomCount` for 2s and asserts it stays at the seed count. Catches the class of bug where a late worker init message reverts the hydrated scene back to the default.
+10. **Happy path capsule (creative-seed variant)** — capsule bug-repro fixture; scene must stay stable for 500ms post-pill (no late mutation).
+11. **No `?from=watch` → silent normal boot** — the Lab entry surface must be inert when the query flag is absent.
+
+##### Regression-Lock Invariants (prose)
+
+Two tests in the spec above exist specifically as regression locks — they do not exercise a feature, they guard against a class of bug that has historically been easy to re-introduce. Both are written as polling invariants because the bug-class is a transient visible state that a single-shot assertion would miss.
+
+- **"Pending-handoff boot: default C60 is NEVER rendered."** Before the seed is applied, Lab boot must not render the default scene at all — not even for one frame. The test polls the window's atom-count hook every 50ms across the full boot window and fails if any sample equals 60 (the default-C60 atom count). This is strictly stronger than asserting the final state: it catches any intermediate flash of the default scene between token consume and seed apply. Any change that re-introduces a "render default, then swap" boot path will fail this.
+- **"Worker init race: hydrated scene does not revert."** After the provenance pill has appeared (signaling hydrate completed), the test polls `atomCount` for 2 full seconds and asserts it never diverges from the seed count. This catches the specific class of bug where a worker-init completion message arrives after hydrate and naively resets the scene — the test fails the moment the atom count drifts back toward the default.
+
+##### E2E Conventions Reinforced by This Spec
+
+The Watch→Lab spec is representative of the current E2E pattern and contributor-facing examples should reflect these conventions:
+
+- **Console capture on failure** — specs attach a `page.on('console', …)` collector so that when a polling invariant trips, the test failure message includes the browser console transcript. Without this, "atom count was 60 at t=250ms" is uninvestigable.
+- **Sample-trace error messages** — polling assertions (as in tests 8 and 9) format the failure message with the full sample trace, not just the offending sample. The trace makes it obvious whether the bug is a single-frame flash, a steady-state regression, or a drift-over-time race.
+- **Polling invariants for transient states** — when the bug class is a transient wrong state (not a final-state mismatch), the test must poll across the window in which the wrong state could appear. A single `expect(atomCount).toBe(n)` after `waitForSelector(pill)` would pass even while the bug is present.
+
 ## Frontend Smoke Test
 
 Manual verification checklist for the interactive page (`lab/index.html`). Run after any changes to `lab/` code.

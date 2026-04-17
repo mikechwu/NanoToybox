@@ -613,6 +613,83 @@ canvas { display: block; touch-action: none; }
 .react-info .title { display: none; }
 .react-info .status-text { color: var(--color-text-secondary); font-size: var(--font-xs); }
 .react-info .reconciliation-text { color: var(--color-accent-text); font-size: var(--font-xs); }
+
+/* ── Watch→Lab arrival pill (plan §7.2) ─────────────────────────────
+   Lower-left quadrant, well clear of the dock (bottom) and any
+   side panels. Entrance: translateX(-12px) + fade, 180 ms in; exit
+   handled by unmount (React removes the node). Reduced-motion
+   degrades to opacity-only per §9.6.
+   ----------------------------------------------------------------- */
+.watch-handoff-provenance-pill {
+  position: absolute;
+  left: 12px;
+  bottom: 88px; /* clears the dock row (~60px) + safe inset */
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(calc(100vw - 24px), 520px);
+  padding: 6px 6px 6px 12px;
+  background: var(--panel-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  /* Ink uses `--color-text` (primary) for WCAG 1.4.3 AA: muted text
+   * over the translucent panel bg drops below 4.5:1 on both themes
+   * (§9.1.1 contrast test). Primary ink comfortably clears the
+   * threshold under both themes. */
+  color: var(--color-text);
+  font-size: var(--font-xs);
+  line-height: 1.4;
+  animation: watch-handoff-provenance-pill__in 180ms ease-out both;
+}
+.watch-handoff-provenance-pill__copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.watch-handoff-provenance-pill__close {
+  flex: 0 0 auto;
+  /* 44×44 hit area via padding around a 16px glyph (§9.6 touch row). */
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--color-text);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: 16px;
+  line-height: 1;
+}
+.watch-handoff-provenance-pill__close:hover {
+  color: var(--color-accent-text);
+}
+.watch-handoff-provenance-pill__close:focus-visible {
+  outline: 2px solid var(--color-accent-text);
+  outline-offset: -2px;
+}
+@keyframes watch-handoff-provenance-pill__in {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .watch-handoff-provenance-pill {
+    animation: watch-handoff-provenance-pill__in--reduced 60ms ease-out both;
+  }
+  @keyframes watch-handoff-provenance-pill__in--reduced {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+}
+[data-ui-effects="reduced"] .watch-handoff-provenance-pill {
+  animation: none;
+}
 /* Top-right flex container — holds AccountControl + FPSDisplay.
  * One positioning ancestor replaces the previous two independently
  * absolutely-positioned surfaces. Children align to the top so multi-line

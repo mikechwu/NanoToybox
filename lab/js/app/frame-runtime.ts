@@ -119,6 +119,15 @@ export interface FrameRuntimeSurface {
   setLastReconciledSnapshotVersion(v: number): void;
   appRunning: boolean;
   getStepTiming(): { stepWallMs: number; baseStepsPerSecond: number };
+  /** Hydration lock (owned by main.ts, written by the Watch→Lab
+   *  hydrate transaction). When true, this frame MUST skip snapshot
+   *  reconciliation AND local physics stepping — any mutation would
+   *  clobber state the hydrate is mid-way through committing, and a
+   *  stale pre-restoreState worker snapshot would surface the
+   *  pre-hydrate scene with the post-hydrate pill. Render still runs
+   *  so the pill / provenance surface can appear during the brief
+   *  transaction window. */
+  isHydrating(): boolean;
 }
 
 /**
@@ -150,8 +159,13 @@ export function executeFrame(timestamp: number, s: FrameRuntimeSurface): void {
     let substepsThisFrame = 0;
     let stepsReconciled = 0;
 
+    // Hydration-lock snapshot — read once per frame so the flag
+    // transitioning mid-frame cannot leave us half-locked. Gates every
+    // block that would read or write physics / snapshot state.
+    const hydrating = s.isHydrating();
+
     // ── 1. Physics stepping ──
-    const shouldStep = !s.session.playback.paused && !(s.placement && s.placement.active) && s.physics.n > 0;
+    const shouldStep = !s.session.playback.paused && !(s.placement && s.placement.active) && s.physics.n > 0 && !hydrating;
     if (shouldStep) {
       const pb = s.session.playback;
 
@@ -260,7 +274,15 @@ export function executeFrame(timestamp: number, s: FrameRuntimeSurface): void {
     // ── 2-5. Position sync + feedback + highlights ──
     const inReview = s.timelineSub?.isInReview();
     const updateStart = performance.now();
-    if (!inReview) {
+    // Hydration lock skips the whole reconcile-or-local-step block. A
+    // stale pre-restoreState worker snapshot arriving during the
+    // transaction would otherwise overwrite `physics.n` / `physics.pos`
+    // via the reconciler (see `snapshot-reconciler.ts:45`). The
+    // transaction itself is the authoritative writer during its
+    // window; we must not race it. `setLastReconciledSnapshotVersion`
+    // stays untouched so the first post-unlock frame can process the
+    // fresh (post-restoreState) snapshot normally.
+    if (!inReview && !hydrating) {
       if (s.workerRuntime && s.workerRuntime.isActive()) {
         const snapshot = s.workerRuntime.getLatestSnapshot();
         if (snapshot && snapshot.n > 0 && s.snapshotReconciler) {

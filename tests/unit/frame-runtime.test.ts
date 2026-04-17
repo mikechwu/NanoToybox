@@ -67,6 +67,7 @@ function makeStub(overrides: Partial<FrameRuntimeSurface> = {}): FrameRuntimeSur
     setLastReconciledSnapshotVersion: vi.fn(),
     appRunning: true,
     getStepTiming: vi.fn(() => ({ stepWallMs: 1, baseStepsPerSecond: 1000 })),
+    isHydrating: () => false,
     ...overrides,
   };
 }
@@ -123,6 +124,46 @@ describe('frame-runtime: executeFrame', () => {
     const recordEntry = order.find((e: any) => Array.isArray(e) && e[0] === 'record');
     expect(recordEntry).toBeTruthy();
     expect(recordEntry[1]).toBe(42); // stepsCompleted from snapshot
+  });
+
+  it('hydration lock: snapshot reconciler is NOT applied and local physics is NOT stepped while `isHydrating()` returns true', () => {
+    // This regression-locks the fix for the 2026-04-16 bug where a
+    // stale pre-restoreState worker snapshot arrived during the
+    // hydrate transaction's `await worker.restoreState(...)` and
+    // clobbered physics via the reconciler, surfacing the pre-hydrate
+    // default scene with the post-hydrate provenance pill.
+    const snapshot = { n: 60, snapshotVersion: 7, stepsCompleted: 1, pos: new Float64Array(180), vel: new Float64Array(180) };
+    const stepOnceSpy = vi.fn();
+    const applySpy = vi.fn();
+    const s = makeStub({
+      physics: {
+        n: 10, pos: new Float64Array(30),
+        stepOnce: stepOnceSpy, applySafetyControls: vi.fn(),
+        updateBondList: vi.fn(), rebuildComponents: vi.fn(),
+        componentId: null, components: null,
+      },
+      session: { playback: { paused: false, speedMode: 'auto', selectedSpeed: 1, maxSpeed: 10, effectiveSpeed: 1 }, interactionMode: 'atom' },
+      workerRuntime: {
+        isActive: vi.fn(() => true),
+        canSendRequest: vi.fn(() => true),
+        sendRequestFrame: vi.fn(),
+        sendInteraction: vi.fn(),
+        getLatestSnapshot: vi.fn(() => snapshot),
+        checkStalled: vi.fn(),
+        isStalled: vi.fn(() => false),
+        getSnapshotAge: vi.fn(() => 0),
+      },
+      snapshotReconciler: { apply: applySpy },
+      timelineSub: { isInReview: vi.fn(() => false), recordAfterReconciliation: vi.fn() },
+      isHydrating: () => true,
+    });
+
+    executeFrame(1000, s);
+
+    // The hydrate transaction is the authoritative writer during its
+    // window. Any mutation here would race the commit.
+    expect(applySpy).not.toHaveBeenCalled();
+    expect(stepOnceSpy).not.toHaveBeenCalled();
   });
 
   it('drag refresh runs only when active and not in review', () => {

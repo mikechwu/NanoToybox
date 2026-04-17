@@ -53,6 +53,12 @@ function makeSnapshot(overrides: Partial<WatchControllerSnapshot> = {}): WatchCo
     cinematicCameraEnabled: true,
     cinematicCameraActive: false,
     cinematicCameraStatus: 'waiting_major_clusters' as const,
+    // Lab entry (rev 5+/6/7) — mirror controller defaults in empty state.
+    labEntryEnabled: false,
+    labHint: null,
+    labHref: '/lab/',
+    labCurrentFrameAvailable: false,
+    labCurrentFrameHref: null,
     ...overrides,
   };
 }
@@ -100,6 +106,14 @@ function createMockController(initialSnapshot?: Partial<WatchControllerSnapshot>
     getRegisteredInterpolationMethods: vi.fn(() => []),
     getInterpolationRuntime: vi.fn(() => null),
     openSharedCapsule: vi.fn(async () => {}),
+    // Lab entry (rev 5+/6/7)
+    openLab: vi.fn(),
+    openLabFromCurrentFrame: vi.fn(),
+    buildLabHref: vi.fn(() => '/lab/'),
+    buildCurrentFrameLabHref: vi.fn(() => null),
+    notifyLabMenuClosed: vi.fn(),
+    dismissLabHint: vi.fn(),
+    notifyLabGestureEnd: vi.fn(),
     dispose: vi.fn(),
     // Test helper
     setSnapshot(overrides: Partial<WatchControllerSnapshot>) {
@@ -144,6 +158,22 @@ describe('WatchApp React integration', () => {
     const banner = container.querySelector('.review-status-msg--error');
     expect(banner).not.toBeNull();
     expect(banner!.textContent).toBe('Bad file');
+  });
+
+  it('error banner carries rev 6 Ax11 ARIA contract (role=status, aria-live=polite, aria-atomic)', () => {
+    // Pre-PR 2 audit follow-up: the static-HTML test in
+    // watch-lab-toast-aria.test.tsx only locks the ARIA attribute set
+    // as a copy of production JSX. This integration-level assertion
+    // renders the REAL WatchApp component and reads the attributes
+    // off the produced DOM, so a future structural drift (added
+    // wrapper, moved attributes, renamed class) is caught here.
+    const ctrl = createMockController({ error: 'Bad file' });
+    const { container } = render(<WatchApp controller={ctrl} />);
+    const banner = container.querySelector('.watch-error-banner') as HTMLElement | null;
+    expect(banner).not.toBeNull();
+    expect(banner!.getAttribute('role')).toBe('status');
+    expect(banner!.getAttribute('aria-live')).toBe('polite');
+    expect(banner!.getAttribute('aria-atomic')).toBe('true');
   });
 
   // ── Empty-state UX + open panel ──

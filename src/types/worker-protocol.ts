@@ -18,6 +18,21 @@ export interface PhysicsConfig {
   /** Damping reference batch size — authoritative engine timing input.
    *  Used only for damping normalization, not for frame-rate control. */
   dampingReferenceSteps: number
+  /**
+   * Damping reference duration in femtoseconds — the physical time
+   * window over which the `damping` parameter is defined (fractional
+   * velocity loss per `dampingRefDurationFs`). Required so handoff /
+   * restart flows can restore the damping calibration authoritatively;
+   * without this field, `setTimeConfig(dt, refSteps)` alone is
+   * insufficient because the engine's `_recomputeDampingFactor` uses
+   * `dampingRefDurationFs` (not `dt * refSteps`) as the decay window.
+   *
+   * When omitted by a pre-existing call site, the engine preserves its
+   * current `dampingRefDurationFs` (boot default). New call sites that
+   * carry authoritative timing (like the Watch → Lab handoff) MUST
+   * populate this field to preserve semantic fidelity.
+   */
+  dampingRefDurationFs?: number
   damping: number
   kDrag: number
   kRotate: number

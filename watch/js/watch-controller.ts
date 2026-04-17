@@ -22,7 +22,59 @@
  * renderer.updateReviewFrame() — enforced by code review + a meta-test.
  */
 
-import { createWatchDocumentService, type DocumentMetadata } from './watch-document-service';
+import { createWatchDocumentService, deriveDocumentKey, type DocumentMetadata } from './watch-document-service';
+import {
+  createWatchLabDiscoveryRuntime,
+  type WatchLabDiscoveryRuntime,
+  type WatchLabHintModel,
+} from './watch-lab-discovery';
+import { buildLabHref } from './watch-lab-href';
+import { buildWatchLabSceneSeed, canBuildWatchLabSceneSeed } from './watch-lab-seed';
+import {
+  writeWatchToLabHandoff,
+  removeWatchToLabHandoff,
+  WatchHandoffWriteError,
+} from './watch-lab-handoff';
+
+/**
+ * `From this frame` UI path — gate flipped in 2026-04-16, after the
+ * release criteria below were met end-to-end. Feature is on by default
+ * for all Watch users; no per-user flag or URL override remains.
+ *
+ * Release criteria that were satisfied before the flip:
+ *   - Watch transport + seed builder + URL composition.
+ *   - `lab/js/runtime/hydrate-from-watch-seed.ts` transactional module,
+ *     with a rollback across five authorities (main physics, worker,
+ *     renderer, registry/tracker, sceneState) on any mid-transaction
+ *     throw.
+ *   - `AtomMetadataRegistry.snapshot/restore` +
+ *     `TimelineAtomIdentityTracker.snapshot/restore` +
+ *     `cloneSceneState` helpers.
+ *   - `PhysicsConfig.dampingRefDurationFs` + `physics.setTimeConfig`
+ *     three-arg form (damping-window fidelity across the handoff).
+ *   - `SceneRuntime.hydrateFromWatchSeed()` wrapper with classified
+ *     failure→copy mapping.
+ *   - Lab boot invokes `consumeWatchToLabHandoffFromLocation` + hydrate.
+ *   - §10 failure surfacing: stale + missing-entry are user-visible
+ *     with distinct copy; tampering/schema-drift stays silent.
+ *   - Watch-side writer failure-copy (`WatchHandoffWriteError` with
+ *     `kind='storage-unavailable' | 'quota-exceeded'`) classified
+ *     uniformly across every storage-touch (read-path iteration,
+ *     initial setItem, retry setItem).
+ *   - `WatchHandoffProvenancePill` (§7.2) with all four §9.5 copy
+ *     variants, 1-based ordinal frame rendering, 8000 ms auto-
+ *     dismiss, sessionStorage suppression, ARIA `role=status` /
+ *     `aria-live=polite`, and the §7.2 non-disclosure rule (no raw
+ *     fileName / shareCode / token in DOM).
+ *   - `sourceMeta.frameId` schema extension with back-compat
+ *     deserialize (legacy tokens normalize to `frameId: null`).
+ *   - §9.1.1 contrast table measured + verified by
+ *     `tests/unit/lab-entry-contrast.test.ts`.
+ *   - Playwright coverage: stale, missing-entry, malformed-silent,
+ *     enabled-menuitem, happy-path user journey (load fixture →
+ *     caret → click "From this frame" → Lab hydrates seeded scene
+ *     + pill shows exact variant copy).
+ */
 import { createWatchPlaybackModel, type WatchPlaybackModel } from './watch-playback-model';
 import { createWatchBondedGroups, type WatchBondedGroups } from './watch-bonded-groups';
 import { createWatchViewService, type WatchViewService } from './watch-view-service';
@@ -168,6 +220,28 @@ export interface WatchControllerSnapshot {
    *  presentation logic must not re-derive status from individual
    *  booleans. */
   cinematicCameraStatus: SnapshotCinematicCameraStatus;
+  // ── Lab entry (rev 5+/6) ──
+  /** True iff a file is loaded AND its metadata is coherent. Source-of-
+   *  truth for the split-button's `enabled` prop. */
+  labEntryEnabled: boolean;
+  /** Controller-owned public projection of the active discovery hint.
+   *  Identity invariant: every transition produces a FRESH object
+   *  (see snapshotChanged). Null when no hint should render. */
+  labHint: WatchLabHintModel | null;
+  /** Stable href for the primary `Open in Lab` anchor. Derived once from
+   *  `import.meta.env.BASE_URL`; identical across renders. */
+  labHref: string;
+  /** PR 2: true iff the current display frame can produce a valid seed
+   *  (cheap predicate via `canBuildWatchLabSceneSeed`). Probe cache is
+   *  keyed on (displayFrameKey, topologyFrameKey) tuple — recomputed
+   *  only when either key changes. */
+  labCurrentFrameAvailable: boolean;
+  /** PR 2: read-only accessor for the current-frame handoff URL. Minted
+   *  and cached by the controller when the caret menu opens (via
+   *  `buildCurrentFrameLabHref`); null when unavailable or uncached.
+   *  The snapshot NEVER mints — it only projects the cache entry so
+   *  `buildSnapshot` stays free of side effects. */
+  labCurrentFrameHref: string | null;
 }
 
 export interface WatchController {
@@ -201,6 +275,37 @@ export interface WatchController {
   getRegisteredInterpolationMethods(): readonly InterpolationMethodMetadata[];
   // ── Cinematic Camera ──
   setCinematicCameraEnabled(enabled: boolean): void;
+  // ── Lab entry (rev 5+/6) ──
+  /** Navigate to plain Lab in a NEW TAB (rev 7). Callers typically
+   *  intercept left-click on the anchor and invoke this with
+   *  preventDefault; modified / middle / right clicks follow the
+   *  anchor's `target="_blank"` naturally. */
+  openLab(): void;
+  /** Open the current-frame handoff target in a new tab. Requires
+   *  `labCurrentFrameHref` to be non-null (i.e. the caret menu has
+   *  been opened at least once for the current document+display frame
+   *  so the token + href is already cached). */
+  openLabFromCurrentFrame(): void;
+  /** Pure URL composition — safe to call during snapshot build. */
+  buildLabHref(): string;
+  /** Mints a fresh handoff token + URL for the current display frame
+   *  IFF the `(documentKey, displayFrameKey)` cache is stale. Called
+   *  from the UI when the caret dropdown opens — NOT from
+   *  `buildSnapshot()`. Returns the URL (cached or freshly minted)
+   *  or null when the current frame is not seedable / storage is
+   *  unavailable. Publishes the resulting `labCurrentFrameHref` into
+   *  the snapshot. */
+  buildCurrentFrameLabHref(): string | null;
+  /** Signal that the caret dropdown has closed. Debounces the cache
+   *  invalidation by 500 ms so a rapid close→open at the same frame
+   *  reuses the cached token instead of churning localStorage. */
+  notifyLabMenuClosed(): void;
+  /** Dismiss the active discovery hint. Optional `id` guard prevents a
+   *  late dismiss from clearing a newer hint that just fired. */
+  dismissLabHint(id?: WatchLabHintModel['id']): void;
+  /** Signal that a user gesture (pointer / scrub) just ended so the
+   *  hint runtime's post-gesture idle grace window can start. */
+  notifyLabGestureEnd(): void;
   // ── Runtime access ──
   getPlaybackModel(): WatchPlaybackModel;
   getBondedGroups(): WatchBondedGroups;
@@ -232,6 +337,11 @@ const EMPTY_SNAPSHOT: WatchControllerSnapshot = {
   cinematicCameraEnabled: false,
   cinematicCameraActive: false,
   cinematicCameraStatus: 'off' as SnapshotCinematicCameraStatus,
+  labEntryEnabled: false,
+  labHint: null,
+  labHref: buildLabHref(),
+  labCurrentFrameAvailable: false,
+  labCurrentFrameHref: null,
 };
 
 /** Derive the compatibility shim from the authoritative field. */
@@ -256,6 +366,8 @@ export function deriveCinematicCameraStatus(
 
 export function createWatchController(): WatchController {
   const documentService = createWatchDocumentService();
+  const labDiscovery: WatchLabDiscoveryRuntime = createWatchLabDiscoveryRuntime();
+  const _labHref = buildLabHref();
   const playback = createWatchPlaybackModel();
   const bondedGroups = createWatchBondedGroups();
   const viewService = createWatchViewService();
@@ -295,6 +407,143 @@ export function createWatchController(): WatchController {
   function notify() {
     for (const cb of _listeners) {
       try { cb(); } catch (e) { console.error('[watch] listener error:', e); }
+    }
+  }
+
+  /** Discovery runtime → controller snapshot bridge. Any hint-state
+   *  transition republishes the snapshot so React re-renders. */
+  const _labDiscoveryUnsubscribe = labDiscovery.subscribe(() => {
+    publishSnapshot();
+  });
+
+  // ── PR 2: labCurrentFrameAvailable probe cache + handoff href cache ──
+  /** Probe cache — avoids recomputing `canBuildWatchLabSceneSeed` on
+   *  every RAF tick. Keyed on the (displayFrameKey, topologyFrameKey)
+   *  tuple; within a single dense frame the cached boolean is reused
+   *  with zero allocations. */
+  let _probeCache: {
+    displayFrameKey: number;
+    topologyFrameKey: number;
+    result: boolean;
+  } | null = null;
+
+  function computeLabCurrentFrameAvailable(): boolean {
+    if (!playback.isLoaded()) return false;
+    const currentTimePs = playback.getCurrentTimePs();
+    const displayKey = playback.getDisplayFrameIndexAtTime(currentTimePs);
+    const topologyKey = playback.getTopologyFrameIdAtTime(currentTimePs);
+    if (displayKey == null || topologyKey == null) return false;
+    if (
+      _probeCache
+      && _probeCache.displayFrameKey === displayKey
+      && _probeCache.topologyFrameKey === topologyKey
+    ) {
+      return _probeCache.result;
+    }
+    const history = playback.getLoadedHistory();
+    if (!history) return false;
+    const result = canBuildWatchLabSceneSeed({ history, timePs: currentTimePs, playback });
+    _probeCache = { displayFrameKey: displayKey, topologyFrameKey: topologyKey, result };
+    return result;
+  }
+
+  /** Current-frame handoff href cache — minted on caret-open only.
+   *  The snapshot reads the cache via `projectCurrentFrameHref()`; it
+   *  NEVER mints, so snapshot builds remain side-effect-free.
+   *
+   *  Cache identity (rev 7 follow-up P1) — `(documentKey,
+   *  displayFrameKey, topologyFrameKey, restartFrameId)`. All four
+   *  matter to the seed builder:
+   *    - documentKey: a different file produces a different seed
+   *    - displayFrameKey: different positions
+   *    - topologyFrameKey: different bonds (especially for reconstructed
+   *      topology sources on capsule histories)
+   *    - restartFrameId: different velocities / config / boundary
+   *      (full histories only; null for capsule — still compared)
+   *  Omitting any one of these risks serving a stale seed URL that
+   *  describes a frame the user is no longer looking at. */
+  let _currentFrameHrefCache: {
+    documentKey: string;
+    displayFrameKey: number;
+    topologyFrameKey: number;
+    restartFrameId: number | null;
+    href: string;
+    token: string;
+  } | null = null;
+  let _menuCloseDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Records whether the last `buildCurrentFrameLabHref` attempt failed
+   *  because the handoff writer threw (storage-unavailable / quota). The
+   *  build path already calls `setErrorKeepingCurrentState` with
+   *  mode-specific copy, so the click path (`openLabFromCurrentFrame`)
+   *  must NOT overwrite that with the generic "couldn't prepare" copy.
+   *  Reset on every build attempt so stale state can't leak across
+   *  unrelated calls. */
+  let _lastCurrentFrameBuildWriteFailure: 'storage-unavailable' | 'quota-exceeded' | null = null;
+
+  /** Derive the full seed identity at the current playback time. Returns
+   *  null when any component is unresolvable (history not loaded,
+   *  display frame missing, etc.). Cheap — O(log n) binary searches +
+   *  a linear walk over restart frames (typically few). */
+  function deriveCurrentFrameSeedIdentity(): {
+    documentKey: string;
+    displayFrameKey: number;
+    topologyFrameKey: number;
+    restartFrameId: number | null;
+  } | null {
+    if (!playback.isLoaded()) return null;
+    const meta = documentService.getMetadata();
+    const documentKey = deriveDocumentKey(meta);
+    if (!documentKey) return null;
+    const timePs = playback.getCurrentTimePs();
+    const displayFrameKey = playback.getDisplayFrameIndexAtTime(timePs);
+    const topologyFrameKey = playback.getTopologyFrameIdAtTime(timePs);
+    if (displayFrameKey == null || topologyFrameKey == null) return null;
+    // restartFrameId is null for capsule histories — that's valid; the
+    // cache comparison below uses `===` so two null values match.
+    const restartFrameId = playback.getNearestRestartFrameIdAtTime(timePs);
+    return { documentKey, displayFrameKey, topologyFrameKey, restartFrameId };
+  }
+
+  /** Best-effort programmatic new-tab opener. The primary user path is
+   *  the anchor in `WatchLabEntryControl` (`<a target="_blank"
+   *  rel="noopener noreferrer" href={...}>`) which the browser handles
+   *  natively; this helper exists for non-anchor callers (future
+   *  keyboard shortcut, etc.).
+   *
+   *  IMPORTANT — blocker detection DOES NOT rely on the return value
+   *  of `window.open`. Per the HTML spec, `window.open` with the
+   *  `noopener` feature always returns `null` even on success — the
+   *  opener handle is deliberately withheld. A null return therefore
+   *  cannot distinguish "blocked" from "succeeded with noopener", and
+   *  earlier attempts at such detection produced false-positive error
+   *  banners on every click. We just call `window.open` and trust it;
+   *  if the browser genuinely refuses, the user can retry via the
+   *  anchor's native middle-click.
+   */
+  function openLabInNewTab(href: string): void {
+    try {
+      window.open(href, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      // Extremely rare — `window.open` throwing (not returning null)
+      // is usually a sandboxed iframe with `allow-popups` disabled.
+      // Log diagnostically; do not surface a user-facing error because
+      // we have no reliable way to distinguish this from a successful
+      // open with a WindowProxy we can't read from.
+      console.warn('[watch] new-tab open threw:', e);
+    }
+  }
+
+  function invalidateCurrentFrameHrefCache(): void {
+    if (_menuCloseDebounceTimer != null) {
+      clearTimeout(_menuCloseDebounceTimer);
+      _menuCloseDebounceTimer = null;
+    }
+    if (_currentFrameHrefCache) {
+      // Best-effort orphan-token cleanup. The TTL sweep is the real
+      // backstop; this is just for tidy behavior in same-tab scenarios.
+      removeWatchToLabHandoff(_currentFrameHrefCache.token);
+      _currentFrameHrefCache = null;
     }
   }
 
@@ -407,6 +656,13 @@ export function createWatchController(): WatchController {
       cinematicCameraEnabled: cs.enabled,
       cinematicCameraActive: computeCinematicCameraActive(),
       cinematicCameraStatus: deriveCinematicCameraStatus(cs.status, viewService.isFollowing()),
+      // Lab entry — disabled in empty state; hint is always null here
+      // because the discovery runtime emits only while a file is loaded.
+      labEntryEnabled: false,
+      labHint: labDiscovery.getState().activeHint,
+      labHref: _labHref,
+      labCurrentFrameAvailable: false,
+      labCurrentFrameHref: null,
     };
   }
 
@@ -451,7 +707,43 @@ export function createWatchController(): WatchController {
       cinematicCameraEnabled: cs.enabled,
       cinematicCameraActive,
       cinematicCameraStatus: deriveCinematicCameraStatus(cs.status, viewService.isFollowing()),
+      // Lab entry — enabled whenever a file is fully loaded.
+      labEntryEnabled: true,
+      labHint: labDiscovery.getState().activeHint,
+      labHref: _labHref,
+      labCurrentFrameAvailable: computeLabCurrentFrameAvailable(),
+      // Rev 7 follow-up: project the cached href ONLY when it still
+      // describes the current display frame. If playback has advanced
+      // past the frame the user opened the menu at, the href becomes
+      // null (menu item re-renders disabled until the user re-opens the
+      // caret, which will mint a fresh token via `buildCurrentFrameLabHref`).
+      // Additionally: when the feature flag is off, the snapshot MUST
+      // publish null even if some other code path managed to populate
+      // the cache, so that `(labCurrentFrameAvailable === false) IMPLIES
+      // (labCurrentFrameHref === null)` — a coherent snapshot contract
+      // future UI consumers can rely on. This is a pure projection —
+      // no writes, no allocations.
+      labCurrentFrameHref: projectCurrentFrameHref(),
     };
+  }
+
+  /** Pure accessor used by `buildSnapshot` to null-out a stale cached
+   *  href. Stale = ANY component of the seed identity (document, display
+   *  frame, topology frame, restart frame) differs from the cached
+   *  entry. Purges no storage; the TTL sweep + the menu-open purge in
+   *  `buildCurrentFrameLabHref` handle cleanup. */
+  function projectCurrentFrameHref(): string | null {
+    if (!_currentFrameHrefCache) return null;
+    const now = deriveCurrentFrameSeedIdentity();
+    if (!now) return null;
+    const c = _currentFrameHrefCache;
+    if (
+      c.documentKey !== now.documentKey
+      || c.displayFrameKey !== now.displayFrameKey
+      || c.topologyFrameKey !== now.topologyFrameKey
+      || c.restartFrameId !== now.restartFrameId
+    ) return null;
+    return c.href;
   }
 
   function snapshotChanged(a: WatchControllerSnapshot, b: WatchControllerSnapshot): boolean {
@@ -479,7 +771,15 @@ export function createWatchController(): WatchController {
       || a.loadingShareCode !== b.loadingShareCode
       || a.cinematicCameraEnabled !== b.cinematicCameraEnabled
       || a.cinematicCameraActive !== b.cinematicCameraActive
-      || a.cinematicCameraStatus !== b.cinematicCameraStatus;
+      || a.cinematicCameraStatus !== b.cinematicCameraStatus
+      // Lab entry — value compare for the boolean; identity compare
+      // for `labHint` matches the `openProgress` contract: fresh
+      // object per transition, `!==` catches any change.
+      || a.labEntryEnabled !== b.labEntryEnabled
+      || a.labHint !== b.labHint
+      || a.labHref !== b.labHref
+      || a.labCurrentFrameAvailable !== b.labCurrentFrameAvailable
+      || a.labCurrentFrameHref !== b.labCurrentFrameHref;
   }
 
   /**
@@ -655,6 +955,24 @@ export function createWatchController(): WatchController {
       }
     }
 
+    // Discovery runtime — advance milestone triggers against the current
+    // progress. `isScrubbing: false` here because scrub-driven advancement
+    // comes through `scrub()` which calls the runtime directly.
+    if (playback.isLoaded()) {
+      try {
+        labDiscovery.onPlaybackProgress({
+          loaded: true,
+          currentTimePs: playback.getCurrentTimePs(),
+          startTimePs: playback.getStartTimePs(),
+          endTimePs: playback.getEndTimePs(),
+          documentKey: deriveDocumentKey(documentService.getMetadata()),
+          isScrubbing: false,
+        });
+      } catch (e) {
+        console.error('[watch] discovery progress error (non-fatal):', e);
+      }
+    }
+
     try {
       publishSnapshot();
     } catch (e) {
@@ -719,6 +1037,10 @@ export function createWatchController(): WatchController {
        *  via `!isStale()`). Omit or return `true` for unconditional
        *  continuation (the default for local-file opens). */
       shouldContinue?: () => boolean;
+      /** Rev 6: share-flow threads the normalized share code through
+       *  so `DocumentMetadata.shareCode` receives the right identity
+       *  on commit. Local-file flow passes null. */
+      shareCode?: string | null;
     },
   ): Promise<void> {
     const canContinue = () => opts.shouldContinue?.() ?? true;
@@ -736,7 +1058,7 @@ export function createWatchController(): WatchController {
       return;
     }
 
-    const { history, fileName } = result;
+    const { history, fileName, fingerprint, fileByteLength } = result;
     const prevDocMeta = documentService.saveForRollback();
     const prevHistory = playback.getLoadedHistory();
     const prevTimePs = playback.getCurrentTimePs();
@@ -754,8 +1076,20 @@ export function createWatchController(): WatchController {
       // stale request.
       if (!canContinue()) return;
       stopRAF();
-      documentService.commit(history, fileName);
+      documentService.commit(history, fileName, {
+        fingerprint,
+        fileByteLength,
+        shareCode: opts.shareCode ?? null,
+      });
       playback.load(history);
+      // Discovery runtime: reset per-document trigger tracking whenever the
+      // loaded document changes. Derived after commit so meta reflects the
+      // just-loaded file.
+      labDiscovery.resetForDocument(deriveDocumentKey(documentService.getMetadata()));
+      // PR 2 caches are keyed on document identity — document change
+      // forces a full reset so the new document can mint fresh state.
+      invalidateCurrentFrameHrefCache();
+      _probeCache = null;
       // Appearance reset before first render — prevents stale color flash from prior file.
       // bondedGroups/viewService reset AFTER render — they don't affect visual state,
       // and deferring them preserves rollback safety (if renderer init fails, follow/hover
@@ -1035,6 +1369,7 @@ export function createWatchController(): WatchController {
         await openPreparedFile(file, {
           progressOwnership: 'caller',
           shouldContinue: () => !isStale(),
+          shareCode: code,
         });
         if (isStale()) return;
 
@@ -1074,6 +1409,17 @@ export function createWatchController(): WatchController {
     scrub(timePs) {
       if (!playback.isLoaded()) return;
       playback.seekTo(timePs);
+      // Tell the discovery runtime this was a seek (advancement gate will
+      // ignore this progress event so a scrub-to-99% does not burn
+      // halfway + completed in the same tick).
+      labDiscovery.onPlaybackProgress({
+        loaded: true,
+        currentTimePs: playback.getCurrentTimePs(),
+        startTimePs: playback.getStartTimePs(),
+        endTimePs: playback.getEndTimePs(),
+        documentKey: deriveDocumentKey(documentService.getMetadata()),
+        isScrubbing: true,
+      });
       renderAtCurrentTime();
       publishSnapshot();
     },
@@ -1219,6 +1565,160 @@ export function createWatchController(): WatchController {
       publishSnapshot();
     },
 
+    // ── Lab entry (rev 5+/6, rev 7 new-tab) ──
+    openLab() {
+      // Rev 7 (revised): the primary nav path is the anchor's
+      // `target="_blank" rel="noopener noreferrer"`. This programmatic
+      // entry point is kept for non-anchor callers (future keyboard
+      // shortcuts, etc.). Never same-tab — always new tab.
+      openLabInNewTab(buildLabHref());
+    },
+
+    buildLabHref() {
+      return _labHref;
+    },
+
+    buildCurrentFrameLabHref() {
+      // Clear the per-attempt write-failure flag up front so stale
+      // state from a prior call can't leak into this one's fallback
+      // decision (see `openLabFromCurrentFrame`).
+      _lastCurrentFrameBuildWriteFailure = null;
+      if (!playback.isLoaded()) return null;
+      const history = playback.getLoadedHistory();
+      if (!history) return null;
+      const identity = deriveCurrentFrameSeedIdentity();
+      if (!identity) return null;
+      const meta = documentService.getMetadata();
+      const currentTimePs = playback.getCurrentTimePs();
+
+      // Cache hit — ALL identity components must match (document,
+      // display frame, topology frame, restart frame).
+      if (
+        _currentFrameHrefCache
+        && _currentFrameHrefCache.documentKey === identity.documentKey
+        && _currentFrameHrefCache.displayFrameKey === identity.displayFrameKey
+        && _currentFrameHrefCache.topologyFrameKey === identity.topologyFrameKey
+        && _currentFrameHrefCache.restartFrameId === identity.restartFrameId
+      ) {
+        return _currentFrameHrefCache.href;
+      }
+
+      // Cache miss — cancel any pending close-debounced invalidation
+      // because we're clearly still interacting with the menu.
+      if (_menuCloseDebounceTimer != null) {
+        clearTimeout(_menuCloseDebounceTimer);
+        _menuCloseDebounceTimer = null;
+      }
+      // Purge the prior cache entry BEFORE minting a new one so we
+      // best-effort remove the orphan token from localStorage.
+      if (_currentFrameHrefCache) {
+        removeWatchToLabHandoff(_currentFrameHrefCache.token);
+        _currentFrameHrefCache = null;
+      }
+
+      // Build the seed. Return null when the frame is not seedable —
+      // UI renders the menu item disabled in that case.
+      const seed = buildWatchLabSceneSeed({ history, timePs: currentTimePs, playback });
+      if (!seed) return null;
+
+      let token: string;
+      try {
+        token = writeWatchToLabHandoff({
+          version: 1,
+          source: 'watch',
+          mode: 'current-frame',
+          createdAt: Date.now(),
+          sourceMeta: {
+            fileName: meta.fileName,
+            fileKind: meta.fileKind,
+            shareCode: meta.shareCode,
+            timePs: currentTimePs,
+            // `frameId` feeds the Lab arrival pill's `frame {n}` copy
+            // (§7.2). `null` when the Watch document cannot resolve a
+            // dense-frame index at `currentTimePs` — defensive; all
+            // live paths set this. The pill elides "frame N" in that
+            // case rather than rendering placeholder text.
+            frameId: playback.getDisplayFrameIndexAtTime(currentTimePs),
+          },
+          seed,
+        });
+      } catch (e) {
+        // Storage disabled / quota exhausted (§10). `writeWatchToLabHandoff`
+        // classifies these via `WatchHandoffWriteError.kind` so we can
+        // surface distinct copy rather than a single generic string.
+        // Record the kind so the click path (`openLabFromCurrentFrame`)
+        // doesn't stomp this specific message with its generic fallback.
+        if (e instanceof WatchHandoffWriteError) {
+          _lastCurrentFrameBuildWriteFailure = e.kind;
+          const message = e.kind === 'storage-unavailable'
+            ? 'Your browser is blocking storage, so the current frame can\u2019t be prepared. Use \u201cOpen in Lab\u201d for the default scene, or try again in a non-private window.'
+            : 'Browser storage is full, so the current frame can\u2019t be prepared. Clear some space and try again, or use \u201cOpen in Lab\u201d for the default scene.';
+          setErrorKeepingCurrentState(message);
+          console.warn('[watch] handoff write failed:', e.kind, e.message);
+        } else {
+          console.warn('[watch] handoff write failed (unclassified); current-frame Lab entry unavailable:', e);
+        }
+        return null;
+      }
+
+      const href = buildLabHref({ from: 'watch', handoff: token });
+      _currentFrameHrefCache = { ...identity, href, token };
+      publishSnapshot();
+      return href;
+    },
+
+    notifyLabMenuClosed() {
+      // 500 ms debounce — close→reopen at the same frame reuses the
+      // cached token; sustained closed state invalidates so the next
+      // open mints afresh.
+      if (_menuCloseDebounceTimer != null) clearTimeout(_menuCloseDebounceTimer);
+      _menuCloseDebounceTimer = setTimeout(() => {
+        _menuCloseDebounceTimer = null;
+        invalidateCurrentFrameHrefCache();
+        publishSnapshot();
+      }, 500);
+    },
+
+    openLabFromCurrentFrame() {
+      // Rev 7 follow-up P1: the cached href may point at an older
+      // display / topology / restart frame if playback advanced between
+      // menu-open and click. Re-check via seed identity; re-mint if
+      // stale so the click path always captures the user's current
+      // visible frame.
+      let href = projectCurrentFrameHref();
+      if (!href) {
+        href = this.buildCurrentFrameLabHref();
+      }
+      if (!href) {
+        // Rev 7 follow-up P2: FAIL CLOSED. The user explicitly chose
+        // "From this frame" — falling back to plain Lab would silently
+        // produce the WRONG outcome. Surface an error through the
+        // existing Watch error-banner so the user knows to retry, and
+        // do NOT navigate anywhere. `Open in Lab` is a separate,
+        // unaffected action they can click instead.
+        //
+        // If `buildCurrentFrameLabHref` already set a specific write-
+        // failure message (storage-unavailable / quota-exceeded), keep
+        // that — it's strictly more actionable than the generic copy.
+        console.warn('[watch] openLabFromCurrentFrame: current frame could not be prepared');
+        if (_lastCurrentFrameBuildWriteFailure == null) {
+          setErrorKeepingCurrentState(
+            'Couldn\u2019t prepare this frame for Lab. Try scrubbing to a different moment, or use "Open in Lab" for the default scene.',
+          );
+        }
+        return;
+      }
+      openLabInNewTab(href);
+    },
+
+    dismissLabHint(id) {
+      labDiscovery.dismissActiveHint(id);
+    },
+
+    notifyLabGestureEnd() {
+      labDiscovery.notifyGestureEnd(Date.now());
+    },
+
     getPlaybackModel: () => playback,
     getBondedGroups: () => bondedGroups,
     getInterpolationRuntime: () => interpolation,
@@ -1230,7 +1730,13 @@ export function createWatchController(): WatchController {
       // Sync current theme into the new renderer (CSS tokens already set by settings)
       renderer.applyTheme(settings.getTheme());
       cameraInput = createWatchCameraInput(renderer, {
-        onUserCameraInteraction: (phase) => cinematicCamera.markUserCameraInteraction(phase),
+        onUserCameraInteraction: (phase) => {
+          cinematicCamera.markUserCameraInteraction(phase);
+          // Every gesture-end event starts the idle-grace window in the
+          // discovery runtime, so hint fires cannot "pounce" on a user
+          // who just let go of the canvas.
+          if (phase === 'end') labDiscovery.notifyGestureEnd(Date.now());
+        },
       });
       overlayLayout = createWatchOverlayLayout(renderer);
       cinematicCamera.attachRenderer(renderer);
@@ -1262,6 +1768,10 @@ export function createWatchController(): WatchController {
       appearance.reset();
       documentService.clear();
       teardownInterpolationRuntime();
+      _labDiscoveryUnsubscribe();
+      labDiscovery.destroy();
+      invalidateCurrentFrameHrefCache();
+      _probeCache = null;
       detachRenderer();
     },
   };

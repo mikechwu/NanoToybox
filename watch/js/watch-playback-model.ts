@@ -24,6 +24,15 @@ const PS_PER_MS_AT_1X = VIEWER_DEFAULTS.baseSimRatePsPerSecond / 1000;
 export interface WatchTopologySource {
   reset(): void;
   getTopologyAtTime(timePs: number): { bonds: [number, number, number][]; n: number; frameId: number } | null;
+  /**
+   * Cheap O(log n) — returns just the frame id at `timePs` without
+   * materializing bonds. Exists so UI availability checks (like
+   * `canBuildWatchLabSceneSeed`) can probe frame identity WITHOUT
+   * triggering reconstructed-topology bond building on a cache miss.
+   * Every implementation MUST avoid the heavy path that
+   * `getTopologyAtTime` takes.
+   */
+  getTopologyFrameIdAtTime(timePs: number): number | null;
 }
 
 /** Discriminated union of loaded history kinds. Legacy 'reduced' files
@@ -69,6 +78,34 @@ export interface WatchPlaybackModel {
   getConfigAtTime(timePs: number): unknown | null;
   getBoundaryAtTime(timePs: number): unknown | null;
   getInteractionAtTime(timePs: number): import('./capsule-history-import').NormalizedInteractionState | null;
+
+  // ── PR 2 foundation: cheap primitives for the seed predicate ──
+  /** O(log n) binary search — returns the dense-frame index whose
+   *  positions are displayed at `timePs`, or null if none resolves. */
+  getDisplayFrameIndexAtTime(timePs: number): number | null;
+  /** Returns the topology frame id at `timePs` without materializing
+   *  the bond array. For full histories this is driven by restart-
+   *  frame alignment; for capsule histories it mirrors the dense-
+   *  frame id. */
+  getTopologyFrameIdAtTime(timePs: number): number | null;
+  /** For capsule histories: returns true iff the given dense-frame
+   *  index has at least one neighbor (prev or next) resolvable so
+   *  velocity approximation has an input. For full histories always
+   *  true when the index is valid. Does NOT run the approximation. */
+  canApproximateVelocityAtDisplayFrame(index: number): boolean;
+  /** Returns the neighbor dense-frame indices (prev/next) for use by
+   *  the seed builder. Returns {prev: null, next: null} at singletons. */
+  getNeighborDenseFrameIndices(index: number): { prev: number | null; next: number | null };
+  /**
+   * For full histories, returns the nearest restart-frame's frameId
+   * at-or-before `timePs`. This is what the seed builder uses to
+   * source config + boundary + velocities, so the cache key must
+   * track it — two different timePs values inside the same display
+   * frame can resolve to different restart frames. Returns null for
+   * capsule histories (no restart frames) OR when no restart frame
+   * covers `timePs`.
+   */
+  getNearestRestartFrameIdAtTime(timePs: number): number | null;
 }
 
 // Binary search helpers shared across watch/ — see frame-search.ts
@@ -256,6 +293,57 @@ export function createWatchPlaybackModel(): WatchPlaybackModel {
       const e = events[lo];
       if (e.kind === 'none') return { kind: 'none' };
       return { kind: e.kind, atomId: (e as { atomId: number }).atomId, target: (e as { target: [number, number, number] }).target };
+    },
+
+    // ── PR 2 foundation: cheap primitives for canBuildWatchLabSceneSeed ──
+
+    getDisplayFrameIndexAtTime(timePs: number): number | null {
+      if (!_history) return null;
+      const i = bsearchIndexAtOrBefore(_history.denseFrames, timePs);
+      if (i < 0 || i >= _history.denseFrames.length) return null;
+      return i;
+    },
+
+    getTopologyFrameIdAtTime(timePs: number): number | null {
+      if (!_topologySource) return null;
+      // Use the dedicated cheap probe — never `getTopologyAtTime`, which
+      // would trigger bond reconstruction for capsule sources on a cache
+      // miss. See WatchTopologySource docstring + rev 6 follow-up P1.1.
+      return _topologySource.getTopologyFrameIdAtTime(timePs);
+    },
+
+    canApproximateVelocityAtDisplayFrame(index: number): boolean {
+      if (!_history) return false;
+      if (index < 0 || index >= _history.denseFrames.length) return false;
+      // Full histories: velocities are available from restart-frame
+      // alignment, so any valid display frame qualifies.
+      if (_history.kind === 'full') return true;
+      // Capsule: need at least one neighbor frame to do finite-
+      // difference velocity approximation.
+      return _history.denseFrames.length >= 2;
+    },
+
+    getNeighborDenseFrameIndices(index: number): { prev: number | null; next: number | null } {
+      if (!_history) return { prev: null, next: null };
+      const n = _history.denseFrames.length;
+      if (index < 0 || index >= n) return { prev: null, next: null };
+      return {
+        prev: index > 0 ? index - 1 : null,
+        next: index < n - 1 ? index + 1 : null,
+      };
+    },
+
+    getNearestRestartFrameIdAtTime(timePs: number): number | null {
+      if (!_history || _history.kind !== 'full') return null;
+      const frames = _history.restartFrames;
+      if (frames.length === 0) return null;
+      // Linear walk — restart frames are typically few (<100). Fine.
+      let candidate: NormalizedRestartFrame | null = null;
+      for (const rf of frames) {
+        if (rf.timePs <= timePs) candidate = rf;
+        else break;
+      }
+      return candidate ? candidate.frameId : null;
     },
   };
 }

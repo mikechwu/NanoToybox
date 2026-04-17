@@ -325,3 +325,295 @@ body {
   .watch-cinematic-toggle__label--short { display: inline; }
   .watch-topbar__kind { display: none; }
 }
+
+/* ── Lab entry split-button + hint (rev 5/6) ──
+   Right-side cluster on the toolbar. Primary anchor + caret; anchor/button
+   pair preserves browser-native navigation (middle-click, ⌘-click, right-
+   click → "Open in new tab") while the caret toggles a dropdown. */
+.watch-toolbar__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.watch-lab-entry-anchor {
+  position: relative;
+}
+/* Desktop footprint is compact (32px) but touch devices expand to
+   WCAG 2.5.8 minimum 44×44 via the `pointer: coarse` rule below.
+   Visual boundary remains tight so focus rings do not bloom. */
+.watch-lab-entry {
+  display: inline-flex;
+  align-items: stretch;
+  min-height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--color-surface, rgba(20,20,28,0.85));
+  overflow: hidden;
+  font-family: var(--font-family);
+  font-size: var(--font-xs, 12px);
+}
+.watch-lab-entry__primary {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  color: var(--color-text);
+  text-decoration: none;
+  line-height: 1;
+  min-width: 44px;
+  min-height: 32px;
+  white-space: nowrap;
+}
+.watch-lab-entry__primary:hover {
+  background: var(--color-surface-hover, rgba(255,255,255,0.06));
+}
+.watch-lab-entry__primary:focus-visible {
+  outline: 2px solid var(--color-accent, #6dc);
+  outline-offset: -2px;
+}
+.watch-lab-entry__caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-height: 32px;
+  background: none;
+  border: none;
+  border-left: 1px solid var(--color-border);
+  color: var(--color-text);
+  cursor: pointer;
+  padding: 0;
+}
+.watch-lab-entry__caret:hover {
+  background: var(--color-surface-hover, rgba(255,255,255,0.06));
+}
+.watch-lab-entry__caret:focus-visible {
+  outline: 2px solid var(--color-accent, #6dc);
+  outline-offset: -2px;
+}
+.watch-lab-entry__caret[data-state="open"] {
+  /* Opaque accent, not the translucent `--color-accent-soft`, so the
+   * open affordance meets WCAG 1.4.11 (≥ 3:1 vs. toolbar surface).
+   * The translucent accent composited over the pageBg drops to ~1.2:1
+   * on both themes (§9.1.1 contrast test). The `▾` glyph is
+   * `aria-hidden` and its rotation also encodes open/close state,
+   * so glyph-on-accent contrast is not load-bearing for the a11y
+   * contract. */
+  background: var(--color-accent, #6dc);
+}
+.watch-lab-entry__caret-glyph {
+  display: inline-block;
+  transition: transform 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.watch-lab-entry__caret[data-state="open"] .watch-lab-entry__caret-glyph {
+  transform: rotate(180deg);
+}
+.watch-lab-entry__menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  min-width: 180px;
+  padding: 4px;
+  background: var(--color-surface, rgba(20,20,28,0.95));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+  z-index: 30;
+  animation: watchLabEntryMenuIn 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes watchLabEntryMenuIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* Disabled-item wrapper hosts the disabled button + caption. Explicit
+   min-height ensures the row does not collapse below the WCAG 2.5.8
+   touch target when the inner button renders as a non-interactive
+   `<button disabled>`. */
+.watch-lab-entry__menuitem-wrap {
+  display: block;
+  min-height: 44px;
+}
+.watch-lab-entry__menuitem {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: none;
+  border: none;
+  text-align: left;
+  text-decoration: none;
+  color: var(--color-text);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.watch-lab-entry__menuitem:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--color-surface-hover, rgba(255,255,255,0.06));
+}
+.watch-lab-entry__menuitem:focus-visible {
+  outline: 2px solid var(--color-accent, #6dc);
+  outline-offset: -2px;
+}
+.watch-lab-entry__menuitem--disabled,
+.watch-lab-entry__menuitem:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.watch-lab-entry__menu-caption {
+  display: block;
+  padding: 0 12px 8px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+/* Hint bubble — default placement is above-right. The resolver in
+   WatchLabHint.tsx switches `data-placement` to `above-left` when the
+   bubble would clip the left edge, or to `below` when the bubble has
+   no room above (rare; e.g. rotated phone with keyboard open). */
+.watch-lab-hint {
+  position: absolute;
+  max-width: 280px;
+  min-width: 220px;
+  padding: 10px 34px 10px 14px;
+  background: var(--color-surface, rgba(20,20,28,0.97));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.28);
+  z-index: 20;
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-sm, 13px);
+  line-height: 1.35;
+  animation: watchLabHintIn 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.watch-lab-hint[data-placement="above-right"] {
+  right: 0;
+  bottom: calc(100% + 8px);
+}
+.watch-lab-hint[data-placement="above-left"] {
+  left: 0;
+  bottom: calc(100% + 8px);
+}
+.watch-lab-hint[data-placement="below"] {
+  left: 0;
+  top: calc(100% + 8px);
+}
+.watch-lab-hint__band {
+  position: absolute;
+  left: 0; top: 6px; bottom: 6px;
+  width: 3px;
+  background: var(--color-accent, #6dc);
+  border-top-left-radius: 3px;
+  border-bottom-left-radius: 3px;
+}
+.watch-lab-hint__message {
+  padding-left: 10px;
+}
+.watch-lab-hint__close {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text);
+  opacity: 0.7;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 18px;
+  line-height: 1;
+}
+.watch-lab-hint__close:hover {
+  opacity: 1;
+  background: var(--color-surface-hover, rgba(255,255,255,0.06));
+}
+.watch-lab-hint__close:focus-visible {
+  outline: 2px solid var(--color-accent, #6dc);
+  outline-offset: -2px;
+  opacity: 1;
+}
+@keyframes watchLabHintIn {
+  from { opacity: 0; transform: translateY(-2px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Narrow viewports: align hint to right of the control root, preserve
+   anchor pointing vertically. Cap at viewport width. */
+@media (max-width: 520px) {
+  .watch-lab-hint {
+    max-width: calc(100vw - 32px);
+    min-width: 0;
+  }
+}
+
+/* Touch: every interactive control in the Lab-entry surface meets the
+   WCAG 2.5.8 minimum 44×44 target. Inner visual boundaries stay at
+   the desktop geometry (32 / 28 / 28 px) so focus rings remain tight;
+   hit area expands via padding and min dims applied here. */
+@media (pointer: coarse) {
+  .watch-lab-entry {
+    min-height: 44px;
+  }
+  .watch-lab-entry__primary {
+    min-height: 44px;
+    padding: 0 14px;
+  }
+  .watch-lab-entry__caret {
+    width: 44px;
+  }
+  .watch-lab-entry__menuitem,
+  .watch-lab-entry__menuitem-wrap {
+    min-height: 44px;
+  }
+  .watch-lab-hint__close {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* Reduced motion: opacity-only entrances; caret rotation remains instant. */
+@media (prefers-reduced-motion: reduce) {
+  .watch-lab-entry__caret-glyph { transition: none; }
+  .watch-lab-entry__menu {
+    animation: none;
+    opacity: 1;
+  }
+  .watch-lab-hint {
+    animation: watchLabHintFadeIn 60ms ease-out;
+  }
+  @keyframes watchLabHintFadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+}
+
+/* Forced colors — the hint's left-edge band MUST survive as a visible
+   accent. Use Highlight against Canvas to meet the rev 6 contrast
+   requirement (≥3:1 vs Canvas). */
+@media (forced-colors: active) {
+  .watch-lab-entry { background: Canvas; border-color: ButtonText; }
+  .watch-lab-entry__primary,
+  .watch-lab-entry__caret,
+  .watch-lab-entry__menuitem { color: ButtonText; background: ButtonFace; }
+  .watch-lab-entry__caret[data-state="open"] { background: Highlight; color: HighlightText; }
+  .watch-lab-entry__menu { background: Canvas; border-color: ButtonText; }
+  .watch-lab-hint { background: Canvas; border-color: ButtonText; color: CanvasText; }
+  .watch-lab-hint__band { background: Highlight; }
+}
+
+/* Phone: primary collapses to an icon+short label pair; dropdown
+   content unchanged. */
+@media (max-width: 480px) {
+  .watch-lab-entry__primary-label { font-size: 0; }
+  .watch-lab-entry__primary-label::after {
+    content: 'Lab';
+    font-size: var(--font-xs, 12px);
+  }
+}

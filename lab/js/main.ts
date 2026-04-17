@@ -33,6 +33,7 @@ import { createInputBindings, type InputBindings } from './runtime/input-binding
 import { registerStoreCallbacks } from './runtime/ui-bindings';
 import { createAtomSource } from './runtime/atom-source';
 import { createSceneRuntime, type SceneRuntime } from './runtime/scene-runtime';
+import { consumeWatchToLabHandoffFromLocation } from './runtime/watch-handoff';
 import { handleCenterObject as _handleCenterObject, resolveReturnTarget } from './runtime/focus-runtime';
 import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/snapshot-reconciler';
 import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecycle';
@@ -105,6 +106,50 @@ const session = {
     totalAtoms: 0,
   },
 };
+
+// --- Initial-scene helpers ---
+//
+// The boot sequence needs two decisions before it touches `_scene`:
+//   1. WHICH structure, if any, to load on a fresh boot (`_pickDefaultStructure`).
+//   2. WHETHER to skip the default because a Watch→Lab handoff is
+//      about to hydrate the scene from a seed (`_hasPendingWatchHandoff`).
+//
+// These are pure, early-callable, side-effect-free functions so the
+// boot flow can ask "should I load C60?" before doing any work. The
+// previous hardcoded `await addMoleculeToScene(c60)` in init()
+// rendered C60 for ~500 ms during every handoff boot — visible flash
+// to the user even though the scene was about to be replaced.
+
+/** Pick the structure Lab loads when no handoff is incoming. Defaults
+ *  to C60 (most iconic / smallest buckyball); falls back to the
+ *  smallest structure in the manifest if C60 is missing. Returns
+ *  null when the manifest is empty — caller decides what that means
+ *  (typically: boot with an empty scene). */
+function _pickDefaultStructure(
+  manifest: Record<string, { file: string; description: string; n_atoms: number }>,
+): { file: string; description: string } | null {
+  const entries = Object.entries(manifest).sort((a, b) => a[1].n_atoms - b[1].n_atoms);
+  if (entries.length === 0) return null;
+  const c60 = entries.find(([k]) => k === 'c60');
+  const chosen = c60 ?? entries[0];
+  return { file: chosen[1].file, description: chosen[1].description };
+}
+
+/** URL-only check for an incoming Watch→Lab handoff. Pure — does NOT
+ *  read localStorage, does NOT mutate anything. The real consume
+ *  (validate + remove storage) happens later via
+ *  `consumeWatchToLabHandoffFromLocation`. If this returns true, the
+ *  boot MUST skip the default-scene load and let the hydrate populate
+ *  the scene from the seed. A later fallback path re-loads the
+ *  default when the consume rejects or the hydrate fails. */
+function _hasPendingWatchHandoff(): boolean {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('from') === 'watch' && !!params.get('handoff');
+  } catch {
+    return false;
+  }
+}
 
 // --- Scheduler (accumulator, profiler, render skip) ---
 // Timing is derived from the live physics engine to stay consistent if dt changes.
@@ -204,6 +249,25 @@ let _placementFramingAnchor: { x: number; y: number; z: number }[] | null = null
 // Pause sync guard — resolves when syncStateNow completes during pause transition.
 // Awaited by scene-runtime commitMolecule to block mutations until local state is fresh.
 let _pauseSyncPromise: Promise<void> | null = null;
+
+/** Resolves when the worker's initial `init(C60)` has acked (or immediately
+ *  null when worker mode is off). The Watch→Lab handoff consume awaits
+ *  this before calling `worker.clearScene` / `worker.appendMolecule` —
+ *  otherwise `workerRuntime.isActive()` returns false, the hydrate
+ *  silently skips the worker commit, and the worker (once initialized)
+ *  emits C60 frameResults that revert the main-thread seed scene. */
+let _workerInitPromise: Promise<void> | null = null;
+
+/** Hydration lock — while true, the rAF-driven frame runtime must
+ *  skip snapshot reconciliation and local physics stepping so that a
+ *  stale pre-restoreState worker snapshot cannot clobber the scene
+ *  state the Watch→Lab hydrate transaction is in the middle of
+ *  committing. Owned by main.ts (single writer / single reader) and
+ *  consumed through `FrameRuntimeSurface.isHydrating()`. Set by the
+ *  transactional module via the scene-runtime `setHydrationActive`
+ *  dep; released in a finally block so rollback and
+ *  rollback-also-failed paths always clear it. */
+let _hydrationActive = false;
 
 // Interaction dispatch (created in init)
 let _dispatch: ((cmd: import('./state-machine').Command, sx?: number, sy?: number) => { dragTarget?: number[] }) | null = null;
@@ -378,6 +442,7 @@ async function init() {
     partialProfilerReset,
     recoverFromWorkerFailure: recoverLocalPhysicsAfterWorkerFailure,
     getPauseSyncPromise: () => _pauseSyncPromise,
+    setHydrationActive: (active: boolean) => { _hydrationActive = active; },
     onSceneMutated: () => { _bondedGroupCoordinator?.update(); if (physics) _bondedGroupAppearance?.pruneAndSync(physics.n); },
     onMoleculeCommitted: (info) => {
       if (!_timelineSub) return;
@@ -386,18 +451,35 @@ async function init() {
       const assignedIds = tracker.handleAppend(info.atomOffset, info.atomCount);
       registry.registerAppendedAtoms(assignedIds, info.atoms, { file: info.filename, label: info.name });
     },
+    // Watch → Lab handoff bindings (plan §7). Deferred getters — the
+    // timeline subsystem owns the tracker + registry and is constructed
+    // later in init(). The SceneRuntime wrapper returns a classified
+    // error if either is still null at call time.
+    getAtomIdentityTracker: () => _timelineSub?.getAtomIdentityTracker() ?? null,
+    getAtomMetadataRegistry: () => _timelineSub?.getAtomMetadataRegistry() ?? null,
   });
 
-  // Load manifest
+  // Load manifest + choose-and-maybe-load the initial scene.
+  //
+  // The default scene is the first C60 entry, or the smallest structure
+  // if the manifest has no C60. `_pickDefaultStructure` isolates that
+  // choice — swapping the boot structure is a one-line change here, not
+  // a grep across the file.
+  //
+  // A Watch→Lab handoff (URL carries `?from=watch&handoff=<token>`)
+  // will repopulate the scene from the handed-off seed. In that case
+  // we MUST NOT load the default first — doing so would render C60
+  // for ~500 ms before the hydrate replaces it, which the user sees
+  // as a confusing flash. `_scene` stays empty at boot, the hydrate
+  // runs against a clean slate, and if the hydrate fails the fallback
+  // branch further down loads the default as a last resort.
+  let _defaultStructure: { file: string; description: string } | null = null;
   try {
     manifest = await loadManifest();
+    _defaultStructure = _pickDefaultStructure(manifest);
 
-    // Auto-load C60 as first molecule
-    const entries = Object.entries(manifest).sort((a, b) => a[1].n_atoms - b[1].n_atoms);
-    if (entries.length > 0) {
-      const c60 = entries.find(([k]) => k === 'c60');
-      const [key, info] = c60 || entries[0];
-      await _scene!.addMoleculeToScene(info.file, info.description, [0, 0, 0]);
+    if (_defaultStructure && !_hasPendingWatchHandoff()) {
+      await _scene!.addMoleculeToScene(_defaultStructure.file, _defaultStructure.description, [0, 0, 0]);
     }
   } catch (e) {
     useAppStore.getState().setStatusError('Failed to load structures. Serve from repo root.');
@@ -434,11 +516,22 @@ async function init() {
       if (_workerRuntime) _workerRuntime.setTestStalledThreshold(ms);
     };
 
-    // Initialize with current scene state
-    if (physics.n > 0) {
-      const config = _buildWorkerConfig();
-      _workerRuntime.init(config, _scene!.collectSceneAtoms(), _scene!.collectSceneBonds());
-    }
+    // Initialize unconditionally — even with an EMPTY scene (pending
+    // handoff path). The worker needs to be `_initialized = true`
+    // before the hydrate runs, so it can accept `clearScene +
+    // appendMolecule` to replace the empty state with the seed.
+    // Previously this was gated on `physics.n > 0`, which skipped the
+    // worker init entirely during the pending-handoff boot and left
+    // `isActive() === false` when the hydrate checked. The hydrate
+    // would then either silently skip the worker (old bug — scene
+    // flashed to C60 later) or roll back (new behavior). Empty init
+    // is cheap and keeps the state machine honest.
+    const config = _buildWorkerConfig();
+    _workerInitPromise = _workerRuntime.init(
+      config,
+      _scene!.collectSceneAtoms(),
+      _scene!.collectSceneBonds(),
+    );
   }
 
   // ═══════════════════════════════════════════════════════
@@ -732,10 +825,20 @@ async function init() {
     reinitWorker: async () => {
       if (!_workerRuntime || physics.n === 0) return;
       const payload = serializeForWorkerRestore(physics, _buildWorkerConfig);
-      await _workerRuntime.restoreState(
+      const result = await _workerRuntime.restoreState(
         payload.config, payload.atoms, payload.bonds,
         payload.velocities, payload.boundary,
       );
+      // On logical failure, `restoreState` already tore down the
+      // worker and `onFailure` → `recoverLocalPhysicsAfterWorkerFailure`
+      // restored main-thread physics from the last snapshot. Surface
+      // a user-facing banner so subsequent scrub / play against the
+      // now-sync-mode engine isn't silently wrong.
+      if (!result.ok) {
+        useAppStore.getState().setStatusError(
+          'Simulation worker disconnected during timeline restart. Running locally — performance may be reduced.',
+        );
+      }
     },
     isWorkerActive: () => !!(_workerRuntime && _workerRuntime.isActive()),
     forceRender: () => { scheduler.forceRenderThisTick = true; },
@@ -880,6 +983,129 @@ async function init() {
     },
   });
   _timelineSub.installAndEnable(); // Atomic: install callbacks + enter ready state (no transient off flash)
+
+  // ── Watch → Lab handoff consume (plan §7 + §10 surfacing policy) ──
+  // Runs AFTER the timeline subsystem is ready (so the tracker +
+  // registry are reachable from scene-runtime) but BEFORE auth/input
+  // wiring so the hydrated scene is visible the first time the user
+  // can interact.
+  //
+  // Outcome dispatch per plan §10. The rule: user-attempt failures that
+  // commonly happen in normal usage (stale TTL, storage already consumed /
+  // cleared / private-mode-dropped) are VISIBLE. Tampering or schema-drift
+  // signals stay SILENT because a scary toast on a coincidental deploy or
+  // a crafted URL is worse than a quiet fallback.
+  //
+  //   - `none`     → silent normal boot (no `?from=watch` at all).
+  //   - `ready`    → hydrate; the wrapper surfaces any classified
+  //                  transaction failure via setStatusError on its own.
+  //   - `rejected` + 'stale' → user clicked a >10 min old Remix link.
+  //                  Tell them it expired so they don't stare at a
+  //                  default scene wondering why.
+  //   - `rejected` + 'missing-entry' → `?from=watch&handoff=<token>` but
+  //                  no matching storage (one-shot already consumed on a
+  //                  prior tab, storage cleared, private-mode eviction,
+  //                  later reopen of the same URL). Same "I clicked
+  //                  Remix and got the default scene" confusion as stale
+  //                  — surface it with slightly different copy since
+  //                  "expired" would mislead when TTL wasn't the cause.
+  //   - `rejected` + any other reason (malformed-seed, wrong-version,
+  //                  wrong-source, wrong-mode, missing-token, parse-
+  //                  error) → silent (console.warn'd by the consumer).
+  //                  These indicate tampering or schema drift, not a
+  //                  normal user attempt.
+  {
+    const outcome = consumeWatchToLabHandoffFromLocation(window.location, window.history);
+    if (outcome.status === 'ready') {
+      try {
+        // Wait for the worker's initial C60 `init` to ack before
+        // consuming the handoff. Without this, the hydrate's
+        // `workerRuntime.isActive()` check reads false, the worker
+        // commit is silently skipped, and the worker (once
+        // initialized) starts emitting C60 frameResults that clobber
+        // the main-thread seed scene. Failures propagate — the
+        // lifecycle's own `onFailure` handler has already run, so
+        // the worker is torn down; hydrate then runs in
+        // no-worker mode (main-thread only) which is safe.
+        if (_workerInitPromise) {
+          try {
+            await _workerInitPromise;
+          } catch (err) {
+            console.warn('[lab.boot] worker init failed before hydrate; continuing without worker:', err);
+          }
+        }
+        const result = await _scene!.hydrateFromWatchSeed(outcome.payload.seed, outcome.payload.sourceMeta);
+        if (result.status === 'error') {
+          console.warn('[lab.boot] watch handoff hydrate failed:', result.reason, result.cause ?? '');
+        } else {
+          console.info('[lab.boot] watch handoff hydrated:', {
+            atomCount: result.atomCount,
+            historyKind: outcome.payload.seed.provenance.historyKind,
+            velocitiesAreApproximated: outcome.payload.seed.provenance.velocitiesAreApproximated,
+          });
+          // Arrival pill (§7.2) — acknowledges the hydrate and flags
+          // lossiness when velocities were approximated. Suppression
+          // keyed on the handoff token so a refresh that somehow
+          // re-hydrates the same token doesn't re-show. Never
+          // disclose the raw fileName or shareCode in the pill info
+          // per §7.2 non-disclosure rule; only a boolean
+          // `isSharedScene` derived from shareCode presence.
+          useAppStore.getState().setWatchHandoffProvenance({
+            isSharedScene: outcome.payload.sourceMeta.shareCode !== null,
+            timePs: outcome.payload.sourceMeta.timePs,
+            frameId: outcome.payload.sourceMeta.frameId,
+            velocitiesAreApproximated: outcome.payload.seed.provenance.velocitiesAreApproximated,
+            token: outcome.token,
+          });
+        }
+      } catch (err) {
+        console.error('[lab.boot] unexpected error during watch handoff hydrate:', err);
+        useAppStore.getState().setStatusError(
+          'Something went wrong loading that Watch scene. Please reload the page.',
+        );
+      }
+    } else if (outcome.status === 'rejected' && outcome.reason === 'stale') {
+      useAppStore.getState().setStatusError(
+        'This remix link has expired. Open it again from Watch to try once more.',
+      );
+    } else if (outcome.status === 'rejected' && outcome.reason === 'missing-entry') {
+      useAppStore.getState().setStatusError(
+        'This remix link is no longer available. Open it again from Watch to try once more.',
+      );
+    }
+    // All other outcomes (none, rejected+tampering-reason) fall through
+    // to the normal Lab boot silently per §10.
+
+    // ── Fallback to the default scene when the pending-handoff boot
+    //    path ended without populating the scene. This covers every
+    //    branch that left `physics.n === 0`: a stale / missing-entry
+    //    / malformed / parse-error consume, a hydrate that rolled
+    //    back, or an unexpected throw. Without this, the user would
+    //    stare at an empty canvas (or a stale error toast) because
+    //    the default-scene load was skipped up front. Loading the
+    //    default here (rather than always up-front) keeps the
+    //    happy-path flash-free: successful hydrate leaves physics.n
+    //    > 0 and the fallback is a no-op. ──
+    if (physics && physics.n === 0 && _defaultStructure) {
+      try {
+        await _scene!.addMoleculeToScene(
+          _defaultStructure.file,
+          _defaultStructure.description,
+          [0, 0, 0],
+        );
+      } catch (err) {
+        // Surface to the user — `console.warn` alone would leave an
+        // empty canvas with the handoff-rejected toast auto-dismissing
+        // in a few seconds, giving them no affordance for recovery.
+        // Prefer this over the rejection-reason toast that may be up:
+        // "the default didn't load" is the more actionable state.
+        console.error('[lab.boot] default-scene fallback load failed:', err);
+        useAppStore.getState().setStatusError(
+          'Couldn\u2019t load the default scene. Please reload the page.',
+        );
+      }
+    }
+  }
 
   // ── Auth UX (Phase 6) ──
   // Register sign-in / sign-out callbacks and kick off a session fetch. The
@@ -1099,8 +1325,24 @@ function _buildWorkerConfig(): import('../../src/types/worker-protocol').Physics
 /** Recover local physics after worker failure. Called via workerRuntime.onFailure.
  *  Seeds local state from the snapshot captured before teardown if available,
  *  including atom-count reconciliation if the worker's authoritative count differs.
- *  Otherwise preserves existing local momentum. Never blanket-zeroes velocity. */
+ *  Otherwise preserves existing local momentum. Never blanket-zeroes velocity.
+ *
+ *  CRITICAL: early-returns when a Watch→Lab hydrate transaction is in
+ *  flight (`_hydrationActive === true`). The hydrate's own rollback
+ *  path is the authority over physics state during that window; if
+ *  this recovery ran anyway it would overwrite the just-restored
+ *  checkpoint with the worker's stale last-snapshot, and the user
+ *  would see the wrong scene alongside the hydrate's "couldn't
+ *  remix" banner. The hydrate classifies the failure itself and
+ *  surfaces the appropriate copy. Logged so ops can correlate. */
 function recoverLocalPhysicsAfterWorkerFailure(reason: string, lastSnapshot?: import('./runtime/worker-lifecycle').RecoverySnapshot) {
+  if (_hydrationActive) {
+    console.warn(
+      '[worker] failure during hydrate transaction — deferring to hydrate rollback:',
+      reason,
+    );
+    return;
+  }
   console.warn('[worker] failure:', reason, '— rebuilding local physics for sync fallback');
   if (physics) {
     const snap = lastSnapshot;
@@ -1223,6 +1465,7 @@ function frameLoop(timestamp: number) {
     setLastReconciledSnapshotVersion: (v: number) => { _lastReconciledSnapshotVersion = v; },
     appRunning: _appRunning,
     getStepTiming: _getStepTiming,
+    isHydrating: () => _hydrationActive,
   };
   executeFrame(timestamp, surface);
   if (_appRunning) _rafId = requestAnimationFrame(frameLoop);

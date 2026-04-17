@@ -159,6 +159,48 @@ Rules:
 - Teardown is the creator's responsibility
 - Comments must never be stronger than code (no "single source of truth" without test evidence)
 
+### Scene Mutation Primitives
+
+Scene-content replacement goes through the same two primitives the native commit-molecule flow uses: `clearScene` + `appendMolecule`. This is the canonical path for any code replacing scene contents — file open, Watch→Lab handoff hydrate, test harness, structure-chooser swap.
+
+- **Do not use `restoreCheckpoint` + `restoreState` for scene replacement.** `restoreCheckpoint` is reserved for transactional rollback (undoing a committed-then-failed mutation). Using it as a normal "set the scene" path conflates rollback with forward mutation and loses the invariant that `restoreCheckpoint` is always recovering from a known-good prior commit.
+- Main-thread physics and worker both accept the same primitives; the transactional pattern below composes them.
+
+### Worker Protocol: `{ ok: boolean }` Return Shape
+
+`workerRuntime.init`, `restoreState`, `clearScene`, and `appendMolecule` all return `{ ok: boolean, ... }`. Callers **must** check `ok` and surface failures — either by triggering rollback (inside a transaction) or by calling `setStatusError` (outside one).
+
+Void-returning worker calls that silently drop logical failures are the anti-pattern. The previous `restoreState: Promise<void>` shape was migrated precisely because a rejected worker op became indistinguishable from a successful one at the call site. New worker operations follow the `{ ok }` contract.
+
+### Transactional Scene Mutation Pattern
+
+The Watch→Lab hydrate module is the exemplar. Any code that mutates scene state across both main-thread physics and the worker — and must be atomic from the user's perspective — follows this shape:
+
+1. **Capture rollback state** — physics checkpoint, boundary, scene state, registry snapshot, tracker snapshot. Enough to fully restore the prior scene if any later step throws.
+2. **Stage the renderer** — prepare renderer state that can be unwound without a commit.
+3. **Commit main-thread physics** via `appendMolecule` (following `clearScene` if replacing).
+4. **Commit worker** via `clearScene` + `appendMolecule`, checking `{ ok }` on each.
+5. **Finalize** registry, tracker, and scene-state bookkeeping.
+6. **Publish** the post-commit signal (`onHydrated` or equivalent).
+
+Any throw in steps 2–5 triggers **full rollback** from the captured state. `rollback-also-failed` is a first-class `HydrateFailureReason` — if the rollback itself throws, that is a distinct classified failure, not a swallowed log line.
+
+### Hydration Lock Pattern (Boot-Scope Transactional Guards)
+
+Long-running transactional mutations that run during or shortly after boot need a module-level guard so global-recovery callbacks don't interfere. The Watch→Lab hydrate uses this shape:
+
+- **Module-level flag** in `main.ts`: `let _hydrationActive = false` (or similar).
+- **Setter threaded through deps**: `setHydrationActive?: (active: boolean) => void` on the transaction's dependency bag.
+- **Reader on the frame-runtime surface**: `isHydrating(): boolean` so other runtime modules can check it.
+- **`finally` block releases the lock** on every exit path: success, classified rollback, and rollback-also-failed. Never leave the lock held on an error path.
+- **Global recovery callbacks check the lock** — e.g., `recoverLocalPhysicsAfterWorkerFailure` and similar cross-cutting handlers early-return when `isHydrating()` is true and let the in-flight transaction's own rollback handle the failure. Two recoveries racing on the same crash corrupt state.
+
+### Boot Order: Pure URL Checks, Late Storage Consume
+
+Early boot-time checks that decide "do we have work queued from a prior surface?" **must be pure URL reads — no localStorage access, no side effects.** `_hasPendingWatchHandoff()` reads `window.location` only.
+
+The destructive consume (`consumeWatchToLabHandoffFromLocation`) runs **later**, once subsystems (physics, worker, renderer) are ready to receive the payload. Pattern: **ask the URL early, consume storage late.** Consuming storage before subsystems are ready means a failed hydrate leaves the handoff already drained, so retry is impossible and the user loses the work silently.
+
 ### Placement Solver Policy (3-Surface Architecture)
 
 The placement solver (`lab/js/runtime/placement-solver.ts`) uses a 3-surface architecture that must be kept in sync. The module header documents this, but the key constraint is:
@@ -359,6 +401,10 @@ Future style changes (colors, opacity, scale) go in `config.ts` config tokens, n
 
 Both are shared across `bonded-group-highlight.test.ts` and `renderer-interaction-highlight.test.ts`. New highlight tests should import from this shared module rather than duplicating setup.
 
+### Contrast Verification as a CI Gate
+
+`tests/unit/lab-entry-contrast.test.ts` is the pattern for contrast-target CI gates: the test **re-derives** WCAG 2.1 sRGB→linear relative-luminance contrast from the live `THEMES` tokens at test time and fails CI on any target miss. The computation is the ground truth; the plan table is a human-readable snapshot, not a source of truth. When adding a new themed surface with a contrast commitment, add its token pairs to this test (or a sibling file following the same shape) rather than eyeballing from a design doc.
+
 ### Watch Architecture (Controller Pattern)
 
 Watch (`watch/`) does **not** use Zustand. It uses a controller pattern where `watch-controller.ts` is the orchestration facade over domain services. React components consume state via `useSyncExternalStore`.
@@ -429,6 +475,8 @@ When adding a new state machine to the store, follow this pattern rather than `{
 Error state in a state machine should be shaped `{ kind: 'someErrorCategory', message: string }`, not a bare `string` or a string with an adjacent "error effect" flag. The `kind` discriminator prevents cross-branch bleed — e.g., a popup-blocked error cannot be silently reinterpreted as a network error by a component that reads only the message.
 
 When error branches need to drive different UI affordances (retry button vs. "open in new tab" button vs. dismiss-only), switch on `kind`, never parse the message.
+
+The same shape applies to non-store error classification. Two canonical examples from the Watch→Lab handoff: `WatchHandoffWriteError` (`kind: 'storage-unavailable' | 'quota-exceeded'`) wraps write-path failures at the storage boundary, and `HydrateFailureReason` is a discriminated union for the hydrate module (`'rollback-also-failed'` is a first-class reason, not a log string). Pair each failure surface with a per-failure copy map (e.g., `HYDRATE_FAILURE_COPY`) so user-facing text stays consistent. Split diagnostic channels: `console.warn` for ops (with the `kind` in the message), `setStatusError` for the user-facing banner.
 
 #### sessionStorage sentinel with `?authReturn=1` handshake
 

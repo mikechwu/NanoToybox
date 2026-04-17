@@ -10,6 +10,7 @@
 import React from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { StatusBar } from './components/StatusBar';
+import { WatchHandoffProvenancePill } from './components/WatchHandoffProvenancePill';
 import { DockLayout } from './components/DockLayout';
 import { DockBar } from './components/DockBar';
 import { CameraControls } from './components/CameraControls';
@@ -53,6 +54,7 @@ export function mountReactUI() {
   root.render(
     <React.StrictMode>
       <StatusBar />
+      <WatchHandoffProvenancePill />
       <TopRightControls />
       <BondedGroupsPanel />
       <CameraControls />

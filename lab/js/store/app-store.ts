@@ -40,6 +40,33 @@ export interface StructureOption {
   file: string;
 }
 
+/** Provenance info the Lab-side arrival pill (§7.2) renders after a
+ *  successful Watch→Lab hydrate. Null when no Watch handoff landed this
+ *  boot (plain Lab open). The React subscription in
+ *  `WatchHandoffProvenancePill` reads this slot. */
+export interface WatchHandoffProvenanceInfo {
+  /** Whether the source scene came from a public share link. Drives the
+   *  pill's "From shared scene" vs "From Watch" copy selection (§9.5).
+   *  Derived from `sourceMeta.shareCode !== null` at boot, not stored on
+   *  the pill directly — the raw share code is NEVER put in the DOM per
+   *  the §7.2 non-disclosure rule. */
+  isSharedScene: boolean;
+  /** Playback time in ps at the handoff moment. Renders as `{time} ps`
+   *  with two-decimal precision. */
+  timePs: number;
+  /** Dense-frame index used for the seed (sourceMeta.frameId). Null when
+   *  the source did not expose a resolvable dense frame; the pill elides
+   *  the "frame N" segment in that case. */
+  frameId: number | null;
+  /** Whether velocities in the seed were approximated from neighboring
+   *  frames (capsule histories) vs exact (full histories). Drives the
+   *  `· creative seed` suffix. */
+  velocitiesAreApproximated: boolean;
+  /** Handoff token that minted this arrival. Used as the suppression key
+   *  so a refresh after manual dismissal doesn't re-show the pill. */
+  token: string;
+}
+
 /** Imperative callbacks registered by main.ts, invoked by React Dock component. */
 export interface DockCallbacks {
   onAdd: () => void;
@@ -514,6 +541,12 @@ export interface AppStore {
   setHelpPageActive: (active: boolean) => void;
   setRecentStructure: (recent: { file: string; name: string } | null) => void;
 
+  // Watch→Lab handoff arrival pill (§7.2).
+  // Written by `lab/js/main.ts` on successful hydrate; read by the
+  // `WatchHandoffProvenancePill` React component. Null = no pill.
+  watchHandoffProvenance: WatchHandoffProvenanceInfo | null;
+  setWatchHandoffProvenance: (info: WatchHandoffProvenanceInfo | null) => void;
+
   // Imperative callback registration
   setCloseOverlay: (cb: () => void) => void;
   setDockCallbacks: (cbs: DockCallbacks) => void;
@@ -600,6 +633,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   dampingSliderValue: 0,
   statusText: null,
   statusError: null,
+  watchHandoffProvenance: null,
   boundaryMode: 'contain',
   helpPageActive: false,
   recentStructure: null,
@@ -739,6 +773,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setBoundaryMode: (mode) => set({ boundaryMode: mode }),
   setStatusText: (text) => set({ statusText: text }),
   setStatusError: (error) => set({ statusError: error }),
+  setWatchHandoffProvenance: (info) => set({ watchHandoffProvenance: info }),
   setHelpPageActive: (active) => set({ helpPageActive: active }),
   setRecentStructure: (recent) => set({ recentStructure: recent }),
   setCloseOverlay: (cb) => set({ closeOverlay: cb }),
@@ -836,6 +871,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     // Status channels
     statusText: null,
     statusError: null,
+    watchHandoffProvenance: null,
     // Auth UX ephemeral flags (Phase 6). These are one-shot control-flow
     // state — NOT durable identity. Auth.status + auth.session live
     // outside the reset so a signed-in user stays signed-in across

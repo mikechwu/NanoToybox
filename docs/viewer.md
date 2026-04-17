@@ -536,6 +536,7 @@ Once a valid file loads, the app presents:
 | Canvas | Three.js scene (same renderer as lab, via thin adapter: `initForPlayback` + `updateReviewFrame`) |
 | Top bar | File-kind badge + file name + "Open File" action + share-code input (see Remote Open via Share Code above) |
 | Bonded-groups panel | Two-tier expand (large/small clusters) with hover preview, Center/Follow buttons, and authored color editing (see Color Editing below) |
+| Bottom-chrome toolbar | Left cluster hosts the top-bar identity; right cluster hosts the "Open in Lab" split-button (+ discovery hint bubble) and the Cinematic Camera pill. See Watch → Lab Entry Funnel below |
 | Timeline | Custom scrub track (thick variant from shared `timeline-track.css`) with pointer-event scrubbing and time readouts at both ends |
 | Playback dock | Transport cluster + utility cluster (repeat, smooth toggle, speed) + settings button (see Playback Dock below) |
 | Settings sheet | Smooth Playback, Appearance, File Info, Help sections (see Settings below) |
@@ -672,6 +673,82 @@ Speed and repeat controls live in the dock only — they are not duplicated in s
 
 When an experimental method cannot run for a specific bracket, the runtime falls back to Linear automatically and the settings sheet shows a diagnostic note explaining why (e.g., "velocities not available for this frame pair", "timeline edge").
 
+### Watch → Lab Entry Funnel
+
+Watch exposes two paths into Lab from a loaded document: **plain** (open Lab with its default scene) and **from this frame** (mint a handoff seeded from the current playback frame and hydrate Lab from it). Both open in a new tab so the Watch session — playback position, camera, color edits — is preserved.
+
+**UI surfaces (right cluster of bottom-chrome toolbar):**
+
+| Surface | Details |
+|---------|---------|
+| `WatchLabEntryControl` | Split-button. **Primary anchor** is "Open in Lab" (plain `/lab/`). **Caret menu** contains a single "From this frame" menuitem |
+| `WatchLabHint` | Discovery hint bubble anchored to the entry control. Fires once per document per session at two milestones: **halfway** through playback, and **completed** (end reached). Each hint has a "Try it" affordance (opens "From this frame") and a dismiss button |
+
+**Click-ownership contract (most-likely-to-regress invariant):**
+
+The split-button has two distinct click paths, and duplicating ownership between them produces a double-tab regression. The contract is enforced at the component boundary and is documented on the `WatchLabEntryControlProps` docstring in `watch/js/components/WatchLabEntryControl.tsx`.
+
+| Path | Owner | Behavior |
+|------|-------|----------|
+| Primary "Open in Lab" anchor (plain click) | **Native anchor** | `target="_blank" rel="noopener noreferrer"` is the sole navigation. `WatchApp` intentionally does NOT wire an `onOpenPlainLab` handler — a controller nav call here would collide with the browser's anchor-default and open two tabs |
+| Primary anchor (modifier / middle / right click) | **Native anchor** | Browser handles it (new tab, new window, context menu) using the static `labHref` |
+| Caret "From this frame" (plain click) | **Controller** | The menuitem calls `event.preventDefault()` and invokes `controller.openLabFromCurrentFrame()`, which mints a fresh token and navigates via `window.open()` |
+| Caret "From this frame" (modifier / middle click) | **Native anchor** | Passes through to the native anchor using the controller's cached `labCurrentFrameHref` so the user gets a new-tab/window with the correct minted URL. Cache invalidation is debounced on caret close (500 ms) to cover the moment between menu-close and middle-click |
+
+**Controller methods** (in `watch/js/watch-controller.ts`, consumed by `WatchApp`):
+
+| Method | Purpose |
+|--------|---------|
+| `openLab()` | Programmatic new-tab nav to plain `/lab/`. Not wired to the primary anchor — reserved for non-split-button callers |
+| `openLabFromCurrentFrame()` | Primary caret-click handler. Mints a token, writes the handoff, opens `/lab/?from=watch&handoff=<token>` in a new tab. **Fails closed**: on handoff-write failure, surfaces a mode-specific error via `setErrorKeepingCurrentState` rather than falling back to plain Lab — a silent fallback would produce the wrong scene in the new tab |
+| `buildLabHref()` | Returns the static `/lab/` URL (for `labHref`) |
+| `buildCurrentFrameLabHref()` | Returns a cached minted URL for "From this frame". Cache key is the **seed identity**: document + display-frame + topology-frame + restart-frame. Called on caret-menu open so modifier-click / middle-click can use the same minted URL without minting twice |
+| `notifyLabMenuClosed()` | Starts the 500 ms debounced invalidation of the cached current-frame URL. The debounce covers the gap between menu-close and a late middle-click |
+| `dismissLabHint(id)` | User-dismiss for a discovery hint |
+| `notifyLabGestureEnd()` | Idle-grace gating for hint discovery — hints do not fire mid-gesture; the discovery runtime waits for a gesture-end signal before showing a bubble |
+
+**Controller snapshot fields** (what React reads via `useSyncExternalStore`):
+
+| Field | Meaning |
+|-------|---------|
+| `labEntryEnabled` | True when Lab can be opened at all (document loaded and not in an error state) |
+| `labHref` | Static `/lab/` URL — passed directly to the primary anchor's `href` |
+| `labCurrentFrameAvailable` | True when the current frame is seedable (see Seed Extraction below). Drives whether the "From this frame" menuitem is enabled |
+| `labCurrentFrameHref` | Cached minted URL (or null). Passed to the caret menu's anchor so modifier/middle clicks land on the correct minted URL |
+| `labHint` | Active hint descriptor (or null) — drives `WatchLabHint` visibility and content |
+
+**Seed extraction (what "from this frame" means):**
+
+`watch/js/watch-lab-seed.ts` builds the Lab scene seed from the current playback frame:
+
+- **`canBuildWatchLabSceneSeed({ history, timePs, playback })`** — O(log n) predicate used to gate `labCurrentFrameAvailable`. Safe to call per snapshot; does no allocation
+- **`buildWatchLabSceneSeed(...)`** — full seed builder, called by `openLabFromCurrentFrame()` at mint time. Velocities are approximated via finite differences on capsule histories (which carry no stored velocities); full histories use the restart-frame velocities directly
+- Helpers in `watch/js/watch-playback-model.ts` — `getDisplayFrameIndexAtTime`, `getTopologyFrameIdAtTime`, `canApproximateVelocityAtDisplayFrame`, `getNearestRestartFrameIdAtTime` — are the per-channel queries the seed builder composes. Each is a binary-search over its respective index so gating stays O(log n)
+
+**Handoff writer (`watch/js/watch-lab-handoff.ts`):**
+
+The writer persists the minted seed to `localStorage` under `atomdojo.watchLabHandoff:<token>` with a 10-minute TTL. A pre-write sweep removes expired entries so orphan accumulation is bounded regardless of how many "From this frame" clicks a user fires off. Lab's reader (documented in `architecture.md`) always scrubs the URL token whether or not hydration succeeds.
+
+Every storage-touching operation (iteration during the sweep, the `setItem` write, and the post-quota retry) classifies failures into a `WatchHandoffWriteError` with one of two kinds:
+
+| Kind | Trigger |
+|------|---------|
+| `'storage-unavailable'` | `localStorage` is inaccessible (Safari private mode, storage disabled, cross-origin iframe) |
+| `'quota-exceeded'` | `setItem` throws a quota error even after the sweep + retry |
+
+The controller catches these and calls `setErrorKeepingCurrentState` with mode-specific copy so the failure is visible in the existing error overlay without disturbing the loaded document or the current playback position.
+
+**Document metadata:** `WatchDocumentService` (`watch/js/watch-document-service.ts`) exposes `shareCode`, `documentFingerprint`, and `fileByteLength` on the document metadata. The `shareCode` field propagates into the handoff payload and drives Lab's arrival pill variant — Lab renders "From shared scene" when `shareCode` is present and "From Watch" otherwise.
+
+**Discovery runtime (`watch/js/watch-lab-discovery.ts`):**
+
+Fires hint bubbles based on playback progress:
+
+- **Halfway trigger** — user has played past 50% of the timeline (monotonic — scrubbing backward does not re-arm)
+- **Completed trigger** — playback reaches the end
+- **Session-scoped suppression per document** — once a hint fires (or is dismissed) for a given document in the current session, it does not re-fire on reload of the same document. Opening a different document resets the suppression set
+- **Gesture idle-grace** — hints do not pop mid-gesture; the runtime waits for `notifyLabGestureEnd()` before surfacing a bubble so a hint does not interrupt an active orbit or scrub
+
 ### Playback Model
 
 `WatchPlaybackModel` provides exact recorded-frame playback from `denseFrames` at canonical x1 rate from `VIEWER_DEFAULTS.baseSimRatePsPerSecond` (0.12 ps/s). Rate is file-length-independent — not normalized to file duration.
@@ -745,6 +822,8 @@ Watch-specific overrides live in `watch/css/watch-dock.css` (dock grid, transpor
 ### Error Handling
 
 Transactional file open: a bad replacement file keeps the current document intact and shows an error overlay. Commit-phase rollback restores the previous document on failure (including color assignment and interpolation runtime rollback). The error overlay is visible in both the landing and workspace states.
+
+**Handoff-write failures (Watch → Lab Entry Funnel)** route through the same overlay via `setErrorKeepingCurrentState`, classified by `WatchHandoffWriteError.kind` so the user sees mode-specific copy (storage-unavailable vs quota-exceeded) without losing the current document or playback position. `openLabFromCurrentFrame()` never silently falls back to plain Lab on write failure — that would open the wrong scene in the new tab.
 
 ### Theme & Renderer
 

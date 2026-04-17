@@ -9,10 +9,64 @@ import type { StructureAtom } from './placement';
 
 const DEBUG_LOAD = CONFIG.debug.load;
 
-interface SceneState {
-  molecules: { id: number; name: string; structureFile: string; atomCount: number; atomOffset: number; localAtoms: StructureAtom[]; localBonds: BondTuple[] }[];
+export interface SceneStateMolecule {
+  id: number;
+  name: string;
+  structureFile: string;
+  atomCount: number;
+  atomOffset: number;
+  localAtoms: StructureAtom[];
+  localBonds: BondTuple[];
+}
+
+export interface SceneState {
+  molecules: SceneStateMolecule[];
   totalAtoms: number;
   nextId: number;
+}
+
+/** Deep clone a `SceneState` for rollback capture. Used by the Watch →
+ *  Lab hydrate transaction (§7.1): the full contents of `session.scene`
+ *  are captured before destructive commits so a mid-transaction failure
+ *  can restore the exact pre-call scene without leaking the synthetic
+ *  `@watch-handoff` molecule. The clone is deep for `localAtoms` /
+ *  `localBonds` so subsequent mutations of the live scene do not touch
+ *  the snapshot's arrays. */
+export function cloneSceneState(state: SceneState): SceneState {
+  return {
+    totalAtoms: state.totalAtoms,
+    nextId: state.nextId,
+    molecules: state.molecules.map((m) => ({
+      id: m.id,
+      name: m.name,
+      structureFile: m.structureFile,
+      atomCount: m.atomCount,
+      atomOffset: m.atomOffset,
+      localAtoms: m.localAtoms.map((a) => ({ element: a.element, x: a.x, y: a.y, z: a.z })),
+      localBonds: m.localBonds.map((b) => [b[0], b[1], b[2]] as BondTuple),
+    })),
+  };
+}
+
+/** Atomically replace `target`'s contents with `source`'s. Helper for
+ *  the hydrate rollback path: `session.scene` is held by reference
+ *  elsewhere (the scene-runtime closure's `sceneState`), so we must
+ *  mutate in place rather than reassign. */
+export function restoreSceneStateInPlace(target: SceneState, source: SceneState): void {
+  target.molecules.length = 0;
+  for (const m of source.molecules) {
+    target.molecules.push({
+      id: m.id,
+      name: m.name,
+      structureFile: m.structureFile,
+      atomCount: m.atomCount,
+      atomOffset: m.atomOffset,
+      localAtoms: m.localAtoms.map((a) => ({ element: a.element, x: a.x, y: a.y, z: a.z })),
+      localBonds: m.localBonds.map((b) => [b[0], b[1], b[2]] as BondTuple),
+    });
+  }
+  target.totalAtoms = source.totalAtoms;
+  target.nextId = source.nextId;
 }
 
 interface CommitCallbacks {

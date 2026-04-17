@@ -71,8 +71,13 @@ async function workerTransaction(
   try {
     const candidate = new PhysicsEngine({ skipWasmInit: true });
 
-    // Apply timing config so engine uses protocol dt/dampingReferenceSteps, not defaults.
-    candidate.setTimeConfig(config.dt, config.dampingReferenceSteps);
+    // Apply timing config so engine uses protocol dt/dampingReferenceSteps
+    // and, when the caller supplies it, the authoritative
+    // `dampingRefDurationFs` from the handed-off / restart state. Without
+    // the duration arg the engine preserves its boot default — same
+    // semantics as legacy init paths. New call sites that carry real
+    // timing state (Watch → Lab handoff) populate all three.
+    candidate.setTimeConfig(config.dt, config.dampingReferenceSteps, config.dampingRefDurationFs);
     // Apply shared config FIRST so caller-specific state (e.g. restoreBoundarySnapshot)
     // can override wallMode and damping if it has authoritative values.
     candidate.setDamping(config.damping);

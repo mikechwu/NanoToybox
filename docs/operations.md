@@ -242,10 +242,32 @@ operator is pairing with a reporting user during an incident.
 | `[auth] dropping auth-complete message from unexpected origin` | A `message` event with the auth-complete shape arrived from an origin that did not match the Lab tab's `window.location.origin`. The handler dropped it (security-correct). On a Vite dev host (port 5173) this commonly indicates a popup that landed on `:8788` — run the Lab under `npm run cf:dev` or use the same host for both. |
 | `[auth] OAuth popup skipped — running on Vite dev host` | Dev-only signal: `tryBeginOAuthPopup` short-circuited because the Lab is on Vite (port != 8788), where `/auth/{provider}/start` 404s. The popup-blocked UX surfaces (Retry / Continue-in-tab / Back). Production traffic never emits this. |
 
-### Client-side sentinels (sessionStorage, not logs)
+### Client-side (Watch→Lab handoff, browser console)
 
-Not log prefixes, but operators should know what's in sessionStorage
-when debugging with a user:
+Emitted during the Watch→Lab "open current frame" funnel. Watch writes
+the paused frame (positions + velocities + small metadata) to
+`localStorage` and opens `/lab/?from=watch&handoff=<token>`; Lab
+consumes, scrubs the URL, and hydrates the scene. Every failure mode
+logs a greppable tag before (or instead of) surfacing an error banner —
+user reports almost always correlate with one of these.
+
+| Prefix | Meaning |
+|---|---|
+| `[lab.boot] watch handoff hydrated: { atomCount, historyKind, velocitiesAreApproximated }` | Happy path. `historyKind` discriminates which seed flavor was consumed; `velocitiesAreApproximated=true` indicates the velocity payload was synthesized (older Watch build or lossy transport) rather than full fidelity. Informational. |
+| `[lab.boot] watch handoff hydrate failed: <reason> <cause>` | Hydration reached the scene-runtime stage and then blew up (e.g. worker unavailable, seed shape mismatch at apply-time). Paired with a fallback path — default scene loads instead. The `<cause>` is the raw thrown value; grep the matching `[worker] …` or `[scene-runtime] …` entry emitted in the same turn for the underlying reason. |
+| `[lab.boot] watch handoff rejected: <reason>` | Handoff failed the consume-side validator before any runtime work started. `<reason>` is one of `stale` (token older than TTL), `missing-entry` (token URL present but no matching `localStorage` entry — expected if the other tab already consumed, or if the writer was suppressed by storage-unavailable), `malformed-seed`, `wrong-version`, `wrong-source`, `wrong-mode`, `parse-error`. `stale`/`missing-entry` are the two the user is most likely to surface via the banner copy below. The others indicate a writer/reader version skew and should be correlated with recent deploys. |
+| `[lab.boot] default-scene fallback load failed: <err>` | The default-scene load attempted after a rejected or failed handoff itself failed. This is the terminal error path — the Lab will render its "Couldn't load the default scene" banner. If you see this without a preceding handoff rejection, it's a plain default-scene regression, not a handoff issue. |
+| `[watch] handoff write failed: <kind> <message>` | Watch-side writer failed. `<kind>` is `storage-unavailable` (private-browsing, extension-blocked, or no DOM storage at all) or `quota-exceeded` (origin `localStorage` ceiling hit; the writer pre-sweeps prior handoff entries before surfacing the error, so a persistent rate of this in the absence of other heavy `localStorage` writers indicates something outside our namespace is consuming quota). The user sees one of the two storage banners listed below. |
+| `[worker] failure: <reason> — rebuilding local physics for sync fallback` | Generic worker-append failure outside a hydrate transaction. Scene-runtime tears down the worker and continues in sync mode; the user sees the "Simulation worker is unavailable…" banner. Sustained volume indicates a worker-bundle regression (check recent changes under `src/md/worker/`). |
+| `[worker] failure during hydrate transaction — deferring to hydrate rollback: <reason>` | Worker failed mid-hydrate; the hydration lock intercepted the tear-down so the hydrate can roll back atomically rather than leaving a half-applied scene. Paired with the `[lab.boot] watch handoff hydrate failed: …` entry above. |
+| `[scene-runtime] worker append failed — tearing down worker, falling back to sync mode` | Companion to the `[worker] failure: …` entry emitted by the scene-runtime side of the tear-down. Presence of one without the other is a regression (the two logs bracket the same transition). |
+
+### Client-side sentinels (browser storage, not logs)
+
+Not log prefixes, but operators should know what's in browser storage
+when debugging with a user. Keys are split by storage class and TTL.
+
+**`sessionStorage` (per-tab, cleared on tab close):**
 
 - `atomdojo.onboardingDismissed` — boolean-ish; set when the user
   dismisses the onboarding modal. Purely client-side; no backend
@@ -256,6 +278,65 @@ when debugging with a user:
   read on the post-auth return to resume the interrupted action.
   Self-clears on consume; stale entries are ignored via the `iat` TTL
   check.
+- `atomdojo.watchHandoffPillDismissed:<token>` — set when the user
+  explicitly closes the Watch→Lab arrival pill. Session-scoped so a
+  refresh of the same Lab tab doesn't re-show the pill; a new tab (or
+  a fresh handoff with a different token) shows it again.
+
+**`localStorage` (per-origin, persistent until cleared):**
+
+- `atomdojo.watchLabHandoff:<token>` — Watch→Lab handoff payload,
+  10-minute TTL enforced at read time. Value is a small JSON envelope
+  wrapping a base64-encoded `Float64Array` of positions + velocities.
+  Typical size is <500 KB for a 264-atom capsule frame; origin
+  `localStorage` quota is ~5–10 MB per browser (implementation-defined),
+  so any single token is well under budget. Tokens are one-shot: Lab
+  consumes (removes) the entry on first successful read, and the URL
+  query params are scrubbed post-consume so a reload can't replay.
+  Watch pre-sweeps orphan entries under this prefix before each write,
+  bounding worst-case accumulation if a user repeatedly opens
+  handoffs but never lands on the Lab tab.
+
+When a user reports a handoff failure, first ask them to open devtools
+→ Application → Storage and confirm whether any
+`atomdojo.watchLabHandoff:*` keys are present. Zero keys + a Lab URL
+carrying `?from=watch&handoff=<token>` matches the `missing-entry`
+rejection reason.
+
+### User-reported error banner copy (grep-to-root-cause)
+
+Support reports usually quote the banner text verbatim. Map to code
+path before asking the user to reproduce:
+
+| Banner text | Root-cause path |
+|---|---|
+| "This remix link has expired. Open it again from Watch to try once more." | `[lab.boot] watch handoff rejected: stale` — token older than the TTL (10 min in production; `?e2eHandoffTtlMs=<ms>` override is test-only). |
+| "This remix link is no longer available. Open it again from Watch to try once more." | `[lab.boot] watch handoff rejected: missing-entry` — either the other tab already consumed (benign — reload of the Lab tab after arrival), or the writer-side entry never landed (check for `[watch] handoff write failed: …`). |
+| "Your browser is blocking storage, so the current frame can't be prepared. …" | `[watch] handoff write failed: storage-unavailable` — private browsing, Storage-API permissions, or extension blocking. Watch-side only; no Lab-side log. |
+| "Browser storage is full, so the current frame can't be prepared. …" | `[watch] handoff write failed: quota-exceeded` — retry sweeps prior handoff entries first; if this still surfaces, a non-atomdojo writer is consuming the origin's `localStorage` quota. |
+| "Couldn't load the default scene. Please reload the page." | `[lab.boot] default-scene fallback load failed: …` — see the signal table above. |
+| "Simulation worker is unavailable. Running locally — performance may be reduced." | `[worker] failure: … — rebuilding local physics for sync fallback` — worker append failed outside a hydrate transaction. |
+| "Simulation worker disconnected during timeline restart. Running locally — performance may be reduced." | `reinitWorker` → `restoreState` failed during a worker re-init (timeline restart / scrub). Scene continues in sync mode; same degraded-performance story as the generic worker-unavailable banner. |
+
+### Watch→Lab URL query params
+
+`/lab/` honors the following query params in addition to `?authReturn=1`
+(already covered under `validateReturnTo`). All four are consumed and
+scrubbed from the URL after the Lab boot pipeline reads them, so reload
+is always a clean state:
+
+| Param | Purpose |
+|---|---|
+| `?from=watch` | Signals a pending Watch→Lab handoff. Required pair with `handoff`. |
+| `?handoff=<token>` | Opaque token naming the `atomdojo.watchLabHandoff:<token>` `localStorage` entry. One-shot; consumed (removed) by Lab on first successful read. |
+| `?e2e=1` | Test hook. On Watch it installs `window._watchOpenFile` + `window._watchScrub` harness helpers; on Lab it exposes `window._getUIState`. Never set by production user flows. If you see this in a user-reported URL, either they pasted a test-harness URL or an automation tool is running — not a production support case. |
+| `?e2eHandoffTtlMs=<ms>` | Test-only TTL override for the handoff stale-check. Ignored unless `?e2e=1` is also present. Production uses the hard-coded 10-minute TTL. |
+
+The one-shot scrub is what prevents reload-replay: once Lab consumes
+the token, the URL no longer carries it, and a browser reload lands on
+a plain `/lab/` with no pending handoff. If a user reports that a
+reload "recovered" a failed handoff, that's a bug — file it, don't
+dismiss it.
 
 ---
 
@@ -841,6 +922,23 @@ curl -I "https://atomdojo.pages.dev/c/<code>"
   audit-delete-abuse-reports Sun 04:45 UTC). Only one free-tier slot
   remains — adding another schedule requires either collapsing an
   existing trigger or moving the Worker to a paid plan.
+- **Watch→Lab handoff is pure client-side.** The `localStorage` handoff
+  payload (see *Client-side sentinels*) never crosses an origin boundary
+  and never hits the Pages Functions or R2. It costs nothing on the
+  backend and there is no server-side rate limit to tune. The only
+  capacity ceiling is the browser's per-origin `localStorage` quota
+  (~5–10 MB); a 264-atom capsule frame is typically <500 KB, so budget
+  is ample. Quota-exceeded retry first sweeps prior
+  `atomdojo.watchLabHandoff:*` entries before surfacing the error
+  banner — if users still see "Browser storage is full…" after that
+  sweep, a non-atomdojo writer on the same origin is consuming quota.
+- **Removed flags (watch out for stale URLs / bookmarks).** The
+  `REMIX_CURRENT_FRAME_UI_ENABLED` build-time gate has been removed,
+  and the `?e2eEnableRemixCurrentFrame=1` URL override no longer does
+  anything. Neither is an error to pass — they're silently ignored —
+  but user reports that reference either in triage notes predate the
+  ship and should be re-verified against the current behavior before
+  reproducing.
 
 ## Privacy contact channel — `/privacy-request`
 

@@ -32,6 +32,7 @@ Or visit the live demo at [atomdojo.pages.dev](https://atomdojo.pages.dev/lab/).
 - **Containment boundary** — soft harmonic wall with Contain/Remove toggle, live atom count, auto-scaling radius
 - **Responsive UI** — phone (bottom sheet), tablet (side panel), desktop (non-modal panel)
 - **Bonded-group color editing** — inline color chip with preset swatch popover; group color intents persist across topology changes, multi-color chips for mixed groups, perceptual lift for 3D readability
+- **Watch→Lab remix** — split-button in Watch sends the current scrubbed frame to Lab: primary "Open in Lab" starts a default session, caret "From this frame" hands off atoms/bonds/velocities/boundary via a short-lived token and hydrates Lab transactionally. Lab shows an arrival pill (`From Watch · frame N · time · creative seed` when velocities were approximated); stale or missing handoffs toast and fall back to the default C60 scene
 - **React + Zustand** — all UI surfaces are React-authoritative with reactive store
 
 ### Watch (trajectory viewer)
@@ -143,6 +144,7 @@ NanoToybox/
 │   ├── input/                  # Camera gesture constants
 │   ├── policy/                 # Single-source policy version + active segments, Vite plugin for meta-tag injection
 │   ├── share/                  # Capsule publish/delete, audit, rate-limit, b64url, error-message utilities
+│   ├── watch-lab-handoff/      # Shared Watch→Lab handoff schema + normalize helper
 │   └── types/                  # Shared TypeScript type definitions
 ├── structures/library/         # 15 relaxed 0K structures
 ├── scripts/                    # CLI tools, scaling research

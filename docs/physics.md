@@ -74,13 +74,30 @@ Properties: symplectic, time-reversible, second-order accurate. Guarantees bound
 
 ## Timing Parameterization
 
-`PhysicsEngine` owns its timestep (`dtFs`) as instance state rather than reading a module-level constant. `stepOnce()` uses `this.dtFs`. The runtime method `setTimeConfig(dtFs, dampingRefSteps)` allows changing the timestep and damping reference without rebuilding the engine.
+`PhysicsEngine` owns its timestep (`dtFs`) as instance state rather than reading a module-level constant. `stepOnce()` uses `this.dtFs`. The runtime method `setTimeConfig(dtFs, dampingRefSteps, dampingRefDurationFs?)` allows changing the timestep and damping reference without rebuilding the engine.
 
 **Time-based exponential damping.** The user-facing damping parameter *d* represents fractional velocity loss over a reference batch duration (`dampingRefDurationFs`). This is converted to a decay rate γ (per femtosecond), then to a per-step factor via `exp(-γ · dtFs)`. Because the factor is derived from physical time, the effective decay rate is preserved when dt changes.
+
+**Dual damping parameters — `dampingRefDurationFs` is authoritative.** The engine carries both `dampingRefSteps` (legacy step-count hint) and `dampingRefDurationFs` (physical-time window in fs) as instance state. `_recomputeDampingFactor` reads `dampingRefDurationFs` — **not** `dtFs * dampingRefSteps` — so the decay window is step-rate-invariant. `setTimeConfig` has two forms:
+
+- **Two-arg** `setTimeConfig(dtFs, dampingRefSteps)` — preserves the engine's current `dampingRefDurationFs` (boot default or a previously-restored value). Used by the Lab runtime for ordinary step-rate changes where the calibration window should not silently shift.
+- **Three-arg** `setTimeConfig(dtFs, dampingRefSteps, dampingRefDurationFs)` — reinstates an authoritative damping window. Used by restore paths (Watch→Lab handoff, timeline restart) so damping calibration survives the hop. `PhysicsConfig.dampingRefDurationFs?` (in `src/types/worker-protocol.ts`) carries the value end-to-end through worker `init` / `restoreState`. Producers: see `normalize-watch-seed.ts`.
 
 **Boundary snapshots.** `getBoundarySnapshot()` and `restoreBoundarySnapshot()` capture/restore wall state (mode, radius, center, centerSet, removedCount, damping). Used by timeline restart to reset the boundary consistently.
 
 **Derived scheduler timing.** `getPhysicsTiming()` in `config.ts` derives `baseStepsPerSecond` from `baseSimRatePsPerSecond` and dt. The scheduler reads timing live from the engine each frame rather than caching values at startup.
+
+## Engine Lifecycle & Scene Primitives
+
+**Scene-replacement primitives (canonical).** `appendMolecule(atoms, bonds, offset)` and `clearScene()` are the authoritative scene-mutation entry points. `appendMolecule` grows positions/velocities/forces plus the neighbor-list workspace in one pass (inline allocation with data migration). `clearScene` resets to N=0 and nulls the workspace buffers.
+
+**Checkpoint round-trip (rollback only).** `createCheckpoint()` copies `{ n, pos, vel, bonds }`; `restoreCheckpoint(cp)` is the authoritative rollback primitive — used by the post-`clearScene` rollback path and similar recovery. It rebuilds forces and bond topology from the restored positions. Not a general scene-replacement API; prefer `clearScene` + `appendMolecule` for arbitrary scene changes.
+
+**Empty-atom init is supported.** `physics.init([], [])` produces a ready-to-append engine and is the entry point for the Watch→Lab pending-handoff boot path: the main-thread physics starts with zero atoms and the hydrate's subsequent `appendMolecule` populates them.
+
+**Neighbor-list-workspace invariant.** After `init`, `appendMolecule`, or `restoreCheckpoint`, the `_nlCounts` / `_nlArrays` neighbor-list workspace is guaranteed allocated and sized for at least `this.n` entries. `clearScene` is the only path that intentionally nulls them (resetting to the empty-engine state).
+
+The private `_ensureNeighborListWorkspace()` helper enforces this invariant for the two paths that can land on a fresh or cleared engine (`init`, `restoreCheckpoint`). It is idempotent and grow-only. The guard is `_nlCounts == null || _nlArrays == null || _maxN < this.n` — the null check is load-bearing: a fresh or post-`clearScene` engine has `_maxN == this.n == 0` with null buffers, so a `_maxN < this.n` comparison alone would skip allocation for the empty-scene init path and the next `buildNeighborList()` would null-deref `_nlCounts.fill(0)`. `appendMolecule` and `_removeAtomsOutsideWall` do not use this helper — they perform inline grow-and-migrate in a single pass.
 
 ## Unit System
 
