@@ -23,13 +23,8 @@
  */
 
 import { createWatchDocumentService, deriveDocumentKey, type DocumentMetadata } from './watch-document-service';
-import {
-  createWatchLabDiscoveryRuntime,
-  type WatchLabDiscoveryRuntime,
-  type WatchLabHintModel,
-} from './watch-lab-discovery';
 import { buildLabHref } from './watch-lab-href';
-import { buildWatchLabSceneSeed, canBuildWatchLabSceneSeed } from './watch-lab-seed';
+import { buildWatchLabSceneSeed } from './watch-lab-seed';
 import {
   writeWatchToLabHandoff,
   removeWatchToLabHandoff,
@@ -55,25 +50,19 @@ import {
  *   - `SceneRuntime.hydrateFromWatchSeed()` wrapper with classified
  *     failure→copy mapping.
  *   - Lab boot invokes `consumeWatchToLabHandoffFromLocation` + hydrate.
- *   - §10 failure surfacing: stale + missing-entry are user-visible
- *     with distinct copy; tampering/schema-drift stays silent.
+ *   - Failure surfacing: stale + missing-entry are user-visible with
+ *     distinct copy; tampering / schema-drift stays silent.
  *   - Watch-side writer failure-copy (`WatchHandoffWriteError` with
  *     `kind='storage-unavailable' | 'quota-exceeded'`) classified
  *     uniformly across every storage-touch (read-path iteration,
  *     initial setItem, retry setItem).
- *   - `WatchHandoffProvenancePill` (§7.2) with all four §9.5 copy
- *     variants, 1-based ordinal frame rendering, 8000 ms auto-
- *     dismiss, sessionStorage suppression, ARIA `role=status` /
- *     `aria-live=polite`, and the §7.2 non-disclosure rule (no raw
- *     fileName / shareCode / token in DOM).
  *   - `sourceMeta.frameId` schema extension with back-compat
  *     deserialize (legacy tokens normalize to `frameId: null`).
- *   - §9.1.1 contrast table measured + verified by
+ *   - Contrast table measured + verified by
  *     `tests/unit/lab-entry-contrast.test.ts`.
  *   - Playwright coverage: stale, missing-entry, malformed-silent,
- *     enabled-menuitem, happy-path user journey (load fixture →
- *     caret → click "From this frame" → Lab hydrates seeded scene
- *     + pill shows exact variant copy).
+ *     enabled-anchor, and happy-path user journey (load fixture →
+ *     hover + click Continue → Lab hydrates seeded scene).
  */
 import { createWatchPlaybackModel, type WatchPlaybackModel } from './watch-playback-model';
 import { createWatchBondedGroups, type WatchBondedGroups } from './watch-bonded-groups';
@@ -224,17 +213,15 @@ export interface WatchControllerSnapshot {
   /** True iff a file is loaded AND its metadata is coherent. Source-of-
    *  truth for the split-button's `enabled` prop. */
   labEntryEnabled: boolean;
-  /** Controller-owned public projection of the active discovery hint.
-   *  Identity invariant: every transition produces a FRESH object
-   *  (see snapshotChanged). Null when no hint should render. */
-  labHint: WatchLabHintModel | null;
   /** Stable href for the primary `Open in Lab` anchor. Derived once from
    *  `import.meta.env.BASE_URL`; identical across renders. */
   labHref: string;
-  /** PR 2: true iff the current display frame can produce a valid seed
-   *  (cheap predicate via `canBuildWatchLabSceneSeed`). Probe cache is
-   *  keyed on (displayFrameKey, topologyFrameKey) tuple — recomputed
-   *  only when either key changes. */
+  /** True iff the loaded file contains ≥1 seedable frame. This is a
+   *  FILE-level availability signal — NOT gated on the exact current
+   *  playback time. The click path snaps `currentTimePs` to the
+   *  nearest seedable dense frame via
+   *  `playback.findNearestSeedableTimePs`, so Continue never flickers
+   *  disabled between dense frames during playback. */
   labCurrentFrameAvailable: boolean;
   /** PR 2: read-only accessor for the current-frame handoff URL. Minted
    *  and cached by the controller when the caret menu opens (via
@@ -299,13 +286,7 @@ export interface WatchController {
   /** Signal that the caret dropdown has closed. Debounces the cache
    *  invalidation by 500 ms so a rapid close→open at the same frame
    *  reuses the cached token instead of churning localStorage. */
-  notifyLabMenuClosed(): void;
-  /** Dismiss the active discovery hint. Optional `id` guard prevents a
-   *  late dismiss from clearing a newer hint that just fired. */
-  dismissLabHint(id?: WatchLabHintModel['id']): void;
-  /** Signal that a user gesture (pointer / scrub) just ended so the
-   *  hint runtime's post-gesture idle grace window can start. */
-  notifyLabGestureEnd(): void;
+  notifyContinueIdle(): void;
   // ── Runtime access ──
   getPlaybackModel(): WatchPlaybackModel;
   getBondedGroups(): WatchBondedGroups;
@@ -338,7 +319,6 @@ const EMPTY_SNAPSHOT: WatchControllerSnapshot = {
   cinematicCameraActive: false,
   cinematicCameraStatus: 'off' as SnapshotCinematicCameraStatus,
   labEntryEnabled: false,
-  labHint: null,
   labHref: buildLabHref(),
   labCurrentFrameAvailable: false,
   labCurrentFrameHref: null,
@@ -366,7 +346,6 @@ export function deriveCinematicCameraStatus(
 
 export function createWatchController(): WatchController {
   const documentService = createWatchDocumentService();
-  const labDiscovery: WatchLabDiscoveryRuntime = createWatchLabDiscoveryRuntime();
   const _labHref = buildLabHref();
   const playback = createWatchPlaybackModel();
   const bondedGroups = createWatchBondedGroups();
@@ -410,40 +389,36 @@ export function createWatchController(): WatchController {
     }
   }
 
-  /** Discovery runtime → controller snapshot bridge. Any hint-state
-   *  transition republishes the snapshot so React re-renders. */
-  const _labDiscoveryUnsubscribe = labDiscovery.subscribe(() => {
-    publishSnapshot();
-  });
-
-  // ── PR 2: labCurrentFrameAvailable probe cache + handoff href cache ──
-  /** Probe cache — avoids recomputing `canBuildWatchLabSceneSeed` on
-   *  every RAF tick. Keyed on the (displayFrameKey, topologyFrameKey)
-   *  tuple; within a single dense frame the cached boolean is reused
-   *  with zero allocations. */
-  let _probeCache: {
-    displayFrameKey: number;
-    topologyFrameKey: number;
-    result: boolean;
-  } | null = null;
+  // ── labCurrentFrameAvailable: FILE-level availability ──────────
+  // Contract (post-refactor): Continue is enabled whenever the loaded
+  // file contains ≥1 seedable frame. The button is NEVER gated on the
+  // exact current playback time — which was the prior source of UX
+  // flicker (snapshot rebuilds during playback momentarily saw
+  // unseedable times between dense frames, or before the topology
+  // source's first covered time, and disabled the button).
+  //
+  // When the user clicks Continue, the build path snaps to the nearest
+  // seedable frame via `playback.findNearestSeedableTimePs`, so the
+  // click never fails on a "not available" edge case as long as the
+  // file itself has seedable content.
+  //
+  // Cache: file-level — keyed on the history object identity. New
+  // file load → `invalidateCurrentFrameHrefCache()` runs anyway; we
+  // also clear this cache there so the next snapshot recomputes.
+  let _fileSeedableCache: { history: object; result: boolean } | null = null;
 
   function computeLabCurrentFrameAvailable(): boolean {
     if (!playback.isLoaded()) return false;
-    const currentTimePs = playback.getCurrentTimePs();
-    const displayKey = playback.getDisplayFrameIndexAtTime(currentTimePs);
-    const topologyKey = playback.getTopologyFrameIdAtTime(currentTimePs);
-    if (displayKey == null || topologyKey == null) return false;
-    if (
-      _probeCache
-      && _probeCache.displayFrameKey === displayKey
-      && _probeCache.topologyFrameKey === topologyKey
-    ) {
-      return _probeCache.result;
-    }
     const history = playback.getLoadedHistory();
     if (!history) return false;
-    const result = canBuildWatchLabSceneSeed({ history, timePs: currentTimePs, playback });
-    _probeCache = { displayFrameKey: displayKey, topologyFrameKey: topologyKey, result };
+    if (_fileSeedableCache && _fileSeedableCache.history === (history as unknown as object)) {
+      return _fileSeedableCache.result;
+    }
+    // A non-null nearest-seedable-time at ANY probe time is
+    // equivalent to "this file has ≥1 seedable frame" — the helper
+    // scans the whole dense array.
+    const result = playback.findNearestSeedableTimePs(playback.getStartTimePs()) !== null;
+    _fileSeedableCache = { history: history as unknown as object, result };
     return result;
   }
 
@@ -481,28 +456,47 @@ export function createWatchController(): WatchController {
    *  unrelated calls. */
   let _lastCurrentFrameBuildWriteFailure: 'storage-unavailable' | 'quota-exceeded' | null = null;
 
-  /** Derive the full seed identity at the current playback time. Returns
-   *  null when any component is unresolvable (history not loaded,
-   *  display frame missing, etc.). Cheap — O(log n) binary searches +
-   *  a linear walk over restart frames (typically few). */
+  /** Derive the full seed identity at (or NEAREST TO) the current
+   *  playback time. The snap-to-nearest-seedable step is what makes
+   *  Continue robust during playback: if the continuous playback time
+   *  falls between dense frames or before the topology source's first
+   *  covered time, we still land on a valid seed identity by using
+   *  the nearest seedable frame's time.
+   *
+   *  Returns null when the file has no seedable frame at all (a
+   *  single-frame capsule, or before the file is loaded). Cheap on
+   *  the common path — one linear pass over dense frames (O(n)) but
+   *  only called from the click path / menu-open, not from the
+   *  snapshot hot path.
+   *
+   *  Exported shape includes `seedTimePs` — the SNAPPED time — so the
+   *  handoff writer can record it as the authoritative
+   *  `sourceMeta.timePs` rather than the user's between-frame display
+   *  time (which would point at a frame that wasn't actually shipped). */
   function deriveCurrentFrameSeedIdentity(): {
     documentKey: string;
     displayFrameKey: number;
     topologyFrameKey: number;
     restartFrameId: number | null;
+    seedTimePs: number;
   } | null {
     if (!playback.isLoaded()) return null;
     const meta = documentService.getMetadata();
     const documentKey = deriveDocumentKey(meta);
     if (!documentKey) return null;
-    const timePs = playback.getCurrentTimePs();
-    const displayFrameKey = playback.getDisplayFrameIndexAtTime(timePs);
-    const topologyFrameKey = playback.getTopologyFrameIdAtTime(timePs);
+    const currentTimePs = playback.getCurrentTimePs();
+    const seedTimePs = playback.findNearestSeedableTimePs(currentTimePs);
+    if (seedTimePs == null) return null;
+    const displayFrameKey = playback.getDisplayFrameIndexAtTime(seedTimePs);
+    const topologyFrameKey = playback.getTopologyFrameIdAtTime(seedTimePs);
+    // Both must resolve by construction (findNearestSeedableTimePs
+    // returns only times where they do); the null guard is
+    // defence-in-depth against future topology-source variants.
     if (displayFrameKey == null || topologyFrameKey == null) return null;
     // restartFrameId is null for capsule histories — that's valid; the
     // cache comparison below uses `===` so two null values match.
-    const restartFrameId = playback.getNearestRestartFrameIdAtTime(timePs);
-    return { documentKey, displayFrameKey, topologyFrameKey, restartFrameId };
+    const restartFrameId = playback.getNearestRestartFrameIdAtTime(seedTimePs);
+    return { documentKey, displayFrameKey, topologyFrameKey, restartFrameId, seedTimePs };
   }
 
   /** Best-effort programmatic new-tab opener. The primary user path is
@@ -656,10 +650,8 @@ export function createWatchController(): WatchController {
       cinematicCameraEnabled: cs.enabled,
       cinematicCameraActive: computeCinematicCameraActive(),
       cinematicCameraStatus: deriveCinematicCameraStatus(cs.status, viewService.isFollowing()),
-      // Lab entry — disabled in empty state; hint is always null here
-      // because the discovery runtime emits only while a file is loaded.
+      // Lab entry — disabled in empty state.
       labEntryEnabled: false,
-      labHint: labDiscovery.getState().activeHint,
       labHref: _labHref,
       labCurrentFrameAvailable: false,
       labCurrentFrameHref: null,
@@ -709,7 +701,6 @@ export function createWatchController(): WatchController {
       cinematicCameraStatus: deriveCinematicCameraStatus(cs.status, viewService.isFollowing()),
       // Lab entry — enabled whenever a file is fully loaded.
       labEntryEnabled: true,
-      labHint: labDiscovery.getState().activeHint,
       labHref: _labHref,
       labCurrentFrameAvailable: computeLabCurrentFrameAvailable(),
       // Rev 7 follow-up: project the cached href ONLY when it still
@@ -772,11 +763,8 @@ export function createWatchController(): WatchController {
       || a.cinematicCameraEnabled !== b.cinematicCameraEnabled
       || a.cinematicCameraActive !== b.cinematicCameraActive
       || a.cinematicCameraStatus !== b.cinematicCameraStatus
-      // Lab entry — value compare for the boolean; identity compare
-      // for `labHint` matches the `openProgress` contract: fresh
-      // object per transition, `!==` catches any change.
+      // Lab entry — value compare for the boolean.
       || a.labEntryEnabled !== b.labEntryEnabled
-      || a.labHint !== b.labHint
       || a.labHref !== b.labHref
       || a.labCurrentFrameAvailable !== b.labCurrentFrameAvailable
       || a.labCurrentFrameHref !== b.labCurrentFrameHref;
@@ -955,24 +943,6 @@ export function createWatchController(): WatchController {
       }
     }
 
-    // Discovery runtime — advance milestone triggers against the current
-    // progress. `isScrubbing: false` here because scrub-driven advancement
-    // comes through `scrub()` which calls the runtime directly.
-    if (playback.isLoaded()) {
-      try {
-        labDiscovery.onPlaybackProgress({
-          loaded: true,
-          currentTimePs: playback.getCurrentTimePs(),
-          startTimePs: playback.getStartTimePs(),
-          endTimePs: playback.getEndTimePs(),
-          documentKey: deriveDocumentKey(documentService.getMetadata()),
-          isScrubbing: false,
-        });
-      } catch (e) {
-        console.error('[watch] discovery progress error (non-fatal):', e);
-      }
-    }
-
     try {
       publishSnapshot();
     } catch (e) {
@@ -1082,14 +1052,10 @@ export function createWatchController(): WatchController {
         shareCode: opts.shareCode ?? null,
       });
       playback.load(history);
-      // Discovery runtime: reset per-document trigger tracking whenever the
-      // loaded document changes. Derived after commit so meta reflects the
-      // just-loaded file.
-      labDiscovery.resetForDocument(deriveDocumentKey(documentService.getMetadata()));
       // PR 2 caches are keyed on document identity — document change
       // forces a full reset so the new document can mint fresh state.
       invalidateCurrentFrameHrefCache();
-      _probeCache = null;
+      _fileSeedableCache = null;
       // Appearance reset before first render — prevents stale color flash from prior file.
       // bondedGroups/viewService reset AFTER render — they don't affect visual state,
       // and deferring them preserves rollback safety (if renderer init fails, follow/hover
@@ -1409,17 +1375,6 @@ export function createWatchController(): WatchController {
     scrub(timePs) {
       if (!playback.isLoaded()) return;
       playback.seekTo(timePs);
-      // Tell the discovery runtime this was a seek (advancement gate will
-      // ignore this progress event so a scrub-to-99% does not burn
-      // halfway + completed in the same tick).
-      labDiscovery.onPlaybackProgress({
-        loaded: true,
-        currentTimePs: playback.getCurrentTimePs(),
-        startTimePs: playback.getStartTimePs(),
-        endTimePs: playback.getEndTimePs(),
-        documentKey: deriveDocumentKey(documentService.getMetadata()),
-        isScrubbing: true,
-      });
       renderAtCurrentTime();
       publishSnapshot();
     },
@@ -1586,10 +1541,17 @@ export function createWatchController(): WatchController {
       if (!playback.isLoaded()) return null;
       const history = playback.getLoadedHistory();
       if (!history) return null;
+      // `seedTimePs` on the identity is the SNAPPED time — nearest
+      // seedable dense frame to the live playback cursor. All downstream
+      // seed construction, cache keying, and handoff metadata use this
+      // time, NOT the raw `currentTimePs`, so building from between
+      // dense frames during smooth playback still produces a coherent
+      // handoff (the shipped frame is the nearest one the viewer was
+      // actually interpolating toward).
       const identity = deriveCurrentFrameSeedIdentity();
       if (!identity) return null;
       const meta = documentService.getMetadata();
-      const currentTimePs = playback.getCurrentTimePs();
+      const seedTimePs = identity.seedTimePs;
 
       // Cache hit — ALL identity components must match (document,
       // display frame, topology frame, restart frame).
@@ -1616,9 +1578,11 @@ export function createWatchController(): WatchController {
         _currentFrameHrefCache = null;
       }
 
-      // Build the seed. Return null when the frame is not seedable —
-      // UI renders the menu item disabled in that case.
-      const seed = buildWatchLabSceneSeed({ history, timePs: currentTimePs, playback });
+      // Build the seed at the SNAPPED time. If this still returns
+      // null (e.g., unexpected topology-source gap despite the snap
+      // helper claiming seedability), we abort — the click path
+      // surfaces the generic "couldn't prepare" error.
+      const seed = buildWatchLabSceneSeed({ history, timePs: seedTimePs, playback });
       if (!seed) return null;
 
       let token: string;
@@ -1632,13 +1596,13 @@ export function createWatchController(): WatchController {
             fileName: meta.fileName,
             fileKind: meta.fileKind,
             shareCode: meta.shareCode,
-            timePs: currentTimePs,
-            // `frameId` feeds the Lab arrival pill's `frame {n}` copy
-            // (§7.2). `null` when the Watch document cannot resolve a
-            // dense-frame index at `currentTimePs` — defensive; all
-            // live paths set this. The pill elides "frame N" in that
-            // case rather than rendering placeholder text.
-            frameId: playback.getDisplayFrameIndexAtTime(currentTimePs),
+            // Record the SNAPPED time — this is the frame that was
+            // actually shipped. The live playback cursor may have been
+            // mid-interpolation between frames when the user clicked;
+            // recording the real seedTime keeps the Lab arrival pill
+            // consistent with the atoms Lab renders.
+            timePs: seedTimePs,
+            frameId: identity.displayFrameKey,
           },
           seed,
         });
@@ -1667,7 +1631,7 @@ export function createWatchController(): WatchController {
       return href;
     },
 
-    notifyLabMenuClosed() {
+    notifyContinueIdle() {
       // 500 ms debounce — close→reopen at the same frame reuses the
       // cached token; sustained closed state invalidates so the next
       // open mints afresh.
@@ -1702,21 +1666,21 @@ export function createWatchController(): WatchController {
         // that — it's strictly more actionable than the generic copy.
         console.warn('[watch] openLabFromCurrentFrame: current frame could not be prepared');
         if (_lastCurrentFrameBuildWriteFailure == null) {
+          // This branch is only reached when the snap-to-nearest-
+          // seedable helper + builder BOTH failed after the file-
+          // level availability gate let the click through — i.e.,
+          // the file-wide seedability test passed but an individual
+          // frame's build threw (reconstructed-topology failure,
+          // atom-manifest mismatch). Scrubbing to a different frame
+          // won't help for file-wide problems, so keep the copy
+          // action-neutral: offer the "Open Lab" fallback only.
           setErrorKeepingCurrentState(
-            'Couldn\u2019t prepare this frame for Lab. Try scrubbing to a different moment, or use "Open in Lab" for the default scene.',
+            'Couldn\u2019t prepare this frame for Lab. Use "Open Lab" for the default scene, or reload the file and try again.',
           );
         }
         return;
       }
       openLabInNewTab(href);
-    },
-
-    dismissLabHint(id) {
-      labDiscovery.dismissActiveHint(id);
-    },
-
-    notifyLabGestureEnd() {
-      labDiscovery.notifyGestureEnd(Date.now());
     },
 
     getPlaybackModel: () => playback,
@@ -1732,10 +1696,6 @@ export function createWatchController(): WatchController {
       cameraInput = createWatchCameraInput(renderer, {
         onUserCameraInteraction: (phase) => {
           cinematicCamera.markUserCameraInteraction(phase);
-          // Every gesture-end event starts the idle-grace window in the
-          // discovery runtime, so hint fires cannot "pounce" on a user
-          // who just let go of the canvas.
-          if (phase === 'end') labDiscovery.notifyGestureEnd(Date.now());
         },
       });
       overlayLayout = createWatchOverlayLayout(renderer);
@@ -1768,10 +1728,8 @@ export function createWatchController(): WatchController {
       appearance.reset();
       documentService.clear();
       teardownInterpolationRuntime();
-      _labDiscoveryUnsubscribe();
-      labDiscovery.destroy();
       invalidateCurrentFrameHrefCache();
-      _probeCache = null;
+      _fileSeedableCache = null;
       detachRenderer();
     },
   };

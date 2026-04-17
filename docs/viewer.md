@@ -536,7 +536,7 @@ Once a valid file loads, the app presents:
 | Canvas | Three.js scene (same renderer as lab, via thin adapter: `initForPlayback` + `updateReviewFrame`) |
 | Top bar | File-kind badge + file name + "Open File" action + share-code input (see Remote Open via Share Code above) |
 | Bonded-groups panel | Two-tier expand (large/small clusters) with hover preview, Center/Follow buttons, and authored color editing (see Color Editing below) |
-| Bottom-chrome toolbar | Left cluster hosts the top-bar identity; right cluster hosts the "Open in Lab" split-button (+ discovery hint bubble) and the Cinematic Camera pill. See Watch → Lab Entry Funnel below |
+| Bottom-chrome toolbar | Left cluster hosts the top-bar identity; right cluster stacks the Lab split-capsule (Open Lab \| Continue) above the Cinematic Camera pill. See Watch → Lab Entry Funnel below |
 | Timeline | Custom scrub track (thick variant from shared `timeline-track.css`) with pointer-event scrubbing and time readouts at both ends |
 | Playback dock | Transport cluster + utility cluster (repeat, smooth toggle, speed) + settings button (see Playback Dock below) |
 | Settings sheet | Smooth Playback, Appearance, File Info, Help sections (see Settings below) |
@@ -681,8 +681,7 @@ Watch exposes two paths into Lab from a loaded document: **plain** (open Lab wit
 
 | Surface | Details |
 |---------|---------|
-| `WatchLabEntryControl` | Split-button. **Primary anchor** is "Open in Lab" (plain `/lab/`). **Caret menu** contains a single "From this frame" menuitem |
-| `WatchLabHint` | Discovery hint bubble anchored to the entry control. Fires once per document per session at two milestones: **halfway** through playback, and **completed** (end reached). Each hint has a "Try it" affordance (opens "From this frame") and a dismiss button |
+| `WatchLabEntryControl` | Split-capsule with two halves: **Open Lab** (left, ghost surface, static `/lab/` href) and **Continue** (right, filled accent, routes the current frame into a seeded Lab tab). A CSS-only hover tooltip ("Continue this frame in Lab") appears above the Continue half while the pointer / keyboard focus is on it, and disappears the moment the pointer leaves or focus moves away — no timer, no auto-dismiss. Hidden on coarse pointers (touch) since there is no reliable hover state there |
 
 **Click-ownership contract (most-likely-to-regress invariant):**
 
@@ -704,8 +703,6 @@ The split-button has two distinct click paths, and duplicating ownership between
 | `buildLabHref()` | Returns the static `/lab/` URL (for `labHref`) |
 | `buildCurrentFrameLabHref()` | Returns a cached minted URL for "From this frame". Cache key is the **seed identity**: document + display-frame + topology-frame + restart-frame. Called on caret-menu open so modifier-click / middle-click can use the same minted URL without minting twice |
 | `notifyLabMenuClosed()` | Starts the 500 ms debounced invalidation of the cached current-frame URL. The debounce covers the gap between menu-close and a late middle-click |
-| `dismissLabHint(id)` | User-dismiss for a discovery hint |
-| `notifyLabGestureEnd()` | Idle-grace gating for hint discovery — hints do not fire mid-gesture; the discovery runtime waits for a gesture-end signal before showing a bubble |
 
 **Controller snapshot fields** (what React reads via `useSyncExternalStore`):
 
@@ -715,7 +712,6 @@ The split-button has two distinct click paths, and duplicating ownership between
 | `labHref` | Static `/lab/` URL — passed directly to the primary anchor's `href` |
 | `labCurrentFrameAvailable` | True when the current frame is seedable (see Seed Extraction below). Drives whether the "From this frame" menuitem is enabled |
 | `labCurrentFrameHref` | Cached minted URL (or null). Passed to the caret menu's anchor so modifier/middle clicks land on the correct minted URL |
-| `labHint` | Active hint descriptor (or null) — drives `WatchLabHint` visibility and content |
 
 **Seed extraction (what "from this frame" means):**
 
@@ -740,14 +736,14 @@ The controller catches these and calls `setErrorKeepingCurrentState` with mode-s
 
 **Document metadata:** `WatchDocumentService` (`watch/js/watch-document-service.ts`) exposes `shareCode`, `documentFingerprint`, and `fileByteLength` on the document metadata. The `shareCode` field propagates into the handoff payload and drives Lab's arrival pill variant — Lab renders "From shared scene" when `shareCode` is present and "From Watch" otherwise.
 
-**Discovery runtime (`watch/js/watch-lab-discovery.ts`):**
+**Continue-button hover tooltip:**
 
-Fires hint bubbles based on playback progress:
+The earlier timeline-triggered discovery hint runtime (`watch-lab-discovery.ts`, fired at 50% and 95% of playback) has been removed. Discoverability is now carried entirely by a CSS-only hover tooltip attached to the Continue half of `WatchLabEntryControl`:
 
-- **Halfway trigger** — user has played past 50% of the timeline (monotonic — scrubbing backward does not re-arm)
-- **Completed trigger** — playback reaches the end
-- **Session-scoped suppression per document** — once a hint fires (or is dismissed) for a given document in the current session, it does not re-fire on reload of the same document. Opening a different document resets the suppression set
-- **Gesture idle-grace** — hints do not pop mid-gesture; the runtime waits for `notifyLabGestureEnd()` before surfacing a bubble so a hint does not interrupt an active orbit or scrub
+- **Reveal trigger** — `:hover` OR `:focus-visible` on the primary anchor, detected via a `:has()` selector on the outer `.watch-lab-entry-anchor`. No JS state, no timers
+- **Copy** — "Continue this frame in Lab" (same as the button's accessible name / `aria-describedby` target)
+- **Lifetime** — stays visible for as long as the pointer or focus holds. Fades out the moment either leaves
+- **Coarse pointer** — hidden (no reliable hover on touch). The button's `aria-label` still conveys the action to assistive tech
 
 ### Playback Model
 

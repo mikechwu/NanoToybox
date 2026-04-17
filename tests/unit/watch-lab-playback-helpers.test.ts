@@ -3,7 +3,6 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { createWatchPlaybackModel } from '../../watch/js/watch-playback-model';
-import { canBuildWatchLabSceneSeed } from '../../watch/js/watch-lab-seed';
 import { importCapsuleHistory } from '../../watch/js/capsule-history-import';
 import * as topologyModule from '../../src/topology/build-bond-topology';
 import type { AtomDojoPlaybackCapsuleFileV1 } from '../../src/history/history-file-v1';
@@ -68,31 +67,19 @@ describe('WatchPlaybackModel PR-2 cheap helpers', () => {
     expect(pm.getNeighborDenseFrameIndices(2)).toEqual({ prev: 1, next: null });
   });
 
-  it('canBuildWatchLabSceneSeed is true for capsule with >= 2 frames', () => {
-    const pm = createWatchPlaybackModel();
-    const history = importCapsuleHistory(makeCapsule(3));
-    pm.load(history);
-    expect(canBuildWatchLabSceneSeed({ history, timePs: 0.1, playback: pm })).toBe(true);
-  });
-
-  it('canBuildWatchLabSceneSeed is false for singleton capsule', () => {
-    const pm = createWatchPlaybackModel();
-    const history = importCapsuleHistory(makeCapsule(1));
-    pm.load(history);
-    expect(canBuildWatchLabSceneSeed({ history, timePs: 0, playback: pm })).toBe(false);
-  });
-
   it('getTopologyFrameIdAtTime does NOT trigger bond reconstruction (capsule)', () => {
     // Spy on the heavy bond-reconstruction builder — it must NOT be called
-    // from the cheap predicate path (rev 6 follow-up P1.1).
+    // from the cheap probe path; upstream callers (the controller's
+    // `findNearestSeedableTimePs` scan, for instance) rely on this probe
+    // staying allocation-free so they can iterate every dense frame
+    // without paying for bond materialization.
     const spy = vi.spyOn(topologyModule, 'buildBondTopologyFromPositions');
     try {
       const pm = createWatchPlaybackModel();
       const history = importCapsuleHistory(makeCapsule(5));
       pm.load(history);
-      // Reach for the topology frame id without the predicate allocating bonds.
       expect(pm.getTopologyFrameIdAtTime(0.21)).not.toBeNull();
-      expect(canBuildWatchLabSceneSeed({ history, timePs: 0.21, playback: pm })).toBe(true);
+      expect(pm.findNearestSeedableTimePs(0.21)).not.toBeNull();
       expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();

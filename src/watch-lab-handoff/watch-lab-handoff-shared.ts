@@ -103,10 +103,9 @@ export interface WatchToLabHandoffPayload {
      *  expose a resolvable dense-frame index at the handoff time
      *  (defensive — all real paths set this).
      *
-     *  Consumers that render this for users shift to a 1-based
-     *  ordinal at display time (see
-     *  `formatProvenancePillCopy` in `WatchHandoffProvenancePill.tsx`).
-     *  Internal APIs, tests, and storage keep the zero-based value. */
+     *  Consumers that render this for users should shift to a
+     *  1-based ordinal at display time; internal APIs, tests, and
+     *  storage keep the zero-based value. */
     frameId: number | null;
   };
   seed: WatchLabSceneSeed;

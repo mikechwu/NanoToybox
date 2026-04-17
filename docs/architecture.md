@@ -110,7 +110,6 @@ NanoToybox/
 │   │   │   ├── AccountControl.tsx # Top-right auth disclosure (loading / signed-in / signed-out / unverified + popup-blocked sub-menu); D120: signed-out menu renders AgeClickwrapNotice + provider buttons (no checkbox)
 │   │   │   ├── AgeClickwrapNotice.tsx # D120 — single short clickwrap sentence with linked Privacy/Terms anchors. Rendered above provider/Publish buttons; consuming buttons reference its `id` via `aria-describedby`. Replaces the deleted AgeGateCheckbox.
 │   │   │   ├── TopRightControls.tsx # Flex row wrapping AccountControl + FPSDisplay (replaces two absolutely-positioned surfaces)
-│   │   │   ├── WatchHandoffProvenancePill.tsx # Arrival pill rendered after a Watch→Lab hydrate; reads `watchHandoffProvenance` from the store
 │   │   │   ├── CameraControls.tsx # Object View panel: Center + Follow buttons (default); mode toggle when Free-Look gate is on
 │   │   │   ├── OnboardingOverlay.tsx # Page-load welcome card with sink-to-Settings animation
 │   │   │   ├── Icons.tsx         # Shared inline SVG icon utility (supporting component)
@@ -128,7 +127,7 @@ NanoToybox/
 │   │   │   ├── timeline-performance.ts # measureSync<T>(name, work) User Timing wrapper; mark/measure/clear failures never replace work()'s return value or thrown error
 │   │   │   └── timeline-hints.ts     # Single source of truth for all timeline tooltip copy (TIMELINE_HINTS constant)
 │   │   ├── store/
-│   │   │   ├── app-store.ts      # Zustand store for UI state; BondedGroupColorAssignment has atomIds (canonical) + atomIndices (authoring snapshot); export capabilities: { full, capsule }; BondedGroupSummary re-exported from src/history/bonded-group-projection; `watchHandoffProvenance` slot (+ setter) for arrival-pill state after a Watch→Lab hydrate
+│   │   │   ├── app-store.ts      # Zustand store for UI state; BondedGroupColorAssignment has atomIds (canonical) + atomIndices (authoring snapshot); export capabilities: { full, capsule }; BondedGroupSummary re-exported from src/history/bonded-group-projection
 │   │   │   └── selectors/
 │   │   │       ├── dock.ts       # selectDockSurface derived selector
 │   │   │       ├── camera.ts    # selectCameraMode selector + CameraMode type
@@ -197,12 +196,11 @@ NanoToybox/
 │   │   └── watch-dock.css            # Watch dock CSS (3-zone hierarchical layout)
 │   └── js/
 │       ├── main.ts                   # Thin bootstrap: theme init, controller creation, React mount
-│       ├── watch-controller.ts       # Non-React facade: orchestrates domain services, owns RAF clock, snapshot publication, transactional file open, interpolation runtime lifecycle; exposes buildCurrentFrameLabHref(), openLabFromCurrentFrame(), notifyLabMenuClosed(), dismissLabHint()
+│       ├── watch-controller.ts       # Non-React facade: orchestrates domain services, owns RAF clock, snapshot publication, transactional file open, interpolation runtime lifecycle; exposes buildCurrentFrameLabHref(), openLabFromCurrentFrame(), notifyLabMenuClosed()
 │       ├── watch-document-service.ts # File lifecycle: read, detect, validate, import (kind-based dispatch: full → full importer, capsule/reduced → capsule importer). Non-destructive prepare/commit. Carries `shareCode` + `documentFingerprint` on DocumentMetadata for handoff provenance.
 │       ├── watch-lab-handoff.ts      # Writer: mints token, TTL sweep, serialize, `WatchHandoffWriteError` (kind: 'storage-unavailable' | 'quota-exceeded'), quota retry
 │       ├── watch-lab-seed.ts         # `canBuildWatchLabSceneSeed` predicate + `buildWatchLabSceneSeed` extractor (pulls atoms/velocities/bonds/boundary/workerConfig from the current playback frame)
 │       ├── watch-lab-href.ts         # URL composer: assembles `?from=watch&handoff=<token>` plus any document-identity query params
-│       ├── watch-lab-discovery.ts    # Milestone-trigger runtime: fires hint bubble based on playback milestones
 │       ├── watch-view-service.ts     # Camera target, follow state (frozen atom set), center/follow commands
 │       ├── watch-camera-input.ts     # DOM event binding for orbit + triad interaction (desktop orbit + mobile triad, no atom picking)
 │       ├── watch-cinematic-camera.ts # Cinematic Camera service: auto-framing adapter over src/camera/cinematic-camera.ts (phase-aware gesture tracking, per-file lifecycle, speed-profile-driven target refresh)
@@ -232,8 +230,7 @@ NanoToybox/
 │           ├── WatchTimeline.tsx         # Custom scrubber track using shared timeline-track.css primitives (full-width, no mode rail)
 │           ├── WatchSettingsSheet.tsx    # Settings sheet: Smooth Playback (toggle + method picker from registry), Appearance (theme, text-size via Segmented), File Info, Help. Uses shared useSheetLifecycle + sheet-shell.css
 │           ├── WatchBondedGroupsPanel.tsx # Two-tier bonded-groups display using shared partitionBondedGroups; color chip + popover
-│           ├── WatchLabEntryControl.tsx  # Split-button (primary anchor to buildCurrentFrameLabHref() + caret menu); exposes "From this frame" entry to Lab
-│           ├── WatchLabHint.tsx          # Discovery hint bubble anchored to WatchLabEntryControl
+│           ├── WatchLabEntryControl.tsx  # Split-capsule (Open Lab | Continue). Continue primary routes the current frame to a seeded Lab tab; renders a CSS hover tooltip (no JS timer, dismisses when cursor leaves)
 │           └── PlaybackSpeedControl.tsx  # Compact log-mapped speed slider + readout (uses shared playback-speed-constants)
 ├── viewer/
 │   └── index.html                # Three.js pre-computed trajectory viewer
@@ -733,7 +730,6 @@ Each state slice has one authoritative writer. Other modules emit intents via ca
 | Auth state (`auth.status` / `auth.session`) | Primary writer: `auth-runtime.ts` (via `setAuthLoading` / `setAuthSignedIn` / `setAuthSignedOut` / `setAuthUnverified`). Secondary writer: `TimelineBar.tsx` (calls `setAuthSignedOut()` on `AuthRequiredError` from publish, the 401 recovery path). Both write through the narrow setters — never assemble a raw `AuthState` object. Persists across `resetTransientState`. |
 | `authPopupBlocked` (one-shot) | auth-runtime.ts (set on blocked `window.open`) | AccountControl sub-menu (Retry / Continue-in-tab / Back); cleared by `onDismissPopupBlocked` or `resetTransientState`. |
 | `shareTabOpenRequested` (one-shot) | auth-runtime.ts (on post-popup resume-publish consumption) | TimelineBar read-and-clear on next render; cleared by `resetTransientState`. |
-| `watchHandoffProvenance` | `app-store.ts` (`setWatchHandoffProvenance`) | Set by `hydrate-from-watch-seed.ts` on successful commit; read by `WatchHandoffProvenancePill.tsx` for the arrival state. |
 | Hydration lock (`_hydrationActive`) | `main.ts` module-scope flag (setter passed as `setHydrationActive` dep into hydrate + frame-runtime) | Opened by `hydrate-from-watch-seed.ts` on entry; released on commit/rollback. Read by `frame-runtime.isHydrating()` (gates reconciler + local step) and by `main.ts:recoverLocalPhysicsAfterWorkerFailure` (early-returns while set). |
 
 **Note:** The table above covers `lab/` state only. `watch/` has no Zustand store -- all state lives across domain service closures (document, playback, view, camera, appearance, settings) coordinated by the `WatchController` facade, with React `useState` for local UI concerns. React subscribes via `useSyncExternalStore`. See the [Watch App](#watch-app-watch) section for details.
@@ -953,7 +949,7 @@ WatchApp (top-level shell, useSyncExternalStore → controller snapshot)
 
 ### Watch→Lab Handoff Funnel
 
-User-visible flow: in Watch, the caret menu on `WatchLabEntryControl` → "From this frame" opens a new Lab tab at `/lab/?from=watch&handoff=<token>`. Lab boots, recognizes the URL flag, skips its default C60 auto-load, consumes the handoff from `localStorage`, runs a transactional hydrate, and renders `WatchHandoffProvenancePill` as the arrival state.
+User-visible flow: in Watch, the Continue half of the `WatchLabEntryControl` capsule opens a new Lab tab at `/lab/?from=watch&handoff=<token>`. Lab boots, recognizes the URL flag, skips its default C60 auto-load, consumes the handoff from `localStorage`, and runs a transactional hydrate. The hydrated scene itself is the arrival acknowledgement — there is no separate provenance pill surface.
 
 The funnel crosses a process boundary (two tabs) via `localStorage`, so the wire format is pinned by the shared `src/watch-lab-handoff/` module that both apps import.
 
@@ -1004,7 +1000,6 @@ consumeWatchToLabHandoffFromLocation()    ← URL + storage read, URL scrub
                     │                   physics/worker via the same primitives)
                     │
                     └── setHydrationActive(false)  ← closes frame-runtime lock
-                        setWatchHandoffProvenance({...})  ← WatchHandoffProvenancePill mounts
 ```
 
 **Hydration lock — why it gates rAF-driven reconciliation:** the snapshot reconciler is the main-thread path that consumes the latest worker snapshot each frame. If a rAF fires during the window between `worker.clearScene` dispatch and the first post-hydrate snapshot ack, it would apply a **stale** worker snapshot on top of the transactional scene, silently clobbering the new positions. The hydration lock, read through `frame-runtime.isHydrating()`, suppresses the reconciler for the entire hydrate span. The same lock also suppresses the local physics step so the main-thread integrator does not advance atoms that are about to be replaced wholesale. `worker-bridge.ts` proactively clears `latestSnapshot` at each mutation start (and whenever an ack advances `sceneVersion`) to shorten that window, but the lock is what makes the contract safe, not the clear.
@@ -1031,8 +1026,6 @@ _workerInitPromise = workerLifecycle.init(…)
 Both `_workerInitPromise` and `_hasPendingWatchHandoff` are helpers in `main.ts`. `_pickDefaultStructure` is the other new helper — it centralizes the default-scene choice so the fallback branch and the no-handoff branch share one selection. The await on `_workerInitPromise` before the handoff consume is load-bearing: if the worker is still finishing its `init` when the hydrate fires `worker.clearScene` + `worker.appendMolecule`, the init completion will land **after** the hydrate mutations and start the worker with the default scene, clobbering the freshly-hydrated frame.
 
 **Fallback-load contract:** a Watch→Lab arrival must never end with `physics.n === 0`. The two branches above — hydrate-or-default on the boot path, and the post-consume fallback that loads the default when the consume outcome leaves physics empty — together guarantee Lab always lands on either the hydrated frame or the default scene. The frame-runtime's pause is gated on `isHydrating()`, not on `physics.n`, so an empty scene post-hydrate does not lock the app.
-
-**Arrival pill:** `hydrate-from-watch-seed.ts` writes `watchHandoffProvenance` on successful commit; `WatchHandoffProvenancePill.tsx` is mounted by `react-root.tsx` and reads the slot. The provenance record carries document-identity fields from `watch-document-service.ts` (`shareCode`, `documentFingerprint`) plus timeline position so the pill can state "from Watch at t=…".
 
 ### Share-Link Backend (Phase 5)
 

@@ -1,18 +1,17 @@
 /**
  * Watch → Lab handoff end-to-end.
  *
- * These tests drive the production code path via existing test hooks
- * (`_watchOpenFile`, `_getWatchState`) gated on `?e2e=1`, plus the
- * feature-flag URL override (`?e2eEnableRemixCurrentFrame=1`) to
- * exercise the gated current-frame path without a source-level flip.
+ * These tests drive the production code path via the `?e2e=1` hooks
+ * (`_watchOpenFile`, `_getWatchState`).
  *
- * Assertions match each test's title. The surfacing policy (plan §10)
- * is: only `stale` handoffs surface a user-visible toast in the Lab
- * status live region (the user attempted a remix that arrived too
- * late; they deserve to know). All other rejection reasons
- * (malformed, missing-token, tampering, schema drift) stay silent —
- * a console.warn is the only diagnostic, because a scary toast on a
- * coincidental backend deploy would be worse than a quiet fallback.
+ * Assertions match each test's title. The surfacing policy is: only
+ * `stale` + `missing-entry` handoffs surface a user-visible toast in
+ * the Lab status live region (the user attempted a Continue that
+ * arrived too late; they deserve to know). All other rejection
+ * reasons (malformed, missing-token, tampering, schema drift) stay
+ * silent — a console.warn is the only diagnostic, because a scary
+ * toast on a coincidental backend deploy would be worse than a quiet
+ * fallback.
  */
 import { test, expect, type Page } from '@playwright/test';
 import * as fs from 'fs';
@@ -51,12 +50,15 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
     await clearHandoffStorage(page);
   });
 
-  test('plain "Open in Lab" anchor targets /lab/ and the URL resolves to Lab', async ({ page }) => {
+  test('"Open empty" anchor targets /lab/ and the URL resolves to Lab', async ({ page }) => {
     await page.goto('/watch/?e2e=1');
     await page.waitForSelector('.watch-workspace', { timeout: 8000 });
     await loadWatchFixture(page);
 
-    const anchor = page.locator('.watch-lab-entry__primary').first();
+    // Under the paired-actions panel, `.watch-lab-entry__secondary` is
+    // the "Open empty" anchor (plain `/lab/`). Primary is the Continue
+    // anchor with the dynamic handoff href.
+    const anchor = page.locator('.watch-lab-entry__secondary').first();
     await expect(anchor).toBeVisible();
     const href = await anchor.getAttribute('href');
     expect(href).toBeTruthy();
@@ -115,7 +117,7 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
     await page.waitForSelector('canvas', { timeout: 8000 });
     const statusRoot = page.locator('[data-status-root]');
     await expect(statusRoot).toBeVisible({ timeout: 3000 });
-    await expect(statusRoot).toContainText(/remix link has expired/i);
+    await expect(statusRoot).toContainText(/link has expired/i);
     // The live region is correctly wired for screen readers.
     await expect(statusRoot).toHaveAttribute('role', 'status');
     await expect(statusRoot).toHaveAttribute('aria-live', 'polite');
@@ -123,7 +125,7 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
 
   test('missing-entry surfaces "no longer available" copy — consumed / cleared storage is a user-plausible failure', async ({ page }) => {
     // `?from=watch&handoff=<token>` but no localStorage entry. This is
-    // the "I clicked Remix on a tab I already opened" / "storage
+    // the "I clicked Continue on a tab I already opened" / "storage
     // cleared" / "private-mode dropped it" flow — per plan §10, these
     // are user-plausible failures and must surface distinct copy (not
     // the "expired" copy, since TTL isn't what went wrong).
@@ -181,78 +183,79 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
     const statusText = await page.evaluate(
       () => document.querySelector('[data-status-root]')?.textContent ?? '',
     );
-    expect(statusText).not.toMatch(/remix link has expired/i);
+    expect(statusText).not.toMatch(/link has expired/i);
     expect(statusText).not.toMatch(/Couldn\u2019t/i);
   });
 
-  test('"From this frame" menuitem renders as an enabled anchor with a Lab-targeted href when a multi-frame file is loaded', async ({ page }) => {
+  test('"Continue this frame in Lab" primary renders as an enabled anchor with a Lab-targeted href when a multi-frame file is loaded', async ({ page }) => {
     await page.goto('/watch/?e2e=1');
     await page.waitForSelector('.watch-workspace', { timeout: 8000 });
     await loadWatchFixture(page);
 
-    // Open the caret dropdown.
-    const caret = page.getByLabel('More ways to open Lab');
-    await caret.click();
-    await expect(caret).toHaveAttribute('aria-expanded', 'true');
-
-    // Multi-frame fixture → `canBuildWatchLabSceneSeed` returns true →
-    // menuitem is enabled and rendered as an `<a>` with a handoff href.
-    // (The disabled `<button>` branch still exists for non-seedable
-    // frames — e.g. a 1-frame capsule or a time outside any frame — but
-    // it's not reachable from this fixture.)
-    const menu = page.getByRole('menu');
-    await expect(menu).toBeVisible();
-    const menuitem = menu.getByRole('menuitem').first();
-    await expect(menuitem).toBeVisible();
-    await expect(menuitem).toHaveText(/From this frame/i);
-    const tag = await menuitem.evaluate((el) => el.tagName);
-    expect(tag).toBe('A');
-    const href = await menuitem.getAttribute('href');
-    expect(href).toBeTruthy();
-    expect(href).toMatch(/\/lab\/\?.*from=watch/);
-    expect(href).toMatch(/handoff=/);
-  });
-
-  test('happy path: load fixture → scrub to frame → open caret → click "From this frame" → Lab tab hydrates seeded scene and shows provenance pill with exact variant copy', async ({ page, context }) => {
-    // This exercises the whole user-facing chain: Watch fixture →
-    // caret open → menu click → new-tab navigation → Lab hydrate →
-    // arrival pill. The rejection-seam tests above cover every
-    // failure path; this one asserts the real interaction actually
-    // works end-to-end, including the exact pill copy.
-    await page.goto('/watch/?e2e=1');
-    await page.waitForSelector('.watch-workspace', { timeout: 8000 });
-    await loadWatchFixture(page);
-
-    // Scrub to the fixture's second dense frame (timePs: 25, frameId: 1).
-    // Pinning the source time → exact pill copy assertion below. Without
-    // the scrub, the pill's rendered `frame N · T.TT ps` depends on
-    // whatever `getCurrentTimePs()` defaults to after `openFile`, which
-    // would make the test brittle against unrelated playback changes.
+    // Scrub into the middle of the fixture so the current time sits
+    // inside a dense frame. `canBuildWatchLabSceneSeed` returns false
+    // for times outside any frame (the initial `getCurrentTimePs()`
+    // can land there depending on fixture timing), which would render
+    // the primary as a disabled `<button>` and short-circuit this
+    // test even though the real user flow works.
     await page.evaluate(() => {
       const hook = (window as unknown as { _watchScrub?: (ps: number) => void })._watchScrub;
       if (!hook) throw new Error('_watchScrub test hook not installed');
       hook(25);
     });
 
-    // Open the caret dropdown.
-    const caret = page.getByLabel('More ways to open Lab');
-    await caret.click();
-    await expect(caret).toHaveAttribute('aria-expanded', 'true');
-    const menu = page.getByRole('menu');
-    await expect(menu).toBeVisible();
-    const menuitem = menu.getByRole('menuitem').filter({ hasText: /From this frame/i });
-    await expect(menuitem).toBeVisible();
-    // Sanity — enabled menuitem must render as an `<a>` with a Lab-
-    // targeted href (disabled state is a <button>; wrong role here
-    // would mean the feature gate / seed builder rejected the frame,
-    // which would short-circuit the rest of the happy path).
-    expect(await menuitem.evaluate((el) => el.tagName)).toBe('A');
+    // Hover the primary first to trigger `onContinueIntent` → controller
+    // mints the token. Without the hover the anchor's href is null
+    // (lazy mint on intent). Select via class because the enclosing
+    // element is the `<a>`; `getByText` would land on the inner label
+    // `<span>`.
+    const primary = page.locator('.watch-lab-entry__primary').first();
+    await expect(primary).toBeVisible();
+    await primary.hover();
+    const tag = await primary.evaluate((el) => el.tagName);
+    expect(tag).toBe('A');
+    const href = await primary.getAttribute('href');
+    expect(href).toBeTruthy();
+    expect(href).toMatch(/\/lab\/\?.*from=watch/);
+    expect(href).toMatch(/handoff=/);
+  });
 
-    // Click the menuitem — the controller's click path invokes
+  test('happy path: load fixture → scrub to frame → click "Continue this frame in Lab" → Lab tab hydrates the seeded scene', async ({ page, context }) => {
+    // This exercises the whole user-facing chain: Watch fixture →
+    // hover + click the Continue primary → new-tab navigation → Lab
+    // hydrate → scene committed. The rejection-seam tests above cover
+    // every failure path; this one asserts the real interaction
+    // actually works end-to-end.
+    await page.goto('/watch/?e2e=1');
+    await page.waitForSelector('.watch-workspace', { timeout: 8000 });
+    await loadWatchFixture(page);
+
+    // Scrub to the fixture's second dense frame (timePs: 25, frameId: 1)
+    // to pin the source time deterministically. Without the scrub the
+    // handoff's source metadata depends on whatever `getCurrentTimePs()`
+    // defaults to after `openFile`, which would make the test brittle
+    // against unrelated playback changes.
+    await page.evaluate(() => {
+      const hook = (window as unknown as { _watchScrub?: (ps: number) => void })._watchScrub;
+      if (!hook) throw new Error('_watchScrub test hook not installed');
+      hook(25);
+    });
+
+    // Hover the Continue primary to mint the current-frame token (the
+    // mint-on-intent path), then sanity-check the enabled anchor.
+    // Select the enclosing primary element (the `<a>` or `<button>`),
+    // not the inner label `<span>`. Class selector picks the button
+    // root directly, independent of current enabled/disabled state.
+    const primary = page.locator('.watch-lab-entry__primary').first();
+    await expect(primary).toBeVisible();
+    await primary.hover();
+    expect(await primary.evaluate((el) => el.tagName)).toBe('A');
+
+    // Click — controller's `openLabFromCurrentFrame` invokes
     // `window.open(href, '_blank', 'noopener,noreferrer')`, which
     // Playwright surfaces as a new Page on the BrowserContext.
     const labTabPromise = context.waitForEvent('page');
-    await menuitem.click();
+    await primary.click();
     const labTab = await labTabPromise;
 
     // Wait for Lab to finish its consume step (the boot strips
@@ -281,28 +284,26 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
       { timeout: 8000 },
     );
 
-    // Verify the provenance pill is visible with the EXACT variant copy.
-    // Fixture context at the scrub time:
-    //   - local file (no shareCode) → lead "From Watch"
-    //   - scrubbed to timePs: 25 → rendered "25.00 ps"
-    //   - dense-frame index 1 at timePs: 25 → rendered "frame 2"
-    //     (1-based ordinal render shift, see
-    //     `formatProvenancePillCopy` in WatchHandoffProvenancePill.tsx)
-    //   - full-history fixture → exact velocities → NO "creative seed"
-    //     suffix
-    // If any of those drift, this exact match fails immediately
-    // (zero-vs-one-based bug, wrong time source, wrong variant, copy
-    // refactor, etc.). The close-button affordance still trails in
-    // the DOM textContent so we assert via startsWith rather than
-    // strict equality.
-    const pill = labTab.locator('[data-handoff-provenance-root]');
-    await expect(pill).toBeVisible({ timeout: 3000 });
-    const expectedCopy = 'From Watch · frame 2 · 25.00 ps';
-    const pillCopy = labTab.locator('.watch-handoff-provenance-pill__copy');
-    await expect(pillCopy).toHaveText(expectedCopy);
-    // ARIA wiring on the pill (same contract as the stale-handoff test).
-    await expect(pill).toHaveAttribute('role', 'status');
-    await expect(pill).toHaveAttribute('aria-live', 'polite');
+    // Hydrate success signal: the handoff token was consumed (URL
+    // scrubbed above) AND the seed's atom count is on-screen. The
+    // provenance pill that used to carry this acknowledgement was
+    // removed — it was visual noise without actionable information.
+    // We now assert the committed state directly.
+    const atomCount = await labTab.evaluate(() => {
+      const w = window as unknown as { _getUIState?: () => { atomCount: number } };
+      return w._getUIState?.()?.atomCount ?? -1;
+    });
+    // Full-history fixture's frame-at-timePs-25 has a specific atom
+    // count; the seed extractor preserves it verbatim. Anything other
+    // than the seed's count means the hydrate didn't commit.
+    expect(atomCount).toBeGreaterThan(0);
+    // Belt-and-suspenders: explicitly guard against the default-C60
+    // scene leaking in. `waitForFunction` above enforces `=== 2`, but
+    // if a future fixture edit changes the seed atom count, the
+    // `> 0` check would still accept 60 (the default). This extra
+    // assertion preserves the "not default" discrimination that the
+    // removed pill-copy assertion used to carry.
+    expect(atomCount).not.toBe(60);
   });
 
   test('pending-handoff boot with stale token: fallback-loads the default scene (empty canvas + error toast is not acceptable UX)', async ({ page }) => {
@@ -341,7 +342,7 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
     // the dedicated stale-handoff test earlier in this file).
     const statusRoot = page.locator('[data-status-root]');
     await expect(statusRoot).toBeVisible({ timeout: 3000 });
-    await expect(statusRoot).toContainText(/remix link has expired/i);
+    await expect(statusRoot).toContainText(/link has expired/i);
     // Critical: default scene loaded as fallback → atomCount > 0 (C60
     // has 60 atoms; any default structure is non-empty). Without the
     // fallback the scene would be empty forever.
@@ -377,13 +378,14 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
       if (!hook) throw new Error('_watchScrub test hook not installed');
       hook(0.5);
     });
-    const caret = page.getByLabel('More ways to open Lab');
-    await caret.click();
-    const menu = page.getByRole('menu');
-    await expect(menu).toBeVisible();
-    const menuitem = menu.getByRole('menuitem').filter({ hasText: /From this frame/i });
+    // Select the enclosing primary element (the `<a>` or `<button>`),
+    // not the inner label `<span>`. Class selector picks the button
+    // root directly, independent of current enabled/disabled state.
+    const primary = page.locator('.watch-lab-entry__primary').first();
+    await expect(primary).toBeVisible();
+    await primary.hover();
     const labTabPromise = context.waitForEvent('page');
-    await menuitem.click();
+    await primary.click();
     const labTab = await labTabPromise;
 
     // Start polling atomCount as soon as the Lab tab has a script
@@ -418,14 +420,14 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
     // runs before that init acks, the OLD code silently skipped the
     // worker commit. Once init acked, the worker emitted C60
     // frameResults that the reconciler applied to main-thread
-    // physics, reverting the scene to default C60 AFTER the pill had
-    // already declared success. The previous E2E didn't catch this
-    // because vite-preview + fast hardware finished init before the
-    // click happened.
+    // physics, reverting the scene to default C60 AFTER the hydrate
+    // had already declared success. The previous E2E didn't catch
+    // this because vite-preview + fast hardware finished init before
+    // the click happened.
     //
     // To reproduce reliably, we check the scene state over a full
-    // 2-second window AFTER the pill lands — long enough for even a
-    // slow worker init ack to arrive. The atom count must NEVER
+    // 2-second window after the hydrate commit — long enough for
+    // even a slow worker init ack to arrive. The atom count must NEVER
     // revert to 60 (C60). Previously this test would pass at the
     // initial assertion, then the worker init ack + C60 frameResult
     // would flip atomCount to 60 before the 2-second poll finished.
@@ -440,13 +442,14 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
       hook(0.5);
     });
 
-    const caret = page.getByLabel('More ways to open Lab');
-    await caret.click();
-    const menu = page.getByRole('menu');
-    await expect(menu).toBeVisible();
-    const menuitem = menu.getByRole('menuitem').filter({ hasText: /From this frame/i });
+    // Select the enclosing primary element (the `<a>` or `<button>`),
+    // not the inner label `<span>`. Class selector picks the button
+    // root directly, independent of current enabled/disabled state.
+    const primary = page.locator('.watch-lab-entry__primary').first();
+    await expect(primary).toBeVisible();
+    await primary.hover();
     const labTabPromise = context.waitForEvent('page');
-    await menuitem.click();
+    await primary.click();
     const labTab = await labTabPromise;
     await labTab.waitForLoadState('domcontentloaded');
     await labTab.waitForSelector('canvas', { timeout: 8000 });
@@ -454,10 +457,6 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
       () => !new URL(location.href).searchParams.get('handoff'),
       { timeout: 8000 },
     );
-
-    // Pill appears (hydrate reported success).
-    const pill = labTab.locator('[data-handoff-provenance-root]');
-    await expect(pill).toBeVisible({ timeout: 3000 });
 
     // CRITICAL regression lock: poll atomCount every 100 ms for 2
     // seconds. It must stay at 2 (seed) the entire time. Any revert
@@ -480,16 +479,15 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
       everyIsSeed,
       `atomCount reverted during the poll window (should stay 2): ${JSON.stringify(samples)}`,
     ).toBe(true);
-    await expect(pill).toBeVisible();
   });
 
-  test('happy path (capsule / approximated velocities): pill shows "creative seed" AND Lab renders the handed-off atoms, not the default C60', async ({ page, context }) => {
-    // Reproduction of the 2026-04-16 user-reported bug: pill reported
-    // success with "creative seed" suffix but the Lab tab rendered the
-    // default C60 instead of the handed-off scene. The full-history
-    // fixture happy path above did not catch it; capsule histories
-    // follow a different seed-building branch (velocities approximated
-    // from finite differences rather than carried verbatim).
+  test('happy path (capsule / approximated velocities): Lab renders the handed-off atoms, not the default C60', async ({ page, context }) => {
+    // Reproduction of the 2026-04-16 user-reported bug: the hydrate
+    // reported success but the Lab tab rendered the default C60 instead
+    // of the handed-off scene. The full-history fixture happy path
+    // above did not catch it; capsule histories follow a different
+    // seed-building branch (velocities approximated from finite
+    // differences rather than carried verbatim).
     const capsuleFixturePath = path.resolve(__dirname, 'fixtures/watch-capsule-bug-repro.json');
     const capsuleFixtureContent = fs.readFileSync(capsuleFixturePath, 'utf-8');
     await page.goto('/watch/?e2e=1');
@@ -501,13 +499,14 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
       hook(0.5);
     });
 
-    const caret = page.getByLabel('More ways to open Lab');
-    await caret.click();
-    const menu = page.getByRole('menu');
-    await expect(menu).toBeVisible();
-    const menuitem = menu.getByRole('menuitem').filter({ hasText: /From this frame/i });
+    // Select the enclosing primary element (the `<a>` or `<button>`),
+    // not the inner label `<span>`. Class selector picks the button
+    // root directly, independent of current enabled/disabled state.
+    const primary = page.locator('.watch-lab-entry__primary').first();
+    await expect(primary).toBeVisible();
+    await primary.hover();
     const labTabPromise = context.waitForEvent('page');
-    await menuitem.click();
+    await primary.click();
     const labTab = await labTabPromise;
 
     await labTab.waitForLoadState('domcontentloaded');
@@ -517,19 +516,11 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
       { timeout: 8000 },
     );
 
-    // The bug: the pill's `creative seed` suffix lands (signalling
-    // hydrate success), but the rendered scene is still the default
-    // C60 (atomCount === 60). Assert BOTH the pill AND the atom count
-    // so a regression where the two diverge fails this test.
-    const pill = labTab.locator('[data-handoff-provenance-root]');
-    await expect(pill).toBeVisible({ timeout: 3000 });
-    const pillCopy = labTab.locator('.watch-handoff-provenance-pill__copy');
-    await expect(pillCopy).toHaveText('From Watch · frame 3 · 0.50 ps · creative seed');
-
-    // Critical invariant: pill-reports-success ⇒ scene-is-the-seed.
-    // Seed has 2 atoms; default C60 has 60. A divergence here means the
-    // hydrate module's step-7 success signal is lying about the
-    // committed state.
+    // Bug shape: hydrate reports success (URL handoff token scrubbed,
+    // console reports commit) but the rendered scene is still the
+    // default C60 (atomCount === 60). Seed has 2 atoms; default C60
+    // has 60. A divergence means the hydrate module's step-7 success
+    // signal is lying about the committed state.
     await labTab.waitForFunction(
       () => {
         const w = window as unknown as { _getUIState?: () => { atomCount: number } };
@@ -542,20 +533,17 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
     // C60. That revert was the 2026-04-16 bug: the worker bridge's
     // `latestSnapshot` cached a pre-restoreState frame, and the frame
     // runtime's reconciler would pull it ~1 rAF tick after the
-    // hydration lock released — clobbering physics back to 60 atoms
-    // while the pill stayed visible. 500 ms covers >24 frames at 60fps
-    // AND gives the worker time to emit its first post-restore
-    // frameResult. The pill stays mounted for 8000 ms, and the
-    // reconciler only mutates scene state via fresh snapshots, so a
-    // single stable readout here is sufficient.
+    // hydration lock released — clobbering physics back to 60 atoms.
+    // 500 ms covers >24 frames at 60 fps AND gives the worker time to
+    // emit its first post-restore frameResult. The reconciler only
+    // mutates scene state via fresh snapshots, so a single stable
+    // readout here is sufficient.
     await labTab.waitForTimeout(500);
     const stableAtomCount = await labTab.evaluate(() => {
       const w = window as unknown as { _getUIState?: () => { atomCount: number } };
       return w._getUIState?.()?.atomCount;
     });
     expect(stableAtomCount).toBe(2);
-    // And the pill is still visible — not dismissed or obscured.
-    await expect(pill).toBeVisible();
   });
 
   test('missing ?from=watch is fully silent — Lab boots normally, no status error', async ({ page }) => {

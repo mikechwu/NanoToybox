@@ -1,18 +1,15 @@
 /**
- * Watch → Lab scene-seed extraction. PR 2 foundation + builder.
+ * Watch → Lab scene-seed extraction.
  *
- * Two helpers:
- *   - `canBuildWatchLabSceneSeed(args)` — cheap O(log n) predicate, safe
- *     to call from `buildSnapshot()`. Uses the playback-model helpers
- *     (`getDisplayFrameIndexAtTime`, `getTopologyFrameIdAtTime`,
- *     `canApproximateVelocityAtDisplayFrame`) and never materializes
- *     bonds or positions.
- *   - `buildWatchLabSceneSeed(args)` — full allocation path; runs ONLY
- *     on a Remix-intent click (menu-open cache mint). Allocates
- *     Float64Array-shaped position/velocity arrays and returns the
- *     transit payload or null.
+ * `buildWatchLabSceneSeed(args)` is the full allocation path; runs ONLY
+ * on a Continue-intent click (tooltip-hover cache mint). Allocates
+ * Float64Array-shaped position/velocity arrays and returns the transit
+ * payload, or null when the frame cannot produce a seed. File-level
+ * availability is gated upstream by the controller via
+ * `playback.findNearestSeedableTimePs`, which snaps unseedable cursor
+ * times to the nearest seedable dense frame before the builder runs.
  *
- * Velocity policy (from §6):
+ * Velocity policy:
  *   - full history: use nearest restart frame's velocities when aligned.
  *   - capsule history: central-difference / forward-difference /
  *     backward-difference over neighboring dense frames, converted from
@@ -33,13 +30,10 @@ import type {
   WatchLabConfig,
 } from '../../src/watch-lab-handoff/watch-lab-handoff-shared';
 
-export interface CanBuildArgs {
+export interface BuildArgs {
   history: LoadedWatchHistory;
   timePs: number;
   playback: WatchPlaybackModel;
-}
-
-export interface BuildArgs extends CanBuildArgs {
   /** Optional defaults for boundary + config when a capsule history
    *  provides no simulation state. Both fields fall back to hardcoded
    *  safe values inside the builder when omitted. */
@@ -75,20 +69,6 @@ const CAPSULE_CONFIG_DEFAULT: WatchLabConfig = {
   dtFs: 0.5,
   dampingRefDurationFs: 100,
 };
-
-/**
- * O(1)-ish predicate — safe to call on every snapshot build.
- */
-export function canBuildWatchLabSceneSeed(args: CanBuildArgs): boolean {
-  const { history, timePs, playback } = args;
-  if (!history) return false;
-  const index = playback.getDisplayFrameIndexAtTime(timePs);
-  if (index == null) return false;
-  const topologyId = playback.getTopologyFrameIdAtTime(timePs);
-  if (topologyId == null) return false;
-  if (!playback.canApproximateVelocityAtDisplayFrame(index)) return false;
-  return true;
-}
 
 /**
  * Build an atom-id → AtomInfoV1 lookup map from the history's atom list.

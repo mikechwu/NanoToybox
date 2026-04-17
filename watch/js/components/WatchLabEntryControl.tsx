@@ -1,68 +1,59 @@
 /**
- * WatchLabEntryControl — split-button that sends viewers to Lab.
+ * WatchLabEntryControl — split-capsule Lab entry.
  *
- * Two navigation paths with different ownership models. The
- * authoritative contract is the "Click-ownership contract" docstring
- * on `WatchLabEntryControlProps` below; this header summary stays
- * deliberately short so a future reader cannot skim-absorb a stale
- * description and reintroduce a double-navigation regression.
+ * ONE pill-shaped container holding two halves:
+ *   - LEFT half: "Open Lab" — ghost surface. Opens Lab with its
+ *     default scene.
+ *   - RIGHT half: "Continue" — filled accent. Takes the current Watch
+ *     frame's state and seeds a Lab session from it (the controller
+ *     snaps to the nearest seedable dense frame internally, so this
+ *     path is robust to smooth-playback cursors that land between
+ *     frames).
  *
- *   - Primary "Open in Lab": the anchor OWNS navigation via
- *     `target="_blank" rel="noopener noreferrer"`. No preventDefault,
- *     no controller nav call from the click handler.
- *   - Current-frame "From this frame": the controller OWNS plain-click
- *     navigation (so the remint-if-stale logic is authoritative).
- *     Plain-click → preventDefault + callback. Modified / middle click
- *     stays native via the cached href (which is null when stale).
+ * A 1px divider separates the halves; the outer border + fully
+ * rounded corners make it read as one capsule, echoing the shape of
+ * the Cinematic Camera toggle next to it. A custom CSS hover tooltip
+ * ("Continue this frame in Lab") is rendered as a sibling of the
+ * capsule so the capsule's `overflow: hidden` does not clip it; the
+ * tooltip reveals on `:hover` / `:focus-visible` of the primary via a
+ * `:has()` rule on `.watch-lab-entry-anchor`.
  *
- * Accessibility notes are preserved verbatim below the contract. They
- * describe the dropdown's role/menu behavior, not the click paths.
- */
-
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-
-/**
- * NOTE — `busy` prop intentionally omitted from this PR's API surface.
- * The plan reserves a `busy` state for in-flight handoff serialization,
- * but that state has no producer until the current-frame Remix path
- * lands in PR 2. Shipping a prop that doesn't suppress interaction is
- * a footgun (consumers reasonably assume it gates clicks); per rev 6
- * follow-up P2.2 we reintroduce it at the same time its enforcement
- * ships, so primary / caret / menu all honor it together.
- */
-/**
- * Click-ownership contract for the two navigation paths:
+ * Click-ownership contract:
  *
- *   PRIMARY ("Open in Lab"):
- *     - href is STATIC (`/lab/`); cannot go stale.
- *     - The anchor's `target="_blank"` + `rel="noopener noreferrer"`
- *       is the SOLE navigation owner.
- *     - `onOpenPlainLab` is an OPTIONAL, SIDE-EFFECT-ONLY hook for
- *       analytics / hint dismissal / etc. It MUST NOT navigate. Not
- *       passing a handler is the expected default.
- *     - The component NEVER calls `preventDefault()` on this path.
- *
- *   CURRENT-FRAME ("From this frame"):
- *     - href is DYNAMIC — cached by the controller on menu-open and
- *       can go stale if playback advances.
+ *   PRIMARY ("Continue" — RIGHT half):
+ *     - High-intent action — takes the current Watch frame's state
+ *       and seeds a Lab session from it. No leading icon; regular
+ *       text weight.
+ *     - `href` is DYNAMIC — cached by the controller, nulled when the
+ *       display/topology/restart identity changes. Mint-on-intent:
+ *       `onContinueIntent` fires on pointerenter / focus so the
+ *       handoff token is minted BEFORE the user clicks (middle-click
+ *       / ⌘-click need a live href to open a new tab with the
+ *       handoff). `onContinueIdle` fires on pointerleave / blur for
+ *       debounced cache invalidation.
  *     - On PLAIN LEFT-CLICK, the component calls `preventDefault()`
- *       and routes through `onOpenCurrentFrameLab` as the SOLE
- *       navigation owner (which invokes `controller.openLabFromCurrentFrame`
- *       — that's where the "remint if stale" logic lives, so this path
- *       always captures the user's currently visible frame).
+ *       and routes through `onOpenCurrentFrameLab` (which invokes
+ *       `controller.openLabFromCurrentFrame()` — the remint-if-stale
+ *       + window.open authority).
  *     - On MODIFIED / MIDDLE click, the anchor's native navigation
- *       follows the cached href. This is acceptable because:
- *         (a) the snapshot projection nulls the href as soon as the
- *             display-frame identity changes, so a stale middle-click
- *             disables the item entirely, and
- *         (b) modified-click callers accept the browser-native
- *             behavior as part of normal "open in new tab" ergonomics.
+ *       follows the cached href.
+ *     - Disabled state: genuinely unseedable file (e.g., single-frame
+ *       capsule). Renders as a `<button disabled>` with a `title`
+ *       tooltip explaining why; the custom hover tooltip is NOT
+ *       rendered in the disabled case.
  *
- * Any callback intended to NAVIGATE is the exclusive owner of its
- * click path. Any callback intended as a SIDE-EFFECT HOOK must never
- * navigate. Mixing the two caused a duplicate-tab regression and is
- * explicitly forbidden by this contract.
+ *   SECONDARY ("Open Lab" — LEFT half):
+ *     - Opens Lab with whatever its default scene is (currently
+ *       auto-loads C60 — so labelled "Open Lab" rather than "Open
+ *       empty", which would misrepresent the state).
+ *     - `href` is STATIC (`/lab/`); cannot go stale.
+ *     - The anchor's `target="_blank"` is the SOLE navigation owner.
+ *     - `onOpenPlainLab` is an OPTIONAL side-effect hook (analytics)
+ *       that MUST NOT navigate.
  */
+
+import React, { useCallback, useRef } from 'react';
+
 export interface WatchLabEntryControlProps {
   enabled: boolean;
   currentFrameAvailable: boolean;
@@ -71,25 +62,30 @@ export interface WatchLabEntryControlProps {
   /** Controller-derived href for the current-frame target, or null. */
   currentFrameLabHref: string | null;
   /**
-   * OPTIONAL side-effect-only hook for the primary click. MUST NOT
+   * OPTIONAL side-effect-only hook for the secondary click. MUST NOT
    * navigate — the anchor's `target="_blank"` already handles that.
-   * Typical uses: analytics, dismissing the Lab-entry hint, closing
-   * an unrelated overlay. Omit in normal wiring; there is nothing to
-   * do on a plain `Open in Lab` click today.
+   * Typical use: analytics. Omit in normal wiring.
    */
   onOpenPlainLab?: (event?: React.MouseEvent) => void;
   /**
-   * NAVIGATION-OWNING callback for the current-frame plain-click.
-   * The component calls `preventDefault()` before invoking this, so
-   * this callback is the SOLE navigator. Must invoke
-   * `controller.openLabFromCurrentFrame()` (or an equivalent) which
+   * NAVIGATION-OWNING callback for the primary plain-click. The
+   * component calls `preventDefault()` before invoking this, so this
+   * callback is the SOLE navigator. Must invoke
+   * `controller.openLabFromCurrentFrame()` (or equivalent) which
    * handles the remint-if-stale contract and calls `window.open`.
    */
   onOpenCurrentFrameLab: (event?: React.MouseEvent) => void;
-  /** Caret open/close — controller listens so it can mint a fresh
-   *  current-frame href on open and debounce invalidation on close. */
-  onCaretOpen?: () => void;
-  onCaretClose?: () => void;
+  /** Fires when the user signals intent to continue — pointerenter on
+   *  non-touch, focus on keyboard. Controller mints a current-frame
+   *  token on this signal so the anchor's href is populated before
+   *  the user clicks (middle-click / cmd-click need a live href to
+   *  open a new tab with the handoff). Safe to call on every hover —
+   *  the controller caches by seed identity. */
+  onContinueIntent?: () => void;
+  /** Fires when intent cools — pointerleave + blur. Controller
+   *  debounces cache invalidation (500 ms) so a quick hover-off /
+   *  hover-on reuses the token; sustained absence mints fresh. */
+  onContinueIdle?: () => void;
 }
 
 function isPlainLeftClick(e: React.MouseEvent): boolean {
@@ -97,19 +93,19 @@ function isPlainLeftClick(e: React.MouseEvent): boolean {
 }
 
 /**
- * Accessibility notes (rev 6):
- *   - Caret button carries `aria-haspopup="true"` + `aria-expanded`.
- *   - Caret glyph is `aria-hidden="true"`; the button's accessible
- *     name comes from `aria-label="More ways to open Lab"`.
- *   - Dropdown container is `role="menu"`; enabled item is
- *     `role="menuitem"` on an anchor; disabled item is a native
- *     `<button disabled role="menuitem">` (auto-removed from tab order).
- *   - Arrow-Down / Enter / Space on the caret opens the dropdown and
- *     moves focus to the first menuitem; Escape closes the dropdown
- *     and returns focus to the caret.
- *   - Roving Arrow-Up/Down cycling INSIDE the menu is deferred: one
- *     actionable item today, so cycling has no useful destination.
- *     Reintroduce a roving-focus handler when PR 2+ adds a second row.
+ * Accessibility notes:
+ *   - Wrapper has `role="group"` + `aria-labelledby` pointing at the
+ *     `LAB` overline so SR users hear "Lab group, Continue this
+ *     frame in Lab, link" when they Tab onto the primary.
+ *   - Both interactive elements are anchors (enabled case) or a
+ *     native `<button disabled>` (primary when frame isn't seedable).
+ *   - Disabled primary exposes `aria-describedby` pointing at the
+ *     caption so the "can't be continued yet" reason is announced.
+ *   - Focus order: primary → secondary (native Tab order, no custom
+ *     key handling).
+ *   - No role="menu" / menuitem — the dropdown is gone. Native
+ *     semantics are stronger than the APG composite widget for this
+ *     always-visible pair.
  */
 export function WatchLabEntryControl(props: WatchLabEntryControlProps) {
   const {
@@ -119,176 +115,164 @@ export function WatchLabEntryControl(props: WatchLabEntryControlProps) {
     currentFrameLabHref,
     onOpenPlainLab,
     onOpenCurrentFrameLab,
-    onCaretOpen,
-    onCaretClose,
+    onContinueIntent,
+    onContinueIdle,
   } = props;
 
-  const [menuOpen, setMenuOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const caretRef = useRef<HTMLButtonElement | null>(null);
-  const firstItemRef = useRef<HTMLAnchorElement | HTMLButtonElement | null>(null);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const openMenu = useCallback(() => {
-    setMenuOpen(true);
-    // Only notify the controller to mint a current-frame handoff when
-    // the menu has a chance of exposing an enabled action. If
-    // `currentFrameAvailable` is false — e.g. feature flag off, or the
-    // current frame is not seedable — we still open the dropdown (to
-    // show the disabled item + caption) but do NOT trigger a mint.
-    // Defence-in-depth against the controller-side guard in
-    // `buildCurrentFrameLabHref`; failing either one keeps the UI-gated
-    // build from writing localStorage.
-    if (currentFrameAvailable) onCaretOpen?.();
-  }, [onCaretOpen, currentFrameAvailable]);
-
-  const closeMenu = useCallback((refocusCaret = false) => {
-    setMenuOpen(false);
-    onCaretClose?.();
-    if (refocusCaret) caretRef.current?.focus();
-  }, [onCaretClose]);
-
-  // Outside click closes menu
-  useEffect(() => {
-    if (!menuOpen) return;
-    function onDocDown(e: PointerEvent) {
-      const root = rootRef.current;
-      if (!root) return;
-      if (root.contains(e.target as Node)) return;
-      closeMenu(false);
-    }
-    document.addEventListener('pointerdown', onDocDown, true);
-    return () => document.removeEventListener('pointerdown', onDocDown, true);
-  }, [menuOpen, closeMenu]);
-
-  // Focus first item on open
-  useEffect(() => {
-    if (menuOpen) {
-      // Rendering pass: first item is mounted now, move focus
-      firstItemRef.current?.focus();
-    }
-  }, [menuOpen]);
-
-  const handleMenuKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      closeMenu(true);
-    }
-  }, [closeMenu]);
-
-  const handleCaretKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      if (!menuOpen) openMenu();
-    } else if (e.key === 'Escape' && menuOpen) {
-      e.preventDefault();
-      closeMenu(true);
-    }
-  }, [menuOpen, openMenu, closeMenu]);
-
-  // PRIMARY — anchor is sole nav owner. Optional side-effect hook
-  // fires but MUST NOT navigate (see WatchLabEntryControlProps
-  // docstring). Earlier revisions called both an intercepted
-  // `window.open` and the native anchor, producing either a duplicate
-  // tab (without preventDefault) or a false-positive popup-blocker
-  // banner (with preventDefault + the `noopener` null-return). Both
-  // are forbidden by the split-ownership contract.
-  const handlePrimaryClick = useCallback((e: React.MouseEvent) => {
+  // SECONDARY — anchor is sole nav owner. Optional side-effect hook
+  // fires but MUST NOT navigate (see props docstring).
+  const handleSecondaryClick = useCallback((e: React.MouseEvent) => {
     if (!enabled) {
-      // Disabled component → suppress the anchor's navigation so
-      // clicking the dim state does not open an empty tab.
       e.preventDefault();
       return;
     }
     if (!isPlainLeftClick(e)) return; // modifiers handled by the browser natively
-    // Side-effect hook only — no preventDefault, no navigation.
     onOpenPlainLab?.(e);
   }, [enabled, onOpenPlainLab]);
 
-  // CURRENT-FRAME — callback is sole nav owner on plain left-click
-  // (we preventDefault so the cached-but-possibly-stale href does NOT
-  // navigate natively; the controller re-mints if stale then calls
-  // window.open). Modified / middle click fall through to the
-  // anchor's native path using the cached href — acceptable because
-  // a stale cache produces null href which disables the item.
-  const handleCurrentFrameClick = useCallback((e: React.MouseEvent) => {
-    if (!currentFrameAvailable || currentFrameLabHref == null) {
+  // PRIMARY — callback is sole nav owner on plain left-click (we
+  // preventDefault so the cached-but-possibly-stale href does NOT
+  // navigate natively; the controller re-mints if stale OR missing
+  // then calls window.open). Modified / middle click fall through
+  // to the anchor using the cached href — those require the hover
+  // mint to have populated the href already.
+  const handlePrimaryClick = useCallback((e: React.MouseEvent) => {
+    if (!currentFrameAvailable) {
+      // Frame isn't seedable (shouldn't happen — disabled button has
+      // no click handler — but defend anyway).
       e.preventDefault();
       return;
     }
-    if (!isPlainLeftClick(e)) return; // let browser handle modifier/middle clicks
-    e.preventDefault();                // sole-owner: prevent the anchor's native nav
-    onOpenCurrentFrameLab(e);          // controller.openLabFromCurrentFrame() navigates
-    closeMenu(false);                  // user picked an option; collapse dropdown
-  }, [currentFrameAvailable, currentFrameLabHref, onOpenCurrentFrameLab, closeMenu]);
+    if (!isPlainLeftClick(e)) {
+      // Modifier/middle click: let the browser handle it natively.
+      // If the cached href is empty (hover hadn't minted yet), the
+      // browser opens an empty tab pointed at the Watch page URL —
+      // not ideal but rare in practice because mint-on-hover runs
+      // before any reasonable click cadence.
+      return;
+    }
+    // Plain left-click: sole nav owner. Controller mints-if-missing
+    // + opens the new tab.
+    e.preventDefault();
+    onOpenCurrentFrameLab(e);
+  }, [currentFrameAvailable, onOpenCurrentFrameLab]);
+
+  // Mint-on-intent + debounced invalidation. Gated on
+  // `currentFrameAvailable` so a non-seedable frame doesn't trigger
+  // writes (defence-in-depth — the controller also guards).
+  const handleContinueIntent = useCallback(() => {
+    if (!currentFrameAvailable) return;
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
+    onContinueIntent?.();
+  }, [currentFrameAvailable, onContinueIntent]);
+
+  const handleContinueIdle = useCallback(() => {
+    if (!currentFrameAvailable) return;
+    onContinueIdle?.();
+  }, [currentFrameAvailable, onContinueIdle]);
 
   if (!enabled) return null;
 
-  return (
-    <div
-      className="watch-lab-entry"
-      data-state={menuOpen ? 'open' : 'closed'}
-      ref={rootRef}
+  // Primary is disabled ONLY when the frame itself isn't seedable.
+  // A seedable-but-not-yet-minted state still renders as an anchor so
+  // the hover/focus handlers can fire and populate the href — otherwise
+  // the component is stuck in a catch-22 (disabled button won't mint,
+  // no mint means no href, no href means disabled button). The
+  // controller's click path handles the href-null case by calling
+  // `openLabFromCurrentFrame()` which mints inline.
+  const primaryDisabled = !currentFrameAvailable;
+  // Empty href before mint is intentional — browsers treat
+  // `<a href="">` as same-page and plain-click preventDefault
+  // suppresses navigation. Middle-click with empty href is a no-op
+  // (no new tab opens), which is acceptable because mint-on-hover
+  // populates the href before a reasonably-paced middle-click.
+  const primaryHref = currentFrameLabHref ?? '';
+  const primaryDisabledReason = "This frame can\u2019t be continued yet";
+
+  // DOM order matches visual order (left → right): secondary first,
+  // primary second. Tab order follows DOM, so keyboard users land on
+  // Open Lab before Continue — consistent with reading order.
+  const secondaryNode = (
+    <a
+      className="watch-lab-entry__secondary"
+      href={plainLabHref}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={handleSecondaryClick}
     >
-      <a
-        className="watch-lab-entry__primary"
-        href={plainLabHref}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={handlePrimaryClick}
-      >
-        <span className="watch-lab-entry__primary-label">Open in Lab</span>
-      </a>
-      <button
-        type="button"
-        className="watch-lab-entry__caret"
-        aria-label="More ways to open Lab"
-        aria-haspopup="true"
-        aria-expanded={menuOpen}
-        onClick={() => (menuOpen ? closeMenu(false) : openMenu())}
-        onKeyDown={handleCaretKeyDown}
-        ref={caretRef}
-        data-state={menuOpen ? 'open' : 'closed'}
-      >
-        <span aria-hidden="true" className="watch-lab-entry__caret-glyph">▾</span>
-      </button>
-      {menuOpen && (
-        <div
-          role="menu"
-          className="watch-lab-entry__menu"
-          onKeyDown={handleMenuKeyDown}
-          aria-label="Open in Lab options"
+      <span className="watch-lab-entry__secondary-label">Open Lab</span>
+    </a>
+  );
+
+  // Primary surfaces visually as "Continue" (action verb that respects
+  // the MD simulation metaphor — the user is scrubbing a trajectory
+  // and wants to pick it up from this frame inside Lab). Paired with
+  // the secondary "Open Lab", the split reads as "fresh start" vs.
+  // "pick up from here". Accessible name carries the full
+  // "Continue this frame in Lab" context for screen readers; the
+  // native `title` is DROPPED on the enabled anchor so the browser's
+  // built-in tooltip does not race against our custom CSS tooltip
+  // (two bubbles on one hover = visual noise). Disabled `<button>`
+  // keeps `title` because it has no custom tooltip.
+  const primaryVisibleLabel = 'Continue';
+  const primaryFullName = 'Continue this frame in Lab';
+  const tooltipId = 'watch-lab-continue-tooltip';
+  const primaryNode = primaryDisabled ? (
+    <button
+      type="button"
+      className="watch-lab-entry__primary watch-lab-entry__primary--disabled"
+      disabled
+      title={`${primaryFullName} — ${primaryDisabledReason}`}
+      aria-label={`${primaryFullName} — ${primaryDisabledReason}`}
+    >
+      <span className="watch-lab-entry__primary-label">{primaryVisibleLabel}</span>
+    </button>
+  ) : (
+    <a
+      className="watch-lab-entry__primary"
+      href={primaryHref}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={primaryFullName}
+      aria-describedby={tooltipId}
+      onClick={handlePrimaryClick}
+      onPointerEnter={handleContinueIntent}
+      onFocus={handleContinueIntent}
+      onPointerLeave={handleContinueIdle}
+      onBlur={handleContinueIdle}
+    >
+      <span className="watch-lab-entry__primary-label">{primaryVisibleLabel}</span>
+    </a>
+  );
+
+  // Tooltip — revealed on hover / focus of the primary anchor via a
+  // `:has()` selector on the outer `.watch-lab-entry-anchor` wrapper
+  // (see watch.css). Rendered as a sibling of the capsule so the
+  // capsule's `overflow: hidden` (which clips the inner halves to the
+  // pill shape) does NOT clip the tooltip. Only rendered when the
+  // primary is the enabled anchor — the disabled `<button>` gets the
+  // native `title` affordance instead. `role="tooltip"` + matching
+  // `aria-describedby` on the primary wires the assistive-tech link.
+  return (
+    <>
+      <div className="watch-lab-entry" role="group" aria-label="Lab entry">
+        {secondaryNode}
+        {primaryNode}
+      </div>
+      {!primaryDisabled && (
+        <span
+          id={tooltipId}
+          className="watch-lab-entry__tooltip"
+          role="tooltip"
         >
-          {currentFrameAvailable && currentFrameLabHref ? (
-            <a
-              ref={firstItemRef as React.RefObject<HTMLAnchorElement>}
-              role="menuitem"
-              className="watch-lab-entry__menuitem"
-              href={currentFrameLabHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={handleCurrentFrameClick}
-              tabIndex={-1}
-            >
-              From this frame
-            </a>
-          ) : (
-            <div className="watch-lab-entry__menuitem-wrap">
-              <button
-                ref={firstItemRef as React.RefObject<HTMLButtonElement>}
-                type="button"
-                role="menuitem"
-                className="watch-lab-entry__menuitem watch-lab-entry__menuitem--disabled"
-                disabled
-              >
-                From this frame
-              </button>
-              <span className="watch-lab-entry__menu-caption">
-                Not seedable from this frame
-              </span>
-            </div>
-          )}
-        </div>
+          {primaryFullName}
+        </span>
       )}
-    </div>
+    </>
   );
 }

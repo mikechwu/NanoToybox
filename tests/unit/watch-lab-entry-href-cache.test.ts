@@ -97,7 +97,7 @@ describe('controller.buildCurrentFrameLabHref — cache + debounce (rev 7)', () 
     }
   });
 
-  it('notifyLabMenuClosed debounces invalidation by 500 ms', async () => {
+  it('notifyContinueIdle debounces invalidation by 500 ms', async () => {
     vi.useFakeTimers();
     const mod = await import('../../watch/js/watch-controller');
     const controller = mod.createWatchController();
@@ -107,14 +107,14 @@ describe('controller.buildCurrentFrameLabHref — cache + debounce (rev 7)', () 
       expect(href1).not.toBeNull();
       const tokenCountAfterOpen = countHandoffKeys();
       // Close → pending invalidation in 500 ms.
-      controller.notifyLabMenuClosed();
+      controller.notifyContinueIdle();
       // Immediately re-open — cache must still be alive.
       const href2 = controller.buildCurrentFrameLabHref();
       expect(href2).toBe(href1);
       expect(countHandoffKeys()).toBe(tokenCountAfterOpen);
       // If we close and wait for the debounce to clear, the cache
       // invalidates.
-      controller.notifyLabMenuClosed();
+      controller.notifyContinueIdle();
       vi.advanceTimersByTime(500);
       const href3 = controller.buildCurrentFrameLabHref();
       expect(href3).not.toBeNull();

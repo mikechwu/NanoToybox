@@ -15,7 +15,6 @@ import { WatchDock } from './WatchDock';
 import { WatchTimeline } from './WatchTimeline';
 import { WatchSettingsSheet } from './WatchSettingsSheet';
 import { WatchLabEntryControl } from './WatchLabEntryControl';
-import { WatchLabHint } from './WatchLabHint';
 
 interface WatchAppProps {
   controller: WatchController;
@@ -190,6 +189,14 @@ export function WatchApp({ controller }: WatchAppProps) {
                 />
               </div>
               <div className="watch-toolbar__right">
+                {/*
+                  Lab entry sits ABOVE the Cinematic Camera toggle so
+                  the two action categories read as distinct buckets:
+                  Lab = destination change (opens a new tab); Cinematic
+                  Camera = viewing mode change (in-place). The parent's
+                  `flex-direction: column` enforces the stacking order
+                  (see `.watch-toolbar__right` in watch.css).
+                */}
                 <div className="watch-lab-entry-anchor">
                   <WatchLabEntryControl
                     enabled={snapshot.labEntryEnabled}
@@ -197,18 +204,14 @@ export function WatchApp({ controller }: WatchAppProps) {
                     plainLabHref={snapshot.labHref}
                     currentFrameLabHref={snapshot.labCurrentFrameHref}
                     // No onOpenPlainLab — the anchor's target="_blank"
-                    // is the sole navigation owner for the primary
+                    // is the sole navigation owner for the secondary
                     // path (see WatchLabEntryControlProps docstring).
                     // Wiring a controller nav call here would cause a
                     // duplicate-tab regression. Add only non-
                     // navigating side effects if ever needed.
                     onOpenCurrentFrameLab={() => controller.openLabFromCurrentFrame()}
-                    onCaretOpen={() => controller.buildCurrentFrameLabHref()}
-                    onCaretClose={() => controller.notifyLabMenuClosed()}
-                  />
-                  <WatchLabHint
-                    hint={snapshot.labHint}
-                    onDismiss={(id) => controller.dismissLabHint(id)}
+                    onContinueIntent={() => controller.buildCurrentFrameLabHref()}
+                    onContinueIdle={() => controller.notifyContinueIdle()}
                   />
                 </div>
                 <WatchCinematicCameraToggle

@@ -55,7 +55,6 @@ function makeSnapshot(overrides: Partial<WatchControllerSnapshot> = {}): WatchCo
     cinematicCameraStatus: 'waiting_major_clusters' as const,
     // Lab entry (rev 5+/6/7) — mirror controller defaults in empty state.
     labEntryEnabled: false,
-    labHint: null,
     labHref: '/lab/',
     labCurrentFrameAvailable: false,
     labCurrentFrameHref: null,
@@ -111,9 +110,7 @@ function createMockController(initialSnapshot?: Partial<WatchControllerSnapshot>
     openLabFromCurrentFrame: vi.fn(),
     buildLabHref: vi.fn(() => '/lab/'),
     buildCurrentFrameLabHref: vi.fn(() => null),
-    notifyLabMenuClosed: vi.fn(),
-    dismissLabHint: vi.fn(),
-    notifyLabGestureEnd: vi.fn(),
+    notifyContinueIdle: vi.fn(),
     dispose: vi.fn(),
     // Test helper
     setSnapshot(overrides: Partial<WatchControllerSnapshot>) {

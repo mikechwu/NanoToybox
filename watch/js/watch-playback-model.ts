@@ -27,7 +27,7 @@ export interface WatchTopologySource {
   /**
    * Cheap O(log n) — returns just the frame id at `timePs` without
    * materializing bonds. Exists so UI availability checks (like
-   * `canBuildWatchLabSceneSeed`) can probe frame identity WITHOUT
+   * snap-to-nearest-seedable scan) can probe frame identity WITHOUT
    * triggering reconstructed-topology bond building on a cache miss.
    * Every implementation MUST avoid the heavy path that
    * `getTopologyAtTime` takes.
@@ -106,6 +106,18 @@ export interface WatchPlaybackModel {
    * covers `timePs`.
    */
   getNearestRestartFrameIdAtTime(timePs: number): number | null;
+  /** Snap `timePs` to the nearest dense frame that can produce a valid
+   *  Lab seed (display positions + topology frame + velocity approximation
+   *  all resolvable at that frame). Returns null ONLY when the file
+   *  contains no seedable frame at all — e.g., a single-frame capsule
+   *  history where finite-difference velocity has no neighbor.
+   *
+   *  This powers the "Continue button never goes unavailable during
+   *  playback" contract: the UI stays enabled on any loaded file with
+   *  seedable frames, and the click-path builds the handoff from the
+   *  snapped frame even when the continuous playback time lands between
+   *  frames or before the topology source's first covered time. */
+  findNearestSeedableTimePs(timePs: number): number | null;
 }
 
 // Binary search helpers shared across watch/ — see frame-search.ts
@@ -295,7 +307,7 @@ export function createWatchPlaybackModel(): WatchPlaybackModel {
       return { kind: e.kind, atomId: (e as { atomId: number }).atomId, target: (e as { target: [number, number, number] }).target };
     },
 
-    // ── PR 2 foundation: cheap primitives for canBuildWatchLabSceneSeed ──
+    // ── Cheap primitives for the snap-to-nearest-seedable helper ──
 
     getDisplayFrameIndexAtTime(timePs: number): number | null {
       if (!_history) return null;
@@ -344,6 +356,42 @@ export function createWatchPlaybackModel(): WatchPlaybackModel {
         else break;
       }
       return candidate ? candidate.frameId : null;
+    },
+
+    findNearestSeedableTimePs(timePs: number): number | null {
+      // Runs on the click path only (once per Continue click). Dense
+      // frames are O(10²–10⁴); a linear scan here costs microseconds
+      // and avoids carrying a parallel "seedable-index" array. If this
+      // ever lands on a hot path, swap for a two-pointer outward walk
+      // from `bsearchIndexAtOrBefore` — same semantics, O(log n + gap).
+      if (!_history) return null;
+      const frames = _history.denseFrames;
+      const n = frames.length;
+      if (n === 0) return null;
+      // Capsule histories need ≥2 frames for finite-difference velocity.
+      // A lone-frame capsule is genuinely unseedable; return null so
+      // the caller keeps the button disabled.
+      if (_history.kind !== 'full' && n < 2) return null;
+      let bestTimePs: number | null = null;
+      let bestDelta = Infinity;
+      for (let i = 0; i < n; i++) {
+        const t = frames[i].timePs;
+        // A frame is seedable iff the topology source resolves at
+        // `t`. (Display frame existence is implicit — we're iterating
+        // the dense array. Velocity-approximability is a file-level
+        // property already gated above.)
+        if (_topologySource && _topologySource.getTopologyFrameIdAtTime(t) == null) continue;
+        const d = Math.abs(t - timePs);
+        if (d < bestDelta) {
+          bestDelta = d;
+          bestTimePs = t;
+          // Early-out: an exact hit can't be beaten. `bestDelta === 0`
+          // happens on every click that lands on a frame boundary
+          // (playback paused on a frame, scrub snapped to one, etc.).
+          if (d === 0) return bestTimePs;
+        }
+      }
+      return bestTimePs;
     },
   };
 }

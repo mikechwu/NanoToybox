@@ -27,8 +27,8 @@ import { WatchLabEntryControl } from '../../watch/js/components/WatchLabEntryCon
 
 afterEach(cleanup);
 
-describe('WatchLabEntryControl — new-tab navigation markup (rev 7)', () => {
-  it('primary anchor carries target="_blank" and rel="noopener noreferrer"', () => {
+describe('WatchLabEntryControl — new-tab navigation markup (paired-actions panel)', () => {
+  it('secondary "Open Lab" anchor carries target="_blank" and rel="noopener noreferrer"', () => {
     render(
       <WatchLabEntryControl
         enabled
@@ -39,14 +39,14 @@ describe('WatchLabEntryControl — new-tab navigation markup (rev 7)', () => {
         onOpenCurrentFrameLab={vi.fn()}
       />,
     );
-    const anchor = screen.getByText('Open in Lab').closest('a')!;
+    const anchor = screen.getByText('Open Lab').closest('a')!;
     expect(anchor.getAttribute('target')).toBe('_blank');
     const rel = (anchor.getAttribute('rel') ?? '').split(/\s+/);
     expect(rel).toContain('noopener');
     expect(rel).toContain('noreferrer');
   });
 
-  it('enabled dropdown anchor also carries target="_blank" + rel', () => {
+  it('primary "Continue this frame in Lab" anchor also carries target="_blank" + rel when seedable', () => {
     render(
       <WatchLabEntryControl
         enabled
@@ -57,10 +57,12 @@ describe('WatchLabEntryControl — new-tab navigation markup (rev 7)', () => {
         onOpenCurrentFrameLab={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByLabelText('More ways to open Lab'));
-    const item = screen.getByRole('menuitem');
-    expect(item.getAttribute('target')).toBe('_blank');
-    const rel = (item.getAttribute('rel') ?? '').split(/\s+/);
+    // Primary renders as an anchor when the frame is seedable.
+    // Accessible name carries the full "Continue this frame in Lab";
+    // visible text is the compact "Continue".
+    const primary = screen.getByLabelText(/continue this frame in lab/i).closest('a')!;
+    expect(primary.getAttribute('target')).toBe('_blank');
+    const rel = (primary.getAttribute('rel') ?? '').split(/\s+/);
     expect(rel).toContain('noopener');
     expect(rel).toContain('noreferrer');
   });

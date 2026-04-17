@@ -61,9 +61,10 @@ export function createReconstructedTopologySource(
 
     /**
      * Cheap frame-id probe. Reads ONLY the dense frame's `frameId` field —
-     * never materializes bonds. This is what `canBuildWatchLabSceneSeed`
-     * calls on the hot path so a UI availability check does not trigger
-     * `buildBondTopologyFromPositions` on a cache miss.
+     * never materializes bonds. Upstream callers (the controller's
+     * snap-to-nearest-seedable scan) rely on this probe staying
+     * allocation-free so they can iterate every dense frame without
+     * paying for `buildBondTopologyFromPositions` on each step.
      */
     getTopologyFrameIdAtTime(timePs: number): number | null {
       if (!_frames || _frames.length === 0) return null;

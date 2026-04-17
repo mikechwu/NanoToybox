@@ -1043,20 +1043,11 @@ async function init() {
             historyKind: outcome.payload.seed.provenance.historyKind,
             velocitiesAreApproximated: outcome.payload.seed.provenance.velocitiesAreApproximated,
           });
-          // Arrival pill (§7.2) — acknowledges the hydrate and flags
-          // lossiness when velocities were approximated. Suppression
-          // keyed on the handoff token so a refresh that somehow
-          // re-hydrates the same token doesn't re-show. Never
-          // disclose the raw fileName or shareCode in the pill info
-          // per §7.2 non-disclosure rule; only a boolean
-          // `isSharedScene` derived from shareCode presence.
-          useAppStore.getState().setWatchHandoffProvenance({
-            isSharedScene: outcome.payload.sourceMeta.shareCode !== null,
-            timePs: outcome.payload.sourceMeta.timePs,
-            frameId: outcome.payload.sourceMeta.frameId,
-            velocitiesAreApproximated: outcome.payload.seed.provenance.velocitiesAreApproximated,
-            token: outcome.token,
-          });
+          // Arrival pill removed — the hydrate itself is the
+          // acknowledgement (the scene renders from the handoff). The
+          // console.info above preserves the provenance trace for
+          // debugging (historyKind, velocitiesAreApproximated) without
+          // occupying UI real estate.
         }
       } catch (err) {
         console.error('[lab.boot] unexpected error during watch handoff hydrate:', err);
@@ -1066,11 +1057,11 @@ async function init() {
       }
     } else if (outcome.status === 'rejected' && outcome.reason === 'stale') {
       useAppStore.getState().setStatusError(
-        'This remix link has expired. Open it again from Watch to try once more.',
+        'This link has expired. Open it again from Watch to try once more.',
       );
     } else if (outcome.status === 'rejected' && outcome.reason === 'missing-entry') {
       useAppStore.getState().setStatusError(
-        'This remix link is no longer available. Open it again from Watch to try once more.',
+        'This link is no longer available. Open it again from Watch to try once more.',
       );
     }
     // All other outcomes (none, rejected+tampering-reason) fall through
