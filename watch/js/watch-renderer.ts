@@ -8,6 +8,7 @@
 import { Renderer } from '../../lab/js/renderer';
 import * as THREE from 'three';
 import type { CameraInteractionPhase } from '../../src/camera/camera-interaction-gate';
+import type { WatchLabOrbitCamera } from '../../src/watch-lab-handoff/watch-lab-handoff-shared';
 
 export interface FramedTarget {
   center: [number, number, number];
@@ -99,6 +100,12 @@ export interface WatchRenderer {
   // ── Round 4: authored atom color ──
   /** Apply per-atom color overrides or null to clear. Keys are dense slot indices. */
   setAtomColorOverrides(overrides: Record<number, { hex: string }> | null): void;
+
+  /** Orbit-camera snapshot for Watch → Lab handoff. Reads live
+   *  OrbitControls state (position + target + up + fov). Returns null
+   *  if the renderer is detached. See `lab/js/renderer.ts` for the
+   *  timing / cinematic-camera contract. */
+  getOrbitCameraSnapshot(): WatchLabOrbitCamera | null;
 }
 
 export function createWatchRenderer(container: HTMLElement): WatchRenderer {
@@ -176,5 +183,7 @@ export function createWatchRenderer(container: HTMLElement): WatchRenderer {
     },
 
     onCameraInteraction: (listener) => renderer.onCameraInteraction(listener),
+
+    getOrbitCameraSnapshot: () => renderer.getOrbitCameraSnapshot(),
   };
 }

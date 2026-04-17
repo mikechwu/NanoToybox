@@ -31,8 +31,11 @@
  * method is a thin wrapper that binds the live Lab dependencies.
  */
 
-import type { WatchLabSceneSeed } from '../../../src/watch-lab-handoff/watch-lab-handoff-shared';
-import type { WatchToLabHandoffPayload } from '../../../src/watch-lab-handoff/watch-lab-handoff-shared';
+import type {
+  WatchLabOrbitCamera,
+  WatchLabSceneSeed,
+  WatchToLabHandoffPayload,
+} from '../../../src/watch-lab-handoff/watch-lab-handoff-shared';
 import { normalizeWatchSeed } from '../../../src/watch-lab-handoff/normalize-watch-seed';
 import type { AtomMetadataRegistry, AtomMetadataSnapshot } from './atom-metadata-registry';
 import type { TimelineAtomIdentityTracker, TimelineAtomIdentitySnapshot } from './timeline-atom-identity';
@@ -41,6 +44,7 @@ import { cloneSceneState, restoreSceneStateInPlace } from '../scene';
 import type { AtomXYZ } from '../../../src/types/domain';
 import type { BondTuple } from '../../../src/types/interfaces';
 import type { WorkerCommand, PhysicsConfig } from '../../../src/types/worker-protocol';
+import type { BondedGroupColorAssignment } from '../store/app-store';
 
 /** Marker placed on the synthetic molecule entry so any future code
  *  that wants to "reload from file" knows there is no reload source.
@@ -77,7 +81,8 @@ export interface HydrateFromWatchSeedDeps {
 
   /** Renderer slice. `clearAllMeshes` / `ensureCapacityForAppend` /
    *  `populateAppendedAtoms` / `updatePositions` are the primitives the
-   *  plan §7.1 renderer-rebuild path uses. */
+   *  plan §7.1 renderer-rebuild path uses. Camera read/apply seams
+   *  participate in the hydrate transaction (capture + rollback). */
   renderer: {
     clearAllMeshes(): void;
     ensureCapacityForAppend(atomCount: number): void;
@@ -86,7 +91,31 @@ export interface HydrateFromWatchSeedDeps {
     updateSceneRadius(): void;
     recomputeFocusDistance(): void;
     updatePositions(physics: unknown): void;
+    getOrbitCameraSnapshot?(): WatchLabOrbitCamera | null;
+    applyOrbitCameraSnapshot?(snapshot: WatchLabOrbitCamera): void;
+    /** Fail-closed fallback when the seed carries no camera (legacy
+     *  tokens in-flight during deploy overlap, or any future
+     *  detached-renderer path on the Watch side). Runs after renderer
+     *  rebuild + scene radius update so a valid fit-to-scene frame is
+     *  reachable. */
+    fitCamera?(): void;
   };
+
+  /** Optional bonded-group-appearance runtime slice. Plan phase 1 uses
+   *  this to install handed-off authored colors after tracker/registry
+   *  restoration (so stable atomIds → dense indices are re-derivable),
+   *  and to roll back to the pre-call assignments on failure. Null when
+   *  a test harness exercises hydrate without a color authority. */
+  appearance?: {
+    snapshotAssignments(): BondedGroupColorAssignment[];
+    restoreAssignments(assignments: readonly BondedGroupColorAssignment[]): void;
+  } | null;
+
+  /** Optional store-facing camera-mode probe. Phase 2 is orbit-only; if
+   *  this returns something other than `'orbit'` at hydrate time we log
+   *  a warn but still apply via the orbit path (no other reachable code
+   *  path today). */
+  getCameraMode?: () => string;
 
   /** Worker runtime slice. Null when the environment has no worker
    *  (dev / tests with `useWorker === false`) — the hydrate then
@@ -112,6 +141,12 @@ export interface HydrateFromWatchSeedDeps {
       atoms: AtomXYZ[],
       bonds: BondTuple[],
       offset: [number, number, number],
+      /** Optional handed-off velocities — written into the worker's
+       *  velocity buffer at the appended atom offset so the first
+       *  post-append snapshot carries real momentum. Critical for the
+       *  Watch → Lab handoff: without this, the snapshot reconciler
+       *  zeros the main-thread `physics.vel` on the next frameResult. */
+      velocities?: Float64Array,
     ): Promise<{ ok: boolean }>;
   } | null;
 
@@ -221,12 +256,16 @@ export async function hydrateFromWatchSeed(
     scene: SceneState;
     registry: AtomMetadataSnapshot;
     tracker: TimelineAtomIdentitySnapshot;
+    camera: WatchLabOrbitCamera | null;
+    colorAssignments: BondedGroupColorAssignment[];
   } = {
     physics: physics.createCheckpoint(),
     boundary: physics.getBoundarySnapshot(),
     scene: cloneSceneState(sceneState),
     registry: registry.snapshot(),
     tracker: tracker.snapshot(),
+    camera: renderer.getOrbitCameraSnapshot?.() ?? null,
+    colorAssignments: deps.appearance?.snapshotAssignments() ?? [],
   };
 
   /** Rebuild the renderer from the currently-restored domain state
@@ -290,9 +329,16 @@ export async function hydrateFromWatchSeed(
           };
         }
         const restoredBonds = physics.getBonds();
+        // Snapshot the restored main-thread velocities into a fresh
+        // buffer so the worker's post-append state mirrors main-thread
+        // momentum (same contract as the commit path — avoids a zero-
+        // velocity snapshot reconciler clobber during the error UI).
+        const restoredVel = physics.vel
+          ? new Float64Array(physics.vel.subarray(0, physics.n * 3))
+          : undefined;
         try {
           await worker.clearScene();
-          await worker.appendMolecule(restoredAtoms, restoredBonds, [0, 0, 0]);
+          await worker.appendMolecule(restoredAtoms, restoredBonds, [0, 0, 0], restoredVel);
         } catch (workerResyncErr) {
           // eslint-disable-next-line no-console
           console.warn('[lab.hydrate] worker re-sync after rollback failed:', workerResyncErr);
@@ -304,6 +350,42 @@ export async function hydrateFromWatchSeed(
       // Renderer last — it rebuilds from the restored domain state.
       rebuildRendererFromSceneState();
 
+      // Appearance + camera roll back AFTER the renderer has been
+      // rebuilt from the restored domain state, so the override projection
+      // runs against the correct atom identity and the camera apply
+      // sees a stable renderer.
+      //
+      // Sub-failures here mean the safety net itself broke — the UI is
+      // now in a hybrid state (restored geometry but not-yet-restored
+      // colors or camera). Accumulate them onto `cause` so telemetry /
+      // error banners see BOTH the originating hydrate failure and the
+      // partial-rollback state, rather than silently reporting only
+      // the original.
+      const rollbackSubFailures: unknown[] = [];
+      if (deps.appearance) {
+        try {
+          deps.appearance.restoreAssignments(capture.colorAssignments);
+        } catch (appearanceErr) {
+          // eslint-disable-next-line no-console
+          console.warn('[lab.hydrate] appearance restore on rollback threw:', appearanceErr);
+          rollbackSubFailures.push(appearanceErr);
+        }
+      }
+      if (capture.camera && renderer.applyOrbitCameraSnapshot) {
+        try {
+          renderer.applyOrbitCameraSnapshot(capture.camera);
+        } catch (cameraErr) {
+          // eslint-disable-next-line no-console
+          console.warn('[lab.hydrate] camera restore on rollback threw:', cameraErr);
+          rollbackSubFailures.push(cameraErr);
+        }
+      }
+
+      if (rollbackSubFailures.length > 0) {
+        // eslint-disable-next-line no-console
+        console.error('[lab.hydrate] rollback-partial — scene in hybrid state:', rollbackSubFailures);
+        return { status: 'error', reason, cause: { originatingCause: cause, rollbackSubFailures } };
+      }
       return { status: 'error', reason, cause };
     } catch (rollbackErr) {
       // eslint-disable-next-line no-console
@@ -411,9 +493,23 @@ export async function hydrateFromWatchSeed(
         payload.localStructureAtoms,
         payload.bonds,
         [0, 0, 0],
+        // Forward handed-off velocities to the worker so its first
+        // post-append snapshot carries shipped momentum. Normalizer
+        // guarantees `payload.velocities.length === payload.n * 3`
+        // (zeroed when the seed velocities were null — a cold-start
+        // that correctly yields zero worker-side velocities).
+        payload.velocities,
       );
       if (!appended.ok) {
-        return rollback('worker-restore-rejected', new Error('worker.appendMolecule returned ok:false'));
+        // Propagate the underlying error when the WorkerRuntime wrapper
+        // supplied one (transport failure). Falling back to a synthetic
+        // Error keeps the contract intact for logical `ok: false` acks
+        // that carry no `error` field.
+        const underlying = (appended as { error?: string }).error;
+        const workerCause = underlying
+          ? new Error(`worker.appendMolecule failed: ${underlying}`)
+          : new Error('worker.appendMolecule returned ok:false');
+        return rollback('worker-restore-rejected', workerCause);
       }
     } catch (err) {
       return rollback('worker-restore-rejected', err);
@@ -485,6 +581,105 @@ export async function hydrateFromWatchSeed(
     renderer.updateSceneRadius();
     renderer.recomputeFocusDistance();
     renderer.updatePositions(physics);
+
+    // ── 7. Apply orbit-camera snapshot (phase 2).
+    //       Runs AFTER renderer rebuild so the apply path sees a
+    //       consistent camera/controls pair. No new boot-time flash
+    //       suppression is required (see plan §"Camera-flash hazard
+    //       analysis") — the existing `_hasPendingWatchHandoff()` gate
+    //       in `main.ts` already skips the default-structure load, and
+    //       this hydrate path never invokes `addMoleculeToScene`. ──
+    if (payload.camera && renderer.applyOrbitCameraSnapshot) {
+      const mode = deps.getCameraMode?.();
+      if (mode != null && mode !== 'orbit') {
+        // eslint-disable-next-line no-console
+        console.warn('[lab.hydrate] unexpected non-orbit cameraMode on handoff boot:', mode);
+      }
+      renderer.applyOrbitCameraSnapshot(payload.camera);
+    } else {
+      // Camera-null fallback. The pending-handoff boot skips the
+      // default-scene load, so there is no `addMoleculeToScene` →
+      // `callbacks.fitCamera()` path to rescue us. Without an explicit
+      // fit here, the renderer keeps its constructor-default camera
+      // pose, which can point away from the handed-off scene entirely.
+      // `fitCamera()` runs against the just-rebuilt renderer +
+      // physics-ref, which reflects the handed-off atoms.
+      //
+      // Fail-loud when the renderer slice lacks `fitCamera` — the plan
+      // treats camera-null as fail-CLOSED, not silent-noop. A missing
+      // method here means the scene will render at the constructor
+      // default pose with no in-product signal; surface the diagnostic
+      // so it shows up in bug reports.
+      if (renderer.fitCamera) {
+        renderer.fitCamera();
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn('[lab.hydrate] camera-null fallback but renderer.fitCamera absent — scene may be off-frame');
+      }
+    }
+
+    // ── 8. Apply authored color assignments (phase 1).
+    //       Watch authors colors against Watch's stable atomIds. Lab's
+    //       appearance runtime authors against Lab's stable atomIds
+    //       (assigned by the tracker in step 6 above). Bridge the two
+    //       via display-order correspondence: the wire seed's
+    //       `atoms[i].id` (Watch's stable id) corresponds to display
+    //       slot `i`, and `assignedIds[i]` is Lab's new stable id for
+    //       that same slot. Drop atoms that do not resolve; drop the
+    //       whole assignment if none resolve.
+    //
+    //       **Replace semantics (NOT additive).** The hydrate REPLACES
+    //       the entire scene — if the incoming seed has no color
+    //       assignments, or if every incoming assignment fails to
+    //       resolve, the prior Lab scene's authored colors MUST be
+    //       cleared. `restoreAssignments([])` achieves this via its
+    //       own replace semantics. Calling it unconditionally on the
+    //       success path keeps appearance state transactional with
+    //       the rest of the hydrate. ──
+    if (deps.appearance) {
+      const watchAtomIdToSlot = new Map<number, number>();
+      for (let i = 0; i < seed.atoms.length; i++) {
+        watchAtomIdToSlot.set(seed.atoms[i].id, i);
+      }
+      const toRestore: BondedGroupColorAssignment[] = [];
+      for (const ca of payload.colorAssignments) {
+        const slots: number[] = [];
+        const labIds: number[] = [];
+        // Both arrays MUST stay in lockstep — `atomIndices` and `atomIds`
+        // are parallel projections of the same atoms (dense slot vs.
+        // stable id). Only push to both when the full resolution chain
+        // (Watch id → slot → Lab id) succeeds; otherwise drop the atom
+        // entirely so downstream prune/round-trip cannot corrupt on the
+        // array-length mismatch.
+        for (const watchId of ca.atomIds) {
+          const slot = watchAtomIdToSlot.get(watchId);
+          if (slot == null) continue;
+          const labId = assignedIds[slot];
+          if (labId == null || labId < 0) continue;
+          slots.push(slot);
+          labIds.push(labId);
+        }
+        if (labIds.length === 0) {
+          // eslint-disable-next-line no-console
+          console.warn(`[lab.hydrate] color assignment ${ca.id}: zero atoms resolved, dropping`);
+          continue;
+        }
+        if (slots.length !== ca.atomIds.length) {
+          // eslint-disable-next-line no-console
+          console.warn(`[lab.hydrate] color assignment ${ca.id}: ${ca.atomIds.length - slots.length} atom(s) did not resolve`);
+        }
+        toRestore.push({
+          id: ca.id,
+          atomIds: labIds,
+          atomIndices: slots,
+          colorHex: ca.colorHex,
+          sourceGroupId: ca.sourceGroupId,
+        });
+      }
+      // Unconditional — empty toRestore wipes any prior authored-color
+      // state that would otherwise survive into the handed-off scene.
+      deps.appearance.restoreAssignments(toRestore);
+    }
   } catch (err) {
     return rollback('registry-register-threw', err);
   }

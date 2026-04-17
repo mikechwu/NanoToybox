@@ -546,6 +546,79 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
     expect(stableAtomCount).toBe(2);
   });
 
+  test('camera continuity: Lab camera pose matches Watch click-time pose (plan rev 4 phase 2)', async ({ page, context }) => {
+    // Plan §"Test observability seams" — exact-match via typed hooks,
+    // no pixel diffing. Verifies end-to-end:
+    //   (1) Watch ships a non-null camera snapshot on click.
+    //   (2) Lab's post-hydrate camera matches Watch's click-time camera
+    //       within quantization epsilon (POSITION_Q = 0.01, FOV_Q = 0.5).
+    await page.goto('/watch/?e2e=1');
+    await page.waitForSelector('.watch-workspace', { timeout: 8000 });
+    await loadWatchFixture(page);
+    // Wait for the canvas to mount so the renderer is attached before
+    // we read its camera snapshot. Without this, `_getWatchCameraSnapshot`
+    // can return null if the workspace painted the toolbar but the canvas
+    // hasn't yet run createRenderer on mount.
+    await page.waitForSelector('.watch-workspace canvas', { timeout: 8000 });
+    await page.waitForFunction(() => {
+      const hook = (window as unknown as { _getWatchCameraSnapshot?: () => unknown })._getWatchCameraSnapshot;
+      return hook?.() !== null && hook?.() !== undefined;
+    }, { timeout: 8000 });
+    await page.evaluate(() => {
+      const hook = (window as unknown as { _watchScrub?: (ps: number) => void })._watchScrub;
+      hook?.(25);
+    });
+
+    const primary = page.locator('.watch-lab-entry__primary').first();
+    await primary.hover();
+
+    // Read click-time camera pose (hover fired pre-mint; the contract
+    // says plain left-click re-reads — but reading the pose NOW is a
+    // proxy for the click handler's behavior because nothing moves
+    // between here and the next line).
+    const watchCamera = await page.evaluate(() => {
+      const hook = (window as unknown as { _getWatchCameraSnapshot?: () => unknown })._getWatchCameraSnapshot;
+      return hook?.() ?? null;
+    });
+    expect(watchCamera).not.toBeNull();
+
+    const labTabPromise = context.waitForEvent('page');
+    await primary.click();
+    const labTab = await labTabPromise;
+    await labTab.waitForLoadState('domcontentloaded');
+    await labTab.waitForSelector('canvas', { timeout: 8000 });
+    await labTab.waitForFunction(
+      () => !new URL(location.href).searchParams.get('handoff'),
+      { timeout: 8000 },
+    );
+    // Give hydrate a frame to apply the camera.
+    await labTab.waitForFunction(
+      () => {
+        const hook = (window as unknown as { _getLabCameraSnapshot?: () => unknown })._getLabCameraSnapshot;
+        return hook?.() !== null;
+      },
+      { timeout: 8000 },
+    );
+
+    // Compare quantized: position at 0.01, fov at 0.5.
+    const POS_Q = 0.01;
+    const FOV_Q = 0.5;
+    const quantizeLocal = (c: { position: number[]; target: number[]; fovDeg: number }) => ({
+      position: c.position.map((v) => Math.round(v / POS_Q)),
+      target: c.target.map((v) => Math.round(v / POS_Q)),
+      fovDeg: Math.round(c.fovDeg / FOV_Q),
+    });
+
+    const labCamera = await labTab.evaluate(() => {
+      const hook = (window as unknown as { _getLabCameraSnapshot?: () => { position: number[]; target: number[]; fovDeg: number } | null })._getLabCameraSnapshot;
+      return hook?.() ?? null;
+    });
+    expect(labCamera).not.toBeNull();
+    expect(quantizeLocal(labCamera as { position: number[]; target: number[]; fovDeg: number })).toEqual(
+      quantizeLocal(watchCamera as { position: number[]; target: number[]; fovDeg: number }),
+    );
+  });
+
   test('missing ?from=watch is fully silent — Lab boots normally, no status error', async ({ page }) => {
     await page.goto('/lab/');
     await page.waitForSelector('canvas', { timeout: 8000 });

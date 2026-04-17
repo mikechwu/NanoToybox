@@ -201,11 +201,17 @@ export class WorkerBridge {
     });
   }
 
-  /** Append a molecule to the running scene. Resolves with the ack. */
+  /** Append a molecule to the running scene. Resolves with the ack.
+   *  Optional `velocities` are written into the worker's velocity
+   *  buffer immediately after append so the worker's first post-append
+   *  snapshot carries them — required for the Watch → Lab handoff path
+   *  where shipped momentum would otherwise be zeroed by the next
+   *  frameResult (see `snapshot-reconciler.ts` velocity-sync). */
   async appendMolecule(
     atoms: AtomXYZ[],
     bonds: BondTuple[],
     offset: [number, number, number],
+    velocities?: Float64Array,
   ): Promise<AppendResult> {
     const commandId = this._nextId();
     this._registerMutation(commandId, 'appendMolecule');
@@ -224,6 +230,7 @@ export class WorkerBridge {
       atoms,
       bonds,
       offset,
+      velocities,
     });
 
     return promise;

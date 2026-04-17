@@ -174,16 +174,17 @@ Void-returning worker calls that silently drop logical failures are the anti-pat
 
 ### Transactional Scene Mutation Pattern
 
-The Watch→Lab hydrate module is the exemplar. Any code that mutates scene state across both main-thread physics and the worker — and must be atomic from the user's perspective — follows this shape:
+The Watch→Lab hydrate module (`lab/js/runtime/hydrate-from-watch-seed.ts`) is the exemplar. Any code that mutates scene state across both main-thread physics and the worker — and must be atomic from the user's perspective — follows this shape:
 
-1. **Capture rollback state** — physics checkpoint, boundary, scene state, registry snapshot, tracker snapshot. Enough to fully restore the prior scene if any later step throws.
+1. **Capture rollback state** — physics checkpoint, boundary, scene state, registry snapshot, tracker snapshot, **appearance snapshot** (`bondedGroupAppearanceRuntime.snapshotAssignments()`), and **camera snapshot** (`renderer.getOrbitCameraSnapshot()`). Enough to fully restore the prior scene (including color and camera pose) if any later step throws.
 2. **Stage the renderer** — prepare renderer state that can be unwound without a commit.
-3. **Commit main-thread physics** via `appendMolecule` (following `clearScene` if replacing).
+3. **Commit main-thread physics** via `appendMolecule` (following `clearScene` if replacing). When the seed carries `velocities`, they're handed to the worker's `appendMolecule` command (see "Worker velocity delivery" below) so the first post-append snapshot carries real motion state — not a zeroed frame.
 4. **Commit worker** via `clearScene` + `appendMolecule`, checking `{ ok }` on each.
 5. **Finalize** registry, tracker, and scene-state bookkeeping.
-6. **Publish** the post-commit signal (`onHydrated` or equivalent).
+6. **Rebuild renderer, then apply camera and color** — after the renderer rebuild, call `renderer.applyOrbitCameraSnapshot(seed.camera)` (or fall back to `renderer.fitCamera()` when `camera === null`), then `bondedGroupAppearanceRuntime.restoreAssignments(reindexed)` unconditionally on the success path (REPLACE semantics — an empty array wipes any prior Lab color state).
+7. **Publish** the post-commit signal (`onHydrated` or equivalent).
 
-Any throw in steps 2–5 triggers **full rollback** from the captured state. `rollback-also-failed` is a first-class `HydrateFailureReason` — if the rollback itself throws, that is a distinct classified failure, not a swallowed log line.
+Any throw in steps 2–6 triggers **full rollback** from the captured state, including `restoreAssignments(capture.appearance)` and `applyOrbitCameraSnapshot(capture.camera)`. `rollback-also-failed` is a first-class `HydrateFailureReason` — if the rollback itself throws, that is a distinct classified failure, not a swallowed log line. Rollback sub-failures are accumulated into `cause: { originatingCause, rollbackSubFailures }` rather than swallowed.
 
 ### Hydration Lock Pattern (Boot-Scope Transactional Guards)
 
@@ -200,6 +201,46 @@ Long-running transactional mutations that run during or shortly after boot need 
 Early boot-time checks that decide "do we have work queued from a prior surface?" **must be pure URL reads — no localStorage access, no side effects.** `_hasPendingWatchHandoff()` reads `window.location` only.
 
 The destructive consume (`consumeWatchToLabHandoffFromLocation`) runs **later**, once subsystems (physics, worker, renderer) are ready to receive the payload. Pattern: **ask the URL early, consume storage late.** Consuming storage before subsystems are ready means a failed hydrate leaves the handoff already drained, so retry is impossible and the user loses the work silently.
+
+### Watch→Lab Handoff (Continue Flow)
+
+The Watch-side "Continue" button (previously called "Remix" / "From this frame" — do not reintroduce those names) projects the current Watch frame into a Lab hydrate token and navigates to Lab with the token referenced on the URL. Lab then consumes the token from localStorage and hydrates via the transactional pattern above. There is no arrival pill / provenance banner on the Lab side — hydrate success is signaled only by the rendered scene plus a `[lab.boot] watch handoff hydrated` console.info trace.
+
+**Terminology (canonical):**
+- "Continue" — the Watch-side primary button that opens Lab from the current frame.
+- "Handoff" — the localStorage-backed transport from Watch to Lab.
+- "Seed" — the `WatchLabSceneSeed` payload carried inside a handoff token.
+- "Motion state" — preferred over "momentum" for per-atom velocity data (per-atom mass is not tracked on the wire).
+
+**Shared schema** (`src/watch-lab-handoff/watch-lab-handoff-shared.ts`):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `atoms` | `WatchLabAtom[]` | Stable `id`, element, position. Index ↔ id stay in lockstep with the bonded-group tracker. |
+| `bonds` | `WatchLabBond[]` | Stable-id pairs. |
+| `colorAssignments` | `WatchLabColorAssignment[]` | `{ id, atomIds[], colorHex, sourceGroupId }` — stable-id quartet. No dense indices on the wire. |
+| `camera` | `WatchLabOrbitCamera \| null` | `{ position, target, up, fovDeg }` — exact orbit pose, or `null` to request `renderer.fitCamera()`. |
+| `provenance` | `{ historyKind, velocitySource, velocitiesAreApproximated, unresolvedVelocityFraction }` | `velocitySource ∈ 'restart' \| 'central-difference' \| 'forward-difference' \| 'backward-difference' \| 'mixed' \| 'none'`. |
+
+`isValidSeed` and `isValidPayload` validate tokens in place via `isValidCamera` + `isValidColorAssignment` helpers. Legacy tokens (no camera, no colorAssignments, 2-field provenance) remain accepted — the new fields are optional at validate time.
+
+**Normalizer** (`src/watch-lab-handoff/normalize-watch-seed.ts`): `normalizeWatchSeed` produces `NormalizedWatchHydratePayload` with `colorAssignments`, `camera`, and refined provenance. Legacy-token defaults: `camera → null`, `colorAssignments → []`, `velocitySource` derived from `velocitiesAreApproximated` (true → `'mixed'`, false → `'restart'`), `unresolvedVelocityFraction → 0`. Defensive `VALID_VELOCITY_SOURCES` coercion covers direct-call paths that bypass the validator.
+
+**Watch seed builder** (`watch/js/watch-lab-seed.ts`): `BuildArgs` accepts optional `getColorAssignments` and `getOrbitCameraSnapshot` closures. Per-atom velocity source tracking collapses to a single tag matching `WatchLabVelocitySource`. `unresolvedVelocityFraction` is computed pre-null-promotion. Unknown `atomId`s in color assignments are dropped at build time with a `console.warn`.
+
+**Watch controller cache identity** (`watch/js/watch-controller.ts`): `_currentFrameHrefCache` uses a 5-tuple identity that includes a `cameraIdentity` component — a quantized `(position, target, fovDeg)` string with `POSITION_Q = 0.01`, `FOV_Q = 0.5`. `buildCurrentFrameLabHref` passes both color and camera getters into the seed builder. `openLabFromCurrentFrame` → `projectCurrentFrameHref` re-reads the live camera on click; a cache hit requires **all 5** identity components to match, and a miss purges the stale token via `removeWatchToLabHandoff`.
+
+**Lab hydrate transaction** (`lab/js/runtime/hydrate-from-watch-seed.ts`): follows the Transactional Scene Mutation Pattern above. Color re-indexing maps Watch `atomId` → display slot (via `seed.atoms[i].id`) → Lab `atomId` (via tracker `assignedIds[slot]`); atoms whose full resolution chain fails are dropped. `[lab.boot] watch handoff hydrated` extends with `velocitySource`, `unresolvedVelocityFraction`, `colorAssignmentCount`, and `hasCamera`.
+
+**Worker velocity delivery** (`src/types/worker-protocol.ts`, `lab/js/simulation-worker.ts`, `lab/js/worker-bridge.ts`, `lab/js/runtime/worker-lifecycle.ts`): the `appendMolecule` command carries an optional `velocities: Float64Array`. The worker writes `engine.vel.set(velocities, atomOffset*3)` **before** `sceneVersion++` so the first post-append snapshot reflects real motion state — the snapshot reconciler previously zeroed main-thread velocities on the first frameResult. Velocity-length mismatches warn rather than silently clip.
+
+**Bonded-group appearance runtime** (`lab/js/runtime/bonded-group-appearance-runtime.ts`): exposes `snapshotAssignments()` and `restoreAssignments(prev)` for transactional capture/restore. Both use structural deep-copy and REPLACE semantics (not additive) — restoring an empty snapshot wipes prior state, which is what the hydrate success path relies on.
+
+**E2E observability hooks:**
+- `_getWatchCameraSnapshot` (`watch/js/main.ts`, gated on `?e2e=1`) — returns the live Watch orbit pose.
+- `_getLabCameraSnapshot` (`lab/js/main.ts`, **unconditional** — the Lab tab opened from Watch has no `?e2e` param, so the hook must be ungated for camera-continuity E2E specs).
+
+**Key handoff test files** (under `tests/`): `unit/lab-scene-hydrate-from-seed.test.ts`, `unit/watch-lab-handoff.test.ts`, `unit/watch-lab-normalize-seed.test.ts`, `unit/watch-lab-seed-build.test.ts`, `unit/bonded-group-appearance-runtime-snapshot.test.ts`, `unit/watch-lab-entry-href-cache.test.ts`, `e2e/watch-lab-entry.spec.ts` (includes the camera-continuity spec).
 
 ### Placement Solver Policy (3-Surface Architecture)
 
@@ -321,6 +362,7 @@ Persistent tracked highlights are feature-gated off via `canTrackBondedGroupHigh
 - Owns group-to-atom color mapping, group color intents (`Map<string, string>`), and renderer sync
 - `syncGroupIntents()` propagates intents to uncolored atoms after topology changes (newly joined atoms inherit the group's color)
 - Wired to both projection trigger points in main.ts: `onSceneMutated` (scene changes) and `syncBondedGroupsForDisplayFrame` (timeline coordinator)
+- Exposes `snapshotAssignments()` / `restoreAssignments(prev)` for transactional capture/restore (structural deep-copy, REPLACE semantics — restoring an empty snapshot wipes prior state). Used by the Watch→Lab hydrate transaction.
 
 **Store additions** (`store/app-store.ts`):
 - `colorEditorOpenForGroupId: string | null` — tracks which group's color popover is open
@@ -758,6 +800,8 @@ All debug params must be routed through this single reader.
 | `?e2e=1` | Suppress onboarding overlay | `runtime/onboarding.ts` |
 
 E2E tests inject `?e2e=1` via `gotoApp()` from `tests/e2e/helpers.ts`.
+
+E2E camera-snapshot hooks: `_getWatchCameraSnapshot` is gated on `?e2e=1` (`watch/js/main.ts`); `_getLabCameraSnapshot` is **unconditional** (`lab/js/main.ts`) because the Lab tab opened from Watch via the Continue flow carries no `?e2e` param, and the camera-continuity spec in `tests/e2e/watch-lab-entry.spec.ts` needs to read it on arrival.
 
 ### Python (simulation engine)
 

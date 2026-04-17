@@ -244,17 +244,19 @@ operator is pairing with a reporting user during an incident.
 
 ### Client-side (Watch→Lab handoff, browser console)
 
-Emitted during the Watch→Lab "open current frame" funnel. Watch writes
-the paused frame (positions + velocities + small metadata) to
-`localStorage` and opens `/lab/?from=watch&handoff=<token>`; Lab
-consumes, scrubs the URL, and hydrates the scene. Every failure mode
-logs a greppable tag before (or instead of) surfacing an error banner —
-user reports almost always correlate with one of these.
+Emitted during the Watch→Lab "Continue" funnel (the Watch-side primary
+button, previously labeled "Remix" / "From this frame"). Watch writes
+the paused frame (positions + velocities + color assignments + orbit
+camera + small metadata) to `localStorage` and opens
+`/lab/?from=watch&handoff=<token>`; Lab consumes, scrubs the URL, and
+hydrates the scene inside a transactional apply with rollback. Every
+failure mode logs a greppable tag before (or instead of) surfacing an
+error banner — user reports almost always correlate with one of these.
 
 | Prefix | Meaning |
 |---|---|
-| `[lab.boot] watch handoff hydrated: { atomCount, historyKind, velocitiesAreApproximated }` | Happy path. `historyKind` discriminates which seed flavor was consumed; `velocitiesAreApproximated=true` indicates the velocity payload was synthesized (older Watch build or lossy transport) rather than full fidelity. Informational. |
-| `[lab.boot] watch handoff hydrate failed: <reason> <cause>` | Hydration reached the scene-runtime stage and then blew up (e.g. worker unavailable, seed shape mismatch at apply-time). Paired with a fallback path — default scene loads instead. The `<cause>` is the raw thrown value; grep the matching `[worker] …` or `[scene-runtime] …` entry emitted in the same turn for the underlying reason. |
+| `[lab.boot] watch handoff hydrated: { atomCount, historyKind, velocitySource, unresolvedVelocityFraction, colorAssignmentCount, hasCamera }` | Happy path. `historyKind` discriminates which seed flavor was consumed. `velocitySource` is one of `restart` / `central-difference` / `forward-difference` / `backward-difference` / `mixed` / `none` — the dominant per-atom tag collapsed to a single label at build time. `unresolvedVelocityFraction` (0..1) is the fraction of atoms whose velocity could not be resolved and were null-promoted; anything non-zero indicates partial motion-state fidelity. `colorAssignmentCount` is the number of bonded-group color assignments carried; 0 means the Lab side will wipe prior color state on apply (REPLACE semantics, not additive). `hasCamera` is true when the seed carried an orbit-camera snapshot (position/target/up/fovDeg); false falls back to `renderer.fitCamera()`. Informational — there is NO arrival-provenance pill in the UI; hydrate success is the rendered scene plus this trace. |
+| `[lab.boot] watch handoff hydrate failed: <reason> <cause>` | Hydration reached the transactional apply stage (`lab/js/runtime/hydrate-from-watch-seed.ts`) and threw; the transaction rolled back to the pre-hydrate snapshot (including color assignments and camera pose). `<reason>` is one of: `worker-restore-rejected` (worker refused to accept the restored atom/bond/velocity state — often a worker-bundle regression; correlate with `[worker] failure during hydrate transaction …`), `physics-commit-threw` (main-thread physics engine rejected the commit, e.g. shape mismatch between seed and engine arrays), `renderer-stage-threw` (Three.js/renderer rebuild failed — typically a GPU-context loss or buffer-size mismatch), `registry-register-threw` (bonded-group registry rejected the appearance/color re-registration — usually a color-assignment with unknown atomIds that survived validation), `runtime-not-ready` (hydrate was dispatched before the Lab scene-runtime finished its own boot; race condition, expect this only on extremely slow cold loads), `rollback-also-failed` (the originating failure triggered rollback and the rollback itself threw — `<cause>` is shaped `{ originatingCause, rollbackSubFailures }` with both halves preserved instead of swallowed). Paired with a default-scene fallback load. |
 | `[lab.boot] watch handoff rejected: <reason>` | Handoff failed the consume-side validator before any runtime work started. `<reason>` is one of `stale` (token older than TTL), `missing-entry` (token URL present but no matching `localStorage` entry — expected if the other tab already consumed, or if the writer was suppressed by storage-unavailable), `malformed-seed`, `wrong-version`, `wrong-source`, `wrong-mode`, `parse-error`. `stale`/`missing-entry` are the two the user is most likely to surface via the banner copy below. The others indicate a writer/reader version skew and should be correlated with recent deploys. |
 | `[lab.boot] default-scene fallback load failed: <err>` | The default-scene load attempted after a rejected or failed handoff itself failed. This is the terminal error path — the Lab will render its "Couldn't load the default scene" banner. If you see this without a preceding handoff rejection, it's a plain default-scene regression, not a handoff issue. |
 | `[watch] handoff write failed: <kind> <message>` | Watch-side writer failed. `<kind>` is `storage-unavailable` (private-browsing, extension-blocked, or no DOM storage at all) or `quota-exceeded` (origin `localStorage` ceiling hit; the writer pre-sweeps prior handoff entries before surfacing the error, so a persistent rate of this in the absence of other heavy `localStorage` writers indicates something outside our namespace is consuming quota). The user sees one of the two storage banners listed below. |
@@ -278,24 +280,38 @@ when debugging with a user. Keys are split by storage class and TTL.
   read on the post-auth return to resume the interrupted action.
   Self-clears on consume; stale entries are ignored via the `iat` TTL
   check.
-- `atomdojo.watchHandoffPillDismissed:<token>` — set when the user
-  explicitly closes the Watch→Lab arrival pill. Session-scoped so a
-  refresh of the same Lab tab doesn't re-show the pill; a new tab (or
-  a fresh handoff with a different token) shows it again.
+- (Arrival pill removed — the Continue-centric redesign deleted the
+  Watch→Lab arrival pill. The `atomdojo.watchHandoffPillDismissed:<token>`
+  key is no longer written by current builds. Operators may still see
+  legacy keys in long-lived `sessionStorage` snapshots from pre-pill-
+  removal sessions; they are inert and can be safely ignored.)
 
 **`localStorage` (per-origin, persistent until cleared):**
 
 - `atomdojo.watchLabHandoff:<token>` — Watch→Lab handoff payload,
   10-minute TTL enforced at read time. Value is a small JSON envelope
-  wrapping a base64-encoded `Float64Array` of positions + velocities.
-  Typical size is <500 KB for a 264-atom capsule frame; origin
-  `localStorage` quota is ~5–10 MB per browser (implementation-defined),
-  so any single token is well under budget. Tokens are one-shot: Lab
-  consumes (removes) the entry on first successful read, and the URL
-  query params are scrubbed post-consume so a reload can't replay.
-  Watch pre-sweeps orphan entries under this prefix before each write,
-  bounding worst-case accumulation if a user repeatedly opens
-  handoffs but never lands on the Lab tab.
+  wrapping base64-encoded `Float64Array`s of positions + velocities,
+  plus color assignments (stable-id quartets: `{id, atomIds[], colorHex,
+  sourceGroupId}` — no dense indices on the wire) and an orbit-camera
+  snapshot (`{position, target, up, fovDeg}`). Seed-size hard caps live
+  in `src/watch-lab-handoff/watch-lab-handoff-shared.ts`:
+  `SEED_MAX_ATOMS = 50_000` and `SEED_MAX_BONDS = 100_000`. A Float64
+  positions array at the atom cap is 50_000 × 3 × 8 = 1.2 MB raw → ~1.6
+  MB base64; velocities double that. Typical 264-atom capsule frame is
+  <500 KB total. Origin `localStorage` quota is ~5–10 MB per browser
+  (implementation-defined), so any single token is well under budget
+  even near the cap. Tokens are one-shot: Lab consumes (removes) the
+  entry on first successful read via `removeWatchToLabHandoff`, and the
+  URL query params are scrubbed post-consume so a reload can't replay.
+  Watch pre-sweeps orphan entries under this prefix before each write
+  (TTL sweep uses the same 10-minute threshold), bounding worst-case
+  accumulation if a user repeatedly opens handoffs but never lands on
+  the Lab tab. The Watch controller's current-frame href cache mints a
+  new token only when the identity tuple changes — positions, bonds,
+  velocities, color assignments, and a quantized camera identity
+  (`POSITION_Q = 0.01`, `FOV_Q = 0.5`); on a cache miss the prior token
+  is purged via `removeWatchToLabHandoff` before the new one is written,
+  so the prefix never grows unboundedly on rapid pose tweaks.
 
 When a user reports a handoff failure, first ask them to open devtools
 → Application → Storage and confirm whether any
@@ -308,13 +324,18 @@ rejection reason.
 Support reports usually quote the banner text verbatim. Map to code
 path before asking the user to reproduce:
 
+Banner copy has been updated to drop the "remix" terminology in favor
+of the Continue wording; older support tickets may still quote the
+prior strings verbatim, so both forms are kept in this table.
+
 | Banner text | Root-cause path |
 |---|---|
-| "This remix link has expired. Open it again from Watch to try once more." | `[lab.boot] watch handoff rejected: stale` — token older than the TTL (10 min in production; `?e2eHandoffTtlMs=<ms>` override is test-only). |
-| "This remix link is no longer available. Open it again from Watch to try once more." | `[lab.boot] watch handoff rejected: missing-entry` — either the other tab already consumed (benign — reload of the Lab tab after arrival), or the writer-side entry never landed (check for `[watch] handoff write failed: …`). |
+| "This Continue link has expired. Open it again from Watch to try once more." (legacy: "This remix link has expired. …") | `[lab.boot] watch handoff rejected: stale` — token older than the TTL (10 min in production; `?e2eHandoffTtlMs=<ms>` override is test-only). |
+| "This Continue link is no longer available. Open it again from Watch to try once more." (legacy: "This remix link is no longer available. …") | `[lab.boot] watch handoff rejected: missing-entry` — either the other tab already consumed the token and cleared it via `removeWatchToLabHandoff` (benign — reload of the Lab tab after arrival), or the writer-side entry never landed (check for `[watch] handoff write failed: …`). |
 | "Your browser is blocking storage, so the current frame can't be prepared. …" | `[watch] handoff write failed: storage-unavailable` — private browsing, Storage-API permissions, or extension blocking. Watch-side only; no Lab-side log. |
-| "Browser storage is full, so the current frame can't be prepared. …" | `[watch] handoff write failed: quota-exceeded` — retry sweeps prior handoff entries first; if this still surfaces, a non-atomdojo writer is consuming the origin's `localStorage` quota. |
-| "Couldn't load the default scene. Please reload the page." | `[lab.boot] default-scene fallback load failed: …` — see the signal table above. |
+| "Browser storage is full, so the current frame can't be prepared. …" | `[watch] handoff write failed: quota-exceeded` — retry sweeps prior handoff entries first (TTL sweep over `atomdojo.watchLabHandoff:*`); if this still surfaces, a non-atomdojo writer is consuming the origin's `localStorage` quota. |
+| "Couldn't restore the scene from Watch. The default scene is loading instead." | `[lab.boot] watch handoff hydrate failed: <reason> …` — the transactional hydrate rolled back. `<reason>` narrows the cause: `worker-restore-rejected`, `physics-commit-threw`, `renderer-stage-threw`, `registry-register-threw`, `runtime-not-ready`, or `rollback-also-failed`. See the signal table above for per-reason triage. The default-scene fallback is attempted immediately after the rollback completes. |
+| "Couldn't load the default scene. Please reload the page." | `[lab.boot] default-scene fallback load failed: …` — see the signal table above. Often chained after a hydrate failure when the fallback path itself blows up. |
 | "Simulation worker is unavailable. Running locally — performance may be reduced." | `[worker] failure: … — rebuilding local physics for sync fallback` — worker append failed outside a hydrate transaction. |
 | "Simulation worker disconnected during timeline restart. Running locally — performance may be reduced." | `reinitWorker` → `restoreState` failed during a worker re-init (timeline restart / scrub). Scene continues in sync mode; same degraded-performance story as the generic worker-unavailable banner. |
 
@@ -925,13 +946,19 @@ curl -I "https://atomdojo.pages.dev/c/<code>"
 - **Watch→Lab handoff is pure client-side.** The `localStorage` handoff
   payload (see *Client-side sentinels*) never crosses an origin boundary
   and never hits the Pages Functions or R2. It costs nothing on the
-  backend and there is no server-side rate limit to tune. The only
+  backend and there is no server-side rate limit to tune. Seed content
+  is hard-capped in source (`SEED_MAX_ATOMS=50_000`,
+  `SEED_MAX_BONDS=100_000` in
+  `src/watch-lab-handoff/watch-lab-handoff-shared.ts`); the per-token
+  size ceiling at the atom cap is ~3 MB base64 (positions + velocities
+  Float64 + color assignments + camera metadata). The only external
   capacity ceiling is the browser's per-origin `localStorage` quota
   (~5–10 MB); a 264-atom capsule frame is typically <500 KB, so budget
-  is ample. Quota-exceeded retry first sweeps prior
-  `atomdojo.watchLabHandoff:*` entries before surfacing the error
-  banner — if users still see "Browser storage is full…" after that
-  sweep, a non-atomdojo writer on the same origin is consuming quota.
+  is ample even with color + camera metadata. Quota-exceeded retry
+  first sweeps prior `atomdojo.watchLabHandoff:*` entries (via the TTL
+  sweep + `removeWatchToLabHandoff`) before surfacing the error banner
+  — if users still see "Browser storage is full…" after that sweep, a
+  non-atomdojo writer on the same origin is consuming quota.
 - **Removed flags (watch out for stale URLs / bookmarks).** The
   `REMIX_CURRENT_FRAME_UI_ENABLED` build-time gate has been removed,
   and the `?e2eEnableRemixCurrentFrame=1` URL override no longer does

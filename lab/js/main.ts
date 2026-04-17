@@ -457,6 +457,8 @@ async function init() {
     // error if either is still null at call time.
     getAtomIdentityTracker: () => _timelineSub?.getAtomIdentityTracker() ?? null,
     getAtomMetadataRegistry: () => _timelineSub?.getAtomMetadataRegistry() ?? null,
+    getAppearanceRuntime: () => _bondedGroupAppearance ?? null,
+    getCameraMode: () => useAppStore.getState().cameraMode,
   });
 
   // Load manifest + choose-and-maybe-load the initial scene.
@@ -1038,11 +1040,29 @@ async function init() {
         if (result.status === 'error') {
           console.warn('[lab.boot] watch handoff hydrate failed:', result.reason, result.cause ?? '');
         } else {
-          console.info('[lab.boot] watch handoff hydrated:', {
-            atomCount: result.atomCount,
-            historyKind: outcome.payload.seed.provenance.historyKind,
-            velocitiesAreApproximated: outcome.payload.seed.provenance.velocitiesAreApproximated,
-          });
+          {
+            // Legacy tokens may omit the rev-4 refined fields; the
+            // normalizer fills defaults at hydrate time, but the raw
+            // seed we log here can still be in its pre-normalize shape.
+            // Read with ?? fallbacks so the trace stays readable across
+            // the deploy window.
+            const prov = outcome.payload.seed.provenance as {
+              historyKind: 'full' | 'capsule';
+              velocitiesAreApproximated: boolean;
+              velocitySource?: string;
+              unresolvedVelocityFraction?: number;
+            };
+            console.info('[lab.boot] watch handoff hydrated:', {
+              atomCount: result.atomCount,
+              historyKind: prov.historyKind,
+              velocitiesAreApproximated: prov.velocitiesAreApproximated,
+              velocitySource: prov.velocitySource
+                ?? (prov.velocitiesAreApproximated ? 'mixed' : 'restart'),
+              unresolvedVelocityFraction: prov.unresolvedVelocityFraction ?? 0,
+              colorAssignmentCount: outcome.payload.seed.colorAssignments?.length ?? 0,
+              hasCamera: outcome.payload.seed.camera != null,
+            });
+          }
           // Arrival pill removed — the hydrate itself is the
           // acknowledgement (the scene renders from the handoff). The
           // console.info above preserves the provenance trace for
@@ -1137,6 +1157,16 @@ async function init() {
   if (new URLSearchParams(window.location.search).get('e2e') === '1') {
     (window as unknown as Record<string, unknown>).__useAppStore = useAppStore;
   }
+
+  // Plan §"Test observability seams": pure pass-through to the same
+  // camera apply seam the hydrate path writes through. Installed
+  // unconditionally like `_getUIState` below — Lab tabs opened from
+  // Watch's `?e2e=1` session do NOT carry `?e2e=1` in their URL (the
+  // handoff link template adds only `?from=watch&handoff=...`), so a
+  // gate-check here would prevent E2E camera assertions on the Lab
+  // tab that actually matters. Production impact is negligible: a
+  // single read-only getter added to `window`.
+  (window as unknown as Record<string, unknown>)._getLabCameraSnapshot = () => renderer?.getOrbitCameraSnapshot?.() ?? null;
 
   // Narrow test hook — returns only the specific observable E2E tests need.
   (window as unknown as Record<string, unknown>)._getUIState = () => {

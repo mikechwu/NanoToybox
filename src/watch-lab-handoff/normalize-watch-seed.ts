@@ -15,7 +15,12 @@
 
 import type { BondTuple } from '../types/interfaces';
 import type { PhysicsConfig, WorkerCommand } from '../types/worker-protocol';
-import type { WatchLabSceneSeed } from './watch-lab-handoff-shared';
+import type {
+  WatchLabColorAssignment,
+  WatchLabOrbitCamera,
+  WatchLabSceneSeed,
+  WatchLabVelocitySource,
+} from './watch-lab-handoff-shared';
 
 /** Tiny structural shape matching `lab/js/placement.ts::StructureAtom`.
  *  Duplicated here (rather than imported) so `src/` has no Lab dep.
@@ -49,8 +54,23 @@ export interface NormalizedWatchHydratePayload {
   /** `{ element, x, y, z }` per atom in display order. */
   localStructureAtoms: StructureAtomShape[];
 
-  // ── Provenance for the Lab-side provenance pill + console diagnostics. ──
-  provenance: WatchLabSceneSeed['provenance'];
+  /** Authored color assignments carried across the handoff. Stable-ID
+   *  identity quartet; Lab re-derives dense `atomIndices` at hydrate
+   *  time after tracker/registry restoration. Empty array when Watch
+   *  had no authored colors. */
+  colorAssignments: WatchLabColorAssignment[];
+
+  /** Orbit-camera snapshot at click time. `null` → Lab applies its
+   *  default framing. */
+  camera: WatchLabOrbitCamera | null;
+
+  // ── Provenance for console diagnostics + motion-fidelity honesty. ──
+  provenance: {
+    historyKind: 'full' | 'capsule';
+    velocitySource: WatchLabVelocitySource;
+    velocitiesAreApproximated: boolean;
+    unresolvedVelocityFraction: number;
+  };
 }
 
 /**
@@ -139,6 +159,72 @@ export function normalizeWatchSeed(seed: WatchLabSceneSeed): NormalizedWatchHydr
     useWasm: true,
   };
 
+  // Color assignments — structural deep-copy so downstream mutations
+  // (dense-index re-derivation at hydrate time) cannot reach back into
+  // the consumed wire payload. Absent on legacy tokens → [].
+  const rawColor = (seed as { colorAssignments?: unknown }).colorAssignments;
+  const colorAssignments: WatchLabColorAssignment[] = Array.isArray(rawColor)
+    ? (rawColor as WatchLabColorAssignment[]).map((a) => ({
+        id: a.id,
+        atomIds: a.atomIds.slice(),
+        colorHex: a.colorHex,
+        sourceGroupId: a.sourceGroupId,
+      }))
+    : [];
+
+  // Camera — structural copy; absent on legacy tokens → null. Guard
+  // against array inputs (which pass `typeof === 'object'`) so a direct
+  // `normalizeWatchSeed` caller that bypasses `isValidSeed` cannot crash
+  // when reading `.position[0]` on an array shell.
+  const rawCamera = (seed as { camera?: unknown }).camera;
+  const camera: WatchLabOrbitCamera | null =
+    rawCamera && typeof rawCamera === 'object' && !Array.isArray(rawCamera)
+      ? {
+          position: [
+            (rawCamera as WatchLabOrbitCamera).position[0],
+            (rawCamera as WatchLabOrbitCamera).position[1],
+            (rawCamera as WatchLabOrbitCamera).position[2],
+          ],
+          target: [
+            (rawCamera as WatchLabOrbitCamera).target[0],
+            (rawCamera as WatchLabOrbitCamera).target[1],
+            (rawCamera as WatchLabOrbitCamera).target[2],
+          ],
+          up: [
+            (rawCamera as WatchLabOrbitCamera).up[0],
+            (rawCamera as WatchLabOrbitCamera).up[1],
+            (rawCamera as WatchLabOrbitCamera).up[2],
+          ],
+          fovDeg: (rawCamera as WatchLabOrbitCamera).fovDeg,
+        }
+      : null;
+
+  // Provenance — legacy-token defaults. `velocitySource` is derived
+  // from the existing boolean; `unresolvedVelocityFraction` defaults to 0.
+  const rawProv = seed.provenance as {
+    historyKind: 'full' | 'capsule';
+    velocitiesAreApproximated: boolean;
+    velocitySource?: WatchLabVelocitySource;
+    unresolvedVelocityFraction?: number;
+  };
+  // Defense-in-depth: `isValidSeed` already gates `velocitySource`
+  // against the canonical set on the token-decode path, but direct
+  // `normalizeWatchSeed(...)` callers (tests, future paths) can bypass
+  // that gate. Coerce any unrecognized value to `'none'` so downstream
+  // consumers never see junk in provenance.
+  const VALID_VELOCITY_SOURCES: ReadonlySet<string> = new Set([
+    'restart', 'central-difference', 'forward-difference',
+    'backward-difference', 'mixed', 'none',
+  ]);
+  const rawVs = rawProv.velocitySource;
+  const velocitySource: WatchLabVelocitySource =
+    rawVs != null && VALID_VELOCITY_SOURCES.has(rawVs)
+      ? rawVs
+      : (rawProv.velocitiesAreApproximated ? 'mixed' : 'restart');
+  const unresolvedVelocityFraction = Number.isFinite(rawProv.unresolvedVelocityFraction)
+    ? (rawProv.unresolvedVelocityFraction as number)
+    : 0;
+
   return {
     n,
     workerConfig,
@@ -146,6 +232,13 @@ export function normalizeWatchSeed(seed: WatchLabSceneSeed): NormalizedWatchHydr
     velocities,
     boundary,
     localStructureAtoms,
-    provenance: { ...seed.provenance },
+    colorAssignments,
+    camera,
+    provenance: {
+      historyKind: rawProv.historyKind,
+      velocitySource,
+      velocitiesAreApproximated: rawProv.velocitiesAreApproximated,
+      unresolvedVelocityFraction,
+    },
   };
 }

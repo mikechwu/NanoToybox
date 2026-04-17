@@ -159,3 +159,132 @@ describe('buildWatchLabSceneSeed — capsule history', () => {
     expect(seed!.positions[3]).toBeCloseTo(1.4, 10);
   });
 });
+
+describe('buildWatchLabSceneSeed — color + camera + refined provenance (plan rev 4)', () => {
+  it('colorAssignments default to [] when getter absent', () => {
+    const pm = createWatchPlaybackModel();
+    const history = importCapsuleHistory(makeCapsule3Frame([
+      [0, 0, 0, 1.4, 0, 0],
+      [0, 0, 0, 1.4, 0, 0],
+      [0, 0, 0, 1.4, 0, 0],
+    ]));
+    pm.load(history);
+    const seed = buildWatchLabSceneSeed({ history, timePs: 0.001, playback: pm });
+    expect(seed).not.toBeNull();
+    expect(seed!.colorAssignments).toEqual([]);
+  });
+
+  it('colorAssignments serialized in order with the four-field quartet', () => {
+    const pm = createWatchPlaybackModel();
+    const history = importCapsuleHistory(makeCapsule3Frame([
+      [0, 0, 0, 1.4, 0, 0],
+      [0, 0, 0, 1.4, 0, 0],
+      [0, 0, 0, 1.4, 0, 0],
+    ]));
+    pm.load(history);
+    const seed = buildWatchLabSceneSeed({
+      history,
+      timePs: 0.001,
+      playback: pm,
+      getColorAssignments: () => [
+        { id: 'wca1', atomIds: [0], colorHex: '#ff0000', sourceGroupId: 'g1' },
+        { id: 'wca2', atomIds: [1], colorHex: '#00ff00', sourceGroupId: 'g2' },
+      ],
+    });
+    expect(seed!.colorAssignments).toHaveLength(2);
+    expect(seed!.colorAssignments[0]).toEqual({ id: 'wca1', atomIds: [0], colorHex: '#ff0000', sourceGroupId: 'g1' });
+    expect(seed!.colorAssignments[1]).toEqual({ id: 'wca2', atomIds: [1], colorHex: '#00ff00', sourceGroupId: 'g2' });
+  });
+
+  it('drops color assignments with unknown atomIds and warns', () => {
+    const origWarn = console.warn;
+    const warnCalls: unknown[][] = [];
+    console.warn = (...args: unknown[]) => { warnCalls.push(args); };
+    const pm = createWatchPlaybackModel();
+    const history = importCapsuleHistory(makeCapsule3Frame([
+      [0, 0, 0, 1.4, 0, 0],
+      [0, 0, 0, 1.4, 0, 0],
+      [0, 0, 0, 1.4, 0, 0],
+    ]));
+    pm.load(history);
+    const seed = buildWatchLabSceneSeed({
+      history,
+      timePs: 0.001,
+      playback: pm,
+      getColorAssignments: () => [
+        { id: 'wca1', atomIds: [0, 99], colorHex: '#ff0000', sourceGroupId: 'g1' }, // dropped
+        { id: 'wca2', atomIds: [1], colorHex: '#00ff00', sourceGroupId: 'g2' }, // kept
+      ],
+    });
+    expect(seed!.colorAssignments).toHaveLength(1);
+    expect(seed!.colorAssignments[0].id).toBe('wca2');
+    expect(warnCalls.length).toBeGreaterThan(0);
+    console.warn = origWarn;
+  });
+
+  it('camera getter absent → camera null', () => {
+    const pm = createWatchPlaybackModel();
+    const history = importCapsuleHistory(makeCapsule3Frame([
+      [0, 0, 0, 1.4, 0, 0],
+      [0, 0, 0, 1.4, 0, 0],
+      [0, 0, 0, 1.4, 0, 0],
+    ]));
+    pm.load(history);
+    const seed = buildWatchLabSceneSeed({ history, timePs: 0.001, playback: pm });
+    expect(seed!.camera).toBeNull();
+  });
+
+  it('camera getter returns snapshot → structural serialization', () => {
+    const pm = createWatchPlaybackModel();
+    const history = importCapsuleHistory(makeCapsule3Frame([
+      [0, 0, 0, 1.4, 0, 0],
+      [0, 0, 0, 1.4, 0, 0],
+      [0, 0, 0, 1.4, 0, 0],
+    ]));
+    pm.load(history);
+    const seed = buildWatchLabSceneSeed({
+      history,
+      timePs: 0.001,
+      playback: pm,
+      getOrbitCameraSnapshot: () => ({ position: [5, 0, 0], target: [0, 0, 0], up: [0, 1, 0], fovDeg: 60 }),
+    });
+    expect(seed!.camera).toEqual({ position: [5, 0, 0], target: [0, 0, 0], up: [0, 1, 0], fovDeg: 60 });
+  });
+
+  it('interior capsule frame reports velocitySource central-difference', () => {
+    const pm = createWatchPlaybackModel();
+    const history = importCapsuleHistory(makeCapsule3Frame([
+      [0, 0, 0, 1.400, 0, 0],
+      [0, 0, 0, 1.401, 0, 0],
+      [0, 0, 0, 1.402, 0, 0],
+    ]));
+    pm.load(history);
+    const seed = buildWatchLabSceneSeed({ history, timePs: 0.001, playback: pm });
+    expect(seed!.provenance.velocitySource).toBe('central-difference');
+    expect(seed!.provenance.unresolvedVelocityFraction).toBe(0);
+  });
+
+  it('leading edge reports forward-difference source', () => {
+    const pm = createWatchPlaybackModel();
+    const history = importCapsuleHistory(makeCapsule3Frame([
+      [0, 0, 0, 1.400, 0, 0],
+      [0, 0, 0, 1.401, 0, 0],
+      [0, 0, 0, 1.402, 0, 0],
+    ]));
+    pm.load(history);
+    const seed = buildWatchLabSceneSeed({ history, timePs: 0, playback: pm });
+    expect(seed!.provenance.velocitySource).toBe('forward-difference');
+  });
+
+  it('trailing edge reports backward-difference source', () => {
+    const pm = createWatchPlaybackModel();
+    const history = importCapsuleHistory(makeCapsule3Frame([
+      [0, 0, 0, 1.400, 0, 0],
+      [0, 0, 0, 1.401, 0, 0],
+      [0, 0, 0, 1.402, 0, 0],
+    ]));
+    pm.load(history);
+    const seed = buildWatchLabSceneSeed({ history, timePs: 0.002, playback: pm });
+    expect(seed!.provenance.velocitySource).toBe('backward-difference');
+  });
+});

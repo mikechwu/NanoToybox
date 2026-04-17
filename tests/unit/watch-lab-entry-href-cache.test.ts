@@ -144,3 +144,40 @@ describe('controller.buildCurrentFrameLabHref — cache + debounce (rev 7)', () 
     }
   });
 });
+
+describe('controller.buildCurrentFrameLabHref — camera identity in cache (plan rev 4)', () => {
+  beforeEach(() => { clearHandoffKeys(); });
+
+  it('with no renderer attached, cameraIdentity is null on both sides → cache hits', async () => {
+    const mod = await import('../../watch/js/watch-controller');
+    const controller = mod.createWatchController();
+    try {
+      await loadFixtureCapsule(controller);
+      const href1 = controller.buildCurrentFrameLabHref();
+      const href2 = controller.buildCurrentFrameLabHref();
+      expect(href2).toBe(href1); // null === null, same identity → hit
+      expect(countHandoffKeys()).toBe(1);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it('document-change cache-miss purges the prior localStorage entry', async () => {
+    const mod = await import('../../watch/js/watch-controller');
+    const controller = mod.createWatchController();
+    try {
+      await loadFixtureCapsule(controller);
+      const href1 = controller.buildCurrentFrameLabHref();
+      const token1 = new URL(href1!, 'http://localhost').searchParams.get('handoff');
+      expect(localStorage.getItem(`${HANDOFF_STORAGE_PREFIX}${token1}`)).not.toBeNull();
+      // New document → full cache-miss + purge path.
+      await loadFixtureCapsule(controller);
+      const href2 = controller.buildCurrentFrameLabHref();
+      expect(href2).not.toBe(href1);
+      // Prior token best-effort removed from localStorage.
+      expect(localStorage.getItem(`${HANDOFF_STORAGE_PREFIX}${token1}`)).toBeNull();
+    } finally {
+      controller.dispose();
+    }
+  });
+});

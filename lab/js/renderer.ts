@@ -545,6 +545,56 @@ export class Renderer {
   }
 
   /**
+   * Return an orbit-camera snapshot suitable for wire transport across
+   * the Watch → Lab handoff. The returned tuple captures the pose that
+   * Three.js OrbitControls round-trips cleanly: position, target, up,
+   * and FOV (in degrees).
+   *
+   * Timing note: Watch's cinematic-camera service mutates
+   * `camera.position` every frame while active. Callers minting the
+   * handoff seed on a DOM event (click / pointerenter) naturally read
+   * post-update state because Three processes rAF ticks between events.
+   * No pause/resume dance is required.
+   *
+   * Returns null only when `controls` is absent (detached / mid-
+   * teardown). Every real runtime path on both Watch and Lab has
+   * controls wired at construction.
+   */
+  getOrbitCameraSnapshot(): { position: [number, number, number]; target: [number, number, number]; up: [number, number, number]; fovDeg: number } | null {
+    if (!this.controls || !this.camera) return null;
+    return {
+      position: this.camera.position.toArray() as [number, number, number],
+      target: this.controls.target.toArray() as [number, number, number],
+      up: this.camera.up.toArray() as [number, number, number],
+      fovDeg: this.camera.fov,
+    };
+  }
+
+  /**
+   * Apply an orbit-camera snapshot handed off from Watch. Restores
+   * exact pose (position + target + up + fov) without animation.
+   * Cancels any active camera animation, updates FOV projection matrix
+   * only if fov changed, and runs the silent controls update so the
+   * post-apply orbit behavior is coherent.
+   *
+   * Plan §7.2: phase-2 scope is orbit-only. If `cameraMode` drifts to
+   * a non-orbit value in future, the caller should log and still apply
+   * via this orbit path (there is no other reachable code path today).
+   */
+  applyOrbitCameraSnapshot(snapshot: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number]; fovDeg: number }): void {
+    this.cancelCameraAnimation();
+    this.camera.position.set(snapshot.position[0], snapshot.position[1], snapshot.position[2]);
+    this.controls.target.set(snapshot.target[0], snapshot.target[1], snapshot.target[2]);
+    this.camera.up.set(snapshot.up[0], snapshot.up[1], snapshot.up[2]);
+    if (this.camera.fov !== snapshot.fovDeg) {
+      this.camera.fov = snapshot.fovDeg;
+      this.camera.updateProjectionMatrix();
+    }
+    this._updateControlsSilently();
+    this.recomputeFocusDistance();
+  }
+
+  /**
    * Return the current camera state (position, direction, up) as plain arrays.
    * Used by the orchestrator to send camera info to the worker for
    * view-dependent calculations.

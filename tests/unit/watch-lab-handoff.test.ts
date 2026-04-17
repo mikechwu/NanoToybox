@@ -39,7 +39,7 @@ function validSeed(): WatchLabSceneSeed {
     bonds: [{ a: 0, b: 1, distance: 1.0 }],
     boundary: { mode: 'contain', wallRadius: 50, wallCenter: [0, 0, 0] as [number, number, number], wallCenterSet: true, removedCount: 0, damping: 0.1 },
     config: { damping: 0.1, kDrag: 1, kRotate: 1, dtFs: 0.5, dampingRefDurationFs: 100 },
-    provenance: { historyKind: 'capsule', velocitiesAreApproximated: true },
+    colorAssignments: [], camera: null, provenance: { historyKind: 'capsule', velocitySource: 'mixed' as const, velocitiesAreApproximated: true, unresolvedVelocityFraction: 0 },
   };
 }
 
@@ -257,7 +257,7 @@ describe('handoff write + consume roundtrip', () => {
         bonds: [{ a: 0, b: 1, distance: 1.0 }],
         boundary: { mode: 'contain', wallRadius: 50, wallCenter: [0, 0, 0] as [number, number, number], wallCenterSet: true, removedCount: 0, damping: 0.1 },
         config: { damping: 0.1, kDrag: 1, kRotate: 1, dtFs: 0.5, dampingRefDurationFs: 100 },
-        provenance: { historyKind: 'capsule', velocitiesAreApproximated: true },
+        colorAssignments: [], camera: null, provenance: { historyKind: 'capsule', velocitySource: 'mixed' as const, velocitiesAreApproximated: true, unresolvedVelocityFraction: 0 },
       },
     }));
     const r = consumeWatchToLabHandoffFromLocation(
@@ -293,7 +293,7 @@ describe('handoff write + consume roundtrip', () => {
       mode: 'current-frame',
       createdAt: Date.now(),
       sourceMeta: { fileName: null, fileKind: null, shareCode: null, timePs: 0 },
-      seed: { atoms: [], positions: [], velocities: null, bonds: [], boundary: { mode: 'open' }, config: { damping: 0, kDrag: 0, kRotate: 0, dtFs: 0.01, dampingRefDurationFs: 0 }, provenance: { historyKind: 'capsule', velocitiesAreApproximated: true } },
+      seed: { atoms: [], positions: [], velocities: null, bonds: [], boundary: { mode: 'open' }, config: { damping: 0, kDrag: 0, kRotate: 0, dtFs: 0.01, dampingRefDurationFs: 0 }, colorAssignments: [], camera: null, provenance: { historyKind: 'capsule', velocitySource: 'mixed' as const, velocitiesAreApproximated: true, unresolvedVelocityFraction: 0 } },
     }));
     const result = consumeWatchToLabHandoffFromLocation(
       mockLocation(`?from=watch&handoff=${token}`),
@@ -342,7 +342,7 @@ describe('handoff write + consume roundtrip', () => {
         bonds: [],
         boundary: { mode: 'contain', wallRadius: 50, wallCenter: [0, 0, 0] as [number, number, number], wallCenterSet: true, removedCount: 0, damping: 0.1 },
         config: { damping: 0.1, kDrag: 1, kRotate: 1, dtFs: 0.5, dampingRefDurationFs: 100 },
-        provenance: { historyKind: 'capsule', velocitiesAreApproximated: true },
+        colorAssignments: [], camera: null, provenance: { historyKind: 'capsule', velocitySource: 'mixed' as const, velocitiesAreApproximated: true, unresolvedVelocityFraction: 0 },
       },
     }));
     const r = consumeWatchToLabHandoffFromLocation(
@@ -643,5 +643,119 @@ describe('writer typed failures (§10 surface hooks)', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('isValidSeed — camera + color + refined provenance (plan rev 4)', () => {
+  it('accepts a valid orbit-camera payload', () => {
+    const s = validSeed();
+    (s as unknown as Record<string, unknown>).camera = {
+      position: [10, 0, 0], target: [0, 0, 0], up: [0, 1, 0], fovDeg: 50,
+    };
+    expect(isValidSeed(s)).toBe(true);
+  });
+  it('rejects camera with non-finite vector component', () => {
+    const s = validSeed();
+    (s as unknown as Record<string, unknown>).camera = {
+      position: [NaN, 0, 0], target: [0, 0, 0], up: [0, 1, 0], fovDeg: 50,
+    };
+    expect(isValidSeed(s)).toBe(false);
+  });
+  it('rejects camera with zero-magnitude up', () => {
+    const s = validSeed();
+    (s as unknown as Record<string, unknown>).camera = {
+      position: [10, 0, 0], target: [0, 0, 0], up: [0, 0, 0], fovDeg: 50,
+    };
+    expect(isValidSeed(s)).toBe(false);
+  });
+  it('rejects camera with coincident position/target', () => {
+    const s = validSeed();
+    (s as unknown as Record<string, unknown>).camera = {
+      position: [0, 0, 0], target: [0, 0, 0], up: [0, 1, 0], fovDeg: 50,
+    };
+    expect(isValidSeed(s)).toBe(false);
+  });
+  it('rejects camera with out-of-range fov', () => {
+    const s = validSeed();
+    (s as unknown as Record<string, unknown>).camera = {
+      position: [10, 0, 0], target: [0, 0, 0], up: [0, 1, 0], fovDeg: 5,
+    };
+    expect(isValidSeed(s)).toBe(false);
+    (s as unknown as Record<string, unknown>).camera = {
+      position: [10, 0, 0], target: [0, 0, 0], up: [0, 1, 0], fovDeg: 140,
+    };
+    expect(isValidSeed(s)).toBe(false);
+  });
+
+  it('accepts valid colorAssignments (full quartet)', () => {
+    const s = validSeed();
+    s.colorAssignments = [
+      { id: 'wca1', atomIds: [0, 1], colorHex: '#ff00aa', sourceGroupId: 'g1' },
+    ];
+    expect(isValidSeed(s)).toBe(true);
+  });
+  it('rejects colorAssignment with empty id', () => {
+    const s = validSeed();
+    s.colorAssignments = [
+      { id: '', atomIds: [0], colorHex: '#ff00aa', sourceGroupId: 'g1' },
+    ];
+    expect(isValidSeed(s)).toBe(false);
+  });
+  it('rejects colorAssignment with malformed colorHex', () => {
+    const s = validSeed();
+    s.colorAssignments = [
+      { id: 'w1', atomIds: [0], colorHex: 'not-a-hex', sourceGroupId: 'g1' },
+    ];
+    expect(isValidSeed(s)).toBe(false);
+  });
+  it('rejects colorAssignment with empty atomIds', () => {
+    const s = validSeed();
+    s.colorAssignments = [
+      { id: 'w1', atomIds: [], colorHex: '#112233', sourceGroupId: 'g1' },
+    ];
+    expect(isValidSeed(s)).toBe(false);
+  });
+  it('rejects colorAssignment with empty sourceGroupId', () => {
+    const s = validSeed();
+    s.colorAssignments = [
+      { id: 'w1', atomIds: [0], colorHex: '#112233', sourceGroupId: '' },
+    ];
+    expect(isValidSeed(s)).toBe(false);
+  });
+  it('rejects colorAssignment with unresolved atomId', () => {
+    const s = validSeed();
+    s.colorAssignments = [
+      { id: 'w1', atomIds: [42], colorHex: '#112233', sourceGroupId: 'g1' },
+    ];
+    expect(isValidSeed(s)).toBe(false);
+  });
+
+  it('accepts refined provenance with valid velocitySource', () => {
+    const s = validSeed();
+    s.provenance.velocitySource = 'central-difference';
+    expect(isValidSeed(s)).toBe(true);
+  });
+  it('rejects unknown velocitySource', () => {
+    const s = validSeed();
+    (s.provenance as unknown as Record<string, unknown>).velocitySource = 'magic-extrapolation';
+    expect(isValidSeed(s)).toBe(false);
+  });
+  it('rejects unresolvedVelocityFraction outside [0,1]', () => {
+    const s = validSeed();
+    (s.provenance as unknown as Record<string, unknown>).unresolvedVelocityFraction = 1.5;
+    expect(isValidSeed(s)).toBe(false);
+  });
+
+  it('accepts a legacy-shape payload (no camera, no colorAssignments, 2-field provenance)', () => {
+    const legacy = {
+      atoms: [{ id: 0, element: 'C' }, { id: 1, element: 'C' }],
+      positions: [0, 0, 0, 1, 0, 0],
+      velocities: [0, 0, 0, 0, 0, 0],
+      bonds: [{ a: 0, b: 1, distance: 1.0 }],
+      boundary: { mode: 'contain', wallRadius: 50, wallCenter: [0, 0, 0] as [number, number, number], wallCenterSet: true, removedCount: 0, damping: 0.1 },
+      config: { damping: 0.1, kDrag: 1, kRotate: 1, dtFs: 0.5, dampingRefDurationFs: 100 },
+      provenance: { historyKind: 'capsule' as const, velocitiesAreApproximated: true },
+    };
+    expect(isValidSeed(legacy)).toBe(true);
   });
 });

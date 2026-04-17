@@ -574,7 +574,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **End-to-end pipeline:** load → import → playback → groups.
 
-*As of Phase 7, 2208 unit tests pass across 120 test files (lab + watch + share + auth + account-erasure). Run `npx vitest run` for the authoritative live total.*
+*As of the Watch→Lab rev-4 handoff work, 2596 unit tests (Vitest) + 12 E2E tests (Playwright) pass across the lab + watch + share + auth + account-erasure + handoff surfaces. Run `npx vitest run` for the authoritative live unit total and `npm run test:e2e` for the E2E lane.*
 
 ### Bond Topology Parity (23 tests)
 
@@ -993,7 +993,7 @@ Uses a 5-frame two-atom fixture (`tests/e2e/fixtures/watch-two-atom.json`) and `
 
 ### Watch→Lab Handoff Surface
 
-The Watch→Lab entry is a read-only-review-to-editable-scene handoff: Watch produces a seed payload, the URL carries an opaque entry token, and Lab boot consumes-or-falls-back. The test surface covers four layers — transport (write + read + URL composer), seed shape (normalize + build predicate + builder), Lab-side hydrate (transactional apply + rollback reasons + adapter wrapper), and UI surfaces (entry split-capsule + toast copy). Regression-lock invariants live in the E2E spec because the only reliable way to catch them is against the real Watch→Lab boot sequence.
+The Watch→Lab entry is a read-only-review-to-editable-scene handoff: Watch produces a seed payload, the URL carries an opaque entry token, and Lab boot consumes-or-falls-back. The primary Watch-side button is **"Continue"** (formerly "Remix" / "From this frame"). The seed carries `colorAssignments` (stable-id color quartets), an optional orbit `camera` pose, and a refined `provenance` block with `velocitySource` (`'restart' | 'central-difference' | 'forward-difference' | 'backward-difference' | 'mixed' | 'none'`) and `unresolvedVelocityFraction`. The test surface covers four layers — transport (write + read + URL composer), seed shape (normalize + build predicate + builder, including camera + colorAssignments + velocitySource), Lab-side hydrate (transactional apply + rollback reasons + adapter wrapper, including camera snapshot apply and bonded-group appearance restore), and UI surfaces (entry split-capsule + toast copy). Regression-lock invariants live in the E2E spec because the only reliable way to catch them is against the real Watch→Lab boot sequence.
 
 #### Handoff Transport (`tests/unit/`)
 
@@ -1006,8 +1006,8 @@ The Watch→Lab entry is a read-only-review-to-editable-scene handoff: Watch pro
 
 | File | Purpose |
 |------|---------|
-| `watch-lab-normalize-seed.test.ts` | `normalizeWatchSeed` shape invariants. Pins the collapsed payload view: `localStructureAtoms`, `velocities`, `bonds`, `boundary`, `workerConfig`, `provenance`, `n`. This is the single source of truth for what a seed is — new fields must be added here first. |
-| `watch-lab-seed-build.test.ts` | `canBuildWatchLabSceneSeed` predicate + seed builder coverage (what Watch states are eligible to produce a seed, and what the builder emits for each). |
+| `watch-lab-normalize-seed.test.ts` | `normalizeWatchSeed` shape invariants. Pins the collapsed payload view: `localStructureAtoms`, `velocities`, `bonds`, `boundary`, `workerConfig`, `provenance` (with `velocitySource` + `unresolvedVelocityFraction`), `colorAssignments`, `camera`, `n`. Legacy-token defaults are pinned here: legacy tokens without camera → `null`; without colorAssignments → `[]`; 2-field provenance → `velocitySource` derived from `velocitiesAreApproximated` (true → `'mixed'`, false → `'restart'`), `unresolvedVelocityFraction` → `0`. Defensive `VALID_VELOCITY_SOURCES` coercion is exercised for direct-call paths that bypass the validator. This is the single source of truth for what a seed is — new fields must be added here first. |
+| `watch-lab-seed-build.test.ts` | `canBuildWatchLabSceneSeed` predicate + seed builder coverage (what Watch states are eligible to produce a seed, and what the builder emits for each, including `getColorAssignments` / `getOrbitCameraSnapshot` plumbing, per-atom velocity-source tagging collapsed to a single tag, pre-null-promotion `unresolvedVelocityFraction`, and the unknown-atomId-dropped warn path). |
 
 #### Entry Control UI (`tests/unit/`)
 
@@ -1016,7 +1016,7 @@ The Watch→Lab entry is a read-only-review-to-editable-scene handoff: Watch pro
 | `watch-lab-entry-control.test.tsx` | Split-button React test for the "Open in Lab" control. Enforces the click-ownership contract (plain anchor vs. menuitem paths do not double-fire). |
 | `watch-lab-entry-new-tab.test.tsx` | `target=_blank` behavior on both surfaces. |
 | `watch-lab-entry-gate.test.ts` | P1 seed-identity cache invalidation (cache must flush when the underlying seed changes) + P2 fail-closed click (click path refuses to navigate when the seed build fails rather than leaking a stale href). |
-| `watch-lab-entry-href-cache.test.ts` | Cache + debounce contract: href is memoized per seed identity and recomputation is debounced across rapid state changes. |
+| `watch-lab-entry-href-cache.test.ts` | Cache + debounce contract: href is memoized per seed identity and recomputation is debounced across rapid state changes. The identity tuple includes a quantized `cameraIdentity` (`POSITION_Q = 0.01`, `FOV_Q = 0.5`) alongside the other four components; cache hits require ALL 5 identity components to match, and the click path re-reads live camera and purges stale tokens via `removeWatchToLabHandoff` on miss. |
 | `watch-lab-entry-write-failure.test.ts` | Storage-unavailable vs. quota-exceeded copy surfacing — the two `WatchHandoffWriteError` classes must render distinct user-facing strings. |
 | `watch-lab-toast-aria.test.tsx` | ARIA contract on both toast surfaces (live-region + role). |
 
@@ -1031,7 +1031,7 @@ The Watch→Lab entry is a read-only-review-to-editable-scene handoff: Watch pro
 
 | File | Purpose |
 |------|---------|
-| `lab-scene-hydrate-from-seed.test.ts` | Transactional hydrate against a seeded scene: success path plus **every rollback reason** (schema mismatch, worker-not-active, renderer-append failure, post-append invariant failure). Includes the worker not-active fail-fast rollback — if the worker is not ready when hydrate runs, the transaction must roll back cleanly without leaving a half-applied scene. |
+| `lab-scene-hydrate-from-seed.test.ts` | Transactional hydrate against a seeded scene: success path plus **every rollback reason** (schema mismatch, worker-not-active, renderer-append failure, post-append invariant failure). Includes the worker not-active fail-fast rollback — if the worker is not ready when hydrate runs, the transaction must roll back cleanly without leaving a half-applied scene. Also covers camera-snapshot apply (falls back to `renderer.fitCamera()` when `seed.camera === null`); color re-indexing via Watch atomId → display slot (seed.atoms[i].id) → Lab atomId (tracker `assignedIds[slot]`), dropping atoms whose full resolution chain fails; REPLACE-semantics color restore (unconditional on success, empty array wipes prior Lab state); rollback restores both color (`restoreAssignments(capture)`) and camera (`applyOrbitCameraSnapshot(capture.camera)`); and rollback sub-failures accumulated into `cause: { originatingCause, rollbackSubFailures }` rather than swallowed. The `appendMolecule` velocity-delivery contract is validated: the worker writes `engine.vel.set(velocities, atomOffset*3)` BEFORE `sceneVersion++`, so the first post-append snapshot carries real momentum (previously the reconciler zeroed main-thread velocities on the first frameResult); length-mismatch warns rather than silently clipping. |
 | `scene-runtime-hydrate-wrapper.test.ts` | Adapter layer that wraps the hydrate call for scene-runtime consumers. Covers deps missing, worker rejection, hydration-lock set/clear semantics, and the pause-sync-await contract (pause must be awaited before the mutate step; otherwise a pending physics tick can race the hydrate). |
 
 #### Registry Snapshots (`tests/unit/`)
@@ -1040,6 +1040,7 @@ The Watch→Lab entry is a read-only-review-to-editable-scene handoff: Watch pro
 |------|---------|
 | `atom-metadata-registry-snapshot.test.ts` | Atom-metadata registry snapshot/restore roundtrip (used to re-seat authored atom metadata across a hydrate). |
 | `timeline-atom-identity-snapshot.test.ts` | Timeline atom-identity snapshot/restore roundtrip (stable IDs survive the seed → hydrate path). |
+| `bonded-group-appearance-runtime-snapshot.test.ts` | Bonded-group appearance runtime `snapshotAssignments()` + `restoreAssignments(prev)` roundtrip. Pins REPLACE semantics (not additive), structural deep-copy isolation, and use as the rollback capture/restore for color state across a Watch→Lab hydrate. |
 
 #### Lab Entry Contrast (`tests/unit/`)
 
@@ -1060,11 +1061,11 @@ The Watch→Lab entry is a read-only-review-to-editable-scene handoff: Watch pro
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
-| `watch-lab-entry.spec.ts` | 11 | Full Watch→Lab entry contract, including the two regression-lock invariants documented below. |
+| `watch-lab-entry.spec.ts` | 12 | Full Watch→Lab entry contract, including the two regression-lock invariants and the camera-continuity spec documented below. |
 
 Fixtures: `tests/e2e/fixtures/watch-two-atom.json` (full-history) and `tests/e2e/fixtures/watch-capsule-bug-repro.json` (capsule). The capsule fixture is the creative-seed variant that reproduced the original hydrate regression and is retained specifically to guard against re-introduction.
 
-Test hooks (all gated on `?e2e=1`): `_watchOpenFile(text, name)` and `_watchScrub(timePs)`.
+Test hooks: `_watchOpenFile(text, name)`, `_watchScrub(timePs)`, and `_getWatchCameraSnapshot` are all gated on `?e2e=1` (Watch side). `_getLabCameraSnapshot` is exposed **unconditionally** on the Lab side — the Lab tab opened from Watch does not carry the `?e2e=1` query param, so the observability hook must be available without the gate for camera-continuity assertions to work.
 
 Covered cases:
 
@@ -1072,13 +1073,14 @@ Covered cases:
 2. **Stale handoff → toast + URL scrubbed + ARIA** — stale `?entry=…` token produces the recovery toast, the URL is scrubbed so reload does not re-trigger it, and the toast has correct ARIA.
 3. **Missing-entry → distinct "no longer available" toast** — the missing-entry path must use a different string than the stale path (users can tell them apart).
 4. **Malformed handoff → silent (console.warn only)** — garbage tokens do not pop a toast; they log and fall through to a clean default boot.
-5. **"From this frame" menuitem enabled as `<a>` for multi-frame fixture** — the menuitem is a real anchor (not a button) so middle-click / cmd-click produce the expected OS behavior.
+5. **"Continue" menuitem enabled as `<a>` for multi-frame fixture** — the Continue menuitem (formerly "From this frame" / "Remix") is a real anchor (not a button) so middle-click / cmd-click produce the expected OS behavior.
 6. **Happy path full-history** — load → scrub → click → Lab hydrates the handoff scene (atom count > 0, handoff query param consumed).
 7. **Pending-handoff stale-token fallback** — when the token is stale at boot, the fallback path loads the default scene (user is never stranded on a blank canvas).
 8. **Pending-handoff boot NEVER renders default C60 (no flash)** — regression-lock. Polls `atomCount` every 50ms through boot and asserts no sample ever equals 60 (the default-C60 size). Catches any transient render of the default scene between token consume and seed apply; even a single flashed frame of the wrong scene would fail this.
 9. **Worker init race regression** — regression-lock. After the handoff query param is scrubbed (hydrate committed), polls `atomCount` for 2s and asserts it stays at the seed count. Catches the class of bug where a late worker init message reverts the hydrated scene back to the default.
 10. **Happy path capsule (approximated-velocities variant)** — capsule bug-repro fixture; scene must stay stable for 500ms post-commit (no late mutation).
 11. **No `?from=watch` → silent normal boot** — the Lab entry surface must be inert when the query flag is absent.
+12. **Camera continuity Watch→Lab** — uses `_getWatchCameraSnapshot` (gated `?e2e=1`) and `_getLabCameraSnapshot` (unconditional) to assert that the Lab orbit pose after hydrate matches the Watch pose at Continue-click time within the quantization tolerance. Guards the `applyOrbitCameraSnapshot` path (cancels animation, sets camera + target + up, updates projection matrix if FOV changed, recomputes focus distance) and the live camera re-read on the click path.
 
 ##### Regression-Lock Invariants (prose)
 

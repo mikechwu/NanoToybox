@@ -84,6 +84,7 @@ function createMockRenderer(): WatchRenderer & { _canvas: HTMLCanvasElement } {
     setAtomColorOverrides: vi.fn(),
     updateCinematicFraming: vi.fn(),
     onCameraInteraction: vi.fn(() => () => {}),
+    getOrbitCameraSnapshot: vi.fn(() => null),
   };
 }
 

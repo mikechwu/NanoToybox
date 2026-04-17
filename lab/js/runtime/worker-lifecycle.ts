@@ -50,7 +50,7 @@ export interface WorkerRuntime {
   getSnapshotAge(): number;
   /** Request a zero-step authoritative state sync and resolve when the snapshot arrives. */
   syncStateNow(): Promise<void>;
-  appendMolecule(atoms: AtomXYZ[], bonds: BondTuple[], offset: [number, number, number]): Promise<{ ok: boolean }>;
+  appendMolecule(atoms: AtomXYZ[], bonds: BondTuple[], offset: [number, number, number], velocities?: Float64Array): Promise<{ ok: boolean }>;
   bumpGeneration(): void;
   clearScene(): Promise<{ ok: boolean }>;
   sendInteraction(cmd: WorkerInteractionCommand): void;
@@ -246,15 +246,18 @@ export function createWorkerRuntime(deps: {
       throw new Error('Worker state sync timed out');
     },
 
-    async appendMolecule(atoms, bonds, offset) {
+    async appendMolecule(atoms, bonds, offset, velocities) {
       if (!_bridge || !_initialized) return { ok: false };
       try {
-        return await _bridge.appendMolecule(atoms, bonds, offset);
+        return await _bridge.appendMolecule(atoms, bonds, offset, velocities);
       } catch (e) {
         console.warn('[worker] appendMolecule error:', e);
         const snap = _teardown();
         deps.onFailure('appendMolecule transport failure', snap);
-        return { ok: false };
+        // Preserve the underlying cause on the return so callers can
+        // attach it to their own error chain (hydrate rollback routes
+        // this into its `cause` field instead of a synthetic stub).
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
     },
 

@@ -31,7 +31,7 @@ function seed(): WatchLabSceneSeed {
       wallCenterSet: true, removedCount: 0, damping: 0.1,
     },
     config: { damping: 0.1, kDrag: 1, kRotate: 1, dtFs: 0.5, dampingRefDurationFs: 100 },
-    provenance: { historyKind: 'full', velocitiesAreApproximated: false },
+    colorAssignments: [], camera: null, provenance: { historyKind: 'full', velocitySource: 'restart' as const, velocitiesAreApproximated: false, unresolvedVelocityFraction: 0 },
   };
 }
 

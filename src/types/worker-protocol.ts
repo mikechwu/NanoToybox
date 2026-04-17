@@ -46,7 +46,17 @@ export type WorkerCommand =
       atoms: AtomXYZ[]; bonds: BondTuple[]; velocities: Float64Array;
       boundary: { mode: 'contain' | 'remove'; wallRadius: number; wallCenter: [number, number, number]; wallCenterSet: boolean; removedCount: number; damping: number };
     }
-  | { type: 'appendMolecule'; commandId: number; atoms: AtomXYZ[]; bonds: BondTuple[]; offset: [number, number, number] }
+  | { type: 'appendMolecule'; commandId: number; atoms: AtomXYZ[]; bonds: BondTuple[]; offset: [number, number, number];
+      /** Optional per-atom velocities (interleaved vx,vy,vz;
+       *  length === atoms.length * 3). When present, the worker writes
+       *  them into `engine.vel` at the appended atom offset immediately
+       *  after `engine.appendMolecule` runs — so the worker's first
+       *  snapshot after append carries the handed-off momentum rather
+       *  than zero-initialized velocities. Absent → worker's default
+       *  zero-init (preserves the existing commit-path semantics for
+       *  every caller that predates the Watch → Lab velocity handoff). */
+      velocities?: Float64Array;
+    }
   | { type: 'clearScene'; commandId: number }
   | { type: 'requestFrame'; commandId: number; stepsRequested: number }
   | { type: 'startDrag'; commandId: number; atomIndex: number; mode: 'atom' | 'move' | 'rotate' }

@@ -28,12 +28,24 @@ import type {
   WatchLabSceneSeed,
   WatchLabBoundary,
   WatchLabConfig,
+  WatchLabColorAssignment,
+  WatchLabOrbitCamera,
+  WatchLabVelocitySource,
 } from '../../src/watch-lab-handoff/watch-lab-handoff-shared';
+import type { WatchColorAssignment } from './watch-bonded-group-appearance';
 
 export interface BuildArgs {
   history: LoadedWatchHistory;
   timePs: number;
   playback: WatchPlaybackModel;
+  /** Phase 1 — Watch authored-color authority getter. Absent or
+   *  returning `undefined` → `[]` on the wire. Assignments whose
+   *  `atomIds` do not resolve in the current display frame's atom
+   *  manifest are dropped with a `console.warn`. */
+  getColorAssignments?: () => readonly WatchColorAssignment[];
+  /** Phase 2 — live renderer orbit-camera snapshot getter. Absent OR
+   *  returning `null` → `camera: null` on the wire (fail-closed). */
+  getOrbitCameraSnapshot?: () => WatchLabOrbitCamera | null;
   /** Optional defaults for boundary + config when a capsule history
    *  provides no simulation state. Both fields fall back to hardcoded
    *  safe values inside the builder when omitted. */
@@ -161,6 +173,8 @@ export function buildWatchLabSceneSeed(args: BuildArgs): WatchLabSceneSeed | nul
   let config: WatchLabConfig;
   let boundary: WatchLabBoundary;
   let velocitiesAreApproximated = false;
+  let velocitySource: WatchLabVelocitySource = 'restart';
+  let unresolvedVelocityFraction = 0;
 
   if (history.kind === 'full' && history.velocityUnit === 'angstrom-per-fs') {
     const restart = findNearestRestartFrame(history, timePs);
@@ -181,8 +195,12 @@ export function buildWatchLabSceneSeed(args: BuildArgs): WatchLabSceneSeed | nul
         out[i * 3 + 1] = restart.velocities[j3 + 1];
         out[i * 3 + 2] = restart.velocities[j3 + 2];
       }
+      unresolvedVelocityFraction = unresolved / n;
       if (unresolved / n <= VELOCITY_ZERO_FRACTION_COLD_THRESHOLD) {
         velocities = out;
+        velocitySource = 'restart';
+      } else {
+        velocitySource = 'none';
       }
       // Configure + boundary from restart frame.
       const rc = restart.config;
@@ -242,34 +260,38 @@ export function buildWatchLabSceneSeed(args: BuildArgs): WatchLabSceneSeed | nul
 
     const out = new Array<number>(n * 3);
     let zeroedCount = 0;
+    let centralCount = 0;
+    let forwardCount = 0;
+    let backwardCount = 0;
     for (let i = 0; i < n; i++) {
       const atomId = display.atomIds[i];
       const curJ = curIndexMap.get(atomId);
       if (curJ == null) { zeroedCount++; out[i * 3] = out[i * 3 + 1] = out[i * 3 + 2] = 0; continue; }
       let v: [number, number, number] | null = null;
+      let source: 'central' | 'forward' | 'backward' | null = null;
       const prevJ = prevMap?.get(atomId);
       const nextJ = nextMap?.get(atomId);
       if (prevFrame && nextFrame && prevJ != null && nextJ != null) {
-        // Central difference.
         v = finiteDifferenceVelocity(
           prevFrame.positions, prevFrame.timePs,
           nextFrame.positions, nextFrame.timePs,
           prevJ, nextJ,
         );
+        source = 'central';
       } else if (nextFrame && nextJ != null) {
-        // Forward.
         v = finiteDifferenceVelocity(
           denseFrames[displayIndex].positions, denseFrames[displayIndex].timePs,
           nextFrame.positions, nextFrame.timePs,
           curJ, nextJ,
         );
+        source = 'forward';
       } else if (prevFrame && prevJ != null) {
-        // Backward.
         v = finiteDifferenceVelocity(
           prevFrame.positions, prevFrame.timePs,
           denseFrames[displayIndex].positions, denseFrames[displayIndex].timePs,
           prevJ, curJ,
         );
+        source = 'backward';
       }
       if (!v || isImplausible(v[0]) || isImplausible(v[1]) || isImplausible(v[2])) {
         zeroedCount++;
@@ -278,16 +300,77 @@ export function buildWatchLabSceneSeed(args: BuildArgs): WatchLabSceneSeed | nul
         out[i * 3] = v[0];
         out[i * 3 + 1] = v[1];
         out[i * 3 + 2] = v[2];
+        if (source === 'central') centralCount++;
+        else if (source === 'forward') forwardCount++;
+        else if (source === 'backward') backwardCount++;
       }
     }
+    unresolvedVelocityFraction = zeroedCount / n;
     // >20% zeroed → cold-start (null velocities) rather than shipping
     // biased partial data.
     if (zeroedCount / n > VELOCITY_ZERO_FRACTION_COLD_THRESHOLD) {
       velocities = null;
+      velocitySource = 'none';
     } else {
       velocities = out;
+      // Collapse per-atom sources into a single tag. If exactly one
+      // source produced all resolved atoms → that tag. Else → 'mixed'.
+      const activeSources = [
+        centralCount > 0 ? 'central-difference' : null,
+        forwardCount > 0 ? 'forward-difference' : null,
+        backwardCount > 0 ? 'backward-difference' : null,
+      ].filter((s): s is WatchLabVelocitySource => s !== null);
+      if (activeSources.length === 1) {
+        velocitySource = activeSources[0];
+      } else if (activeSources.length === 0) {
+        // Unreachable under the current threshold: the >20% zeroed
+        // short-circuit above already sets `'none'` and returns.
+        // Reaching here means at least one atom's velocity was
+        // resolved, so at least one source counter is non-zero. Log
+        // and fall back defensively if a future threshold change
+        // makes this branch live.
+        console.warn('[watch.seed] unreachable: resolved velocities with no active source — defaulting to "none"');
+        velocitySource = 'none';
+      } else {
+        velocitySource = 'mixed';
+      }
     }
   }
+
+  // ── 4. Authored colors (phase 1). Reject assignments whose stable
+  //       atomIds do not resolve in the current display frame's atom
+  //       manifest. Preserve order for deterministic "later wins". ──
+  const colorAssignments: WatchLabColorAssignment[] = [];
+  if (args.getColorAssignments) {
+    const source = args.getColorAssignments();
+    if (source && source.length > 0) {
+      const atomIdSet = new Set<number>();
+      for (const a of atoms) atomIdSet.add(a.id);
+      for (const a of source) {
+        let allResolved = a.atomIds.length > 0;
+        for (const id of a.atomIds) {
+          if (!atomIdSet.has(id)) { allResolved = false; break; }
+        }
+        if (!allResolved) {
+          console.warn(
+            `[watch.seed] color assignment ${a.id} dropped — unknown atomId in current frame`,
+          );
+          continue;
+        }
+        colorAssignments.push({
+          id: a.id,
+          atomIds: a.atomIds.slice(),
+          colorHex: a.colorHex,
+          sourceGroupId: a.sourceGroupId,
+        });
+      }
+    }
+  }
+
+  // ── 5. Orbit-camera snapshot (phase 2). Null is valid — fail-closed. ──
+  const camera: WatchLabOrbitCamera | null = args.getOrbitCameraSnapshot
+    ? (args.getOrbitCameraSnapshot() ?? null)
+    : null;
 
   return {
     atoms,
@@ -296,9 +379,13 @@ export function buildWatchLabSceneSeed(args: BuildArgs): WatchLabSceneSeed | nul
     bonds,
     boundary,
     config,
+    colorAssignments,
+    camera,
     provenance: {
       historyKind: history.kind,
+      velocitySource,
       velocitiesAreApproximated,
+      unresolvedVelocityFraction,
     },
   };
 }

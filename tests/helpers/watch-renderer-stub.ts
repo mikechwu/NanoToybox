@@ -59,6 +59,7 @@ export function createWatchRendererStub(
     setAtomColorOverrides: vi.fn(),
     updateCinematicFraming: vi.fn(),
     onCameraInteraction: vi.fn(() => () => {}),
+    getOrbitCameraSnapshot: vi.fn(() => null),
     ...overrides,
   } as WatchRenderer & { _canvas: HTMLCanvasElement };
 }

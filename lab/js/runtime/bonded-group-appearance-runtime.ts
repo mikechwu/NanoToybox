@@ -29,6 +29,18 @@ export interface BondedGroupAppearanceRuntime {
   clearAllColors(): void;
   syncToRenderer(): void;
   pruneAndSync(atomCount: number): void;
+  /** Return a structural deep-copy of the current authored-color
+   *  assignments. Mutating the returned array / its entries does NOT
+   *  mutate the live store state — safe to use as a rollback capture
+   *  from a hydrate transaction. */
+  snapshotAssignments(): BondedGroupColorAssignment[];
+  /** Replace the current authored-color assignments with the supplied
+   *  list, rebuild the override map from stable atomIds, and push the
+   *  result to the renderer. Used by:
+   *   - the hydrate transaction (capture via `snapshotAssignments`,
+   *     install via `restoreAssignments`, rollback via same),
+   *   - future analysis / save-load / undo surfaces. */
+  restoreAssignments(assignments: readonly BondedGroupColorAssignment[]): void;
 }
 
 export const rebuildOverridesFromAssignments = rebuildOverridesFromDenseIndices;
@@ -143,5 +155,27 @@ export function createBondedGroupAppearanceRuntime(deps: {
     }
   }
 
-  return { applyGroupColor, clearGroupColor, clearColorAssignment, clearAllColors, syncToRenderer, pruneAndSync };
+  function snapshotAssignments(): BondedGroupColorAssignment[] {
+    const current = useAppStore.getState().bondedGroupColorAssignments;
+    return current.map((a) => ({
+      id: a.id,
+      atomIds: a.atomIds.slice(),
+      atomIndices: a.atomIndices.slice(),
+      colorHex: a.colorHex,
+      sourceGroupId: a.sourceGroupId,
+    }));
+  }
+
+  function restoreAssignments(assignments: readonly BondedGroupColorAssignment[]): void {
+    const copy = assignments.map((a) => ({
+      id: a.id,
+      atomIds: a.atomIds.slice(),
+      atomIndices: a.atomIndices.slice(),
+      colorHex: a.colorHex,
+      sourceGroupId: a.sourceGroupId,
+    }));
+    writeAssignments(copy);
+  }
+
+  return { applyGroupColor, clearGroupColor, clearColorAssignment, clearAllColors, syncToRenderer, pruneAndSync, snapshotAssignments, restoreAssignments };
 }

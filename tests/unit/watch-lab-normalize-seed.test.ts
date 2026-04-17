@@ -23,7 +23,7 @@ function seedFixture(overrides: Partial<WatchLabSceneSeed> = {}): WatchLabSceneS
       damping: 0.1,
     },
     config: { damping: 0.1, kDrag: 1, kRotate: 1, dtFs: 0.5, dampingRefDurationFs: 100 },
-    provenance: { historyKind: 'full', velocitiesAreApproximated: false },
+    colorAssignments: [], camera: null, provenance: { historyKind: 'full', velocitySource: 'restart' as const, velocitiesAreApproximated: false, unresolvedVelocityFraction: 0 },
     ...overrides,
   };
 }
@@ -176,5 +176,61 @@ describe('normalizeWatchSeed — single-source-of-truth ordering', () => {
     // First payload unaffected (no shared mutable state).
     expect(a.localStructureAtoms[0].x).toBe(0);
     expect(a.localStructureAtoms[0].element).toBe('C');
+  });
+});
+
+describe('normalizeWatchSeed — color + camera + refined provenance', () => {
+  it('colorAssignments survive normalize with structural copy', () => {
+    const seed = seedFixture();
+    seed.colorAssignments = [
+      { id: 'wca1', atomIds: [0, 1], colorHex: '#ff00aa', sourceGroupId: 'g1' },
+    ];
+    const p = normalizeWatchSeed(seed);
+    expect(p.colorAssignments).toEqual([
+      { id: 'wca1', atomIds: [0, 1], colorHex: '#ff00aa', sourceGroupId: 'g1' },
+    ]);
+    // Structural copy — mutating the normalized copy does not touch the seed.
+    p.colorAssignments[0].atomIds.push(999);
+    expect(seed.colorAssignments[0].atomIds).toEqual([0, 1]);
+  });
+
+  it('camera survives normalize with structural copy', () => {
+    const seed = seedFixture();
+    seed.camera = { position: [5, 0, 0], target: [0, 0, 0], up: [0, 1, 0], fovDeg: 60 };
+    const p = normalizeWatchSeed(seed);
+    expect(p.camera).toEqual({ position: [5, 0, 0], target: [0, 0, 0], up: [0, 1, 0], fovDeg: 60 });
+    // Structural copy — the vector tuple is not the same reference.
+    expect(p.camera!.position).not.toBe(seed.camera!.position);
+  });
+
+  it('legacy payload: camera → null, colorAssignments → [], velocitySource derived', () => {
+    const legacy = {
+      atoms: [{ id: 0, element: 'C' }, { id: 1, element: 'H' }],
+      positions: [0, 0, 0, 1, 0, 0],
+      velocities: null,
+      bonds: [{ a: 0, b: 1, distance: 1 }],
+      boundary: { mode: 'contain' as const, wallRadius: 50, wallCenter: [0, 0, 0] as [number, number, number], wallCenterSet: true, removedCount: 0, damping: 0.1 },
+      config: { damping: 0.1, kDrag: 1, kRotate: 1, dtFs: 0.5, dampingRefDurationFs: 100 },
+      provenance: { historyKind: 'capsule' as const, velocitiesAreApproximated: true },
+    } as unknown as WatchLabSceneSeed;
+    const p = normalizeWatchSeed(legacy);
+    expect(p.colorAssignments).toEqual([]);
+    expect(p.camera).toBeNull();
+    expect(p.provenance.velocitySource).toBe('mixed');
+    expect(p.provenance.unresolvedVelocityFraction).toBe(0);
+  });
+
+  it('legacy payload with velocitiesAreApproximated=false → velocitySource "restart"', () => {
+    const legacy = {
+      atoms: [{ id: 0, element: 'C' }, { id: 1, element: 'H' }],
+      positions: [0, 0, 0, 1, 0, 0],
+      velocities: null,
+      bonds: [],
+      boundary: { mode: 'contain' as const, wallRadius: 50, wallCenter: [0, 0, 0] as [number, number, number], wallCenterSet: true, removedCount: 0, damping: 0.1 },
+      config: { damping: 0.1, kDrag: 1, kRotate: 1, dtFs: 0.5, dampingRefDurationFs: 100 },
+      provenance: { historyKind: 'full' as const, velocitiesAreApproximated: false },
+    } as unknown as WatchLabSceneSeed;
+    const p = normalizeWatchSeed(legacy);
+    expect(p.provenance.velocitySource).toBe('restart');
   });
 });

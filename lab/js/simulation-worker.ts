@@ -169,6 +169,29 @@ function handleAppendMolecule(cmd: Extract<WorkerCommand, { type: 'appendMolecul
   if (!engine) { emitNotReady(cmd, 'Engine not initialized'); return; }
   try {
     const result = engine.appendMolecule(cmd.atoms, cmd.bonds, cmd.offset);
+    // Apply handed-off velocities BEFORE the scene-version bump, so
+    // the first frameResult snapshot at the new sceneVersion carries
+    // the real momentum. Without this, the Watch→Lab hydrate path's
+    // main-thread-only velocity write is immediately clobbered by the
+    // worker's first zero-velocity snapshot via snapshot-reconciler.
+    if (cmd.velocities && engine.vel) {
+      const expected = result.atomCount * 3;
+      const tailRoom = engine.vel.length - result.atomOffset * 3;
+      // Fail-loud on any mismatch. The normalizer contract guarantees
+      // `velocities.length === n*3`, so a disagreement here means
+      // either a buggy caller or an offset-math regression in
+      // `engine.appendMolecule`. Silently clipping would produce
+      // subtly-wrong first-frame momentum that no test can catch.
+      if (cmd.velocities.length !== expected || tailRoom < expected) {
+        console.warn(
+          `[worker.appendMolecule] velocity length mismatch: got=${cmd.velocities.length} expected=${expected} tailRoom=${tailRoom}`,
+        );
+      }
+      const writeLen = Math.max(0, Math.min(cmd.velocities.length, expected, tailRoom));
+      if (writeLen > 0) {
+        engine.vel.set(cmd.velocities.subarray(0, writeLen), result.atomOffset * 3);
+      }
+    }
     engine.updateWallCenter(cmd.atoms, cmd.offset);
     engine.updateWallRadius();
     sceneVersion += 1;

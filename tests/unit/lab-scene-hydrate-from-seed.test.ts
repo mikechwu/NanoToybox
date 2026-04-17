@@ -44,7 +44,7 @@ function seedFixture(): WatchLabSceneSeed {
       damping: 0.1,
     },
     config: { damping: 0.1, kDrag: 1, kRotate: 1, dtFs: 0.5, dampingRefDurationFs: 100 },
-    provenance: { historyKind: 'full', velocitiesAreApproximated: false },
+    colorAssignments: [], camera: null, provenance: { historyKind: 'full', velocitySource: 'restart' as const, velocitiesAreApproximated: false, unresolvedVelocityFraction: 0 },
   };
 }
 
@@ -267,7 +267,7 @@ describe('hydrateFromWatchSeed — success path', () => {
     expect(onHydrated).toHaveBeenCalledWith(expect.objectContaining({
       atomCount: 2,
       sourceMeta: sourceMetaFixture(),
-      provenance: { historyKind: 'full', velocitiesAreApproximated: false },
+      provenance: { historyKind: 'full', velocitySource: 'restart' as const, velocitiesAreApproximated: false, unresolvedVelocityFraction: 0 },
     }));
   });
 
@@ -460,5 +460,223 @@ describe('hydrateFromWatchSeed — synthetic molecule shape', () => {
     const deps = makeDeps({}, 'resolve');
     await hydrateFromWatchSeed(seedFixture(), { ...sourceMetaFixture(), fileName: null }, deps);
     expect(deps.sceneState.molecules[0].name).toBe('Remixed scene');
+  });
+});
+
+describe('hydrateFromWatchSeed — velocity delivery to worker', () => {
+  it('forwards seed velocities to worker.appendMolecule so first snapshot carries momentum', async () => {
+    // Root cause lock: `appendMolecule` on the worker used to accept no
+    // velocity argument, so the worker started at zero velocity. The
+    // snapshot reconciler's velocity-sync (snapshot-reconciler.ts:71)
+    // then overwrote main-thread `physics.vel` with the worker's zeros
+    // on the very first frameResult — the user felt zero momentum
+    // despite the hydrate having correctly set main-thread velocities.
+    const deps = makeDeps({}, 'resolve');
+    const spy = vi.spyOn(deps.worker!, 'appendMolecule');
+    const seed = seedFixture();
+    seed.velocities = [0.02, 0, 0, -0.02, 0, 0];
+    const r = await hydrateFromWatchSeed(seed, sourceMetaFixture(), deps);
+    expect(r.status).toBe('ok');
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [, , , forwardedVel] = spy.mock.calls[0] as [unknown, unknown, unknown, Float64Array | undefined];
+    expect(forwardedVel).toBeInstanceOf(Float64Array);
+    expect(forwardedVel!.length).toBeGreaterThanOrEqual(6);
+    expect(Array.from(forwardedVel!.subarray(0, 6))).toEqual([0.02, 0, 0, -0.02, 0, 0]);
+  });
+
+  it('cold-start (null seed velocities) forwards a zero-filled Float64Array', async () => {
+    const deps = makeDeps({}, 'resolve');
+    const spy = vi.spyOn(deps.worker!, 'appendMolecule');
+    const seed = seedFixture();
+    seed.velocities = null;
+    const r = await hydrateFromWatchSeed(seed, sourceMetaFixture(), deps);
+    expect(r.status).toBe('ok');
+    const [, , , forwardedVel] = spy.mock.calls[0] as [unknown, unknown, unknown, Float64Array | undefined];
+    expect(forwardedVel).toBeInstanceOf(Float64Array);
+    for (let i = 0; i < 6; i++) expect(forwardedVel![i]).toBe(0);
+  });
+});
+
+describe('hydrateFromWatchSeed — camera + color transport (plan rev 4)', () => {
+  function seedWithCamera() {
+    const s = seedFixture();
+    s.camera = { position: [12, 0, 0], target: [0, 0, 0], up: [0, 1, 0], fovDeg: 55 };
+    return s;
+  }
+
+  it('applies the orbit-camera snapshot when camera is non-null', async () => {
+    const applySpy = vi.fn();
+    const getSpy = vi.fn(() => ({ position: [0, 0, 15] as [number, number, number], target: [0, 0, 0] as [number, number, number], up: [0, 1, 0] as [number, number, number], fovDeg: 50 }));
+    const renderer = {
+      ...makeMockRenderer(),
+      applyOrbitCameraSnapshot: applySpy,
+      getOrbitCameraSnapshot: getSpy,
+    };
+    const deps = makeDeps({ renderer: renderer as unknown as HydrateFromWatchSeedDeps['renderer'] }, 'resolve');
+    const r = await hydrateFromWatchSeed(seedWithCamera(), sourceMetaFixture(), deps);
+    expect(r.status).toBe('ok');
+    expect(applySpy).toHaveBeenCalledTimes(1);
+    expect(applySpy.mock.calls[0][0]).toEqual({ position: [12, 0, 0], target: [0, 0, 0], up: [0, 1, 0], fovDeg: 55 });
+    // Rollback capture must have read the prior camera once.
+    expect(getSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips camera apply when payload camera is null', async () => {
+    const applySpy = vi.fn();
+    const renderer = {
+      ...makeMockRenderer(),
+      applyOrbitCameraSnapshot: applySpy,
+      getOrbitCameraSnapshot: () => null,
+    };
+    const deps = makeDeps({ renderer: renderer as unknown as HydrateFromWatchSeedDeps['renderer'] }, 'resolve');
+    const r = await hydrateFromWatchSeed(seedFixture(), sourceMetaFixture(), deps);
+    expect(r.status).toBe('ok');
+    expect(applySpy).not.toHaveBeenCalled();
+  });
+
+  it('restores authored color assignments via appearance runtime', async () => {
+    const restoreSpy = vi.fn();
+    const appearance = {
+      snapshotAssignments: vi.fn(() => []),
+      restoreAssignments: restoreSpy,
+    };
+    const seed = seedFixture();
+    seed.colorAssignments = [
+      { id: 'wca1', atomIds: [0, 1], colorHex: '#ff00aa', sourceGroupId: 'g1' },
+    ];
+    const deps = makeDeps({ appearance }, 'resolve');
+    const r = await hydrateFromWatchSeed(seed, sourceMetaFixture(), deps);
+    expect(r.status).toBe('ok');
+    expect(restoreSpy).toHaveBeenCalledTimes(1);
+    const arg = restoreSpy.mock.calls[0][0];
+    expect(arg).toHaveLength(1);
+    expect(arg[0].colorHex).toBe('#ff00aa');
+    expect(arg[0].sourceGroupId).toBe('g1');
+    // atomIndices re-derived as display slots 0, 1.
+    expect(arg[0].atomIndices).toEqual([0, 1]);
+    // Lab-side atomIds are tracker-assigned fresh ids after the
+    // hydrate's reset + handleAppend(0, n) → 0, 1.
+    expect(arg[0].atomIds).toEqual([0, 1]);
+  });
+
+  it('drops color assignments with no resolvable atoms and warns; restores empty for replace semantics', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const restoreSpy = vi.fn();
+    const appearance = {
+      snapshotAssignments: vi.fn(() => []),
+      restoreAssignments: restoreSpy,
+    };
+    const seed = seedFixture();
+    seed.colorAssignments = [
+      { id: 'wca1', atomIds: [999], colorHex: '#ff00aa', sourceGroupId: 'g1' },
+    ];
+    // Validator would reject this; bypass by casting so we exercise the
+    // hydrate-side defensive branch.
+    const deps = makeDeps({ appearance }, 'resolve');
+    const r = await hydrateFromWatchSeed(seed as WatchLabSceneSeed, sourceMetaFixture(), deps);
+    expect(r.status).toBe('ok');
+    // Replace semantics: `restoreAssignments` still fires (with `[]`)
+    // to wipe any prior Lab authored-color state.
+    expect(restoreSpy).toHaveBeenCalledTimes(1);
+    expect(restoreSpy.mock.calls[0][0]).toEqual([]);
+    expect(warn.mock.calls.some(c => String(c[0]).includes('zero atoms resolved'))).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('empty incoming colorAssignments clears prior Lab color state (replace semantics)', async () => {
+    // P1 regression lock: hydrate REPLACES the scene — prior Lab authored
+    // colors must not leak into a scene the incoming seed declares as
+    // un-authored. Previously the `colorAssignments.length > 0` guard
+    // skipped `restoreAssignments` entirely, leaving stale state.
+    const restoreSpy = vi.fn();
+    const appearance = {
+      snapshotAssignments: vi.fn(() => [
+        { id: 'prior', atomIds: [1], atomIndices: [1], colorHex: '#abcdef', sourceGroupId: 'preGroup' },
+      ]),
+      restoreAssignments: restoreSpy,
+    };
+    const seed = seedFixture();
+    seed.colorAssignments = [];
+    const deps = makeDeps({ appearance }, 'resolve');
+    const r = await hydrateFromWatchSeed(seed, sourceMetaFixture(), deps);
+    expect(r.status).toBe('ok');
+    expect(restoreSpy).toHaveBeenCalledTimes(1);
+    expect(restoreSpy.mock.calls[0][0]).toEqual([]);
+  });
+
+  it('zero-resolve incoming colorAssignments clears prior Lab color state', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const restoreSpy = vi.fn();
+    const appearance = {
+      snapshotAssignments: vi.fn(() => [
+        { id: 'prior', atomIds: [1], atomIndices: [1], colorHex: '#abcdef', sourceGroupId: 'preGroup' },
+      ]),
+      restoreAssignments: restoreSpy,
+    };
+    const seed = seedFixture();
+    seed.colorAssignments = [
+      { id: 'wca1', atomIds: [999], colorHex: '#ff00aa', sourceGroupId: 'g1' },
+    ];
+    const deps = makeDeps({ appearance }, 'resolve');
+    const r = await hydrateFromWatchSeed(seed, sourceMetaFixture(), deps);
+    expect(r.status).toBe('ok');
+    expect(restoreSpy).toHaveBeenCalledTimes(1);
+    expect(restoreSpy.mock.calls[0][0]).toEqual([]);
+    warn.mockRestore();
+  });
+
+  it('camera-null seed falls back to renderer.fitCamera()', async () => {
+    // P1 regression lock: pending-handoff boot skips default-scene load,
+    // so there is no first-molecule fit path. Without this fallback the
+    // renderer keeps its constructor-default camera pointing away from
+    // the handed-off atoms. Legacy tokens in-flight during deploy overlap
+    // carry `camera: null`; they must still frame the scene.
+    const fitSpy = vi.fn();
+    const applySpy = vi.fn();
+    const renderer = {
+      ...makeMockRenderer(),
+      applyOrbitCameraSnapshot: applySpy,
+      getOrbitCameraSnapshot: () => null,
+      fitCamera: fitSpy,
+    };
+    const deps = makeDeps({ renderer: renderer as unknown as HydrateFromWatchSeedDeps['renderer'] }, 'resolve');
+    const seed = seedFixture();
+    seed.camera = null;
+    const r = await hydrateFromWatchSeed(seed, sourceMetaFixture(), deps);
+    expect(r.status).toBe('ok');
+    expect(applySpy).not.toHaveBeenCalled();
+    expect(fitSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('rolls back camera + color assignments on worker-restore failure', async () => {
+    const applySpy = vi.fn();
+    const restoreSpy = vi.fn();
+    const priorCamera = { position: [0, 0, 15] as [number, number, number], target: [0, 0, 0] as [number, number, number], up: [0, 1, 0] as [number, number, number], fovDeg: 50 };
+    const priorColor = [
+      { id: 'prior', atomIds: [3], atomIndices: [3], colorHex: '#abcdef', sourceGroupId: 'preGroup' },
+    ];
+    const renderer = {
+      ...makeMockRenderer(),
+      applyOrbitCameraSnapshot: applySpy,
+      getOrbitCameraSnapshot: () => priorCamera,
+    };
+    const appearance = {
+      snapshotAssignments: vi.fn(() => priorColor),
+      restoreAssignments: restoreSpy,
+    };
+    const seed = seedWithCamera();
+    seed.colorAssignments = [
+      { id: 'wca1', atomIds: [0], colorHex: '#ff00aa', sourceGroupId: 'g1' },
+    ];
+    const deps = makeDeps({ renderer: renderer as unknown as HydrateFromWatchSeedDeps['renderer'], appearance }, 'reject');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const r = await hydrateFromWatchSeed(seed, sourceMetaFixture(), deps);
+    expect(r.status).toBe('error');
+    // Rollback applied prior camera.
+    expect(applySpy).toHaveBeenCalledTimes(1);
+    expect(applySpy.mock.calls[0][0]).toEqual(priorCamera);
+    // Rollback restored prior color assignments.
+    expect(restoreSpy).toHaveBeenCalledWith(priorColor);
+    warn.mockRestore();
   });
 });

@@ -95,6 +95,14 @@ export interface SceneRuntimeDeps {
    *  closed in that case. */
   getAtomIdentityTracker?: () => TimelineAtomIdentityTracker | null;
   getAtomMetadataRegistry?: () => AtomMetadataRegistry | null;
+  /** Bonded-group appearance runtime — used by hydrate to capture +
+   *  restore authored color assignments. Deferred getter (like tracker
+   *  + registry) because main.ts wires appearance AFTER scene-runtime
+   *  construction. Null return → hydrate skips color apply (harmless
+   *  in test harnesses that don't exercise color). */
+  getAppearanceRuntime?: () => { snapshotAssignments: () => import('../store/app-store').BondedGroupColorAssignment[]; restoreAssignments: (a: readonly import('../store/app-store').BondedGroupColorAssignment[]) => void } | null;
+  /** Store-facing cameraMode probe (plan §"Camera-mode contract"). */
+  getCameraMode?: () => string;
   dispatch: (cmd: import('../state-machine').Command) => void;
   fullSchedulerReset: () => void;
   partialProfilerReset: () => void;
@@ -409,13 +417,15 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
           ? {
               isActive: () => workerRuntime.isActive(),
               clearScene: () => workerRuntime.clearScene(),
-              appendMolecule: (atoms, bonds, offset) =>
-                workerRuntime.appendMolecule(atoms, bonds, offset),
+              appendMolecule: (atoms, bonds, offset, velocities) =>
+                workerRuntime.appendMolecule(atoms, bonds, offset, velocities),
             }
           : null,
         sceneState: getSession().scene as unknown as import('../scene').SceneState,
         registry,
         tracker,
+        appearance: deps.getAppearanceRuntime?.() ?? null,
+        getCameraMode: deps.getCameraMode,
         setHydrationActive: deps.setHydrationActive,
         onHydrated: () => {
           // Reuse the existing post-commit path so bonded groups /

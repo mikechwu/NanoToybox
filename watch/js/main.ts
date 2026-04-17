@@ -93,6 +93,11 @@ if (qp.get('e2e') === '1') {
     }
     controller.scrub(timePs);
   };
+  // Plan §"Test observability seams": pure pass-through to the same
+  // method the seed builder consumes, so E2E tests can exact-match
+  // Watch's click-time camera against Lab's post-hydrate camera
+  // without resorting to pixel diffs.
+  w._getWatchCameraSnapshot = () => controller.getRenderer()?.getOrbitCameraSnapshot?.() ?? null;
 }
 
 // Global error handler for unhandled rejections

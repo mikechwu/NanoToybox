@@ -442,6 +442,16 @@ export function createWatchController(): WatchController {
     displayFrameKey: number;
     topologyFrameKey: number;
     restartFrameId: number | null;
+    /** Quantized camera identity (position + target + fov). Omits `up`
+     *  because in a pure orbit camera it is derived from position/target
+     *  and rarely drifts independently. Below visual-perception thresholds
+     *  (POSITION_Q = 0.01 Å, FOV_Q = 0.5°) tiny damping drift does not
+     *  thrash the cache. `null` when the renderer is detached. */
+    cameraIdentity: string | null;
+    /** Snapped seed time (ps) at mint — retained for diagnostics so
+     *  the cache object carries the same shape the identity spread
+     *  produces. Not read by cache comparisons. */
+    seedTimePs: number;
     href: string;
     token: string;
   } | null = null;
@@ -473,11 +483,30 @@ export function createWatchController(): WatchController {
    *  handoff writer can record it as the authoritative
    *  `sourceMeta.timePs` rather than the user's between-frame display
    *  time (which would point at a frame that wasn't actually shipped). */
+  /** Quantization steps for the camera component of the cache identity.
+   *  Exported via `_getWatchHandoffQuantization` for tests that inject
+   *  tighter values to assert cache-hit behavior. Tuned below visual
+   *  perception thresholds at Å-scale so tiny damping drift cannot
+   *  thrash the cache. */
+  const POSITION_Q = 0.01;
+  const FOV_Q = 0.5;
+  function _quantizeScalar(v: number, step: number): number {
+    return Math.round(v / step);
+  }
+  function _quantizeVec3(v: readonly [number, number, number], step: number): string {
+    return `${_quantizeScalar(v[0], step)},${_quantizeScalar(v[1], step)},${_quantizeScalar(v[2], step)}`;
+  }
+  function _cameraIdentityFrom(cam: { position: [number, number, number]; target: [number, number, number]; fovDeg: number } | null): string | null {
+    if (!cam) return null;
+    return `${_quantizeVec3(cam.position, POSITION_Q)}|${_quantizeVec3(cam.target, POSITION_Q)}|${_quantizeScalar(cam.fovDeg, FOV_Q)}`;
+  }
+
   function deriveCurrentFrameSeedIdentity(): {
     documentKey: string;
     displayFrameKey: number;
     topologyFrameKey: number;
     restartFrameId: number | null;
+    cameraIdentity: string | null;
     seedTimePs: number;
   } | null {
     if (!playback.isLoaded()) return null;
@@ -496,7 +525,11 @@ export function createWatchController(): WatchController {
     // restartFrameId is null for capsule histories — that's valid; the
     // cache comparison below uses `===` so two null values match.
     const restartFrameId = playback.getNearestRestartFrameIdAtTime(seedTimePs);
-    return { documentKey, displayFrameKey, topologyFrameKey, restartFrameId, seedTimePs };
+    // Camera identity — live renderer snapshot, quantized. Null when
+    // the renderer is detached (not yet constructed or torn down).
+    const rawCamera = renderer ? renderer.getOrbitCameraSnapshot?.() ?? null : null;
+    const cameraIdentity = _cameraIdentityFrom(rawCamera);
+    return { documentKey, displayFrameKey, topologyFrameKey, restartFrameId, cameraIdentity, seedTimePs };
   }
 
   /** Best-effort programmatic new-tab opener. The primary user path is
@@ -733,6 +766,7 @@ export function createWatchController(): WatchController {
       || c.displayFrameKey !== now.displayFrameKey
       || c.topologyFrameKey !== now.topologyFrameKey
       || c.restartFrameId !== now.restartFrameId
+      || c.cameraIdentity !== now.cameraIdentity
     ) return null;
     return c.href;
   }
@@ -1554,13 +1588,25 @@ export function createWatchController(): WatchController {
       const seedTimePs = identity.seedTimePs;
 
       // Cache hit — ALL identity components must match (document,
-      // display frame, topology frame, restart frame).
+      // display frame, topology frame, restart frame, AND quantized
+      // camera). Plan §"Camera-snapshot timing — authoritative contract":
+      // if the quantized camera identity diverged since the cache was
+      // minted (e.g., hover pre-mint then scrubbed before click), we
+      // MUST re-mint and purge the stale provisional token.
+      //
+      // Null `cameraIdentity` on both sides is acceptable — the four
+      // frame-identity components above already pin the scene, so two
+      // nulls just mean "no camera info either time for the same
+      // frame," not stale-pose poisoning. The cache miss we care about
+      // is camera-identity DIVERGENCE (hover-minted a pose, click sees
+      // a different pose), which `!==` catches correctly.
       if (
         _currentFrameHrefCache
         && _currentFrameHrefCache.documentKey === identity.documentKey
         && _currentFrameHrefCache.displayFrameKey === identity.displayFrameKey
         && _currentFrameHrefCache.topologyFrameKey === identity.topologyFrameKey
         && _currentFrameHrefCache.restartFrameId === identity.restartFrameId
+        && _currentFrameHrefCache.cameraIdentity === identity.cameraIdentity
       ) {
         return _currentFrameHrefCache.href;
       }
@@ -1582,7 +1628,13 @@ export function createWatchController(): WatchController {
       // null (e.g., unexpected topology-source gap despite the snap
       // helper claiming seedability), we abort — the click path
       // surfaces the generic "couldn't prepare" error.
-      const seed = buildWatchLabSceneSeed({ history, timePs: seedTimePs, playback });
+      const seed = buildWatchLabSceneSeed({
+        history,
+        timePs: seedTimePs,
+        playback,
+        getColorAssignments: () => appearance.getAssignments(),
+        getOrbitCameraSnapshot: () => renderer?.getOrbitCameraSnapshot?.() ?? null,
+      });
       if (!seed) return null;
 
       let token: string;

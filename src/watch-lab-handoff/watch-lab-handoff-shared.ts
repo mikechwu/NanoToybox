@@ -74,6 +74,44 @@ export interface WatchLabBoundary {
   damping: number;
 }
 
+/** Velocity-provenance classification shipped from Watch → Lab.
+ *  - `'restart'`: exact velocities copied from a full-history restart frame.
+ *  - `'central-difference'` / `'forward-difference'` / `'backward-difference'`:
+ *    finite-difference approximation over neighboring dense frames; the tag
+ *    records which window was used for every atom.
+ *  - `'mixed'`: different atoms used different sources within a single seed.
+ *  - `'none'`: velocities were promoted to null (cold-start hydrate). */
+export type WatchLabVelocitySource =
+  | 'restart'
+  | 'central-difference'
+  | 'forward-difference'
+  | 'backward-difference'
+  | 'mixed'
+  | 'none';
+
+/** Orbit-camera snapshot shipped from Watch → Lab. `null` on the wire is
+ *  a valid fail-closed value — Lab then applies its own default fit.
+ *  Shape matches the (position, target, up, fov) quartet that
+ *  Three.js OrbitControls-driven cameras round-trip cleanly. */
+export interface WatchLabOrbitCamera {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+  fovDeg: number;
+}
+
+/** Authored atom-color assignment shipped from Watch → Lab. The four-field
+ *  quartet mirrors Watch's in-memory `WatchColorAssignment` and Lab's
+ *  persisted `BondedGroupColorAssignment` minus the dense-index
+ *  `atomIndices` snapshot. Lab re-derives `atomIndices` at hydrate time
+ *  from stable `atomIds`, so dense-slot mapping is never on the wire. */
+export interface WatchLabColorAssignment {
+  id: string;
+  atomIds: number[];
+  colorHex: string;
+  sourceGroupId: string;
+}
+
 export interface WatchLabSceneSeed {
   /** Shared atom metadata (reuses the `AtomInfoV1` wire shape). */
   atoms: WatchLabAtomInfo[];
@@ -85,7 +123,19 @@ export interface WatchLabSceneSeed {
   bonds: WatchLabBond[];
   boundary: WatchLabBoundary;
   config: WatchLabConfig;
-  provenance: { historyKind: 'full' | 'capsule'; velocitiesAreApproximated: boolean };
+  /** Authored atom/group color overrides carried into Lab. Empty array
+   *  is valid. Absent on the wire (legacy token) → `[]` after normalize. */
+  colorAssignments: WatchLabColorAssignment[];
+  /** Orbit-camera pose at click time. Null is valid (fail-closed); Lab
+   *  then applies default framing. Absent on the wire (legacy token) →
+   *  `null` after normalize. */
+  camera: WatchLabOrbitCamera | null;
+  provenance: {
+    historyKind: 'full' | 'capsule';
+    velocitySource: WatchLabVelocitySource;
+    velocitiesAreApproximated: boolean;
+    unresolvedVelocityFraction: number;
+  };
 }
 
 export interface WatchToLabHandoffPayload {
@@ -237,6 +287,58 @@ function isValidAtom(v: unknown): v is WatchLabAtomInfo {
   );
 }
 
+function isValidCamera(value: unknown): value is WatchLabOrbitCamera {
+  if (!hasOwnOrdinaryObject(value)) return false;
+  const c = value as Record<string, unknown>;
+  if (!allFiniteBounded(c.position, SEED_MAX_POSITION_A, 3)) return false;
+  if (!allFiniteBounded(c.target, SEED_MAX_POSITION_A, 3)) return false;
+  if (!allFiniteBounded(c.up, 1e6, 3)) return false;
+  const up = c.up as number[];
+  const upMag2 = up[0] * up[0] + up[1] * up[1] + up[2] * up[2];
+  if (!(upMag2 > 1e-12)) return false;
+  const pos = c.position as number[];
+  const tgt = c.target as number[];
+  const dx = pos[0] - tgt[0];
+  const dy = pos[1] - tgt[1];
+  const dz = pos[2] - tgt[2];
+  const dist2 = dx * dx + dy * dy + dz * dz;
+  if (!(dist2 > 1e-12)) return false;
+  if (!Number.isFinite(c.fovDeg)) return false;
+  const fov = c.fovDeg as number;
+  if (fov < 10 || fov > 120) return false;
+  return true;
+}
+
+function isHexColor(s: unknown): s is string {
+  if (typeof s !== 'string') return false;
+  return /^#[0-9a-fA-F]{6}$/.test(s);
+}
+
+function isValidColorAssignment(v: unknown): v is WatchLabColorAssignment {
+  if (!hasOwnOrdinaryObject(v)) return false;
+  const a = v as Record<string, unknown>;
+  if (typeof a.id !== 'string' || (a.id as string).length === 0) return false;
+  if (typeof a.sourceGroupId !== 'string' || (a.sourceGroupId as string).length === 0) return false;
+  if (!isHexColor(a.colorHex)) return false;
+  if (!Array.isArray(a.atomIds) || a.atomIds.length === 0) return false;
+  const seen = new Set<number>();
+  for (const id of a.atomIds as unknown[]) {
+    if (!Number.isInteger(id) || (id as number) < 0) return false;
+    if (seen.has(id as number)) return false;
+    seen.add(id as number);
+  }
+  return true;
+}
+
+const VALID_VELOCITY_SOURCES: ReadonlySet<string> = new Set([
+  'restart',
+  'central-difference',
+  'forward-difference',
+  'backward-difference',
+  'mixed',
+  'none',
+]);
+
 function isValidBond(v: unknown, atomCount: number): v is WatchLabBond {
   if (!hasOwnOrdinaryObject(v)) return false;
   const b = v as Record<string, unknown>;
@@ -271,6 +373,35 @@ export function isValidSeed(value: unknown): value is WatchLabSceneSeed {
   const prov = s.provenance as Record<string, unknown>;
   if (prov.historyKind !== 'full' && prov.historyKind !== 'capsule') return false;
   if (typeof prov.velocitiesAreApproximated !== 'boolean') return false;
+  // Refined provenance fields are optional at validate time (legacy
+  // tokens still in-flight under the 10-min TTL omit them). Normalizer
+  // fills documented defaults — see `normalizeWatchSeed`.
+  if (prov.velocitySource !== undefined) {
+    if (typeof prov.velocitySource !== 'string') return false;
+    if (!VALID_VELOCITY_SOURCES.has(prov.velocitySource as string)) return false;
+  }
+  if (prov.unresolvedVelocityFraction !== undefined) {
+    if (!Number.isFinite(prov.unresolvedVelocityFraction)) return false;
+    const f = prov.unresolvedVelocityFraction as number;
+    if (f < 0 || f > 1) return false;
+  }
+  // Color + camera are optional at validate time for legacy-token
+  // back-compat. Writer always emits them; consumer tolerates absence.
+  if (s.camera !== undefined && s.camera !== null) {
+    if (!isValidCamera(s.camera)) return false;
+  }
+  if (s.colorAssignments !== undefined) {
+    if (!Array.isArray(s.colorAssignments)) return false;
+    const atomIdSet = new Set<number>();
+    for (const a of s.atoms as WatchLabAtomInfo[]) atomIdSet.add(a.id);
+    for (const c of s.colorAssignments) {
+      if (!isValidColorAssignment(c)) return false;
+      // Atom IDs in assignments must resolve against this seed's atoms.
+      for (const id of (c as WatchLabColorAssignment).atomIds) {
+        if (!atomIdSet.has(id)) return false;
+      }
+    }
+  }
   return true;
 }
 
