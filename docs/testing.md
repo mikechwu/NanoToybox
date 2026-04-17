@@ -355,7 +355,7 @@ That means `pages-dev-flows.spec.ts` is harmless to `npm run test:e2e` (it self-
 | File | Tests | What it validates |
 |------|------:|-------------------|
 | `simulation-timeline.test.ts` | 28+ | Core SimulationTimeline: recording frames, retention limits, review mode entry/exit, scrub to arbitrary frame, restart from timeline, truncation on re-record, motion preservation across restore, arming lifecycle |
-| `timeline-bar-lifecycle.test.tsx` | 87 | TimelineBar unified shell: invariant lane skeleton across all modes (time + overlay-zone + track + action-zone), off/ready use simple label not segmented switch, active uses two-segment mode switch, bidirectional mode switch (onEnterReview, onReturnToLive), Review segment disabled when no recorded range, restart anchor edge clamping (0% at 5%, 100% at 95%), clear confirmation dialog flow (confirm fires, cancel safe), format correctness across all unit ranges (fs/ps/ns/µs with exact string assertions), mode transitions (off→ready→active store changes, startup null→installed), accessibility labels (return-to-sim, restart-with-time, clear trigger), no old row1/row2 layout remnants, thick track across all states, lane structure identical for short and long time values, hint tooltip visibility (6 tests: start recording hint on hover+delay, simulation segment hint in review, review segment hint with range, disabled review hint via focus when no range, restart anchor hint on hover, clear trigger hint on hover — all use `vi.useFakeTimers()` + `fireEvent.mouseEnter` + `vi.advanceTimersByTime(HINT_DELAY_MS)` and assert `timeline-hint--visible` class), export dialog tests use capsule/full format options (no replay). Also covers the Transfer-dialog performance contract (Transfer INP fix): Share-default no-compute, Download-tab JIT compute, close/tab-switch/unmount cancel of scheduled work, one-compute-per-session cache + reset on reopen, pause-fires-on-Share-default / on-OAuth-resume, Transfer-click-survives-pause-throw, failed-estimates-retry-on-tab-switch. Uses top-of-file `vi.mock('.../timeline-after-paint', ...)` exporting a `vi.fn` with a `beforeEach` synchronous-default reset so individual tests can override via `mockImplementation` and a `captureScheduledWork()` helper for cancellation tests. |
+| `timeline-bar-lifecycle.test.tsx` | 87 | TimelineBar unified shell: invariant lane skeleton across all modes (time + overlay-zone + track + action-zone), off/ready use simple label not segmented switch, active uses two-segment mode switch, bidirectional mode switch (onEnterReview, onReturnToLive), Review segment disabled when no recorded range, restart anchor edge clamping (0% at 5%, 100% at 95%), restart-affordance two-element contract (the restart pill is a `<span class="timeline-restart-anchor">` wrapping a `<button class="timeline-restart-button">` — the test asserts the two-element anchor+button structure and that there is **no** wrapping `ActionHint` tooltip on restart; this is a regression lock against the removed duplicate hint), clear confirmation dialog flow (confirm fires, cancel safe), format correctness across all unit ranges (fs/ps/ns/µs with exact string assertions), mode transitions (off→ready→active store changes, startup null→installed), accessibility labels (return-to-sim, restart-with-time, clear trigger), no old row1/row2 layout remnants, thick track across all states, lane structure identical for short and long time values, hint tooltip visibility (6 tests: start recording hint on hover+delay, simulation segment hint in review, review segment hint with range, disabled review hint via focus when no range, restart anchor hint on hover, clear trigger hint on hover — all use `vi.useFakeTimers()` + `fireEvent.mouseEnter` + `vi.advanceTimersByTime(HINT_DELAY_MS)` and assert `timeline-hint--visible` class), export dialog tests use capsule/full format options (no replay). Also covers the Transfer-dialog performance contract (Transfer INP fix): Share-default no-compute, Download-tab JIT compute, close/tab-switch/unmount cancel of scheduled work, one-compute-per-session cache + reset on reopen, pause-fires-on-Share-default / on-OAuth-resume, Transfer-click-survives-pause-throw, failed-estimates-retry-on-tab-switch. Uses top-of-file `vi.mock('.../timeline-after-paint', ...)` exporting a `vi.fn` with a `beforeEach` synchronous-default reset so individual tests can override via `mockImplementation` and a `captureScheduledWork()` helper for cancellation tests. |
 | `timeline-recording-orchestrator.test.ts` | 9 | Orchestrator arming, recording cadence (frame capture rate), review-mode blocking of new recordings, sim-time advancement during recording, reset behavior |
 | `timeline-recording-policy.test.ts` | 5 | Arm/disarm/re-arm lifecycle, policy state transitions |
 | `timeline-subsystem.test.ts` | 11 | Subsystem boundary isolation, clearAndDisarm, teardown cleanup, isInReview predicate, installStoreCallbacks wiring, placement-does-not-arm regression tests |
@@ -574,7 +574,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **End-to-end pipeline:** load → import → playback → groups.
 
-*As of the Watch→Lab rev-4 handoff work, 2596 unit tests (Vitest) + 12 E2E tests (Playwright) pass across the lab + watch + share + auth + account-erasure + handoff surfaces. Run `npx vitest run` for the authoritative live unit total and `npm run test:e2e` for the E2E lane.*
+*As of the Watch→Lab entry-control disclosure + auto-cue milestone work, 2643 unit tests (Vitest) + 12 E2E tests (Playwright) pass across the lab + watch + share + auth + account-erasure + handoff surfaces. Run `npx vitest run` for the authoritative live unit total and `npm run test:e2e` for the E2E lane.*
 
 ### Bond Topology Parity (23 tests)
 
@@ -993,7 +993,7 @@ Uses a 5-frame two-atom fixture (`tests/e2e/fixtures/watch-two-atom.json`) and `
 
 ### Watch→Lab Handoff Surface
 
-The Watch→Lab entry is a read-only-review-to-editable-scene handoff: Watch produces a seed payload, the URL carries an opaque entry token, and Lab boot consumes-or-falls-back. The primary Watch-side button is **"Continue"** (formerly "Remix" / "From this frame"). The seed carries `colorAssignments` (stable-id color quartets), an optional orbit `camera` pose, and a refined `provenance` block with `velocitySource` (`'restart' | 'central-difference' | 'forward-difference' | 'backward-difference' | 'mixed' | 'none'`) and `unresolvedVelocityFraction`. The test surface covers four layers — transport (write + read + URL composer), seed shape (normalize + build predicate + builder, including camera + colorAssignments + velocitySource), Lab-side hydrate (transactional apply + rollback reasons + adapter wrapper, including camera snapshot apply and bonded-group appearance restore), and UI surfaces (entry split-capsule + toast copy). Regression-lock invariants live in the E2E spec because the only reliable way to catch them is against the real Watch→Lab boot sequence.
+The Watch→Lab entry is a read-only-review-to-editable-scene handoff: Watch produces a seed payload, the URL carries an opaque entry token, and Lab boot consumes-or-falls-back. The primary Watch-side CTA is labeled **"Interact From Here"** (accent-filled pill; the secondary option **"Open a Fresh Lab"** lives in a caret-toggled disclosure popover). The seed carries `colorAssignments` (stable-id color quartets), an optional orbit `camera` pose, and a refined `provenance` block with `velocitySource` (`'restart' | 'central-difference' | 'forward-difference' | 'backward-difference' | 'mixed' | 'none'`) and `unresolvedVelocityFraction`. The test surface covers four layers — transport (write + read + URL composer), seed shape (normalize + build predicate + builder, including camera + colorAssignments + velocitySource), Lab-side hydrate (transactional apply + rollback reasons + adapter wrapper, including camera snapshot apply and bonded-group appearance restore), and UI surfaces (primary pill + caret-disclosure popover + toast copy). Regression-lock invariants live in the E2E spec because the only reliable way to catch them is against the real Watch→Lab boot sequence.
 
 #### Handoff Transport (`tests/unit/`)
 
@@ -1001,6 +1001,7 @@ The Watch→Lab entry is a read-only-review-to-editable-scene handoff: Watch pro
 |------|---------|
 | `watch-lab-handoff.test.ts` | Writer + consumer roundtrip; `WatchHandoffWriteError` classification (storage-unavailable vs. quota-exceeded); read-path `SecurityError` coverage; retry reclassification across the same key; Firefox `NS_ERROR_DOM_QUOTA_REACHED` detection (the Firefox DOMException name that Chromium's `QuotaExceededError` check misses). |
 | `watch-lab-href.test.ts` | URL composer: `?from=watch&entry=…` token encoding invariants. |
+| `watch-handoff-url.test.ts` | `isWatchHandoffBoot()` predicate in `src/watch-lab-handoff/watch-handoff-url.ts` — the single source of truth that gates both Lab's pending-handoff boot (`_hasPendingWatchHandoff`) and the onboarding-overlay suppression (`isOnboardingEligible`). Pins the accepted query-flag shapes and the one-call-per-load contract before the URL consume path scrubs the flag. |
 
 #### Seed Shape (`tests/unit/`)
 
@@ -1013,12 +1014,22 @@ The Watch→Lab entry is a read-only-review-to-editable-scene handoff: Watch pro
 
 | File | Purpose |
 |------|---------|
-| `watch-lab-entry-control.test.tsx` | Split-button React test for the "Open in Lab" control. Enforces the click-ownership contract (plain anchor vs. menuitem paths do not double-fire). |
-| `watch-lab-entry-new-tab.test.tsx` | `target=_blank` behavior on both surfaces. |
+| `watch-lab-entry-control.test.tsx` | 21 cases. React test for the Watch→Lab entry control's current shape: a single accent-filled primary pill (`LAB_ENTRY_PRIMARY_LABEL` = *"Interact From Here"*) plus a caret (`LAB_ENTRY_CARET_LABEL`) that toggles a disclosure popover containing the secondary option (`LAB_ENTRY_SECONDARY_TITLE` = *"Open a Fresh Lab"*). Secondary is accessed via `.watch-lab-entry__caret` click + `LAB_ENTRY_SECONDARY_TITLE` title lookup — there are no "Open Lab" / "Continue" text queries. Asserts **disclosure semantics, not menu semantics**: caret carries `aria-haspopup="true"` and the popover is `role="group"` with `aria-label` derived from `LAB_ENTRY_CARET_LABEL`; neither `role="menu"` nor `role="menuitem"` appears anywhere. Also pins hover-tooltip ↔ popover mutual exclusion (`data-menu-open="true"` gate) and the disabled-primary reason copy via `LAB_ENTRY_PRIMARY_DISABLED_REASON`. Enforces the click-ownership contract (primary anchor vs. secondary anchor paths do not double-fire). |
+| `watch-lab-entry-new-tab.test.tsx` | 4 cases. `target=_blank` behavior on both surfaces (primary pill + disclosure-secondary anchor). Secondary access follows the same caret-open-then-query pattern. |
 | `watch-lab-entry-gate.test.ts` | P1 seed-identity cache invalidation (cache must flush when the underlying seed changes) + P2 fail-closed click (click path refuses to navigate when the seed build fails rather than leaking a stale href). |
 | `watch-lab-entry-href-cache.test.ts` | Cache + debounce contract: href is memoized per seed identity and recomputation is debounced across rapid state changes. The identity tuple includes a quantized `cameraIdentity` (`POSITION_Q = 0.01`, `FOV_Q = 0.5`) alongside the other four components; cache hits require ALL 5 identity components to match, and the click path re-reads live camera and purges stale tokens via `removeWatchToLabHandoff` on miss. |
 | `watch-lab-entry-write-failure.test.ts` | Storage-unavailable vs. quota-exceeded copy surfacing — the two `WatchHandoffWriteError` classes must render distinct user-facing strings. |
 | `watch-lab-toast-aria.test.tsx` | ARIA contract on both toast surfaces (live-region + role). |
+
+#### Atom-Interaction Hint (`tests/unit/`)
+
+| File | Purpose |
+|------|---------|
+| `hint-target.test.ts` | Target-atom selection for the Lab "Drag any atom to start" floating bubble. Pins the 2D convex-hull + centermost-pick algorithm (picks a stable referent atom so the bubble does not jitter between frames) and the camera-projection inputs. Tail-less design is assumed — the test does not assert a tail geometry. |
+
+##### Coverage Gap: Primary-Tooltip Auto-Cue Milestone Hook
+
+The Watch primary tooltip ("Interact From Here") fires a 5-second 1-3-1 auto-cue animation on two timeline milestones (50% and 100%) at most once per file each. The semantics — once-per-file (resets on `fileIdentity` change), arm-then-fire (milestone must be observed with `currentTimePs < threshold` before it can fire; deep-links that resume past a threshold do NOT cue), and paused-seek coalescing (a 10%→95% scrub while paused fires the end cue only) — all live in `watch/js/hooks/use-timeline-milestone-tokens.ts`. **This hook is currently not unit-tested.** Future coverage should exercise: file-identity reset, arm-before-fire gating, end-first coalescing of simultaneous milestones, and the reduced-motion CSS-var collapse. The shared lower-level primitive `src/ui/use-timed-cue.ts` (`useTimedCue({ triggerToken, durationMs })`) is likewise a candidate for coverage.
 
 #### Playback + Document Helpers (`tests/unit/`)
 
@@ -1061,7 +1072,7 @@ The Watch→Lab entry is a read-only-review-to-editable-scene handoff: Watch pro
 
 | File | Tests | What it validates |
 |------|------:|-------------------|
-| `watch-lab-entry.spec.ts` | 12 | Full Watch→Lab entry contract, including the two regression-lock invariants and the camera-continuity spec documented below. |
+| `watch-lab-entry.spec.ts` | 12 | Full Watch→Lab entry contract, including the two regression-lock invariants and the camera-continuity spec documented below. The secondary anchor is a disclosure popover entry; specs that need it first click the caret (`await page.locator('.watch-lab-entry__caret').click()`) and then resolve the option inside `.watch-lab-entry__secondary`. |
 
 Fixtures: `tests/e2e/fixtures/watch-two-atom.json` (full-history) and `tests/e2e/fixtures/watch-capsule-bug-repro.json` (capsule). The capsule fixture is the creative-seed variant that reproduced the original hydrate regression and is retained specifically to guard against re-introduction.
 
@@ -1069,18 +1080,18 @@ Test hooks: `_watchOpenFile(text, name)`, `_watchScrub(timePs)`, and `_getWatchC
 
 Covered cases:
 
-1. **Plain "Open in Lab" anchor targets `/lab/`** — baseline anchor wiring.
+1. **Primary "Interact From Here" anchor targets `/lab/`** — baseline anchor wiring for the accent-filled primary pill. The secondary ("Open a Fresh Lab") anchor is reached through the caret-disclosure popover (`.watch-lab-entry__caret` → `.watch-lab-entry__secondary`) and is asserted the same way.
 2. **Stale handoff → toast + URL scrubbed + ARIA** — stale `?entry=…` token produces the recovery toast, the URL is scrubbed so reload does not re-trigger it, and the toast has correct ARIA.
 3. **Missing-entry → distinct "no longer available" toast** — the missing-entry path must use a different string than the stale path (users can tell them apart).
 4. **Malformed handoff → silent (console.warn only)** — garbage tokens do not pop a toast; they log and fall through to a clean default boot.
-5. **"Continue" menuitem enabled as `<a>` for multi-frame fixture** — the Continue menuitem (formerly "From this frame" / "Remix") is a real anchor (not a button) so middle-click / cmd-click produce the expected OS behavior.
+5. **"Interact From Here" primary enabled as `<a>` for multi-frame fixture** — the primary CTA is a real anchor (not a button) so middle-click / cmd-click produce the expected OS behavior. The disclosure-secondary "Open a Fresh Lab" is likewise a real `<a>` inside the popover (accessed after the caret-open step).
 6. **Happy path full-history** — load → scrub → click → Lab hydrates the handoff scene (atom count > 0, handoff query param consumed).
 7. **Pending-handoff stale-token fallback** — when the token is stale at boot, the fallback path loads the default scene (user is never stranded on a blank canvas).
 8. **Pending-handoff boot NEVER renders default C60 (no flash)** — regression-lock. Polls `atomCount` every 50ms through boot and asserts no sample ever equals 60 (the default-C60 size). Catches any transient render of the default scene between token consume and seed apply; even a single flashed frame of the wrong scene would fail this.
 9. **Worker init race regression** — regression-lock. After the handoff query param is scrubbed (hydrate committed), polls `atomCount` for 2s and asserts it stays at the seed count. Catches the class of bug where a late worker init message reverts the hydrated scene back to the default.
 10. **Happy path capsule (approximated-velocities variant)** — capsule bug-repro fixture; scene must stay stable for 500ms post-commit (no late mutation).
 11. **No `?from=watch` → silent normal boot** — the Lab entry surface must be inert when the query flag is absent.
-12. **Camera continuity Watch→Lab** — uses `_getWatchCameraSnapshot` (gated `?e2e=1`) and `_getLabCameraSnapshot` (unconditional) to assert that the Lab orbit pose after hydrate matches the Watch pose at Continue-click time within the quantization tolerance. Guards the `applyOrbitCameraSnapshot` path (cancels animation, sets camera + target + up, updates projection matrix if FOV changed, recomputes focus distance) and the live camera re-read on the click path.
+12. **Camera continuity Watch→Lab** — uses `_getWatchCameraSnapshot` (gated `?e2e=1`) and `_getLabCameraSnapshot` (unconditional) to assert that the Lab orbit pose after hydrate matches the Watch pose at the moment the primary "Interact From Here" pill was clicked, within the quantization tolerance. Guards the `applyOrbitCameraSnapshot` path (cancels animation, sets camera + target + up, updates projection matrix if FOV changed, recomputes focus distance) and the live camera re-read on the click path.
 
 ##### Regression-Lock Invariants (prose)
 

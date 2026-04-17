@@ -195,8 +195,8 @@ All 5 timeline interactive controls have `ActionHint` hover/focus tooltips (desk
 | Simulation (return) | "Back to the current simulation." |
 | Review (enter) | "Enter review mode at the current time." |
 | Review (disabled) | "No recorded history to review yet." |
-| Restart here | "Restart the simulation from this point." |
-| Transfer (transfer icon) | "Transfer history" (opens the Download + Share dialog) |
+| Restart here | No wrapping `ActionHint` tooltip — the label "Restart here" plus the circular-arrow icon are self-explanatory, and the older wrapping hint duplicated that signal. See Restart Affordance below |
+| Transfer (transfer icon) | "Share & Download" (opens the Download + Share dialog). A timed discoverability cue (1 s fade-in / 3 s hold / 1 s fade-out) fires 5 s after the first atom interaction (gated on `useAppStore.hasAtomInteraction`), once per page load. The cue is device-agnostic — it bypasses the `@media (hover: none)` touch-hide via `.timeline-hint--force-visible`. `TRANSFER_HINT_COPY` is exported from `lab/js/components/timeline-transfer-dialog.tsx` |
 | Clear (close icon) | "Stop recording and clear timeline history." |
 
 On touch/coarse-pointer devices, `ActionHint` tooltips are CSS-hidden. Touch discoverability relies on visible button labels and `aria-label` attributes instead.
@@ -220,6 +220,17 @@ Allowed actions in review: **Simulation** (tap in mode switch — return to curr
 **Restart**
 
 Restart uses dense restart frames recorded at 10 Hz containing pos + vel + bonds + config + boundary. Dense restart frames are preferred over sparse checkpoints because they are closer to the viewed time. The worker receives full dynamic state via a dedicated `restoreState` command. History is truncated after the restart point to maintain a monotonic timeline. Interaction state is NOT restored (prevents ghost spring forces).
+
+**Restart affordance (review mode):** A single pill `.timeline-restart-button` with a circular-arrow icon, the label **"Restart here"**, accent fill, and a downward pointer. There is no wrapping `ActionHint` tooltip — the earlier wrapping hint was a duplicate of the visible label and was removed.
+
+The DOM is deliberately **two elements**:
+
+- `<span class="timeline-restart-anchor">` owns positioning + centering along the track
+- `<button class="timeline-restart-button">` owns interaction + hover transform
+
+Separating centering and hover transforms prevents one from stomping the other. The two-element contract is regression-locked by `tests/unit/timeline-bar-lifecycle.test.tsx` — any structural change must update that spec deliberately.
+
+The downward pointer supports **skewed triangles** via a CSS `clip-path` polygon: the base stays on the pill's straight-bottom segment while the tip tracks the marker along the track via the `--tail-skew` CSS var. All geometry is derived from measured pill dimensions + CSS-var pointer base width — there are no hard-coded pixel constants in the clamp logic.
 
 **Recording Policy**
 
@@ -364,7 +375,11 @@ Placement commit does not change `lastFocusedMoleculeId` or retarget the camera.
 
 **Object View controls** (positioned below status block): Center (frame focused molecule) and Follow (continuous tracking) buttons with inline SVG icons. Help is available via Settings > Controls.
 
-**Onboarding:** A welcome overlay appears on each page load when the scene is ready. Dismisses on any tap with a sink animation toward the Settings button, teaching that guidance lives in Settings.
+**Onboarding:** A welcome overlay ("Atom Simulation Studio" card) appears on each page load when the scene is ready. Dismisses on any tap with a sink animation toward the Settings button, teaching that guidance lives in Settings.
+
+**Handoff-boot suppression.** On Watch → Lab handoff boots, the onboarding overlay is suppressed at module load: `lab/js/main.ts` runs `if (isWatchHandoffBoot()) markOnboardingDismissed();`, writing the `atomdojo.onboardingDismissed` session-storage sentinel before the consume path scrubs the URL. The shared predicate `isWatchHandoffBoot()` (in `src/watch-lab-handoff/watch-handoff-url.ts`) is the single source of truth for both the boot gate (`_hasPendingWatchHandoff`) and the onboarding gate (`isOnboardingEligible`).
+
+**Atom-interaction hint:** Before the user drags any atom, a floating bubble reading **"Drag any atom to start"** points at a target atom chosen via 2D convex-hull + centermost pick. The bubble has no tail — the tail design was removed earlier because bubble proximity alone conveys the referent. The hint dismisses on the first atom interaction (`markAtomInteractionStarted` in dispatch) and is suppressed on Watch → Lab handoff boots via the same `isWatchHandoffBoot()` predicate + `atomdojo.onboardingDismissed` session-storage sentinel used by the onboarding overlay.
 
 **Free-Look Mode** *(advanced, gated off by default — `CONFIG.camera.freeLookEnabled = false`)*
 
@@ -541,7 +556,7 @@ Once a valid file loads, the app presents:
 | Canvas | Three.js scene (same renderer as lab, via thin adapter: `initForPlayback` + `updateReviewFrame`) |
 | Top bar | File-kind badge + file name + "Open File" action + share-code input (see Remote Open via Share Code above) |
 | Bonded-groups panel | Two-tier expand (large/small clusters) with hover preview, Center/Follow buttons, and authored color editing (see Color Editing below) |
-| Bottom-chrome toolbar | Left cluster hosts the top-bar identity; right cluster stacks the Lab entry capsule (Open Lab \| **Continue**) above the Cinematic Camera pill. See Watch → Lab Entry Funnel below |
+| Bottom-chrome toolbar | Left cluster hosts the top-bar identity; right cluster stacks the Lab entry capsule (primary **"Interact From Here"** pill + caret disclosure) above the Cinematic Camera pill. See Watch → Lab Entry Funnel below |
 | Timeline | Custom scrub track (thick variant from shared `timeline-track.css`) with pointer-event scrubbing and time readouts at both ends |
 | Playback dock | Transport cluster + utility cluster (repeat, smooth toggle, speed) + settings button (see Playback Dock below) |
 | Settings sheet | Smooth Playback, Appearance, File Info, Help sections (see Settings below) |
@@ -680,46 +695,88 @@ When an experimental method cannot run for a specific bracket, the runtime falls
 
 ### Watch → Lab Entry Funnel
 
-Watch exposes two paths into Lab from a loaded document: **Open Lab** (open Lab with its default scene) and **Continue** (mint a handoff seeded from the current playback frame — including the live orbit-camera pose and authored color edits — and hydrate Lab from it). Both open in a new tab so the Watch session is preserved.
+Watch exposes two paths into Lab from a loaded document: **"Interact From Here"** (mint a handoff seeded from the current playback frame — including the live orbit-camera pose and authored color edits — and hydrate Lab from it) and **"Open a Fresh Lab"** (open Lab with its default starting molecule, no handoff). Both open in a new tab so the Watch session is preserved.
 
-The "Continue" button replaces the older **Remix** / **From this frame** split-button caret menu prose. There is now a single primary action on the right half of the capsule; no caret, no dropdown, no split-button menu.
+The control is a **single primary pill with a caret-toggled disclosure popover**. It replaces the earlier split-button / dual-half capsule design. The primary CTA carries continuation — the secondary option is tucked behind the caret to reduce visual noise without hiding the escape hatch.
 
 **UI surfaces (right cluster of bottom-chrome toolbar):**
 
 | Surface | Details |
 |---------|---------|
-| `WatchLabEntryControl` | Two-half capsule: **Open Lab** (left, ghost surface, static `/lab/` href) and **Continue** (right, filled accent, routes the current frame into a seeded Lab tab). A CSS-only hover tooltip ("Continue this frame in Lab") appears above the Continue half while the pointer / keyboard focus is on it, and disappears the moment the pointer leaves or focus moves away — no timer, no auto-dismiss. Hidden on coarse pointers (touch) since there is no reliable hover state there. On hover, Watch also snaps playback to the displayed frame so the frame that will be minted matches what the user sees |
+| `WatchLabEntryControl` primary pill | Accent-filled pill labeled **"Interact From Here"** (class `.watch-lab-entry__primary`). Routes the current frame into a seeded Lab tab |
+| Caret toggle | A `▼` button adjacent to the primary pill with `aria-haspopup="true"` and `aria-expanded` tracking the popover state. Does NOT navigate on its own — its only job is to toggle the disclosure popover |
+| Disclosure popover | Opens **above** the capsule (never below) at every viewport so it cannot overlap the Cinematic Camera toggle, the timeline, or the dock. Uses **disclosure semantics**, not menu: `role="group"` with `aria-label="More ways to open Lab"`. There is no `role="menu"` / `role="menuitem"` anywhere on the control. Styling uses `--color-surface` / `--color-border` / `--glass-blur` tokens — consistent with the `.watch-open-panel` pattern (neutral surface, not accent-tinted glass) |
+| Secondary entry | Single anchor inside the popover (class `.watch-lab-entry__secondary`): title **"Open a Fresh Lab"**, description *"Starts with a default molecule. Build and experiment from there."* |
+
+**Primary tooltip + auto-cue:**
+
+A hover/focus tooltip (class `.watch-lab-entry__tooltip`) accompanies the primary pill. Copy lives as a module-local `const` inside `WatchLabEntryControl.tsx` (not exported):
+
+> *"Take over from this exact frame. Drag atoms and watch the physics react."*
+
+Two sentences, no em-dash. Renders via `:hover` / `:focus-visible` on the primary anchor, detected through a `:has()` selector on the outer `.watch-lab-entry`.
+
+**Mutual exclusion with the popover.** While the popover is open, React writes `data-menu-open="true"` on `.watch-lab-entry`; a CSS `:has(…)` rule suppresses the tooltip so users don't see both surfaces stacked. Hover + popover-open is unreachable by design.
+
+**Auto-cue timing (1-3-1).** The tooltip also auto-fires on two timeline milestones, at most once per loaded file:
+
+1. **50 %** — halfway through the timeline
+2. **100 %** — at timeline end
+
+Each firing plays a 5-second 1-3-1 animation (1 s fade-in, 3 s hold, 1 s fade-out). Semantics encoded in `watch/js/hooks/use-timeline-milestone-tokens.ts`:
+
+- **Once per file, not once per session.** The fired-state resets on `fileIdentity` change (new file, re-open)
+- **Arm-then-fire.** Each milestone must be observed with `currentTimePs < threshold` at least once before it can fire. A deep-linked share code that resumes at 80 % does NOT flash both cues at mount
+- **Paused-seek coalescing.** At most ONE milestone fires per effect run, end-first. A paused scrub from 10 % → 95 % fires the end cue only — the halfway cue is skipped (the user's intent is "skip to end", not "pass through halfway")
+- **Reduced-motion.** Opacity phases are kept; `--cue-y` and `--cue-s` CSS vars zero out so translate + scale collapse
+- **Screen-reader announcer.** A hidden sibling with `aria-live="polite"` re-emits *"${primaryLabel}. ${tooltipCopy}"* on each firing
+
+The prior timeline-triggered discovery hint runtime (`watch-lab-discovery.ts`) has been removed; its responsibilities are split between the tooltip reveal (hover/focus) and the milestone auto-cue above.
+
+**Shared hooks:**
+
+| Hook | Location | Role |
+|------|----------|------|
+| `useTimedCue({ triggerToken, durationMs })` | `src/ui/use-timed-cue.ts` | Generic baseline-on-first-observation + duration-timer primitive. Returns `{ active, animKey }`. `animKey` is used as a React key so the tooltip re-mounts (and restarts its CSS animation) on every firing |
+| `useTimelineMilestoneTokens(snapshot)` | `watch/js/hooks/use-timeline-milestone-tokens.ts` | Encapsulates the file-reset / arm-before-fire / paused-seek-coalesce rules and produces a single numeric `triggerToken` that flips when a cue should fire |
+
+The Lab-side `TransferTrigger` (Share & Download) does **not** consume `useTimedCue` because its trigger shape (boolean event + 5 s-delay-then-show) differs from Watch's (token-change + immediate-show).
 
 **Click-ownership contract (most-likely-to-regress invariant):**
 
-The capsule has two distinct halves with distinct owners; duplicating ownership between them produces a double-tab regression. The contract is enforced at the component boundary and is documented on the `WatchLabEntryControlProps` docstring in `watch/js/components/WatchLabEntryControl.tsx`.
+The primary pill and the secondary anchor have distinct owners; duplicating ownership between them produces a double-tab regression. The contract is enforced at the component boundary and is documented on the `WatchLabEntryControlProps` docstring in `watch/js/components/WatchLabEntryControl.tsx`.
 
 | Path | Owner | Behavior |
 |------|-------|----------|
-| Open Lab anchor (plain click) | **Native anchor** | `target="_blank" rel="noopener noreferrer"` is the sole navigation. `WatchApp` intentionally does NOT wire an `onOpenPlainLab` handler — a controller nav call here would collide with the browser's anchor-default and open two tabs |
-| Open Lab anchor (modifier / middle / right click) | **Native anchor** | Browser handles it (new tab, new window, context menu) using the static `labHref` |
-| Continue (plain click) | **Controller** | Calls `event.preventDefault()` and invokes `controller.openLabFromCurrentFrame()`, which re-reads the live orbit camera, mints a fresh token, and navigates via `window.open()` |
-| Continue (modifier / middle click) | **Native anchor** | Passes through to the native anchor using the controller's cached `labCurrentFrameHref`. The cache is keyed by a 5-component identity (see `buildCurrentFrameLabHref()` below), so a camera-only change between hover and click still forces a re-mint |
+| Primary pill (plain click) | **Controller** | Calls `event.preventDefault()` and invokes `controller.openLabFromCurrentFrame()`, which re-reads the live orbit camera, mints a fresh token, and navigates via `window.open()` |
+| Primary pill (modifier / middle click) | **Native anchor** | Passes through to the native anchor using the controller's cached `labCurrentFrameHref`. The cache is keyed by a 5-component identity (see `buildCurrentFrameLabHref()` below), so a camera-only change between hover and click still forces a re-mint |
+| Secondary anchor (plain click) | **Native anchor** | `target="_blank" rel="noopener noreferrer"` is the sole navigation. `WatchApp` intentionally does NOT wire an `onOpenFreshLab` handler — a controller nav call here would collide with the browser's anchor-default and open two tabs |
+| Secondary anchor (modifier / middle / right click) | **Native anchor** | Browser handles it (new tab, new window, context menu) using the static `labHref` |
+| Caret toggle | **React state** | Toggles popover open/closed. Never navigates |
+
+Both primary and secondary anchors carry `target="_blank"` — the new-tab invariant is preserved across the redesign.
 
 **Controller methods** (in `watch/js/watch-controller.ts`, consumed by `WatchApp`):
 
 | Method | Purpose |
 |--------|---------|
-| `openLab()` | Programmatic new-tab nav to plain `/lab/`. Not wired to the Open Lab anchor — reserved for non-capsule callers |
-| `openLabFromCurrentFrame()` | Primary Continue-click handler. Re-reads the live orbit camera via `projectCurrentFrameHref`, mints a token, writes the handoff, opens `/lab/?from=watch&handoff=<token>` in a new tab. **Fails closed**: on handoff-write failure, surfaces a mode-specific error via `setErrorKeepingCurrentState` rather than falling back to plain Lab — a silent fallback would produce the wrong scene in the new tab |
-| `buildLabHref()` | Returns the static `/lab/` URL (for `labHref`) |
-| `buildCurrentFrameLabHref()` | Returns a cached minted URL for Continue. Cache key is a **5-component identity**: document + display-frame + topology-frame + restart-frame + quantized orbit camera. The `cameraIdentity` is a quantized `(position, target, fovDeg)` string with `POSITION_Q = 0.01 Å` and `FOV_Q = 0.5°`, so tiny damping drift does not thrash the cache. A miss on any component purges the stale token via `removeWatchToLabHandoff(token)` before re-minting. Passes `getColorAssignments` and `getOrbitCameraSnapshot` into the seed builder |
+| `openLab()` | Programmatic new-tab nav to plain `/lab/`. Not wired to the secondary anchor — reserved for non-capsule callers |
+| `openLabFromCurrentFrame()` | Primary handler for the "Interact From Here" pill. Re-reads the live orbit camera via `projectCurrentFrameHref`, mints a token, writes the handoff, opens `/lab/?from=watch&handoff=<token>` in a new tab. **Fails closed**: on handoff-write failure, surfaces a mode-specific error via `setErrorKeepingCurrentState` rather than falling back to plain Lab — a silent fallback would produce the wrong scene in the new tab |
+| `buildLabHref()` | Returns the static `/lab/` URL (used as the secondary anchor's `href`) |
+| `buildCurrentFrameLabHref()` | Returns a cached minted URL for the primary pill. Cache key is a **5-component identity**: document + display-frame + topology-frame + restart-frame + quantized orbit camera. The `cameraIdentity` is a quantized `(position, target, fovDeg)` string with `POSITION_Q = 0.01 Å` and `FOV_Q = 0.5°`, so tiny damping drift does not thrash the cache. A miss on any component purges the stale token via `removeWatchToLabHandoff(token)` before re-minting. Passes `getColorAssignments` and `getOrbitCameraSnapshot` into the seed builder |
+
+The two controller APIs (`openLabFromCurrentFrame`, `buildCurrentFrameLabHref`) still honor the same contracts as before the UI redesign — the visual shell changed; the seed-minting surface did not.
 
 **Controller snapshot fields** (what React reads via `useSyncExternalStore`):
 
 | Field | Meaning |
 |-------|---------|
 | `labEntryEnabled` | True when Lab can be opened at all (document loaded and not in an error state) |
-| `labHref` | Static `/lab/` URL — passed directly to the primary anchor's `href` |
-| `labCurrentFrameAvailable` | True when the current frame is seedable (see Seed Extraction below). Drives whether the Continue half of the capsule is enabled |
-| `labCurrentFrameHref` | Cached minted URL (or null). Passed to the Continue anchor so modifier/middle clicks land on the correct minted URL |
+| `labHref` | Static `/lab/` URL — passed to the secondary anchor's `href` |
+| `labCurrentFrameAvailable` | True when the current frame is seedable (see Seed Extraction below). Drives whether the primary pill is enabled |
+| `labCurrentFrameHref` | Cached minted URL (or null). Passed to the primary anchor so modifier/middle clicks land on the correct minted URL |
 
-**Seed extraction (what Continue mints):**
+**Seed extraction (what the primary pill mints):**
 
 `watch/js/watch-lab-seed.ts` builds the Lab scene seed from the current playback frame:
 
@@ -739,7 +796,7 @@ Motion-state is the preferred term over "momentum" (per-atom mass is not tracked
 
 **Handoff writer (`watch/js/watch-lab-handoff.ts`):**
 
-The writer persists the minted seed to `localStorage` under `atomdojo.watchLabHandoff:<token>` with a 10-minute TTL. A pre-write sweep removes expired entries so orphan accumulation is bounded regardless of how many Continue clicks a user fires off. Lab's reader (documented in `architecture.md`) always scrubs the URL token whether or not hydration succeeds.
+The writer persists the minted seed to `localStorage` under `atomdojo.watchLabHandoff:<token>` with a 10-minute TTL. A pre-write sweep removes expired entries so orphan accumulation is bounded regardless of how many handoff mints a user fires off. Lab's reader (documented in `architecture.md`) always scrubs the URL token whether or not hydration succeeds.
 
 Every storage-touching operation (iteration during the sweep, the `setItem` write, and the post-quota retry) classifies failures into a `WatchHandoffWriteError` with one of two kinds:
 
@@ -770,15 +827,11 @@ This lives in `lab/js/main.ts` and is the canonical record for E2E/diagnostic as
 
 All three are optional at validate time — legacy tokens (no camera, empty colorAssignments, 2-field provenance) are accepted by `isValidSeed`/`isValidPayload` with sensible defaults applied in the normalizer.
 
-**Continue-button hover tooltip + snap-to-frame:**
+**Snap-to-frame on hover/focus:**
 
-The earlier timeline-triggered discovery hint runtime (`watch-lab-discovery.ts`, fired at 50% and 95% of playback) has been removed. Discoverability is now carried entirely by a CSS-only hover tooltip attached to the Continue half of `WatchLabEntryControl`:
+On hover or keyboard focus of the primary pill, Watch snaps playback to the nearest dense frame so the scene the user sees matches exactly what the pill will mint. There is no interpolation ambiguity at mint time. Snap-to-frame is gated off on coarse pointers (no reliable hover on touch); the `aria-label` still conveys the action to assistive tech on those devices.
 
-- **Reveal trigger** — `:hover` OR `:focus-visible` on the primary anchor, detected via a `:has()` selector on the outer `.watch-lab-entry-anchor`. No JS state, no timers
-- **Copy** — "Continue this frame in Lab" (same as the button's accessible name / `aria-describedby` target)
-- **Lifetime** — stays visible for as long as the pointer or focus holds. Fades out the moment either leaves
-- **Snap-to-frame** — on hover/focus, playback snaps to the nearest dense frame so the scene the user sees matches exactly what Continue will mint. There is no interpolation ambiguity at mint time
-- **Coarse pointer** — hidden (no reliable hover on touch). The button's `aria-label` still conveys the action to assistive tech
+**CSS class inventory (E2E-stable):** `.watch-lab-entry`, `.watch-lab-entry__primary`, `.watch-lab-entry__secondary`, `.watch-lab-entry__tooltip`, `.watch-lab-entry__caret`. The prior `.watch-lab-entry__menu-item` / `.watch-lab-entry__menu-item-title` classes were merged into the secondary classes and are no longer emitted.
 
 **E2E observability hooks:**
 
@@ -790,6 +843,15 @@ Two camera-snapshot helpers are exposed for camera-continuity specs in `tests/e2
 | `window._getLabCameraSnapshot()` | `lab/js/main.ts` | Unconditional — the Lab tab opened from Watch has no `?e2e` param, so the hook must be available by default |
 
 Both return the live orbit-camera pose (`position`, `target`, `up`, `fovDeg`) in the same `WatchLabOrbitCamera` shape that travels on the seed, so specs can assert round-trip fidelity directly.
+
+**Accessing the secondary anchor in specs.** Because "Open a Fresh Lab" now lives inside a caret-toggled popover, E2E specs must click the caret first before interacting with the secondary anchor:
+
+```ts
+await page.locator('.watch-lab-entry__caret').click();
+await page.locator('.watch-lab-entry__secondary').click({ modifiers: ['Meta'] });
+```
+
+This replaces the older pattern of clicking a visible left-half anchor directly.
 
 **Lab-side hydrate transaction** (summarized here; full detail in `architecture.md`):
 

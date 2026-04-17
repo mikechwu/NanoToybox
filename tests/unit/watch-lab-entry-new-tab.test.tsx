@@ -23,12 +23,17 @@
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { WatchLabEntryControl } from '../../watch/js/components/WatchLabEntryControl';
+import {
+  WatchLabEntryControl,
+  LAB_ENTRY_PRIMARY_LABEL,
+  LAB_ENTRY_SECONDARY_TITLE,
+  LAB_ENTRY_CARET_LABEL,
+} from '../../watch/js/components/WatchLabEntryControl';
 
 afterEach(cleanup);
 
-describe('WatchLabEntryControl — new-tab navigation markup (paired-actions panel)', () => {
-  it('secondary "Open Lab" anchor carries target="_blank" and rel="noopener noreferrer"', () => {
+describe('WatchLabEntryControl — new-tab navigation markup', () => {
+  it(`secondary "${LAB_ENTRY_SECONDARY_TITLE}" anchor (in caret menu) carries target="_blank" + rel`, () => {
     render(
       <WatchLabEntryControl
         enabled
@@ -39,14 +44,16 @@ describe('WatchLabEntryControl — new-tab navigation markup (paired-actions pan
         onOpenCurrentFrameLab={vi.fn()}
       />,
     );
-    const anchor = screen.getByText('Open Lab').closest('a')!;
+    // Secondary lives inside the caret-toggled menu — open it first.
+    fireEvent.click(screen.getByRole('button', { name: LAB_ENTRY_CARET_LABEL }));
+    const anchor = screen.getByText(LAB_ENTRY_SECONDARY_TITLE).closest('a')!;
     expect(anchor.getAttribute('target')).toBe('_blank');
     const rel = (anchor.getAttribute('rel') ?? '').split(/\s+/);
     expect(rel).toContain('noopener');
     expect(rel).toContain('noreferrer');
   });
 
-  it('primary "Continue this frame in Lab" anchor also carries target="_blank" + rel when seedable', () => {
+  it(`primary "${LAB_ENTRY_PRIMARY_LABEL}" anchor also carries target="_blank" + rel when seedable`, () => {
     render(
       <WatchLabEntryControl
         enabled
@@ -57,10 +64,7 @@ describe('WatchLabEntryControl — new-tab navigation markup (paired-actions pan
         onOpenCurrentFrameLab={vi.fn()}
       />,
     );
-    // Primary renders as an anchor when the frame is seedable.
-    // Accessible name carries the full "Continue this frame in Lab";
-    // visible text is the compact "Continue".
-    const primary = screen.getByLabelText(/continue this frame in lab/i).closest('a')!;
+    const primary = screen.getByLabelText(LAB_ENTRY_PRIMARY_LABEL).closest('a')!;
     expect(primary.getAttribute('target')).toBe('_blank');
     const rel = (primary.getAttribute('rel') ?? '').split(/\s+/);
     expect(rel).toContain('noopener');

@@ -37,7 +37,6 @@ export interface InteractionDispatchDeps {
   getRenderer: () => Renderer;
   getStateMachine: () => StateMachine;
   getInputManager: () => InputManager | null;
-  getStatusCtrl: () => { fadeHint: () => void } | null;
   isWorkerActive: () => boolean;
   sendWorkerInteraction: (cmd: WorkerInteractionCommand) => void;
   /** Arm timeline recording on first atom interaction. Called unconditionally
@@ -57,7 +56,6 @@ export function createInteractionDispatch(deps: InteractionDispatchDeps) {
       renderer: deps.getRenderer(),
       stateMachine: deps.getStateMachine(),
       inputManager: im,
-      fadeHint: () => { const sc = deps.getStatusCtrl(); if (sc) sc.fadeHint(); },
       updateStatus: deps.updateStatus,
       updateSceneStatus: deps.updateSceneStatus,
       focusMoleculeForAtom: (atomIdx: number) => {

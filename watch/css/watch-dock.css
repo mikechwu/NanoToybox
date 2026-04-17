@@ -34,12 +34,37 @@
   --watch-dock-utility-gap: 2px;
   --watch-dock-speed-slider-w: 84px;
   --watch-dock-speed-label-min-w: 32px;
+
+  /* ──────────────────────────────────────────────────────────────
+     Toolbar / dock horizontal alignment tokens.
+
+     `--watch-bar-inset`
+       Horizontal inner inset shared by the main dock (`.watch-dock-bar`)
+       and the toolbar (`.watch-toolbar`). Keeps their outer edges flush
+       so the toolbar clusters align underneath the dock's inner content
+       boundary. Responsive: 12 px on phone (matches the dock's own
+       phone padding), 0 on tablet/desktop (pill edge is the boundary).
+
+     `--watch-edge-gap`
+       Single parameter that controls the distance between a pinned
+       toolbar cluster and the nearest dock boundary:
+         · Open Lab ▸ Continue capsule → gap from LEFT boundary
+         · Cinematic Camera toggle     → gap from LEFT boundary
+         · Capsule file-identity chip  → gap from RIGHT boundary
+       Change this ONE value to re-tune all three spacings in lockstep
+       without touching any component. Device-agnostic.
+     ────────────────────────────────────────────────────────────── */
+  --watch-bar-inset: 12px;
+  --watch-edge-gap: 8px;
 }
 @media (min-width: 480px) {
   .watch-workspace {
     --dock-slot-action: 56px;
     --watch-dock-speed-slider-w: 100px;
     --watch-dock-speed-label-min-w: 36px;
+    /* Tablet/desktop: dock has `padding: 0` (pill edge = content edge),
+       so the toolbar must also drop to 0 to stay flush. */
+    --watch-bar-inset: 0;
   }
 }
 @media (min-width: 768px) {
@@ -88,18 +113,17 @@
 .watch-dock-bar {
   grid-template-columns: minmax(0, 1fr) minmax(0, auto) var(--dock-slot-action, 56px);
   overflow: hidden;
-  /* Symmetric horizontal gutter on phone so "room left of Back"
-     equals "room right of Settings". The transport cluster below
-     uses `justify-self: start` so its left edge sits flush against
-     this padding, and Settings (fixed right column) sits flush
-     against the right padding. Tablet/desktop restore zero padding
-     (the pill radius takes over) in the 480 px media query below. */
-  padding: 0 12px;
-}
-@media (min-width: 480px) {
-  .watch-dock-bar {
-    padding: 0;
-  }
+  /* Symmetric horizontal inset, shared with the toolbar so the
+     two bars' inner content boundaries coincide. The transport
+     cluster below uses `justify-self: start` so its left edge sits
+     flush against this inset, and Settings (fixed right column)
+     sits flush against the right inset.
+
+     Driven by `--watch-bar-inset` — set once on `.watch-workspace`
+     (watch-dock.css) and responsive there (12 px phone, 0 on
+     tablet/desktop). Same variable is consumed by `.watch-toolbar`
+     so both bars align as a single vertical stack. */
+  padding: 0 var(--watch-bar-inset, 12px);
 }
 
 /* Transport cluster: fixed-width 4-column grid (Back, Play, Fwd, Repeat).

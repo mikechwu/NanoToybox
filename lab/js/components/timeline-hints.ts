@@ -11,7 +11,9 @@ export const TIMELINE_HINTS = {
   returnToSimulation: 'Back to the current simulation.',
   enterReview: 'Enter review mode at the current time.',
   enterReviewDisabled: 'No recorded history to review yet.',
-  restartFromHere: 'Restart the simulation from this point.',
+  // `restartFromHere` was removed — the Restart-here pill is its own
+  // affordance (icon + filled-accent label); a wrapping hover tooltip
+  // was a duplicate second hint with the same wording and is gone.
   clearHistory: 'Stop recording and clear timeline history.',
   exportHistory: 'Export timeline history.',
 } as const;

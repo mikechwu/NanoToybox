@@ -6,7 +6,13 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 
 afterEach(cleanup);
-import { WatchLabEntryControl } from '../../watch/js/components/WatchLabEntryControl';
+import {
+  WatchLabEntryControl,
+  LAB_ENTRY_PRIMARY_LABEL,
+  LAB_ENTRY_SECONDARY_TITLE,
+  LAB_ENTRY_CARET_LABEL,
+  LAB_ENTRY_PRIMARY_DISABLED_REASON,
+} from '../../watch/js/components/WatchLabEntryControl';
 
 function makeProps(overrides: Partial<React.ComponentProps<typeof WatchLabEntryControl>> = {}) {
   return {
@@ -14,22 +20,24 @@ function makeProps(overrides: Partial<React.ComponentProps<typeof WatchLabEntryC
     currentFrameAvailable: false,
     plainLabHref: '/lab/',
     currentFrameLabHref: null,
-    // onOpenPlainLab is OPTIONAL in production (primary anchor navigates
-    // natively). Tests that want to observe the side-effect hook pass
-    // a spy via overrides; default fixture leaves it unset so the
-    // common-case assertion mirrors production wiring.
     onOpenCurrentFrameLab: vi.fn(),
     ...overrides,
   };
 }
 
-describe('WatchLabEntryControl — inline paired pills', () => {
-  it('renders both primary (accessible name "Continue this frame in Lab") and secondary "Open Lab" when enabled', () => {
+// Open the caret popover so the secondary menu item becomes queryable.
+function openMenu(): void {
+  const caret = screen.getByRole('button', { name: LAB_ENTRY_CARET_LABEL });
+  fireEvent.click(caret);
+}
+
+describe('WatchLabEntryControl — primary pill + caret menu', () => {
+  it(`renders primary "${LAB_ENTRY_PRIMARY_LABEL}" and caret toggle when enabled`, () => {
     render(<WatchLabEntryControl {...makeProps({ currentFrameAvailable: true, currentFrameLabHref: '/lab/?x=1' })} />);
-    // Primary surfaces visually as the compact label "Continue" but the
-    // accessible name is the full "Continue this frame in Lab" (via aria-label).
-    expect(screen.getByLabelText(/continue this frame in lab/i)).toBeTruthy();
-    expect(screen.getByText('Open Lab')).toBeTruthy();
+    expect(screen.getByLabelText(LAB_ENTRY_PRIMARY_LABEL)).toBeTruthy();
+    expect(screen.getByRole('button', { name: LAB_ENTRY_CARET_LABEL })).toBeTruthy();
+    // Secondary is gated behind the caret — not in DOM until menu opens.
+    expect(screen.queryByText(LAB_ENTRY_SECONDARY_TITLE)).toBeNull();
   });
 
   it('renders nothing when disabled', () => {
@@ -43,28 +51,85 @@ describe('WatchLabEntryControl — inline paired pills', () => {
     expect(group.getAttribute('aria-label')).toBe('Lab entry');
   });
 
-  // ── Secondary: "Open Lab" — anchor-native navigation ──
+  // ── Caret menu toggle ──
 
-  it('secondary anchor has the plain Lab href', () => {
-    render(<WatchLabEntryControl {...makeProps({ plainLabHref: '/preview-xyz/lab/' })} />);
-    const anchor = screen.getByText('Open Lab').closest('a')!;
-    expect(anchor.getAttribute('href')).toBe('/preview-xyz/lab/');
-    expect(anchor.getAttribute('target')).toBe('_blank');
+  it('clicking the caret reveals a disclosure popover + the secondary anchor', () => {
+    // The popover is a disclosure (`aria-haspopup="true"` + `role="group"`),
+    // NOT a menu — we deliberately don't commit to the full APG menu
+    // keyboard model for a single-item dropdown.
+    render(<WatchLabEntryControl {...makeProps({ currentFrameAvailable: true, currentFrameLabHref: '/lab/?x=1' })} />);
+    const caret = screen.getByRole('button', { name: LAB_ENTRY_CARET_LABEL });
+    expect(caret.getAttribute('aria-haspopup')).toBe('true');
+    expect(caret.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(caret);
+    expect(caret.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText(LAB_ENTRY_SECONDARY_TITLE)).toBeTruthy();
+    // The popover is labelled so SR users hear the caret's "More ways…"
+    // as the group name when they tab into the disclosed content.
+    const popover = screen.getByRole('group', { name: LAB_ENTRY_CARET_LABEL });
+    expect(popover).toBeTruthy();
+    // No `role="menu"` / `role="menuitem"` commitment.
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(screen.queryByRole('menuitem')).toBeNull();
   });
 
-  it('plain left-click on secondary: anchor-native (no preventDefault, no navigator callback required)', () => {
+  it('clicking the caret again closes the menu', () => {
+    render(<WatchLabEntryControl {...makeProps({ currentFrameAvailable: true, currentFrameLabHref: '/lab/?x=1' })} />);
+    const caret = screen.getByRole('button', { name: LAB_ENTRY_CARET_LABEL });
+    fireEvent.click(caret);
+    fireEvent.click(caret);
+    expect(caret.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText(LAB_ENTRY_SECONDARY_TITLE)).toBeNull();
+  });
+
+  it('Escape key closes the menu (focus returns to caret)', () => {
+    render(<WatchLabEntryControl {...makeProps({ currentFrameAvailable: true, currentFrameLabHref: '/lab/?x=1' })} />);
+    const caret = screen.getByRole('button', { name: LAB_ENTRY_CARET_LABEL });
+    fireEvent.click(caret);
+    expect(screen.queryByText(LAB_ENTRY_SECONDARY_TITLE)).not.toBeNull();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByText(LAB_ENTRY_SECONDARY_TITLE)).toBeNull();
+  });
+
+  it('outside-click closes the menu', () => {
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    try {
+      render(<WatchLabEntryControl {...makeProps({ currentFrameAvailable: true, currentFrameLabHref: '/lab/?x=1' })} />);
+      openMenu();
+      expect(screen.queryByText(LAB_ENTRY_SECONDARY_TITLE)).not.toBeNull();
+      fireEvent.pointerDown(outside);
+      expect(screen.queryByText(LAB_ENTRY_SECONDARY_TITLE)).toBeNull();
+    } finally {
+      document.body.removeChild(outside);
+    }
+  });
+
+  // ── Secondary ("New Empty Lab") — anchor-native navigation ──
+
+  it('secondary anchor (inside menu) has the plain Lab href', () => {
+    render(<WatchLabEntryControl {...makeProps({ plainLabHref: '/preview-xyz/lab/' })} />);
+    openMenu();
+    const anchor = screen.getByText(LAB_ENTRY_SECONDARY_TITLE).closest('a')!;
+    expect(anchor.getAttribute('href')).toBe('/preview-xyz/lab/');
+    expect(anchor.getAttribute('target')).toBe('_blank');
+    expect(anchor.getAttribute('rel')).toMatch(/noopener.*noreferrer|noreferrer.*noopener/);
+  });
+
+  it('plain left-click on secondary: anchor-native (no preventDefault)', () => {
     render(<WatchLabEntryControl {...makeProps()} />);
-    const anchor = screen.getByText('Open Lab').closest('a')!;
+    openMenu();
+    const anchor = screen.getByText(LAB_ENTRY_SECONDARY_TITLE).closest('a')!;
     const ev = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
     anchor.dispatchEvent(ev);
-    // Critical: native navigation must not be suppressed.
     expect(ev.defaultPrevented).toBe(false);
   });
 
   it('plain left-click on secondary: optional side-effect hook fires, still no preventDefault', () => {
     const onOpenPlainLab = vi.fn();
     render(<WatchLabEntryControl {...makeProps({ onOpenPlainLab })} />);
-    const anchor = screen.getByText('Open Lab').closest('a')!;
+    openMenu();
+    const anchor = screen.getByText(LAB_ENTRY_SECONDARY_TITLE).closest('a')!;
     const ev = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
     anchor.dispatchEvent(ev);
     expect(onOpenPlainLab).toHaveBeenCalledTimes(1);
@@ -74,7 +139,8 @@ describe('WatchLabEntryControl — inline paired pills', () => {
   it('⌘-click on secondary: no intercept (browser owns)', () => {
     const onOpenPlainLab = vi.fn();
     render(<WatchLabEntryControl {...makeProps({ onOpenPlainLab })} />);
-    const anchor = screen.getByText('Open Lab').closest('a')!;
+    openMenu();
+    const anchor = screen.getByText(LAB_ENTRY_SECONDARY_TITLE).closest('a')!;
     fireEvent.click(anchor, { metaKey: true, button: 0 });
     expect(onOpenPlainLab).not.toHaveBeenCalled();
   });
@@ -82,12 +148,13 @@ describe('WatchLabEntryControl — inline paired pills', () => {
   it('middle-click on secondary: no intercept', () => {
     const onOpenPlainLab = vi.fn();
     render(<WatchLabEntryControl {...makeProps({ onOpenPlainLab })} />);
-    const anchor = screen.getByText('Open Lab').closest('a')!;
+    openMenu();
+    const anchor = screen.getByText(LAB_ENTRY_SECONDARY_TITLE).closest('a')!;
     fireEvent.click(anchor, { button: 1 });
     expect(onOpenPlainLab).not.toHaveBeenCalled();
   });
 
-  // ── Primary: "Continue this frame in Lab" — controller-owned plain-click ──
+  // ── Primary ("Interact From Here") — controller-owned plain-click ──
 
   it('primary renders as ENABLED anchor with the current-frame href when frame is seedable', () => {
     render(
@@ -98,11 +165,7 @@ describe('WatchLabEntryControl — inline paired pills', () => {
         })}
       />,
     );
-    // Primary surfaces visually as "Continue" (compact) but the
-    // accessible name is "Continue this frame in Lab" (set via aria-label).
-    // Fetch via accessible-name lookup so the assertion is agnostic
-    // to the visible-vs-ARIA text split.
-    const primary = screen.getByLabelText(/continue this frame in lab/i).closest('a, button')!;
+    const primary = screen.getByLabelText(LAB_ENTRY_PRIMARY_LABEL).closest('a, button')!;
     expect(primary.tagName).toBe('A');
     expect(primary.getAttribute('href')).toBe('/lab/?from=watch&handoff=t1');
     expect(primary.getAttribute('target')).toBe('_blank');
@@ -110,23 +173,15 @@ describe('WatchLabEntryControl — inline paired pills', () => {
 
   it('primary renders as DISABLED button with tooltip reason when frame is not seedable', () => {
     render(<WatchLabEntryControl {...makeProps()} />);
-    // Primary surfaces visually as "Continue" (compact) but the
-    // accessible name is "Continue this frame in Lab" (set via aria-label).
-    // Fetch via accessible-name lookup so the assertion is agnostic
-    // to the visible-vs-ARIA text split.
-    const primary = screen.getByLabelText(/continue this frame in lab/i).closest('a, button')!;
+    const primary = screen.getByLabelText(new RegExp(LAB_ENTRY_PRIMARY_LABEL, 'i')).closest('a, button')!;
     expect(primary.tagName).toBe('BUTTON');
     expect((primary as HTMLButtonElement).disabled).toBe(true);
-    // Reason surfaces via native `title` tooltip + accessible name.
-    expect(primary.getAttribute('title')).toMatch(/can\u2019t be continued/i);
-    expect(primary.getAttribute('aria-label')).toMatch(/can\u2019t be continued/i);
+    const expectedFragment = LAB_ENTRY_PRIMARY_DISABLED_REASON.slice(0, 12); // robust to copy tweaks
+    expect(primary.getAttribute('title')).toContain(expectedFragment);
+    expect(primary.getAttribute('aria-label')).toContain(expectedFragment);
   });
 
   it('plain left-click on primary: controller is SOLE nav owner (preventDefault + callback)', () => {
-    // Click-ownership invariant preserved from the split-button
-    // design — the anchor's cached href can go stale if playback
-    // advances between mint and click; only the controller's
-    // remint-if-stale path is authoritative for plain-click.
     const onOpenCurrentFrameLab = vi.fn();
     render(
       <WatchLabEntryControl
@@ -137,13 +192,10 @@ describe('WatchLabEntryControl — inline paired pills', () => {
         })}
       />,
     );
-    const primary = screen.getByLabelText(/continue this frame in lab/i).closest('a')!;
+    const primary = screen.getByLabelText(LAB_ENTRY_PRIMARY_LABEL).closest('a')!;
     const ev = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
     primary.dispatchEvent(ev);
     expect(onOpenCurrentFrameLab).toHaveBeenCalledTimes(1);
-    // Anchor's native nav MUST be suppressed. Otherwise plain-click
-    // would open two tabs (anchor-native with cached href + controller
-    // programmatic with remint result).
     expect(ev.defaultPrevented).toBe(true);
   });
 
@@ -158,7 +210,7 @@ describe('WatchLabEntryControl — inline paired pills', () => {
         })}
       />,
     );
-    const primary = screen.getByLabelText(/continue this frame in lab/i).closest('a')!;
+    const primary = screen.getByLabelText(LAB_ENTRY_PRIMARY_LABEL).closest('a')!;
     const ev = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
     primary.dispatchEvent(ev);
     expect(onOpenCurrentFrameLab).toHaveBeenCalledTimes(1);
@@ -166,9 +218,6 @@ describe('WatchLabEntryControl — inline paired pills', () => {
   });
 
   it('⌘-click on primary: native browser new-tab (cached href, no controller intercept)', () => {
-    // Modified click fall-through to the anchor's native path is the
-    // documented escape hatch; the controller's mint-on-hover signal
-    // ensures the cached href is populated before the user clicks.
     const onOpenCurrentFrameLab = vi.fn();
     render(
       <WatchLabEntryControl
@@ -179,15 +228,12 @@ describe('WatchLabEntryControl — inline paired pills', () => {
         })}
       />,
     );
-    const primary = screen.getByLabelText(/continue this frame in lab/i).closest('a')!;
+    const primary = screen.getByLabelText(LAB_ENTRY_PRIMARY_LABEL).closest('a')!;
     fireEvent.click(primary, { metaKey: true, button: 0 });
     expect(onOpenCurrentFrameLab).not.toHaveBeenCalled();
   });
 
-  // ── Mint-on-intent: hover/focus fires onContinueIntent so the cached
-  //    href is populated BEFORE the user clicks. Idle debounces via
-  //    onContinueIdle. Gated on currentFrameAvailable so non-seedable
-  //    frames don't trigger writes. ──
+  // ── Mint-on-intent: hover/focus fires onContinueIntent ──
 
   it('pointerenter on primary calls onContinueIntent when frame is seedable', () => {
     const onContinueIntent = vi.fn();
@@ -200,7 +246,7 @@ describe('WatchLabEntryControl — inline paired pills', () => {
         })}
       />,
     );
-    const primary = screen.getByLabelText(/continue this frame in lab/i).closest('a')!;
+    const primary = screen.getByLabelText(LAB_ENTRY_PRIMARY_LABEL).closest('a')!;
     fireEvent.pointerEnter(primary);
     expect(onContinueIntent).toHaveBeenCalledTimes(1);
   });
@@ -216,7 +262,7 @@ describe('WatchLabEntryControl — inline paired pills', () => {
         })}
       />,
     );
-    const primary = screen.getByLabelText(/continue this frame in lab/i).closest('a')!;
+    const primary = screen.getByLabelText(LAB_ENTRY_PRIMARY_LABEL).closest('a')!;
     fireEvent.focus(primary);
     expect(onContinueIntent).toHaveBeenCalledTimes(1);
   });
@@ -232,20 +278,15 @@ describe('WatchLabEntryControl — inline paired pills', () => {
         })}
       />,
     );
-    const primary = screen.getByLabelText(/continue this frame in lab/i).closest('a')!;
+    const primary = screen.getByLabelText(LAB_ENTRY_PRIMARY_LABEL).closest('a')!;
     fireEvent.pointerLeave(primary);
     expect(onContinueIdle).toHaveBeenCalledTimes(1);
   });
 
   it('disabled primary does NOT fire onContinueIntent on hover (no mint when gated)', () => {
-    // Defence-in-depth: even if the UI shows the disabled primary,
-    // hovering over it MUST NOT trigger a handoff-token mint. The
-    // disabled button doesn't have the pointer handlers wired at all,
-    // but asserting the invariant protects against a future regression
-    // that puts the handlers on both branches.
     const onContinueIntent = vi.fn();
     render(<WatchLabEntryControl {...makeProps({ onContinueIntent })} />);
-    const primary = screen.getByLabelText(/continue this frame in lab/i).closest('button')!;
+    const primary = screen.getByLabelText(new RegExp(LAB_ENTRY_PRIMARY_LABEL, 'i')).closest('button')!;
     fireEvent.pointerEnter(primary);
     expect(onContinueIntent).not.toHaveBeenCalled();
   });

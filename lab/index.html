@@ -74,14 +74,106 @@ html, body {
 }
 canvas { display: block; touch-action: none; }
 
+/* Coachmark surface. Shared by placement / orbit / progressive
+   coachmarks — managed exclusively by StatusController. The generic
+   "tap an atom" onboarding hint that used to live here has been
+   removed; the surface now only paints when a coachmark injects text.
+   `:empty` gates visibility so there is no DOM or CSS state to flip —
+   clearing textContent is the sole "hide" primitive. */
 #hint {
   position: absolute; bottom: var(--hint-bottom, 70px); left: 50%; transform: translateX(-50%);
   background: var(--color-hint-bg); color: var(--color-accent-text);
   padding: 8px 20px; border-radius: 20px; font-size: var(--font-sm);
   z-index: 10; pointer-events: none;
-  opacity: 1; transition: opacity 1.5s ease-out;
 }
-#hint.fade { opacity: 0; }
+#hint:empty { display: none; }
+
+/* ──────────────────────────────────────────────────────────────────
+   Atom-interaction hint — floating bubble that follows a boundary
+   atom outside the 2D convex hull of the projected scene.
+
+   Shape: a single rounded-rectangle pill (`.atom-hint__bubble`). No
+   pointer / tail — the bubble's close proximity to its target atom
+   communicates the referent. A prior iteration carried a speech-
+   bubble tail (rotated triangular clip-path tracking the atom via
+   per-frame `--tail-angle` updates); that shape and its helpers were
+   removed for visual simplicity. See the historical note in
+   `atom-interaction-hint.ts` for restoration pointers.
+
+   Runtime contract
+   ----------------
+   Two CSS custom properties are written per-frame by
+   `atom-interaction-hint.ts`:
+     · `--atom-hint-x`, `--atom-hint-y`
+         Page-space position of the bubble CENTER (in CSS px).
+
+   Visibility is keyed off the host's `data-visible` attribute so the
+   opacity fade doesn't fight the per-frame transform updates.
+   ──────────────────────────────────────────────────────────────── */
+#atom-hint {
+  --atom-hint-x: 0px;
+  --atom-hint-y: 0px;
+  position: fixed; /* page-space coords (page, not canvas) */
+  top: 0; left: 0;
+  /* translate(-50%, -50%) then nudge to the CENTER coord, so the
+     bubble is centered around the computed point. */
+  transform: translate3d(calc(var(--atom-hint-x) - 50%), calc(var(--atom-hint-y) - 50%), 0);
+  pointer-events: none;
+  z-index: 12;
+  will-change: transform;
+}
+#atom-hint:empty { display: none; }
+
+/* ── Bubble body ──────────────────────────────────────────────────
+   A tail-less pill that relies on proximity to the target atom to
+   convey its referent (the runtime positions it just outside the 2D
+   convex hull, `atomRadius + gap` away from the target atom's edge).
+   If a future iteration wants a pointer, keep this bubble as-is and
+   add the tail element back as a sibling; all positioning math is
+   bubble-center-based and agnostic to decorations. */
+.atom-hint__bubble {
+  position: relative;
+  padding: 10px 16px;
+  background: color-mix(in oklab, var(--color-surface, #14141c) 94%, transparent);
+  backdrop-filter: saturate(160%) blur(14px);
+  -webkit-backdrop-filter: saturate(160%) blur(14px);
+  border: 1px solid color-mix(in oklab, var(--color-accent, #6dc) 44%, transparent);
+  border-radius: 16px;
+  box-shadow:
+    0 1px 0 color-mix(in oklab, var(--color-accent, #6dc) 26%, transparent) inset,
+    0 10px 24px -14px rgba(0, 0, 0, 0.65),
+    0 2px 6px -3px rgba(0, 0, 0, 0.4);
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-sm, 13px);
+  font-weight: 500;
+  letter-spacing: 0.012em;
+  line-height: 1.3;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 240ms cubic-bezier(0.22, 0.9, 0.3, 1);
+}
+
+.atom-hint__text {
+  display: inline-block;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Visibility gate ────────────────────────────────────────────── */
+#atom-hint[data-visible="true"] .atom-hint__bubble { opacity: 1; }
+
+/* ── Reduced motion: no fade, just instant show/hide ────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .atom-hint__bubble { transition: none; }
+}
+
+/* ── Fallback for engines without backdrop-filter ───────────────── */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .atom-hint__bubble {
+    background: var(--color-surface, #14141c);
+  }
+}
 
 .drawer-item {
   padding: var(--space-sm) 10px; cursor: pointer; color: var(--color-text);
@@ -1553,38 +1645,194 @@ canvas { display: block; touch-action: none; }
 }
 .timeline-transfer-dialog__confirm:disabled { opacity: 0.5; cursor: default; }
 .timeline-transfer-dialog__confirm:not(:disabled):hover { opacity: 0.9; }
-/* Restart positioning — applied to the ActionHint wrapper via anchorClassName/anchorStyle */
+/* ── Restart-here CTA ──────────────────────────────────────────────
+   Architecture (IMPORTANT — do not flatten into one element):
+
+     .timeline-restart-anchor   positioning layer. Owns the
+                                `left` coord + `translateX(-50%)` that
+                                centers the pill over the review
+                                marker. Its transform MUST stay free
+                                of hover / active mutations so the
+                                pointer (.timeline-restart-button::after
+                                at `left: 50%`) always sits exactly on
+                                the marker.
+
+     .timeline-restart-button   interactive layer. Owns hover /
+                                active / focus transforms. Its
+                                transforms compose with the anchor's
+                                via CSS's transform nesting, so the
+                                centering is preserved across every
+                                state.
+
+   Root-cause context: a previous revision collapsed both concerns
+   onto one element. CSS cannot merge two `transform:` declarations
+   from different rules — the `:hover` rule replaced the base
+   centering translate, the pill drifted half its width off-center,
+   the pointer fell off the marker, and hovering visibly "pushed"
+   the button away from the cursor. The split fixes all three. */
 .timeline-restart-anchor {
-  display: block;
-  position: absolute; bottom: 0; margin-bottom: 6px;
+  /* Single-source fill palette lives on the anchor so the pill, the
+     pointer ::after, AND the corner-bridge can all read from the same
+     "current fill" variable. Hover / active states mutate
+     `--restart-current-fill` on the anchor via `:has()`, and the
+     transition on each consumer animates the value through smoothly. */
+  --restart-fill: color-mix(in oklab, var(--color-accent, #6dc) 62%, black);
+  --restart-fill-hover: color-mix(in oklab, var(--color-accent, #6dc) 74%, black);
+  --restart-fill-active: color-mix(in oklab, var(--color-accent, #6dc) 52%, black);
+  --restart-current-fill: var(--restart-fill);
+  --restart-ink: #ffffff;
+
+  /* Pointer geometry — single source of truth for both sides.
+     The TS base-offset clamp reads `--restart-pointer-base-w` via
+     getComputedStyle so the CSS shape and the math stay in sync. */
+  --restart-pointer-h: 9px;
+  --restart-pointer-base-w: 18px;
+
+  display: inline-block;
+  position: absolute; bottom: 0;
+  /* Anchor lifts the entire assembly above the track by a little
+     more than the pointer height so the pointer's tip, not the pill's
+     bottom edge, aligns with the timeline marker. */
+  margin-bottom: calc(var(--restart-pointer-h) + 5px);
   transform: translateX(-50%);
+  pointer-events: none;
 }
-/* Restart button visual styling (position:relative for ::before/::after pseudo-elements) */
+/* Route state-driven fill through `--restart-current-fill`. Any
+   consumer that reads this var animates between states via its own
+   `transition: background`/`border-top-color` rule. */
+.timeline-restart-anchor:has(.timeline-restart-button:hover) {
+  --restart-current-fill: var(--restart-fill-hover);
+}
+.timeline-restart-anchor:has(.timeline-restart-button:active) {
+  --restart-current-fill: var(--restart-fill-active);
+}
+
 .timeline-restart-button {
+  /* Restore pointer-events that the anchor disables (so the pointer
+     triangle's drop-shadow overflow stays click-through). */
+  pointer-events: auto;
   position: relative;
-  padding: 5px 12px; border-radius: var(--radius-sm);
-  background: var(--color-btn); border: none;
-  color: var(--color-accent-text);
-  font-family: var(--font-family); font-size: var(--font-xs); font-weight: 500;
-  white-space: nowrap; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 7px 14px 7px 12px;
+  border: none; border-radius: 999px;
+  background: var(--restart-current-fill);
+  color: var(--restart-ink);
+  font-family: var(--font-family);
+  font-size: var(--font-xs, 12px);
+  /* 500 = Medium. Bold on a small-cap CTA reads heavy; medium keeps
+     the label feeling light while the fill carries the emphasis. */
+  font-weight: 500;
+  letter-spacing: 0.015em;
+  white-space: nowrap;
+  cursor: pointer;
   font-variant-numeric: tabular-nums;
-  min-height: 26px; display: flex; align-items: center;
-  box-shadow: none;
+  min-height: 32px;
+  box-shadow:
+    0 2px 10px -3px color-mix(in oklab, var(--color-accent, #6dc) 55%, transparent),
+    0 1px 0 rgba(255, 255, 255, 0.12) inset;
+  transition:
+    background 140ms ease,
+    transform 140ms cubic-bezier(0.22, 0.9, 0.3, 1),
+    box-shadow 140ms ease;
 }
-/* Transparent hit-area extension below the chip (covers the gap to the track) */
+.timeline-restart-button__icon {
+  flex: 0 0 auto;
+  display: block;
+  transition: transform 280ms cubic-bezier(0.22, 0.9, 0.3, 1);
+}
+.timeline-restart-button__label {
+  line-height: 1;
+}
+
+/* Hover: modest lift + gentle icon rotate. Fill is driven by
+   `--restart-current-fill` on the anchor (via `:has()`) so the pill,
+   the bridge, and the pointer all change color in lockstep. The
+   translateY(-1px) composes SAFELY with the anchor's translateX(-50%)
+   because they live on different elements. */
+.timeline-restart-button:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 5px 16px -4px color-mix(in oklab, var(--color-accent, #6dc) 70%, transparent),
+    0 1px 0 color-mix(in oklab, white 32%, transparent) inset;
+}
+.timeline-restart-button:hover .timeline-restart-button__icon {
+  transform: rotate(-60deg);
+}
+.timeline-restart-button:active {
+  transform: translateY(0);
+  box-shadow:
+    0 1px 5px -2px color-mix(in oklab, var(--color-accent, #6dc) 60%, transparent),
+    0 1px 0 color-mix(in oklab, white 18%, transparent) inset;
+}
+.timeline-restart-button:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-accent, #6dc) 80%, white);
+  outline-offset: 3px;
+}
+
+/* Transparent hit-area extension. Covers the pointer + the gap to
+   the track below so a finger tapping "between the pill and the
+   marker" still lands on the button. Generous on the bottom edge
+   (where the pointer lives) so the tip is always easy to hit. */
 .timeline-restart-button::before {
   content: ''; position: absolute;
-  inset: -6px -8px -10px;
-  cursor: pointer;
+  inset: -8px -10px -16px;
 }
-/* Subtle pointer arrow */
+
+/* Downward pointer — a RECTANGLE clipped to a triangle via clip-path.
+   This design (vs the earlier border-triangle) enables a SKEWED
+   triangle: the two top vertices (base) stay pinned under the pill's
+   straight-bottom segment, while the bottom vertex (tip) slides
+   horizontally by `--tail-skew`. At rest (skew = 0) the triangle is
+   a symmetric isosceles; at track extremes it tilts so the tip
+   lands exactly on the marker without the base straddling the pill's
+   rounded corner.
+   Geometry variables:
+     --tail-base-offset  horizontal position of the base center
+                         (clamped in TS to the straight segment).
+     --tail-skew         tip shift relative to the base center
+                         (0 inside the clamp band; grows at extremes).
+   Both live on the anchor and are written per-render by TimelineBar. */
 .timeline-restart-button::after {
-  content: ''; position: absolute; top: 100%; left: 50%;
+  content: ''; position: absolute;
+  top: calc(100% - 1px); /* 1 px overlap hides the anti-aliasing seam between pill & triangle */
+  left: calc(50% + var(--tail-base-offset, 0px));
+  width: var(--restart-pointer-base-w);
+  height: var(--restart-pointer-h);
   transform: translateX(-50%);
-  border: 4px solid transparent;
-  border-top-color: var(--color-btn);
+  background: var(--restart-current-fill);
+  /* Polygon vertices in element-local coords:
+       (0, 0)                              ← base-left
+       (100%, 0)                           ← base-right
+       (calc(50% + --tail-skew), 100%)     ← tip, x-shifted by skew
+     No borders, no rotations — the polygon's vertex positions
+     express the full geometry, including the asymmetric "lean"
+     when the tip must track a marker past the base's clamp band. */
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    calc(50% + var(--tail-skew, 0px)) 100%
+  );
+  filter: drop-shadow(0 2px 3px color-mix(in oklab, var(--color-accent, #6dc) 38%, transparent));
+  transition:
+    background 140ms ease,
+    left 120ms cubic-bezier(0.22, 0.9, 0.3, 1),
+    clip-path 120ms cubic-bezier(0.22, 0.9, 0.3, 1);
 }
-.timeline-restart-button:hover { background: var(--color-accent-soft); }
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline-restart-button,
+  .timeline-restart-button__icon,
+  .timeline-restart-button::after {
+    transition: none;
+  }
+  .timeline-restart-button:hover,
+  .timeline-restart-button:active {
+    transform: none;
+  }
+  .timeline-restart-button:hover .timeline-restart-button__icon {
+    transform: none;
+  }
+}
 /* Old review-return button removed — replaced by timeline mode switch */
 /* .timeline-time--review-left removed — time is in the left cluster */
 /* Review track — thicker and easier to drag. Width fills the track-zone parent. */
@@ -1655,21 +1903,37 @@ canvas { display: block; touch-action: none; }
    The .timeline-hint-* class prefix is historical; the infra is shared. */
 .timeline-hint-anchor { position: relative; display: inline-flex; z-index: 0; }
 .timeline-hint-anchor:hover, .timeline-hint-anchor:focus-within { z-index: 50; }
+
+/* Speech-bubble hint used by every ActionHint-wrapped control.
+   Color, font-weight, border, shadow and radius intentionally match
+   the drag-atom hint (`.atom-hint__bubble`) so the two discoverability
+   surfaces read as one design system. Fill is a single token so
+   the arrow inherits the bubble's exact surface color. */
 .timeline-hint {
+  --atom-hint-fill: color-mix(in oklab, var(--color-surface, #14141c) 94%, transparent);
   position: absolute;
   bottom: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%) translateY(4px);
   min-width: 140px;
-  max-width: 220px;
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: rgb(20, 20, 24);
-  color: #fff;
-  font-size: 11px;
-  line-height: 1.35;
+  max-width: 240px;
+  padding: 9px 14px;
+  background: var(--atom-hint-fill);
+  backdrop-filter: saturate(160%) blur(14px);
+  -webkit-backdrop-filter: saturate(160%) blur(14px);
+  border: 1px solid color-mix(in oklab, var(--color-accent, #6dc) 44%, transparent);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 0 color-mix(in oklab, var(--color-accent, #6dc) 26%, transparent) inset,
+    0 10px 24px -14px rgba(0, 0, 0, 0.65),
+    0 2px 6px -3px rgba(0, 0, 0, 0.4);
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-sm, 13px);
+  font-weight: 500;
+  letter-spacing: 0.012em;
+  line-height: 1.3;
   text-align: center;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
   opacity: 0;
   pointer-events: none;
   transition: opacity 140ms ease, transform 140ms ease;
@@ -1680,14 +1944,52 @@ canvas { display: block; touch-action: none; }
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+/* Arrow inherits the bubble's surface fill + accent border half-edge
+   so it reads as a continuation of the bubble. Rotated-square with
+   its bottom-right seam tucked under the bubble. */
 .timeline-hint-arrow {
   position: absolute;
   top: 100%;
   left: 50%;
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
+  background: var(--atom-hint-fill);
+  border: inherit;
+  border-top: none;
+  border-left: none;
+  border-radius: 0 0 2px 0;
   transform: translateX(-50%) translateY(-50%) rotate(45deg);
-  background: rgb(20, 20, 24);
+}
+
+/* ── Timed-cue force-visible (trigger B: 5 s after first interaction) ──
+   Runs a single 5 s keyframe animation: 1 s fade-in, 3 s stay, 1 s
+   fade-out. Device-agnostic — bypasses the `@media (hover: none)`
+   touch-hide rule below because the cue is explicitly user-directed
+   discoverability (not a hover affordance). The component-side timer
+   drops `.timeline-hint--force-visible` after the animation, so the
+   tooltip returns to its normal hover-driven state. */
+.timeline-hint--force-visible {
+  animation: timeline-hint-auto-cue 5s cubic-bezier(0.4, 0, 0.2, 1) both;
+  pointer-events: none;
+}
+@keyframes timeline-hint-auto-cue {
+  0%   { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  20%  { opacity: 1; transform: translateX(-50%) translateY(0); }   /* 1 s in */
+  80%  { opacity: 1; transform: translateX(-50%) translateY(0); }   /* 3 s stay */
+  100% { opacity: 0; transform: translateX(-50%) translateY(4px); } /* 1 s out */
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Still surface the discoverability cue, just without the
+     translate slide — only the opacity phases remain. */
+  .timeline-hint--force-visible {
+    animation: timeline-hint-auto-cue-reduced 5s linear both;
+  }
+}
+@keyframes timeline-hint-auto-cue-reduced {
+  0%   { opacity: 0; }
+  20%  { opacity: 1; }
+  80%  { opacity: 1; }
+  100% { opacity: 0; }
 }
 /* Right-aligned placement for rightmost actions near viewport edge */
 .timeline-hint--top-end {
@@ -1737,7 +2039,10 @@ canvas { display: block; touch-action: none; }
   transform: translateY(50%) rotate(45deg);
 }
 @media (hover: none), (pointer: coarse) {
-  .timeline-hint { display: none; }
+  /* Hide hover-driven tooltips on touch devices — they're not
+     discoverable via hover. The timed-cue path (force-visible) is
+     exempt because it's explicitly user-actionable discoverability. */
+  .timeline-hint:not(.timeline-hint--force-visible) { display: none; }
 }
 </style>
 </head>
@@ -1745,7 +2050,14 @@ canvas { display: block; touch-action: none; }
 <div id="container">
   <!-- React mount point (Milestone D) — display:contents so children position independently -->
   <div id="react-root" style="display:contents"></div>
-  <div id="hint">Click or tap an atom to interact</div>
+  <div id="hint"></div>
+  <!-- Atom-interaction hint. Runtime-controlled: the
+       `atom-interaction-hint` module injects the `.atom-hint__pill`
+       child (with text), toggles `data-visible`, and updates the
+       `--atom-hint-x` / `--atom-hint-y` custom properties every frame
+       so the bubble tracks a specific atom. Empty by default →
+       hidden via `#atom-hint:empty { display: none }`. -->
+  <div id="atom-hint"></div>
 
   <!-- Dock rendered by React Dock component -->
 </div>

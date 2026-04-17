@@ -87,6 +87,8 @@ export interface TeardownSurface {
   timelineSub: { teardown(): void } | null;
   onboarding: { destroy(): void } | null;
   unsubOnboardingOverlay: (() => void) | null;
+  atomInteractionHint: { destroy(): void } | null;
+  unsubAtomHintReadiness: (() => void) | null;
   unsubCameraMode: (() => void) | null;
   bondedGroupCoordinator: { teardown(): void } | null;
   overlayLayout: { destroy(): void } | null;
@@ -123,6 +125,8 @@ export function teardownAllSubsystems(s: TeardownSurface): void {
   // 5. Onboarding + subscriptions (may cancel via input interactions)
   if (s.onboarding) s.onboarding.destroy();
   if (s.unsubOnboardingOverlay) s.unsubOnboardingOverlay();
+  if (s.atomInteractionHint) s.atomInteractionHint.destroy();
+  if (s.unsubAtomHintReadiness) s.unsubAtomHintReadiness();
   if (s.unsubCameraMode) s.unsubCameraMode();
 
   // 6. Bonded group coordinator (coordinates 3 subsystems)

@@ -34,10 +34,12 @@ import { registerStoreCallbacks } from './runtime/ui-bindings';
 import { createAtomSource } from './runtime/atom-source';
 import { createSceneRuntime, type SceneRuntime } from './runtime/scene-runtime';
 import { consumeWatchToLabHandoffFromLocation } from './runtime/watch-handoff';
+import { isWatchHandoffBoot } from '../../src/watch-lab-handoff/watch-handoff-url';
 import { handleCenterObject as _handleCenterObject, resolveReturnTarget } from './runtime/focus-runtime';
 import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/snapshot-reconciler';
 import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecycle';
-import { createOnboardingController, subscribeOnboardingReadiness } from './runtime/onboarding';
+import { createOnboardingController, subscribeOnboardingReadiness, markOnboardingDismissed } from './runtime/onboarding';
+import { createAtomInteractionHint, type AtomInteractionHintRuntime } from './runtime/atom-interaction-hint';
 import { createDragTargetRefresh, dragRefreshAction } from './runtime/drag-target-refresh';
 import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-group-runtime';
 import { resolveBondedGroupDisplaySource } from './runtime/bonded-group-display-source';
@@ -141,14 +143,34 @@ function _pickDefaultStructure(
  *  `consumeWatchToLabHandoffFromLocation`. If this returns true, the
  *  boot MUST skip the default-scene load and let the hydrate populate
  *  the scene from the seed. A later fallback path re-loads the
- *  default when the consume rejects or the hydrate fails. */
+ *  default when the consume rejects or the hydrate fails.
+ *
+ *  Thin wrapper over `isWatchHandoffBoot` (the shared URL predicate)
+ *  so boot and onboarding consume the same source-of-truth without
+ *  duplicating the param-name contract. */
 function _hasPendingWatchHandoff(): boolean {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('from') === 'watch' && !!params.get('handoff');
-  } catch {
-    return false;
-  }
+  return isWatchHandoffBoot();
+}
+
+// ── Handoff onboarding suppression (eager at module load) ─────────
+//
+// `consumeWatchToLabHandoffFromLocation` scrubs `?from=watch&handoff=`
+// from the URL before hydrate runs. The onboarding overlay's
+// readiness gate evaluates AFTER hydrate (when atomCount > 0), by
+// which time the URL predicate would read a clean URL and fail to
+// recognize the handoff boot. Capture the signal NOW — at module
+// load, before any scrub or consume fires — and persist it via the
+// existing sessionStorage sentinel so the onboarding gate sees it
+// through normal channels. Using `markOnboardingDismissed()` rather
+// than a new state slot keeps the suppression source uniform (same
+// primitive covers "user dismissed in-session" and "arrived via
+// handoff — already introduced to the product on Watch").
+//
+// Runs at module evaluation time (top-level statement), so it
+// executes before any imperative boot code, before React mounts,
+// before the consume path's URL scrub.
+if (_hasPendingWatchHandoff()) {
+  markOnboardingDismissed();
 }
 
 // --- Scheduler (accumulator, profiler, render skip) ---
@@ -230,6 +252,8 @@ let _inputBindings: InputBindings | null = null;
 // Onboarding controller (created in init, cleared on teardown)
 let _onboarding: import('./runtime/onboarding').OnboardingController | null = null;
 let _unsubOnboardingOverlay: (() => void) | null = null;
+let _atomInteractionHint: AtomInteractionHintRuntime | null = null;
+let _unsubAtomHintReadiness: (() => void) | null = null;
 let _unsubCameraMode: (() => void) | null = null;
 
 // Bonded group subsystem
@@ -309,6 +333,8 @@ function _teardownRuntime() {
     timelineSub: _timelineSub,
     onboarding: _onboarding,
     unsubOnboardingOverlay: _unsubOnboardingOverlay,
+    atomInteractionHint: _atomInteractionHint,
+    unsubAtomHintReadiness: _unsubAtomHintReadiness,
     unsubCameraMode: _unsubCameraMode,
     bondedGroupCoordinator: _bondedGroupCoordinator,
     overlayLayout: _overlayLayout,
@@ -322,7 +348,9 @@ function _teardownRuntime() {
     resetRuntimeState: () => {
       // Null all refs (main.ts owns these module-scoped variables)
       _timelineSub = null; _lastReconciledSnapshotVersion = -1;
-      _onboarding = null; _unsubOnboardingOverlay = null; _unsubCameraMode = null;
+      _onboarding = null; _unsubOnboardingOverlay = null;
+      _atomInteractionHint = null; _unsubAtomHintReadiness = null;
+      _unsubCameraMode = null;
       _bondedGroupCoordinator = null; _bondedGroupHighlight = null; _bondedGroups = null;
       _overlayLayout = null; placement = null; statusCtrl = null;
       _inputBindings = null; _workerRuntime = null; renderer = null;
@@ -627,10 +655,21 @@ async function init() {
     getRenderer: () => renderer,
     getStateMachine: () => stateMachine,
     getInputManager: () => _inputBindings ? _inputBindings.getManager() : null,
-    getStatusCtrl: () => statusCtrl,
     isWorkerActive: () => !!(_workerRuntime && _workerRuntime.isActive()),
     sendWorkerInteraction: (cmd) => { if (_workerRuntime) _workerRuntime.sendInteraction(cmd); },
-    markAtomInteractionStarted: () => { _timelineSub?.markAtomInteractionStarted(); },
+    markAtomInteractionStarted: () => {
+      _timelineSub?.markAtomInteractionStarted();
+      // First atom interaction dismisses the floating "Drag any atom"
+      // hint. Idempotent — subsequent interactions are no-ops since
+      // the runtime latches on dismissal.
+      _atomInteractionHint?.dismiss();
+      // Broadcast the signal via the store so unrelated components
+      // (e.g., the timed Share & Download nudge in TimelineBar's
+      // TransferTrigger) can subscribe without coupling to this
+      // module's internals. Setter is idempotent — only the first
+      // call mutates state and wakes subscribers.
+      useAppStore.getState().markAtomInteraction();
+    },
     updateStatus: (text) => _scene!.updateStatus(text),
     updateSceneStatus: () => _scene!.updateSceneStatus(),
   });
@@ -718,6 +757,33 @@ async function init() {
 
   // ── Page-load onboarding overlay (reactive readiness gate) ──
   _unsubOnboardingOverlay = subscribeOnboardingReadiness();
+
+  // ── Atom-interaction hint (the floating "Drag any atom" bubble) ──
+  // Follows a boundary atom nearest viewport center. Picked once when
+  // the scene first becomes renderable (atomCount > 0 + no blocking
+  // overlay). Dismissed on first atom interaction (see the dispatch
+  // wiring above — `markAtomInteractionStarted` forwards into the
+  // runtime). The readiness subscription mirrors the onboarding gate:
+  // both need "scene ready, no overlays" and the same store signals
+  // drive both, but the hint has its own lifecycle so they can be
+  // tuned independently.
+  _atomInteractionHint = createAtomInteractionHint({
+    getHostEl: () => document.getElementById('atom-hint'),
+    projectToNDC: (world) => renderer.projectToNDC(world),
+    getCanvasRect: () => renderer.getCanvas().getBoundingClientRect(),
+    getPhysics: () => physics,
+    getAtomScreenRadius: (atomIdx) => renderer.getAtomScreenRadius(atomIdx),
+  });
+  {
+    const tryShow = (): void => {
+      const s = useAppStore.getState();
+      if (s.atomCount > 0 && s.activeSheet === null && !s.placementActive && s.timelineMode !== 'review') {
+        _atomInteractionHint?.show();
+      }
+    };
+    tryShow();
+    _unsubAtomHintReadiness = useAppStore.subscribe(() => tryShow());
+  }
 
   // ── Bonded group subsystem ──
   _bondedGroups = createBondedGroupRuntime({

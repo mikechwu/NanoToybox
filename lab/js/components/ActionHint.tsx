@@ -28,10 +28,24 @@ export interface ActionHintProps {
   anchorClassName?: string;
   /** Inline style on the wrapper span (e.g. for absolute positioning). */
   anchorStyle?: React.CSSProperties;
+  /** External discoverability cue: when true, the hint is forced
+   *  visible regardless of hover / focus / pointer type. Unlike the
+   *  hover path, this also shows on touch devices (the usual
+   *  `@media (hover: none)` hide rule is bypassed via the
+   *  `timeline-hint--force-visible` class).
+   *
+   *  The caller owns the lifetime — usually a one-shot timed cue.
+   *  The paired `forceAnimationKey` prop restarts the CSS animation
+   *  when it changes, so re-triggering the cue mid-flight works. */
+  forceVisible?: boolean;
+  /** Opaque animation-restart token. Passed through to the tooltip's
+   *  `key` when `forceVisible` is true, so toggling false→true→true
+   *  with a new token restarts the fade keyframes cleanly. */
+  forceAnimationKey?: number | string;
   children: React.ReactElement<React.HTMLAttributes<HTMLElement>>;
 }
 
-export function ActionHint({ text, focusableWhenDisabled, focusLabel, placement = 'top', anchorClassName, anchorStyle, children }: ActionHintProps) {
+export function ActionHint({ text, focusableWhenDisabled, focusLabel, placement = 'top', anchorClassName, anchorStyle, forceVisible = false, forceAnimationKey, children }: ActionHintProps) {
   const [visible, setVisible] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tooltipId = useId();
@@ -75,7 +89,12 @@ export function ActionHint({ text, focusableWhenDisabled, focusLabel, placement 
       <span
         id={tooltipId}
         role="tooltip"
-        className={`timeline-hint${placementClass}${visible ? ' timeline-hint--visible' : ''}`}
+        // The React `key` is tied to the caller's animation token so
+        // a new token re-mounts the tooltip span and the CSS
+        // auto-cue keyframe animation restarts from 0% on the next
+        // render. Stable across hover-only usage.
+        key={forceVisible && forceAnimationKey !== undefined ? String(forceAnimationKey) : undefined}
+        className={`timeline-hint${placementClass}${visible ? ' timeline-hint--visible' : ''}${forceVisible ? ' timeline-hint--force-visible' : ''}`}
       >
         {text}
         <span className="timeline-hint-arrow" />

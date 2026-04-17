@@ -622,24 +622,53 @@ function TimelineBarActive() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transferDialog.open, transferDialog.tab, downloadActionAvailable, shareAvailable]);
 
-  // Width-aware restart anchor clamp.
+  // Width-aware restart anchor clamp + pointer-offset compensation.
   //
-  // Problem: the percentage-based clamp (5%..95%) in getRestartAnchorStyle()
-  // only clamps the button *center*, not its edges. Near the right of the
-  // track, the button extends past the track-zone boundary and overlaps the
-  // sibling action-zone. Wider copy or larger text size makes this worse.
+  // Two concerns, one pass:
   //
-  // Fix: after render, measure the button width and the overlay-zone width,
-  // and clamp `left` in pixels to [halfBtn, trackWidth - halfBtn]. This keeps
-  // the button's edges strictly inside the track-zone regardless of copy,
-  // font, or viewport.
+  //   1. The pill must never spill past the overlay-zone edges into the
+  //      sibling action zones. We clamp the pill's CENTER to
+  //      [halfBtn, trackWidth - halfBtn] so the pill's edges stay inside
+  //      the track.
+  //
+  //   2. When the marker is near an edge, the clamped pill-center no
+  //      longer coincides with the true marker position. Without
+  //      compensation, the downward pointer (anchored to the pill's
+  //      own center via `left: 50%`) would aim at the pill-center
+  //      instead of the marker — pointer appears to "freeze" when the
+  //      marker passes the clamp band.
+  //
+  //      Fix: compute `tailOffsetPx = targetPx - clampedPx` and expose
+  //      it as a CSS custom property (`--restart-tail-offset`). The
+  //      pointer's `left` becomes `calc(50% + var(--restart-tail-offset))`
+  //      so it slides along the pill's bottom edge and always points at
+  //      the actual marker.
+  //
+  //      Offset is further clamped to the pill's usable pointer-run —
+  //      left/right by (halfBtn - pointerHalfW - edgeSafety) — so the
+  //      pointer never slides past the pill's rounded corners. When
+  //      the marker moves BEYOND that range (pathological: pill wider
+  //      than half the track), the pointer pins to the usable edge —
+  //      the only honest signal the geometry can deliver in that case.
   const restartButtonRef = useRef<HTMLButtonElement>(null);
   const [restartClampedLeftPx, setRestartClampedLeftPx] = useState<number | null>(null);
+  // Split the pointer geometry into two independent axes:
+  //   · baseOffsetPx — horizontal position of the triangle BASE center,
+  //                    clamped to the pill's straight-bottom segment so
+  //                    the base never straddles a rounded corner.
+  //   · skewOffsetPx — horizontal delta between the BASE center and the
+  //                    TIP. Zero inside the clamp; non-zero at extremes,
+  //                    where it lets the tip keep tracking the marker
+  //                    by tilting the triangle asymmetrically.
+  const [restartBaseOffsetPx, setRestartBaseOffsetPx] = useState<number>(0);
+  const [restartSkewOffsetPx, setRestartSkewOffsetPx] = useState<number>(0);
   const showRestart = isReview && canRestart && restartTargetPs !== null;
 
   useLayoutEffect(() => {
     if (!showRestart) {
       setRestartClampedLeftPx(null);
+      setRestartBaseOffsetPx(0);
+      setRestartSkewOffsetPx(0);
       return;
     }
     const btn = restartButtonRef.current;
@@ -650,16 +679,62 @@ function TimelineBarActive() {
     const compute = () => {
       const trackWidth = overlay.clientWidth;
       const btnWidth = btn.offsetWidth;
+      // Height MAY be 0 in test environments (jsdom doesn't perform
+      // real layout). That shouldn't block the layout clamp — only the
+      // straight-bottom clamp on the pointer base. Guard downstream.
+      const btnHeight = btn.offsetHeight;
       if (trackWidth <= 0 || btnWidth <= 0) return;
       const halfBtn = btnWidth / 2;
-      // If the button is wider than the track (pathological), pin to center.
+
+      // Pathological: pill wider than track — pin pill-center, collapse
+      // base + skew to 0 (no usable marker range to track).
       if (btnWidth >= trackWidth) {
         setRestartClampedLeftPx(trackWidth / 2);
+        setRestartBaseOffsetPx(0);
+        setRestartSkewOffsetPx(0);
         return;
       }
+
       const targetPx = restartProgress * trackWidth;
       const clampedPx = Math.max(halfBtn, Math.min(trackWidth - halfBtn, targetPx));
       setRestartClampedLeftPx(clampedPx);
+
+      // rawOffset: gap between the true marker and the clamped pill
+      // center. This is what the TIP must travel; the BASE may fall
+      // short of it if the pill's corner geometry says so.
+      const rawOffset = targetPx - clampedPx;
+
+      // ── Base-offset clamp: keep the whole base on the straight
+      //    pill-bottom segment so it never sits over a rounded corner.
+      //
+      // The pill is `border-radius: 999px`, i.e. a full pill — each
+      // corner's radius equals half the pill height. The straight-
+      // bottom segment is therefore:
+      //     straightHalfW = halfBtn − cornerRadius
+      //                   = halfBtn − (btnHeight / 2)
+      // And the usable base-center band (so the base's OWN half-width
+      // stays on the straight section) is
+      //     straightHalfW − baseHalfW
+      // `baseHalfW` is read from the CSS var `--restart-pointer-base-w`
+      // so the source of truth lives in one place and theme swaps or
+      // typography changes propagate automatically.
+      //
+      // When `btnHeight` is 0 (jsdom / headless measurement gap) the
+      // straight-segment clamp is unusable; degrade to the "keep the
+      // base inside the pill" bound (halfBtn − baseHalfW) which is
+      // the same degenerate limit the bridge-less pointer had before
+      // this iteration. The tip still tracks the marker via `skew`.
+      const cs = getComputedStyle(btn);
+      const baseWidthRaw = parseFloat(cs.getPropertyValue('--restart-pointer-base-w'));
+      const baseWidth = Number.isFinite(baseWidthRaw) && baseWidthRaw > 0 ? baseWidthRaw : 18;
+      const baseHalfW = baseWidth / 2;
+      const straightHalfW = btnHeight > 0
+        ? Math.max(0, halfBtn - btnHeight / 2)
+        : halfBtn; // no corner geometry available → full pill width is usable
+      const maxBaseOffset = Math.max(0, straightHalfW - baseHalfW);
+      const baseOffset = Math.max(-maxBaseOffset, Math.min(maxBaseOffset, rawOffset));
+      setRestartBaseOffsetPx(baseOffset);
+      setRestartSkewOffsetPx(rawOffset - baseOffset);
     };
 
     compute();
@@ -671,25 +746,62 @@ function TimelineBarActive() {
 
   // First render falls back to percentage clamp; useLayoutEffect swaps in the
   // pixel-based clamp before the browser paints, so there is no visible flicker.
-  const restartAnchorStyle = restartClampedLeftPx !== null
+  const restartAnchorStyle: React.CSSProperties = restartClampedLeftPx !== null
     ? { left: `${restartClampedLeftPx}px` }
     : getRestartAnchorStyle(restartProgress);
+  // Inline custom properties consumed by the pointer's `::after` in
+  // lab/index.html. `--tail-base-offset` positions the BASE horizontally
+  // (clamped to the pill's straight segment). `--tail-skew` shifts the
+  // TIP relative to the base so the tip always lands at the marker,
+  // even when the base had to be clamped short of it.
+  const styleWithVars = restartAnchorStyle as React.CSSProperties & Record<string, string>;
+  styleWithVars['--tail-base-offset'] = `${restartBaseOffsetPx}px`;
+  styleWithVars['--tail-skew'] = `${restartSkewOffsetPx}px`;
 
+  // Restart CTA — the "Restart here" pill IS the affordance; no
+  // wrapping hover tooltip (that was a redundant second hint).
+  //
+  // Layout split (intentional, fixes the "hover jumps away" bug):
+  //   · `.timeline-restart-anchor`  — positioning wrapper. Owns
+  //     `left: <marker px>` + `transform: translateX(-50%)` so the
+  //     pill's center lands ON the review marker and the downward
+  //     pointer at its `::after` hits the marker exactly.
+  //   · `.timeline-restart-button`  — interactive pill. Owns hover /
+  //     active transforms.
+  //
+  // Without this split, the two transforms collide on the same
+  // element — CSS can't composite two `transform` declarations from
+  // different rules, so the more-specific `:hover` rule replaces
+  // the centering translate and the button visually escapes the
+  // cursor.
   const overlayContent = showRestart ? (
-    <ActionHint
-      text={TIMELINE_HINTS.restartFromHere}
-      anchorClassName="timeline-restart-anchor"
-      anchorStyle={restartAnchorStyle}
-    >
+    <span className="timeline-restart-anchor" style={restartAnchorStyle}>
       <button
         ref={restartButtonRef}
         className="timeline-restart-button"
         onClick={handleRestart}
         aria-label={`Restart simulation at ${formatTime(restartTargetPs)}`}
       >
-        Restart here
+        <svg
+          className="timeline-restart-button__icon"
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          {/* Circular-arrow / reload glyph — universal "go again"
+              affordance. */}
+          <path d="M3 12a9 9 0 1 0 3-6.7" />
+          <polyline points="3 3 3 8 8 8" />
+        </svg>
+        <span className="timeline-restart-button__label">Restart here</span>
       </button>
-    </ActionHint>
+    </span>
   ) : <span />;
 
   const trackContent = (

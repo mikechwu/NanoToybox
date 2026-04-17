@@ -127,15 +127,29 @@ body {
 }
 
 /* ── Bottom-chrome toolbar (above timeline) ──
-   Row: [file-identity-chip]  ...  [lab-entry + cinematic column].
-   Clusters are bottom-pinned (align-items: flex-end) so the file
-   chip on the left and the Cinematic Camera pill on the right share
-   the same baseline — identical to the original single-row layout
-   before the Lab capsule was added. The Lab capsule stacks UPWARD
-   from above the Cinematic pill inside `.watch-toolbar__right`, so
-   it does NOT push the file chip vertically. Using `align-items:
-   center` here would re-center the short chip against the taller
-   two-row right column and lift it off its original baseline.
+   Row: [file-identity chip]  ...  [lab-entry + cinematic column].
+
+   Alignment contract — the toolbar's inner content boundaries align
+   with the main dock's inner content boundaries (both bars consume
+   `--watch-bar-inset` from `.watch-workspace`). Inside that shared
+   frame:
+
+     LEFT cluster (`.watch-toolbar__left`)
+       capsule file-identity chip. Cluster's LEFT edge is offset
+       from the dock's LEFT boundary by `--watch-edge-gap`.
+
+     RIGHT cluster (`.watch-toolbar__right`)
+       primary actions — Open Lab ▸ Continue capsule stacked above
+       the Cinematic Camera toggle. Cluster's RIGHT edge is offset
+       from the dock's RIGHT boundary by the same `--watch-edge-gap`.
+
+   Both offsets share the same token so adjusting one value re-tunes
+   every pinned element in lockstep (single parameter, easy to
+   maintain, applies across phone / tablet / desktop).
+
+   Clusters are bottom-pinned (align-items: flex-end) so the
+   Cinematic pill baseline and the file chip baseline coincide —
+   single-row feel is preserved when the Lab capsule is collapsed.
    All font sizes use --font-xs / --font-sm tokens so the Large text
    size setting is respected. */
 .watch-toolbar {
@@ -143,14 +157,22 @@ body {
   align-items: flex-end;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 12px;
+  /* Outer edges flush with the main dock — see `--watch-bar-inset`. */
+  padding: 4px var(--watch-bar-inset, 12px);
   font-family: var(--font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
   font-size: var(--font-xs, 12px);
   color: var(--color-text, #ccc);
 }
-/* File group stays at natural width; remaining space falls between
-   the file group and the cinematic toggle via justify-content. */
-.watch-toolbar__left { flex: 0 1 auto; min-width: 0; }
+/* Left cluster — capsule file-identity chip, offset from the dock's
+   LEFT boundary by `--watch-edge-gap`. Natural-width content; any
+   slack between the two clusters falls into the flex-justify gap. */
+.watch-toolbar__left {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: var(--watch-edge-gap, 8px);
+  display: flex;
+  align-items: center;
+}
 
 /* ── Inline top bar (file identity) ── */
 .watch-topbar {
@@ -338,20 +360,21 @@ body {
    Right-side cluster on the toolbar. Primary anchor + caret; anchor/button
    pair preserves browser-native navigation (middle-click, ⌘-click, right-
    click → "Open in new tab") while the caret toggles a dropdown. */
-/* Right cluster — vertical stack, left-aligned. The Lab split-capsule
-   sits ABOVE the Cinematic Camera toggle; both share the same left
-   edge so they read as a two-story column pinned to the right edge
-   of the toolbar. The capsule chip on the left of the toolbar keeps
-   its full width (date + both icons) because the right cluster no
-   longer competes horizontally for space. 4px gap between the two
+/* Right cluster — primary actions as a vertical stack, pinned to the
+   dock's RIGHT boundary (offset by --watch-edge-gap). The Lab
+   split-capsule sits ABOVE the Cinematic Camera toggle; both share
+   the same RIGHT edge (align-items: flex-end) so they read as a
+   two-story column anchored to the right. 4px gap between the two
    rows is tight enough to signal grouping but wide enough that the
    Lab capsule and the Cinematic pill don't visually touch. */
 .watch-toolbar__right {
+  flex: 0 0 auto;
+  min-width: 0;
+  margin-right: var(--watch-edge-gap, 8px);
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: 4px;
-  flex: 0 0 auto;
 }
 .watch-lab-entry-anchor {
   position: relative;
@@ -404,43 +427,8 @@ body {
   to   { opacity: 1; }
 }
 
-/* Secondary half — ghost surface, LEFT-anchored. Rounded outer-left
-   corner inherits from the parent's `border-radius + overflow:hidden`.
-   Owns the 1px right-edge divider that separates it from the filled
-   primary half. */
-.watch-lab-entry__secondary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 14px;
-  min-height: 32px;
-  background: var(--color-surface, rgba(255,255,255,0.72));
-  color: var(--color-text);
-  text-decoration: none;
-  line-height: 1;
-  border: 0;
-  /* Divider between halves. Neutral border color reads well against
-     both the ghost side (our side) and the accent fill on the right. */
-  border-right: 1px solid var(--color-border);
-  border-radius: 0;
-  font: inherit;
-  white-space: nowrap;
-  transition: background 120ms ease;
-}
-.watch-lab-entry__secondary:hover {
-  background: var(--color-surface-hover, rgba(0,0,0,0.04));
-}
-.watch-lab-entry__secondary:focus-visible {
-  outline: 2px solid var(--color-accent, #6dc);
-  outline-offset: -2px;
-}
-.watch-lab-entry__secondary-label {
-  flex: 0 1 auto;
-}
-
-/* Primary half — filled accent, RIGHT-anchored. Rounded outer-right
-   corner inherits from the parent. No icon, regular weight — text
-   alone carries the action. */
+/* Primary half — filled accent, takes the LEFT position in the
+   capsule. No icon, regular weight — text alone carries the action. */
 .watch-lab-entry__primary {
   display: inline-flex;
   align-items: center;
@@ -452,6 +440,9 @@ body {
   text-decoration: none;
   line-height: 1;
   border: 0;
+  /* Divider between primary and caret — inherits border token so it
+     reads consistently across themes. */
+  border-right: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: 0;
   font: inherit;
   cursor: pointer;
@@ -465,8 +456,6 @@ body {
   transform: translateY(0.5px);
 }
 .watch-lab-entry__primary:focus-visible {
-  /* Inset outline so the ring stays inside the capsule's rounded
-     boundary rather than bleeding past the overflow-clip. */
   outline: 2px solid #fff;
   outline-offset: -3px;
 }
@@ -477,6 +466,7 @@ body {
   cursor: not-allowed;
   opacity: 0.75;
   filter: none;
+  border-right-color: var(--color-border);
 }
 .watch-lab-entry__primary-label {
   flex: 0 1 auto;
@@ -485,26 +475,153 @@ body {
   text-overflow: ellipsis;
 }
 
-/* Touch / coarse-pointer — WCAG 2.5.8 44×44 minimum. */
+/* Caret toggle — narrow RIGHT half of the capsule. Ghost surface so
+   it visually subordinates to the primary; rotates its glyph on
+   open. Inherits the capsule's accent fill via its parent border so
+   the join between primary and caret reads as one pill silhouette. */
+.watch-lab-entry__caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 0 8px;
+  background: color-mix(in oklab, var(--color-accent, #6dc) 90%, black);
+  color: rgba(255, 255, 255, 0.92);
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  transition: background 120ms ease, color 120ms ease;
+}
+.watch-lab-entry__caret:hover {
+  background: color-mix(in oklab, var(--color-accent, #6dc) 76%, black);
+  color: #fff;
+}
+.watch-lab-entry__caret:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -3px;
+}
+.watch-lab-entry__caret-glyph {
+  display: block;
+  transition: transform 180ms cubic-bezier(0.22, 0.9, 0.3, 1);
+}
+.watch-lab-entry__caret--open .watch-lab-entry__caret-glyph {
+  transform: rotate(180deg);
+}
+
+/* ── Popover menu ──────────────────────────────────────────────────
+   Revealed when the caret is toggled open. Opens ABOVE the capsule
+   (never below) so it cannot overlap the Cinematic Camera toggle,
+   timeline readout, or bottom dock that sit beneath the toolbar.
+   Position is identical on every device (phone, tablet, desktop).
+
+   Style follows the Watch-app panel design system — same tokens as
+   `.watch-open-panel` (background: `--color-surface`, border:
+   `--color-border`, `--glass-blur`, drop-shadow). This keeps the
+   dropdown visually consistent with the Open panel, Settings sheet,
+   and every other dialog surface in Watch; the bespoke glass+accent
+   treatment the menu had previously felt visually separate from the
+   rest of the app. */
+.watch-lab-entry__menu {
+  position: absolute;
+  /* Up-opening: bottom-edge of menu sits above the capsule's top. */
+  bottom: calc(100% + 6px);
+  right: 0;
+  width: min(280px, calc(100vw - 32px));
+  padding: 4px;
+  background: var(--color-surface, rgba(24, 24, 30, 0.92));
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.12));
+  border-radius: 12px;
+  backdrop-filter: var(--glass-blur, blur(8px));
+  -webkit-backdrop-filter: var(--glass-blur, blur(8px));
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.35);
+  z-index: 30;
+  animation: watchLabEntryMenuIn 140ms cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+/* Intro slides UP into position — the menu starts 4 px below its
+   resting spot and rises, consistent with the up-opening direction.
+   (Resting position is above the capsule; the menu "grows upward"
+   into view.) */
+@keyframes watchLabEntryMenuIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0);  }
+}
+
+/* Menu item — single row with title + muted description. Styling
+   mirrors the app's panel-row aesthetic: neutral hover background,
+   standard text weights, standard tokens. Uses the existing
+   `.watch-lab-entry__secondary` class name so Playwright / E2E
+   selectors keep working without a rename churn. */
+.watch-lab-entry__secondary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--color-text);
+  text-decoration: none;
+  line-height: 1.4;
+  transition: background 120ms ease;
+  outline: none;
+}
+.watch-lab-entry__secondary:hover,
+.watch-lab-entry__secondary:focus-visible {
+  /* Neutral surface-hover tint — consistent with the rest of Watch
+     (open-panel rows, settings list rows) rather than an accent wash
+     that would make this one dropdown feel visually special. */
+  background: var(--color-surface-hover, rgba(255, 255, 255, 0.06));
+}
+.watch-lab-entry__secondary:focus-visible {
+  outline: 2px solid var(--color-accent, #6dc);
+  outline-offset: -2px;
+}
+.watch-lab-entry__secondary-label {
+  /* 500 at --font-sm reads as "prominent row title" without shouting. */
+  font-size: var(--font-sm, 13px);
+  font-weight: 500;
+  color: var(--color-text);
+}
+.watch-lab-entry__menu-item-desc {
+  font-size: var(--font-xs, 12px);
+  color: var(--color-text-secondary, #9a9a9e);
+  font-weight: 400;
+  /* Allow wrapping — two short sentences wrap to 2–3 readable lines
+     at the menu's 280 px measure. `text-wrap: balance` evens the
+     line breaks where supported. */
+  white-space: normal;
+  text-wrap: balance;
+}
+
+/* Touch / coarse-pointer — WCAG 2.5.8 44×44 minimum for the primary.
+   Caret stays narrow but taller. Menu items get a touch-friendly row. */
 @media (pointer: coarse) {
-  .watch-lab-entry__primary,
-  .watch-lab-entry__secondary {
+  .watch-lab-entry__primary {
     min-height: 44px;
-    padding: 0 16px;
+    padding: 0 18px;
+  }
+  .watch-lab-entry__caret {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 12px;
+  }
+  .watch-lab-entry__secondary {
+    padding: 12px 14px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .watch-lab-entry__primary,
+  .watch-lab-entry__caret,
+  .watch-lab-entry__caret-glyph,
   .watch-lab-entry__secondary {
     transition: none;
   }
   .watch-lab-entry__primary:active:not(:disabled) {
     transform: none;
   }
-  /* Skip the 2 s-delay + 3 s-fade intro — show the capsule at full
-     opacity from first paint. */
-  .watch-lab-entry {
+  .watch-lab-entry,
+  .watch-lab-entry__menu {
     animation: none;
   }
 }
@@ -575,16 +692,18 @@ body {
    ---------------------------------------------------------------- */
 .watch-lab-entry__tooltip {
   /* Anchored to `.watch-lab-entry-anchor` (position: relative). Right
-     edge aligns with the Continue button's right edge; the caret
+     edge aligns with the primary button's right edge; the caret
      (::after) centers under that column. */
   position: absolute;
   right: 0;
   bottom: calc(100% + 12px);
-  /* Compact measure — one line at desktop, wraps naturally on phone.
-     max-width is viewport-clamped so the tooltip never forces
-     horizontal scroll on a 320 px phone. */
-  max-width: min(280px, calc(100vw - 32px));
-  padding: 8px 14px;
+  /* Fixed readable measure so the bubble always wraps to ~2 short
+     lines rather than stretching into an awkward one-liner. The
+     viewport clamp keeps the bubble off the edge of a 320 px phone.
+     `width` (not `max-width`) pins the column so the two sentences
+     break at the same place on every device → consistent layout. */
+  width: min(260px, calc(100vw - 32px));
+  padding: 10px 14px;
   /* Layered glass: vertical gradient surface + saturation backdrop
      lift so the bubble feels distinct from the dark canvas beneath
      without blocking out the scene. */
@@ -609,8 +728,13 @@ body {
   font-size: var(--font-sm, 13px);
   font-weight: 500;
   letter-spacing: 0.012em;
-  line-height: 1.3;
-  white-space: nowrap;
+  line-height: 1.4;
+  /* Allow natural wrap — two short sentences flow to two lines on a
+     280 px measure. `balance` gives a visually even paragraph when
+     the browser supports it; falls back to normal flow otherwise. */
+  white-space: normal;
+  text-wrap: balance;
+  text-align: left;
   z-index: 25;
   /* Hidden resting state. Pointer-events disabled so the bubble
      never intercepts clicks on the button beneath. 90 ms exit delay
@@ -648,12 +772,42 @@ body {
   clip-path: polygon(50% 100%, 0 0, 100% 0);
 }
 /* Reveal on hover / focus of the primary. Zero entrance delay (the
-   base rule's 90 ms delay is only for the exit transition). */
-.watch-lab-entry-anchor:has(.watch-lab-entry__primary:hover) .watch-lab-entry__tooltip,
-.watch-lab-entry-anchor:has(.watch-lab-entry__primary:focus-visible) .watch-lab-entry__tooltip {
+   base rule's 90 ms delay is only for the exit transition).
+   `:not(:has(...data-menu-open="true"))` suppresses the tooltip
+   whenever the caret menu is open — enforces one-popover-at-a-time
+   so the tooltip and the menu can never visually overlap. */
+.watch-lab-entry-anchor:not(:has(.watch-lab-entry[data-menu-open="true"])):has(.watch-lab-entry__primary:hover) .watch-lab-entry__tooltip,
+.watch-lab-entry-anchor:not(:has(.watch-lab-entry[data-menu-open="true"])):has(.watch-lab-entry__primary:focus-visible) .watch-lab-entry__tooltip {
   opacity: 1;
   transform: translateY(0) scale(1);
   transition-delay: 0ms, 0ms;
+}
+
+/* ── Auto-cue animation (timeline-halfway + timeline-end triggers) ──
+   When `WatchLabEntryControl` sets `data-auto-cue="true"` on the
+   tooltip, run the 1-3-1 cue (1 s fade-in, 3 s stay, 1 s fade-out).
+   Single keyframe — `--cue-y` / `--cue-s` are the resting-pose
+   offsets; `prefers-reduced-motion` zeroes them so the cue fades in
+   and out without any translate/scale movement. One keyframe
+   avoids the maintenance burden of two nearly-identical ones that
+   had to stay in sync. */
+.watch-lab-entry__tooltip[data-auto-cue="true"] {
+  --cue-y: 4px;
+  --cue-s: 0.98;
+  animation: watchLabPrimaryHintAutoCue 5s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+@keyframes watchLabPrimaryHintAutoCue {
+  0%   { opacity: 0; transform: translateY(var(--cue-y)) scale(var(--cue-s)); }
+  20%  { opacity: 1; transform: translateY(0)            scale(1);           } /* 1 s in */
+  80%  { opacity: 1; transform: translateY(0)            scale(1);           } /* 3 s stay */
+  100% { opacity: 0; transform: translateY(var(--cue-y)) scale(var(--cue-s)); } /* 1 s out */
+}
+@media (prefers-reduced-motion: reduce) {
+  .watch-lab-entry__tooltip[data-auto-cue="true"] {
+    --cue-y: 0px;
+    --cue-s: 1;
+    animation-timing-function: linear;
+  }
 }
 /* Fallback for engines without backdrop-filter — opaque surface so
    text stays legible on Safari < 14 / older Android webviews. */
@@ -700,8 +854,8 @@ body {
     transform: none;
     transition: opacity 120ms ease;
   }
-  .watch-lab-entry-anchor:has(.watch-lab-entry__primary:hover) .watch-lab-entry__tooltip,
-  .watch-lab-entry-anchor:has(.watch-lab-entry__primary:focus-visible) .watch-lab-entry__tooltip {
+  .watch-lab-entry-anchor:not(:has(.watch-lab-entry[data-menu-open="true"])):has(.watch-lab-entry__primary:hover) .watch-lab-entry__tooltip,
+  .watch-lab-entry-anchor:not(:has(.watch-lab-entry[data-menu-open="true"])):has(.watch-lab-entry__primary:focus-visible) .watch-lab-entry__tooltip {
     transform: none;
   }
 }

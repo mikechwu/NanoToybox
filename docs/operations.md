@@ -244,8 +244,10 @@ operator is pairing with a reporting user during an incident.
 
 ### Client-side (Watch→Lab handoff, browser console)
 
-Emitted during the Watch→Lab "Continue" funnel (the Watch-side primary
-button, previously labeled "Remix" / "From this frame"). Watch writes
+Emitted during the Watch→Lab handoff funnel (the Watch-side primary
+button, currently labeled **"Interact From Here"**; previously "Continue" /
+"Remix" / "From this frame"). The secondary disclosure option is labeled
+**"Open a Fresh Lab"** (previously "Open Lab"). Watch writes
 the paused frame (positions + velocities + color assignments + orbit
 camera + small metadata) to `localStorage` and opens
 `/lab/?from=watch&handoff=<token>`; Lab consumes, scrubs the URL, and
@@ -280,8 +282,11 @@ when debugging with a user. Keys are split by storage class and TTL.
   read on the post-auth return to resume the interrupted action.
   Self-clears on consume; stale entries are ignored via the `iat` TTL
   check.
-- (Arrival pill removed — the Continue-centric redesign deleted the
-  Watch→Lab arrival pill. The `atomdojo.watchHandoffPillDismissed:<token>`
+- (Arrival pill removed — the "Interact From Here" redesign (formerly
+  the Continue-centric redesign) deleted the Watch→Lab arrival pill.
+  Hydrate success now = rendered scene + the `[lab.boot] watch handoff
+  hydrated` console.info trace; there is no arrival UI. The
+  `atomdojo.watchHandoffPillDismissed:<token>`
   key is no longer written by current builds. Operators may still see
   legacy keys in long-lived `sessionStorage` snapshots from pre-pill-
   removal sessions; they are inert and can be safely ignored.)
@@ -324,14 +329,16 @@ rejection reason.
 Support reports usually quote the banner text verbatim. Map to code
 path before asking the user to reproduce:
 
-Banner copy has been updated to drop the "remix" terminology in favor
-of the Continue wording; older support tickets may still quote the
-prior strings verbatim, so both forms are kept in this table.
+Banner copy references the Watch→Lab handoff by the current primary-CTA
+label **"Interact From Here"**. The copy has already cycled through
+earlier wordings ("remix" → "Continue" → "Interact From Here"); older
+support tickets may still quote the prior strings verbatim, so all
+forms are kept in this table.
 
 | Banner text | Root-cause path |
 |---|---|
-| "This Continue link has expired. Open it again from Watch to try once more." (legacy: "This remix link has expired. …") | `[lab.boot] watch handoff rejected: stale` — token older than the TTL (10 min in production; `?e2eHandoffTtlMs=<ms>` override is test-only). |
-| "This Continue link is no longer available. Open it again from Watch to try once more." (legacy: "This remix link is no longer available. …") | `[lab.boot] watch handoff rejected: missing-entry` — either the other tab already consumed the token and cleared it via `removeWatchToLabHandoff` (benign — reload of the Lab tab after arrival), or the writer-side entry never landed (check for `[watch] handoff write failed: …`). |
+| "This Interact From Here link has expired. Open it again from Watch to try once more." (legacy: "This Continue link has expired. …" / "This remix link has expired. …") | `[lab.boot] watch handoff rejected: stale` — token older than the TTL (10 min in production; `?e2eHandoffTtlMs=<ms>` override is test-only). |
+| "This Interact From Here link is no longer available. Open it again from Watch to try once more." (legacy: "This Continue link is no longer available. …" / "This remix link is no longer available. …") | `[lab.boot] watch handoff rejected: missing-entry` — either the other tab already consumed the token and cleared it via `removeWatchToLabHandoff` (benign — reload of the Lab tab after arrival), or the writer-side entry never landed (check for `[watch] handoff write failed: …`). |
 | "Your browser is blocking storage, so the current frame can't be prepared. …" | `[watch] handoff write failed: storage-unavailable` — private browsing, Storage-API permissions, or extension blocking. Watch-side only; no Lab-side log. |
 | "Browser storage is full, so the current frame can't be prepared. …" | `[watch] handoff write failed: quota-exceeded` — retry sweeps prior handoff entries first (TTL sweep over `atomdojo.watchLabHandoff:*`); if this still surfaces, a non-atomdojo writer is consuming the origin's `localStorage` quota. |
 | "Couldn't restore the scene from Watch. The default scene is loading instead." | `[lab.boot] watch handoff hydrate failed: <reason> …` — the transactional hydrate rolled back. `<reason>` narrows the cause: `worker-restore-rejected`, `physics-commit-threw`, `renderer-stage-threw`, `registry-register-threw`, `runtime-not-ready`, or `rollback-also-failed`. See the signal table above for per-reason triage. The default-scene fallback is attempted immediately after the rollback completes. |

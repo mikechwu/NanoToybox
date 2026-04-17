@@ -265,6 +265,14 @@ export interface AppStore {
   onboardingPhase: 'visible' | 'exiting' | 'dismissed';
   setOnboardingPhase: (phase: 'visible' | 'exiting' | 'dismissed') => void;
 
+  /** Flips `true` the first time the user drags / moves / rotates an
+   *  atom. Drives discoverability cues that teach adjacent actions
+   *  (e.g. the timed Share & Download nudge that fades in 5 seconds
+   *  after first interaction). Set once per page load; never cleared
+   *  until page unload or `resetTransientState`. Idempotent setter. */
+  hasAtomInteraction: boolean;
+  markAtomInteraction: () => void;
+
   // Camera control callbacks (registered by main.ts, consumed by CameraControls for Free-Look)
   // Center/Follow moved to BondedGroupCallbacks (Phase 10 legacy cleanup)
   cameraCallbacks: { onReturnToObject?: () => void; onFreeze?: () => void } | null;
@@ -549,6 +557,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   orbitFollowEnabled: false,
   onboardingVisible: false,
   onboardingPhase: 'dismissed' as const,
+  hasAtomInteraction: false,
   cameraCallbacks: null,
   lastFocusedMoleculeId: null,
   cameraTargetRef: null,
@@ -632,6 +641,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
     onboardingPhase: phase,
     onboardingVisible: phase !== 'dismissed',
   }),
+  // Idempotent — false→true only. Zustand no-ops the set when the next
+  // state is strictly-equal, so repeated calls after the first one are
+  // free (no subscriber notifications, no re-renders).
+  markAtomInteraction: () => {
+    if (!get().hasAtomInteraction) set({ hasAtomInteraction: true });
+  },
   setCameraCallbacks: (cbs) => set({ cameraCallbacks: cbs }),
   setLastFocusedMoleculeId: (id) => set({ lastFocusedMoleculeId: id }),
   setCameraTargetRef: (ref) => set({ cameraTargetRef: ref }),
@@ -778,6 +793,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     orbitFollowEnabled: false,
     onboardingVisible: false,
     onboardingPhase: 'dismissed' as const,
+    hasAtomInteraction: false,
     cameraCallbacks: null,
     lastFocusedMoleculeId: null,
     cameraTargetRef: null,

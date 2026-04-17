@@ -67,6 +67,7 @@ describe('subscribeOnboardingReadiness', () => {
 describe('isOnboardingEligible', () => {
   beforeEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
     useAppStore.getState().resetTransientState();
     useAppStore.getState().updateAtomCount(60); // scene ready
   });
@@ -93,6 +94,68 @@ describe('isOnboardingEligible', () => {
   it('returns false during review mode', () => {
     useAppStore.getState().setTimelineMode('review');
     expect(isOnboardingEligible()).toBe(false);
+  });
+
+  // Watch → Lab handoff suppression. The shared `isWatchHandoffBoot`
+  // predicate reads `window.location.search`, so tests stub location.
+  describe('Watch → Lab handoff boot suppression', () => {
+    const ORIGINAL_SEARCH = window.location.search;
+    afterEach(() => {
+      // Restore original search so cross-test state doesn't leak.
+      Object.defineProperty(window, 'location', {
+        value: { ...window.location, search: ORIGINAL_SEARCH },
+        writable: true,
+        configurable: true,
+      });
+    });
+
+    function setSearch(search: string): void {
+      Object.defineProperty(window, 'location', {
+        value: { ...window.location, search },
+        writable: true,
+        configurable: true,
+      });
+    }
+
+    it('returns false when URL has ?from=watch&handoff=<token> (Continue flow)', () => {
+      setSearch('?from=watch&handoff=abc-123');
+      expect(isOnboardingEligible()).toBe(false);
+    });
+
+    it('returns true for direct /lab/ open (no handoff params)', () => {
+      setSearch('');
+      expect(isOnboardingEligible()).toBe(true);
+    });
+
+    it('returns true when only `from=watch` is present (missing handoff token)', () => {
+      // Defense-in-depth: a malformed URL with `from=watch` but no token
+      // is not a real handoff boot — show onboarding normally so the
+      // user isn't silently gated out of the welcome.
+      setSearch('?from=watch');
+      expect(isOnboardingEligible()).toBe(true);
+    });
+
+    it('returns true when only `handoff=` is present (missing from param)', () => {
+      setSearch('?handoff=abc-123');
+      expect(isOnboardingEligible()).toBe(true);
+    });
+
+    // Regression lock for the production race (found in prod):
+    // `consumeWatchToLabHandoffFromLocation` calls
+    // `history.replaceState(null, '', cleanedURL)` to strip the handoff
+    // token from the URL. The readiness gate evaluates AFTER hydrate
+    // completes (atomCount > 0), by which time the URL has been
+    // scrubbed. If the gate relied ONLY on the live URL, onboarding
+    // would re-show. The boot-time `markOnboardingDismissed()` call
+    // in main.ts is the authoritative fix — this test verifies the
+    // sessionStorage sentinel path holds suppression even after scrub.
+    it('stays suppressed after URL scrub when dismissed-in-session sentinel was set at boot', async () => {
+      setSearch('?from=watch&handoff=abc-123');
+      const { markOnboardingDismissed } = await import('../../lab/js/runtime/onboarding');
+      markOnboardingDismissed(); // what main.ts does at boot for handoff
+      setSearch(''); // simulate the consume's history.replaceState scrub
+      expect(isOnboardingEligible()).toBe(false);
+    });
   });
 });
 

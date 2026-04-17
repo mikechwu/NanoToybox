@@ -29,6 +29,7 @@
 
 import { useAppStore } from '../store/app-store';
 import { CONFIG, getDebugParam } from '../config';
+import { isWatchHandoffBoot } from '../../../src/watch-lab-handoff/watch-handoff-url';
 
 
 /** Rendering surface provided by StatusController. */
@@ -302,10 +303,23 @@ function wasOnboardingDismissedInSession(): boolean {
 /**
  * Check whether onboarding overlay is eligible to show.
  * Pure readiness check — no side effects.
- * Suppressed by ?e2e=1 (see getDebugParam in config.ts for approved debug params).
+ *
+ * Suppression sources (in order of cost):
+ *   · `?e2e=1` — E2E tests need a deterministic canvas.
+ *   · Watch → Lab handoff boot — the user arrived from Watch's
+ *     Continue funnel, has already been introduced to the product,
+ *     and expects to land directly in the seeded scene. Showing
+ *     "Atom Simulation Studio / Touch and drag atoms to begin"
+ *     here would be a regression in flow. Delegated to the shared
+ *     URL predicate (`isWatchHandoffBoot`) so the boot-time skip
+ *     gate and the onboarding-time skip gate cannot drift.
+ *   · Prior in-session dismissal.
+ *   · Standard readiness checks (sheets / placement / review /
+ *     atoms / phase).
  */
 export function isOnboardingEligible(): boolean {
   if (getDebugParam('e2e') === '1') return false;
+  if (isWatchHandoffBoot()) return false;
   if (wasOnboardingDismissedInSession()) return false;
   const s = useAppStore.getState();
   if (s.activeSheet !== null) return false;

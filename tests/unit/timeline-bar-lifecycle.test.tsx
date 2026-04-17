@@ -671,8 +671,14 @@ describe('TimelineBar unified shell', () => {
     vi.useRealTimers();
   });
 
-  it('restart anchor hint visible on hover', () => {
-    vi.useFakeTimers();
+  it('restart affordance: positioning anchor + pill, with no wrapping hover tooltip', () => {
+    // Contract enforced here (reproduces a production bug's regression lock):
+    //   · The pill's interactive transforms (hover lift etc.) must NOT
+    //     collide with the anchor's centering transform. Implementation
+    //     keeps them on separate elements — the `<span class="…anchor">`
+    //     owns centering, the `<button class="…button">` owns interaction.
+    //   · The prior ActionHint tooltip (`TIMELINE_HINTS.restartFromHere`)
+    //     is gone — it duplicated the button's label.
     act(() => {
       installSubsystem('active');
       useAppStore.getState().updateTimelineState({
@@ -682,15 +688,21 @@ describe('TimelineBar unified shell', () => {
       });
     });
     const { container } = render(<TimelineBar />);
-    const anchor = container.querySelector('.timeline-restart-anchor')! as HTMLElement;
-    const tooltip = anchor.querySelector('[role="tooltip"]')!;
-    act(() => { fireEvent.mouseEnter(anchor); });
-    act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
-    expect(tooltip.classList.contains('timeline-hint--visible')).toBe(true);
-    expect(tooltip.textContent).toContain('Restart the simulation from this point.');
-    act(() => { fireEvent.mouseLeave(anchor); });
-    expect(tooltip.classList.contains('timeline-hint--visible')).toBe(false);
-    vi.useRealTimers();
+    const anchor = container.querySelector('.timeline-restart-anchor') as HTMLElement | null;
+    const button = container.querySelector('.timeline-restart-button') as HTMLButtonElement | null;
+    expect(anchor).not.toBeNull();
+    expect(button).not.toBeNull();
+    // Separation of concerns — anchor ≠ button.
+    expect(anchor!.tagName).toBe('SPAN');
+    expect(button!.parentElement).toBe(anchor);
+    // Anchor must NOT carry button styling classes, and vice versa.
+    expect(anchor!.classList.contains('timeline-restart-button')).toBe(false);
+    expect(button!.classList.contains('timeline-restart-anchor')).toBe(false);
+    // Label + accessible name.
+    expect(button!.textContent).toContain('Restart here');
+    expect(button!.getAttribute('aria-label')).toMatch(/Restart simulation at/);
+    // The old hover tooltip is gone — no [role="tooltip"] child.
+    expect(anchor!.querySelector('[role="tooltip"]')).toBeNull();
   });
 
   it('clear trigger hint visible on hover', () => {
@@ -957,7 +969,11 @@ describe('TimelineBar unified shell', () => {
     act(() => { fireEvent.mouseEnter(anchor); });
     act(() => { vi.advanceTimersByTime(HINT_DELAY_MS); });
     expect(tooltip.classList.contains('timeline-hint--visible')).toBe(true);
-    expect(tooltip.textContent).toContain('Transfer history');
+    // Tooltip copy was refined from "Transfer history" →
+    // "Share & Download" (see TRANSFER_HINT_COPY in
+    // timeline-transfer-dialog.tsx) — maps 1:1 to the dialog's
+    // Share / Download tabs for clearer discoverability.
+    expect(tooltip.textContent).toContain('Share & Download');
     vi.useRealTimers();
   });
 

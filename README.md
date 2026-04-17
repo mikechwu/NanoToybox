@@ -32,7 +32,7 @@ Or visit the live demo at [atomdojo.pages.dev](https://atomdojo.pages.dev/lab/).
 - **Containment boundary** — soft harmonic wall with Contain/Remove toggle, live atom count, auto-scaling radius
 - **Responsive UI** — phone (bottom sheet), tablet (side panel), desktop (non-modal panel)
 - **Bonded-group color editing** — inline color chip with preset swatch popover; group color intents persist across topology changes, multi-color chips for mixed groups, perceptual lift for 3D readability
-- **Watch→Lab handoff** — a "Continue" button in Watch sends the current scrubbed frame to Lab, handing off atoms/bonds/motion state/boundary via a short-lived token and hydrating Lab transactionally; stale or missing handoffs toast and fall back to the default C60 scene
+- **Watch→Lab handoff** — an "Interact From Here" primary pill in Watch sends the current scrubbed frame to Lab as a seed, handing off atoms/bonds/motion state/boundary via a short-lived token and hydrating Lab transactionally; a caret-toggled disclosure reveals a secondary "Open a Fresh Lab" option that starts from a default molecule. Stale or missing handoffs toast and fall back to the default C60 scene
 - **React + Zustand** — all UI surfaces are React-authoritative with reactive store
 
 ### Watch (trajectory viewer)

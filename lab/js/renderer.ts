@@ -595,6 +595,63 @@ export class Renderer {
   }
 
   /**
+   * World-space display radius of the atom at `atomIdx` (Ångströms).
+   *
+   * Today every atom uses the same geometry radius from
+   * `CONFIG.atoms.radius`. The signature intentionally accepts an
+   * atom index so callers don't need to be updated when per-element
+   * sizing lands (e.g., scaling Carbon / Hydrogen / Oxygen by their
+   * van der Waals radii). Negative / out-of-range indices fall back
+   * to the same default — the caller's downstream math is unaffected.
+   *
+   * Consumers: `atom-interaction-hint` runtime (via `getAtomScreenRadius`).
+   */
+  getAtomDisplayRadius(_atomIdx: number): number {
+    return CONFIG.atoms.radius;
+  }
+
+  /**
+   * Screen-space radius of the atom's rendered sphere in CSS pixels.
+   *
+   * Computed by projecting the atom center and the atom center + a
+   * camera-right-aligned offset of magnitude `getAtomDisplayRadius`,
+   * and measuring the pixel delta between their projections. This
+   * accounts for perspective foreshortening (atoms far from the
+   * camera render smaller) without any approximation.
+   *
+   * Returns 0 when the atom is off-screen or the physics ref is
+   * absent — callers should treat a zero result as "skip the radius
+   * term in offset math" rather than an error.
+   */
+  getAtomScreenRadius(atomIdx: number): number {
+    if (!this._physicsRef || atomIdx < 0 || atomIdx >= this._physicsRef.n) return 0;
+    const canvasRect = this.renderer.domElement.getBoundingClientRect();
+    if (canvasRect.width === 0 || canvasRect.height === 0) return 0;
+    const pos = this._physicsRef.pos;
+    const i3 = atomIdx * 3;
+    const r = this.getAtomDisplayRadius(atomIdx);
+    // Camera basis — use world-space right vector from the camera
+    // matrix (column 0 of matrixWorld). Length 1 since the camera
+    // matrix is a rigid transform (no scale).
+    this.camera.updateMatrixWorld(true);
+    const m = this.camera.matrixWorld.elements;
+    const rightX = m[0], rightY = m[1], rightZ = m[2];
+    const center: [number, number, number] = [pos[i3], pos[i3 + 1], pos[i3 + 2]];
+    const edge: [number, number, number] = [
+      center[0] + rightX * r,
+      center[1] + rightY * r,
+      center[2] + rightZ * r,
+    ];
+    const centerNDC = this.projectToNDC(center);
+    const edgeNDC = this.projectToNDC(edge);
+    // NDC x spans [-1, 1] across `canvasRect.width`, so half-width
+    // converts NDC delta to pixels.
+    const dxPx = (edgeNDC[0] - centerNDC[0]) * 0.5 * canvasRect.width;
+    const dyPx = (edgeNDC[1] - centerNDC[1]) * 0.5 * canvasRect.height;
+    return Math.sqrt(dxPx * dxPx + dyPx * dyPx);
+  }
+
+  /**
    * Return the current camera state (position, direction, up) as plain arrays.
    * Used by the orchestrator to send camera info to the worker for
    * view-dependent calculations.

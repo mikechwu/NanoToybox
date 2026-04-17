@@ -59,7 +59,6 @@ function makeDeps(workerActive = false) {
     getRenderer: () => renderer,
     getStateMachine: () => stateMachine,
     getInputManager: () => inputManager,
-    getStatusCtrl: () => null,
     isWorkerActive: () => workerActive,
     sendWorkerInteraction,
     markAtomInteractionStarted,

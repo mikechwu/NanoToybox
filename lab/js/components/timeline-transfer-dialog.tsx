@@ -21,6 +21,32 @@ import type { AuthStatus } from '../store/app-store';
 import { hydrateAuthSession } from '../runtime/auth-runtime';
 import { AgeClickwrapNotice } from './AgeClickwrapNotice';
 
+/** Canonical wording for the Transfer trigger's tooltip.
+ *  Considered:
+ *    · "Transfer history"   — generic / technical, the previous copy
+ *    · "Export"             — narrow, omits the Share path
+ *    · "Save or share"      — clear but reads as a choice the user
+ *                             must make up-front
+ *    · "Share & Save"       — friendlier but obscures that Save
+ *                             means a local file
+ *    · "Share & Download"   ✓ maps 1:1 to the dialog's two tabs
+ *                             (Share / Download) so the user knows
+ *                             exactly what the click will offer.
+ *                             Colloquial, short, unambiguous.
+ */
+export const TRANSFER_HINT_COPY = 'Share & Download';
+
+/** Delay between the first atom interaction and the timed cue's
+ *  fade-in. Long enough that the cue doesn't step on the user's
+ *  ongoing action; short enough that the association is still felt. */
+const TRANSFER_HINT_TIMED_CUE_DELAY_MS = 5_000;
+
+/** Total on-screen duration of the timed cue (fade-in + stay + fade-out).
+ *  The CSS animation `.timeline-hint--force-visible` uses the same
+ *  duration; JS only needs to drop `forceVisible` when it elapses so
+ *  the animation's `forwards` fill doesn't pin opacity. */
+const TRANSFER_HINT_TIMED_CUE_DURATION_MS = 5_000;
+
 const CLICKWRAP_SHARE_ID = 'age-clickwrap-share';
 const CLICKWRAP_PUBLISH_ID = 'age-clickwrap-publish';
 
@@ -53,9 +79,55 @@ function TransferIcon() {
   );
 }
 
-export function TransferTrigger({ onClick, label = 'Transfer history' }: { onClick: () => void; label?: string }) {
+export function TransferTrigger({ onClick, label = TRANSFER_HINT_COPY }: { onClick: () => void; label?: string }) {
+  // Trigger B (timed cue): fade the hint in 5 seconds after the first
+  // atom interaction — 1 s fade-in, 3 s stay, 1 s fade-out. The CSS
+  // keyframe `.timeline-hint--force-visible` owns the opacity curve so
+  // the JS side is trivial: set forceVisible for the animation
+  // duration, then clear it. Runs at most once per page load (guarded
+  // by `firedRef`) regardless of how many times atoms are touched.
+  const hasAtomInteraction = useAppStore((s) => s.hasAtomInteraction);
+  const [timedVisible, setTimedVisible] = useState(false);
+  // Bump this every time the timed cue opens so ActionHint can
+  // re-key the tooltip span and CSS animation restarts from 0%.
+  const [animationKey, setAnimationKey] = useState(0);
+  const firedRef = useRef(false);
+  const delayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const endTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!hasAtomInteraction) return;
+    if (firedRef.current) return;
+    firedRef.current = true;
+
+    delayTimerRef.current = setTimeout(() => {
+      delayTimerRef.current = null;
+      setAnimationKey((k) => k + 1);
+      setTimedVisible(true);
+      endTimerRef.current = setTimeout(() => {
+        endTimerRef.current = null;
+        setTimedVisible(false);
+      }, TRANSFER_HINT_TIMED_CUE_DURATION_MS);
+    }, TRANSFER_HINT_TIMED_CUE_DELAY_MS);
+
+    return () => {
+      if (delayTimerRef.current !== null) {
+        clearTimeout(delayTimerRef.current);
+        delayTimerRef.current = null;
+      }
+      if (endTimerRef.current !== null) {
+        clearTimeout(endTimerRef.current);
+        endTimerRef.current = null;
+      }
+    };
+  }, [hasAtomInteraction]);
+
   return (
-    <ActionHint text={label}>
+    <ActionHint
+      text={label}
+      forceVisible={timedVisible}
+      forceAnimationKey={animationKey}
+    >
       <button
         className="timeline-transfer-trigger"
         onClick={onClick}

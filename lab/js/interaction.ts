@@ -33,7 +33,7 @@ export function screenToPhysics(renderer: Renderer, inputManager: InputManager, 
  * @param {object} cmd - command from StateMachine
  * @param {number} screenX
  * @param {number} screenY
- * @param {object} deps - { physics, renderer, stateMachine, inputManager, fadeHint, updateStatus, updateSceneStatus }
+ * @param {object} deps - { physics, renderer, stateMachine, inputManager, updateStatus, updateSceneStatus, focusMoleculeForAtom }
  */
 /** Result from interaction dispatch — includes resolved world drag target if applicable. */
 export interface InteractionResult {
@@ -46,14 +46,13 @@ export function handleCommand(cmd: Command, screenX: number | undefined, screenY
   renderer: Renderer;
   stateMachine: StateMachine;
   inputManager: InputManager;
-  fadeHint: () => void;
   updateStatus: (text: string) => void;
   updateSceneStatus: () => void;
   /** Focus-aware pivot: update orbit pivot to the molecule containing the given atom. */
   focusMoleculeForAtom: (atomIdx: number) => void;
 }): InteractionResult {
   let dragTarget: [number, number, number] | null = null;
-  const { physics, renderer, stateMachine, inputManager, fadeHint, updateStatus, updateSceneStatus, focusMoleculeForAtom } = deps;
+  const { physics, renderer, stateMachine, inputManager, updateStatus, updateSceneStatus, focusMoleculeForAtom } = deps;
 
   switch (cmd.action) {
     case 'highlight':
@@ -65,7 +64,6 @@ export function handleCommand(cmd: Command, screenX: number | undefined, screenY
       break;
 
     case 'startDrag': {
-      fadeHint();
       const ai = cmd.atom;
       physics.startDrag(ai);
       renderer.setHighlight(ai);
@@ -101,7 +99,6 @@ export function handleCommand(cmd: Command, screenX: number | undefined, screenY
     }
 
     case 'startMove': {
-      fadeHint();
       const ai = cmd.atom;
       physics.startTranslate(ai);
       renderer.setHighlight(ai);
@@ -131,7 +128,6 @@ export function handleCommand(cmd: Command, screenX: number | undefined, screenY
       break;
 
     case 'startRotate': {
-      fadeHint();
       const ai = cmd.atom;
       physics.startRotateDrag(ai);
       renderer.setHighlight(ai);

@@ -202,15 +202,45 @@ Early boot-time checks that decide "do we have work queued from a prior surface?
 
 The destructive consume (`consumeWatchToLabHandoffFromLocation`) runs **later**, once subsystems (physics, worker, renderer) are ready to receive the payload. Pattern: **ask the URL early, consume storage late.** Consuming storage before subsystems are ready means a failed hydrate leaves the handoff already drained, so retry is impossible and the user loses the work silently.
 
-### Watch→Lab Handoff (Continue Flow)
+### Watch→Lab Handoff (Continue-Flow Entry)
 
-The Watch-side "Continue" button (previously called "Remix" / "From this frame" — do not reintroduce those names) projects the current Watch frame into a Lab hydrate token and navigates to Lab with the token referenced on the URL. Lab then consumes the token from localStorage and hydrates via the transactional pattern above. There is no arrival pill / provenance banner on the Lab side — hydrate success is signaled only by the rendered scene plus a `[lab.boot] watch handoff hydrated` console.info trace.
+The Watch-side entry control projects the current Watch frame into a Lab hydrate token and navigates to Lab with the token referenced on the URL. Lab then consumes the token from localStorage and hydrates via the transactional pattern above. There is no arrival pill / provenance banner on the Lab side — hydrate success is signaled only by the rendered scene plus a `[lab.boot] watch handoff hydrated` console.info trace.
 
-**Terminology (canonical):**
-- "Continue" — the Watch-side primary button that opens Lab from the current frame.
-- "Handoff" — the localStorage-backed transport from Watch to Lab.
-- "Seed" — the `WatchLabSceneSeed` payload carried inside a handoff token.
-- "Motion state" — preferred over "momentum" for per-atom velocity data (per-atom mass is not tracked on the wire).
+**Entry control shape** (`watch/js/components/watch-lab-entry-control.tsx`): a single accent-filled primary pill **"Interact From Here"** plus a caret `▼` that toggles a disclosure popover. The popover exposes the secondary action **"Open a Fresh Lab"** ("Starts with a default molecule. Build and experiment from there."). The primary tooltip copy ("Take over from this exact frame. Drag atoms and watch the physics react.") is a module-local const — not exported.
+
+- **Disclosure, not menu.** The caret uses `aria-haspopup="true"` / `aria-expanded`; the popover is `role="group"` with `aria-label="More ways to open Lab"`. Do NOT add `role="menu"` / `role="menuitem"` — the regression tests and E2E spec pin disclosure semantics.
+- **Mutual exclusion with hover tooltip.** React sets `data-menu-open="true"` on `.watch-lab-entry` whenever the popover is open; CSS `:has(…)` suppresses the hover tooltip. The two affordances never co-render.
+- **Always opens above** the capsule at every viewport, to avoid overlap with the Cinematic toggle, timeline, and dock.
+- **CSS class contract** (preserved for E2E): `.watch-lab-entry`, `.watch-lab-entry__primary`, `.watch-lab-entry__secondary`, `.watch-lab-entry__tooltip`, `.watch-lab-entry__caret`. Menu-item classes are gone; the secondary uses `.watch-lab-entry__secondary` directly.
+
+**Primary-tooltip auto-cue.** A 5 s 1-3-1 animation (1 s fade-in, 3 s hold, 1 s fade-out) fires the primary tooltip on two timeline milestones — 50 % and 100 % — at most once per milestone per file. The semantics live in two shared hooks:
+
+- `src/ui/use-timed-cue.ts` — `useTimedCue({ triggerToken, durationMs })` → `{ active, animKey }`. Baseline-on-first-observation + duration timer + `animKey` for React re-key-on-firing.
+- `watch/js/hooks/use-timeline-milestone-tokens.ts` — `useTimelineMilestoneTokens(snapshot)` → `number`. Encapsulates the file-reset / arm-before-fire / paused-seek-coalesce rules.
+
+Milestone rules:
+1. **Once per file, not per session.** Fired-state resets on `fileIdentity` change.
+2. **Arm-then-fire.** Each milestone must be observed with `currentTimePs < threshold` at least once before it can fire — a share-code deep-link that resumes at 80 % does not flash both cues at mount.
+3. **Paused-seek coalescing, end-first.** At most one milestone fires per effect run; a scrub from 10 % → 95 % while paused fires the end cue only.
+4. **Reduced-motion**: opacity phases remain, `--cue-y` / `--cue-s` zero out, collapsing translate + scale.
+5. **SR announcer**: hidden `aria-live="polite"` sibling re-emits `"${primaryLabel}. ${tooltipCopy}"` on each firing.
+
+The Lab-side `TransferTrigger` (see Share & Download below) intentionally does NOT consume `useTimedCue` — its trigger is a boolean event + 5-s-delay-then-show, distinct from the token-change + immediate-show shape `useTimedCue` models.
+
+**Terminology (canonical — enforce everywhere):**
+
+| Concept | Use | Do NOT use |
+|---|---|---|
+| Watch primary CTA | **Interact From Here** | Continue, Continue this frame in Lab, Remix, From this frame |
+| Watch secondary CTA | **Open a Fresh Lab** | Open Lab, New Empty Lab, Open empty |
+| Watch→Lab mechanism | **handoff** | seed-entry, remix |
+| Payload | **seed** (`WatchLabSceneSeed`) | — |
+| Per-atom velocity state | **motion state** | momentum (per-atom mass is not tracked on the wire) |
+| Popover semantics | **disclosure** (`aria-haspopup="true"`) | menu, dropdown menu, contextmenu |
+| Lab Transfer button | **Share & Download** | Transfer history, Export, Share |
+| Restart review pill | **Restart here** | Restart, Restart simulation |
+| Atom nudge | **"Drag any atom to start"** | Click to interact, Try dragging |
+| Arrival UI | **none — hydrate success = rendered scene + `[lab.boot]` console.info** | arrival pill, provenance pill |
 
 **Shared schema** (`src/watch-lab-handoff/watch-lab-handoff-shared.ts`):
 
@@ -228,7 +258,7 @@ The Watch-side "Continue" button (previously called "Remix" / "From this frame" 
 
 **Watch seed builder** (`watch/js/watch-lab-seed.ts`): `BuildArgs` accepts optional `getColorAssignments` and `getOrbitCameraSnapshot` closures. Per-atom velocity source tracking collapses to a single tag matching `WatchLabVelocitySource`. `unresolvedVelocityFraction` is computed pre-null-promotion. Unknown `atomId`s in color assignments are dropped at build time with a `console.warn`.
 
-**Watch controller cache identity** (`watch/js/watch-controller.ts`): `_currentFrameHrefCache` uses a 5-tuple identity that includes a `cameraIdentity` component — a quantized `(position, target, fovDeg)` string with `POSITION_Q = 0.01`, `FOV_Q = 0.5`. `buildCurrentFrameLabHref` passes both color and camera getters into the seed builder. `openLabFromCurrentFrame` → `projectCurrentFrameHref` re-reads the live camera on click; a cache hit requires **all 5** identity components to match, and a miss purges the stale token via `removeWatchToLabHandoff`.
+**Watch controller cache identity** (`watch/js/watch-controller.ts`): `_currentFrameHrefCache` uses a 5-tuple identity that includes a `cameraIdentity` component — a quantized `(position, target, fovDeg)` string with `POSITION_Q = 0.01`, `FOV_Q = 0.5`. `buildCurrentFrameLabHref` passes both color and camera getters into the seed builder. The entry-control handlers (primary "Interact From Here" and secondary "Open a Fresh Lab") funnel through `projectCurrentFrameHref`, which re-reads the live camera on click; a cache hit requires **all 5** identity components to match, and a miss purges the stale token via `removeWatchToLabHandoff`.
 
 **Lab hydrate transaction** (`lab/js/runtime/hydrate-from-watch-seed.ts`): follows the Transactional Scene Mutation Pattern above. Color re-indexing maps Watch `atomId` → display slot (via `seed.atoms[i].id`) → Lab `atomId` (via tracker `assignedIds[slot]`); atoms whose full resolution chain fails are dropped. `[lab.boot] watch handoff hydrated` extends with `velocitySource`, `unresolvedVelocityFraction`, `colorAssignmentCount`, and `hasCamera`.
 
@@ -240,7 +270,30 @@ The Watch-side "Continue" button (previously called "Remix" / "From this frame" 
 - `_getWatchCameraSnapshot` (`watch/js/main.ts`, gated on `?e2e=1`) — returns the live Watch orbit pose.
 - `_getLabCameraSnapshot` (`lab/js/main.ts`, **unconditional** — the Lab tab opened from Watch has no `?e2e` param, so the hook must be ungated for camera-continuity E2E specs).
 
-**Key handoff test files** (under `tests/`): `unit/lab-scene-hydrate-from-seed.test.ts`, `unit/watch-lab-handoff.test.ts`, `unit/watch-lab-normalize-seed.test.ts`, `unit/watch-lab-seed-build.test.ts`, `unit/bonded-group-appearance-runtime-snapshot.test.ts`, `unit/watch-lab-entry-href-cache.test.ts`, `e2e/watch-lab-entry.spec.ts` (includes the camera-continuity spec).
+**Key handoff test files** (under `tests/`): `unit/lab-scene-hydrate-from-seed.test.ts`, `unit/watch-lab-handoff.test.ts`, `unit/watch-lab-normalize-seed.test.ts`, `unit/watch-lab-seed-build.test.ts`, `unit/bonded-group-appearance-runtime-snapshot.test.ts`, `unit/watch-lab-entry-href-cache.test.ts`, `unit/watch-lab-entry-control.test.tsx` (21 cases — covers the disclosure semantics, auto-cue milestones, arm-then-fire, seek coalescing, reduced-motion, SR announcer), `unit/watch-lab-entry-new-tab.test.tsx` (4 cases), `unit/timeline-bar-lifecycle.test.tsx` (restart-affordance regression lock), `e2e/watch-lab-entry.spec.ts` (12 tests, includes the camera-continuity pose-match spec).
+
+### Handoff-Boot Onboarding Suppression
+
+The Welcome card ("Atom Simulation Studio") and the atom-interaction hint ("Drag any atom to start") are both suppressed on Watch→Lab handoff boots so arrivals land directly on the scene.
+
+- **Shared predicate**: `isWatchHandoffBoot()` in `src/watch-lab-handoff/watch-handoff-url.ts` is the single source of truth for both the boot gate (`_hasPendingWatchHandoff`) and the onboarding gate (`isOnboardingEligible`).
+- **Eager suppression**: `lab/js/main.ts` runs `if (isWatchHandoffBoot()) markOnboardingDismissed();` at module load — this writes the `atomdojo.onboardingDismissed` sessionStorage sentinel **before** the consume path scrubs the URL, so the suppression survives the URL rewrite.
+- **Atom-hint gating** (Lab): the floating "Drag any atom to start" bubble (follows a target atom picked via 2D convex hull + centermost choice; no tail) reads the same predicate + sentinel and never appears on handoff boots. It dismisses on first atom interaction (`markAtomInteractionStarted` in dispatch).
+
+### Restart-Here Review Pill
+
+The timeline-review restart affordance is a single pill — `.timeline-restart-button` — with a circular-arrow icon, the label "Restart here", accent fill, and a downward pointer. There is no wrapping `ActionHint` tooltip (a prior duplicate hint was removed). The DOM contract is exactly two elements:
+
+- `<span class="timeline-restart-anchor">` handles positioning / centering.
+- `<button class="timeline-restart-button">` handles interaction.
+
+This separation keeps the centering transform clear of the hover transform. The pointer (CSS `clip-path` polygon) supports a skewed triangle: the base stays on the pill's straight-bottom segment, the tip tracks the marker via `--tail-skew`, and all geometry numbers derive from measured pill dims + the CSS-var pointer base width — no hard-coded pixel constants in the TS clamp. `tests/unit/timeline-bar-lifecycle.test.tsx` is a regression lock on the two-element contract.
+
+### Lab "Share & Download" Transfer Trigger
+
+The Lab timeline-transfer button label and tooltip are both **"Share & Download"** — do not reintroduce "Transfer history", "Export", or standalone "Share". `TRANSFER_HINT_COPY` is exported from `lab/js/components/timeline-transfer-dialog.tsx` so tests can pin the copy.
+
+Discoverability cue: 5 s after the first atom interaction (signal: `useAppStore.hasAtomInteraction`), the tooltip fades in (1 s), holds (3 s), and fades out (1 s). Fires once per page load. It is device-agnostic — the `.timeline-hint--force-visible` class bypasses the `@media (hover: none)` touch-hide. This is deliberately a one-shot boolean-triggered flow (not token-change), which is why `TransferTrigger` does not share `useTimedCue` with the Watch primary-tooltip auto-cue.
 
 ### Placement Solver Policy (3-Surface Architecture)
 
@@ -801,7 +854,7 @@ All debug params must be routed through this single reader.
 
 E2E tests inject `?e2e=1` via `gotoApp()` from `tests/e2e/helpers.ts`.
 
-E2E camera-snapshot hooks: `_getWatchCameraSnapshot` is gated on `?e2e=1` (`watch/js/main.ts`); `_getLabCameraSnapshot` is **unconditional** (`lab/js/main.ts`) because the Lab tab opened from Watch via the Continue flow carries no `?e2e` param, and the camera-continuity spec in `tests/e2e/watch-lab-entry.spec.ts` needs to read it on arrival.
+E2E camera-snapshot hooks: `_getWatchCameraSnapshot` is gated on `?e2e=1` (`watch/js/main.ts`); `_getLabCameraSnapshot` is **unconditional** (`lab/js/main.ts`) because the Lab tab opened from Watch via the handoff (whether "Interact From Here" or "Open a Fresh Lab") carries no `?e2e` param, and the camera-continuity spec in `tests/e2e/watch-lab-entry.spec.ts` needs to read it on arrival. The E2E spec accesses the secondary action by first clicking `.watch-lab-entry__caret` to open the disclosure popover.
 
 ### Python (simulation engine)
 

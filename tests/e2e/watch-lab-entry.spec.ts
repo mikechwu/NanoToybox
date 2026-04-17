@@ -50,14 +50,18 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
     await clearHandoffStorage(page);
   });
 
-  test('"Open empty" anchor targets /lab/ and the URL resolves to Lab', async ({ page }) => {
+  test('"New Empty Lab" menu anchor targets /lab/ and the URL resolves to Lab', async ({ page }) => {
     await page.goto('/watch/?e2e=1');
     await page.waitForSelector('.watch-workspace', { timeout: 8000 });
     await loadWatchFixture(page);
 
-    // Under the paired-actions panel, `.watch-lab-entry__secondary` is
-    // the "Open empty" anchor (plain `/lab/`). Primary is the Continue
-    // anchor with the dynamic handoff href.
+    // Secondary lives inside the caret-toggled menu now (redesign:
+    // primary-only capsule + caret popover). Click the caret to reveal
+    // the "New Empty Lab" menu item before querying its href.
+    // `.watch-lab-entry__caret` is the caret toggle;
+    // `.watch-lab-entry__secondary` is still the anchor class inside
+    // the menu item so this selector keeps working.
+    await page.locator('.watch-lab-entry__caret').click();
     const anchor = page.locator('.watch-lab-entry__secondary').first();
     await expect(anchor).toBeVisible();
     const href = await anchor.getAttribute('href');

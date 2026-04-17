@@ -1,126 +1,84 @@
 /**
- * Status controller — manages hint fade and contextual coachmarks.
+ * Status controller — manages contextual coachmarks on the shared
+ * `#hint` surface.
  *
- * DOM ownership: #hint only.
- * #hint is a shared surface: generic onboarding hint OR contextual coachmark (one at a time).
- * Lifecycle: destroy() clears pending timers, coachmark state, and restores hint DOM baseline.
+ * DOM ownership: `#hint` only. The element is an empty-by-default
+ * coachmark surface (see `#hint:empty { display: none }` in
+ * `lab/index.html`) — it paints iff a coachmark has injected text,
+ * hides iff text is cleared. No `.fade` class, no display-timer
+ * choreography: clearing `textContent` is the single hide primitive.
  *
- * Status text display is handled by the Zustand store (statusText/statusError)
- * and the React StatusBar component.
+ * Historical note: a generic "Click or tap an atom to interact"
+ * onboarding hint used to inhabit this surface with a `fadeHint()`
+ * fade-out on first interaction. That lifecycle was removed; a new
+ * hint (different style, different location) will replace it via a
+ * separate surface and its own controller.
+ *
+ * Status text display is handled by the Zustand store
+ * (`statusText` / `statusError`) and the React StatusBar component —
+ * not this controller.
  */
-/** Time (ms) to wait after fade before setting display:none. Matches CSS transition. */
-const HINT_FADE_MS = 2000;
 
 export class StatusController {
   _hintEl: HTMLElement | null;
-  _hintFaded: boolean;
-  _hintTimer: ReturnType<typeof setTimeout> | null;
-  _activeCoachmark: { id: string; originalText: string } | null;
-  _defaultHintText: string;
+  _activeCoachmark: { id: string; previousText: string } | null;
 
   constructor({ hintEl }: { hintEl: HTMLElement | null }) {
     this._hintEl = hintEl;
-    this._hintFaded = false;
-    this._hintTimer = null;
     this._activeCoachmark = null;
-    this._defaultHintText = hintEl ? hintEl.textContent ?? '' : '';
   }
 
-  // ── Internal hint-surface helpers ──
-
-  /** @private Cancel any pending hint display:none timer. */
-  _cancelHintTimer() {
-    if (this._hintTimer) { clearTimeout(this._hintTimer); this._hintTimer = null; }
-  }
-
-  /** @private Start a fade-out: add fade class, schedule display:none after transition. */
-  _fadeOutHint() {
-    if (!this._hintEl) return;
-    this._hintEl.classList.add('fade');
-    this._hintTimer = setTimeout(() => { this._hintEl!.style.display = 'none'; }, HINT_FADE_MS);
-  }
-
-  /** @private Show the hint surface with given text (un-fade, make visible). */
-  _showHintText(text: string) {
-    if (!this._hintEl) return;
-    this._hintEl.textContent = text;
-    this._hintEl.style.display = '';
-    this._hintEl.classList.remove('fade');
-  }
-
-  /** @private Immediately hide the hint surface (no transition). */
-  _hideHintImmediate() {
-    if (!this._hintEl) return;
-    this._hintEl.style.display = 'none';
-    this._hintEl.classList.remove('fade');
-  }
-
-  // ── Public hint/coachmark API ──
+  // ── Public coachmark API ──────────────────────────────────────────
 
   /**
-   * Fade out the onboarding hint (one-shot). Rule 5 aware:
-   * if a coachmark is active, marks the generic hint as consumed
-   * but does not touch the visible coachmark.
+   * Show a contextual coachmark on the shared surface.
+   *
+   * v1: one surface, one message at a time. A second `showCoachmark`
+   * with a different `id` while another is active is a no-op (caller's
+   * responsibility to hide first — matches prior contract).
    */
-  fadeHint() {
-    if (this._hintFaded) return;
-    this._hintFaded = true;
-    if (this._activeCoachmark) return;
-    this._fadeOutHint();
-  }
-
-  /**
-   * Show a contextual coachmark, reusing the hint surface.
-   * v1: one surface (#hint), one message at a time.
-   */
-  showCoachmark({ id, text }: { id: string; text: string }) {
+  showCoachmark({ id, text }: { id: string; text: string }): void {
     if (!this._hintEl) return;
     if (this._activeCoachmark && this._activeCoachmark.id !== id) return;
-    this._cancelHintTimer();
     if (!this._activeCoachmark) {
-      this._activeCoachmark = { id, originalText: this._hintEl.textContent ?? '' };
+      this._activeCoachmark = { id, previousText: this._hintEl.textContent ?? '' };
     }
-    this._showHintText(text);
+    this._hintEl.textContent = text;
   }
 
   /**
-   * Hide a contextual coachmark and restore the hint surface.
-   * Used when placement ends normally — may restore the generic hint.
+   * Hide a contextual coachmark, restoring whatever text (if any)
+   * occupied the surface before it showed. In practice that's the
+   * empty string — the surface defaults to `:empty` and nothing else
+   * writes to it — so the post-hide state is "invisible again."
    */
-  hideCoachmark(id: string) {
+  hideCoachmark(id: string): void {
     if (!this._hintEl || !this._activeCoachmark) return;
     if (this._activeCoachmark.id !== id) return;
-    this._cancelHintTimer();
-    if (this._hintFaded) {
-      this._fadeOutHint();
-    } else {
-      this._hintEl.textContent = this._activeCoachmark.originalText;
-    }
+    this._hintEl.textContent = this._activeCoachmark.previousText;
     this._activeCoachmark = null;
   }
 
   /**
-   * Dismiss a coachmark without restoring the generic hint.
-   * Used when an overlay opens — immediate hide, no transition.
+   * Dismiss a coachmark without any restoration — used when an
+   * overlay opens and the surface must clear immediately. Identical
+   * to `hideCoachmark` today (no transition to cut through); kept as
+   * a distinct API so callers encode their intent and future
+   * animation work can diverge the two paths without a rewrite.
    */
-  dismissCoachmark(id: string) {
+  dismissCoachmark(id: string): void {
     if (!this._hintEl || !this._activeCoachmark) return;
     if (this._activeCoachmark.id !== id) return;
-    this._cancelHintTimer();
-    this._hideHintImmediate();
+    this._hintEl.textContent = '';
     this._activeCoachmark = null;
   }
 
   /**
-   * Clean up timers, coachmark state, and restore hint DOM to neutral baseline.
+   * Clean up coachmark state and return the surface to its empty
+   * baseline. Called at teardown / HMR / test cleanup.
    */
-  destroy() {
-    this._cancelHintTimer();
+  destroy(): void {
     this._activeCoachmark = null;
-    if (this._hintEl) {
-      this._hintEl.textContent = this._defaultHintText;
-      this._hintEl.classList.remove('fade');
-      this._hintEl.style.display = '';
-    }
+    if (this._hintEl) this._hintEl.textContent = '';
   }
 }

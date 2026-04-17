@@ -59,7 +59,6 @@ describe('Focus-aware pivot — handleCommand behavior', () => {
       inputManager: {
         screenToWorldOnAtomPlane: vi.fn(() => [0, 0, 0]),
       } as any,
-      fadeHint: vi.fn(),
       updateStatus: vi.fn(),
       updateSceneStatus: vi.fn(),
       focusMoleculeForAtom,

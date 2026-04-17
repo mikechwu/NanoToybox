@@ -15,6 +15,7 @@ import { WatchDock } from './WatchDock';
 import { WatchTimeline } from './WatchTimeline';
 import { WatchSettingsSheet } from './WatchSettingsSheet';
 import { WatchLabEntryControl } from './WatchLabEntryControl';
+import { useTimelineMilestoneTokens } from '../hooks/use-timeline-milestone-tokens';
 
 interface WatchAppProps {
   controller: WatchController;
@@ -86,6 +87,18 @@ export function WatchApp({ controller }: WatchAppProps) {
   const [visibleError, setVisibleError] = useState<string | null>(null);
   const [errorFading, setErrorFading] = useState(false);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Primary-tooltip auto-cue token: bumps when playback crosses the
+  // halfway / end marks of the timeline (once per file, arm-then-fire,
+  // paused-seek-coalesced). See the hook's docstring for the full
+  // semantic contract.
+  const primaryAutoCueToken = useTimelineMilestoneTokens({
+    loaded: snapshot.loaded,
+    currentTimePs: snapshot.currentTimePs,
+    startTimePs: snapshot.startTimePs,
+    endTimePs: snapshot.endTimePs,
+    fileIdentity: snapshot.fileName ?? null,
+  });
 
   useEffect(() => {
     if (errorTimerRef.current) {
@@ -179,6 +192,18 @@ export function WatchApp({ controller }: WatchAppProps) {
         <div className="bottom-region" data-watch-bottom-chrome>
           {isLoaded && (
             <div className="watch-toolbar">
+              {/*
+                Layout (see watch.css § toolbar alignment contract):
+                  LEFT cluster  → capsule file-identity chip, offset
+                                  from the main dock's LEFT boundary
+                                  by `--watch-edge-gap`.
+                  RIGHT cluster → primary actions (Lab entry + Cinematic),
+                                  offset from the main dock's RIGHT
+                                  boundary by the same `--watch-edge-gap`.
+                One token (`--watch-edge-gap`, set on `.watch-workspace`
+                in watch-dock.css) drives every pinned-cluster inset so
+                tuning the whitespace is a single-line change.
+              */}
               <div className="watch-toolbar__left">
                 <WatchTopBar
                   fileKind={snapshot.fileKind}
@@ -194,7 +219,8 @@ export function WatchApp({ controller }: WatchAppProps) {
                   the two action categories read as distinct buckets:
                   Lab = destination change (opens a new tab); Cinematic
                   Camera = viewing mode change (in-place). The parent's
-                  `flex-direction: column` enforces the stacking order
+                  `flex-direction: column` + `align-items: flex-end`
+                  enforces the stacking order and the shared right edge
                   (see `.watch-toolbar__right` in watch.css).
                 */}
                 <div className="watch-lab-entry-anchor">
@@ -203,6 +229,7 @@ export function WatchApp({ controller }: WatchAppProps) {
                     currentFrameAvailable={snapshot.labCurrentFrameAvailable}
                     plainLabHref={snapshot.labHref}
                     currentFrameLabHref={snapshot.labCurrentFrameHref}
+                    primaryAutoCueToken={primaryAutoCueToken}
                     // No onOpenPlainLab — the anchor's target="_blank"
                     // is the sole navigation owner for the secondary
                     // path (see WatchLabEntryControlProps docstring).
