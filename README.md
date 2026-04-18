@@ -18,9 +18,9 @@ Watch the trajectory from the clip above: **[atomdojo.pages.dev/c/SS78S460KEFB](
 
 Atom Dojo bridges the gap between static chemistry textbooks and heavyweight academic MD codes like LAMMPS or GROMACS. It lets you reach into a carbon nanostructure and pull on it — drag a buckyball, twist a graphene sheet, collide two nanotubes — and the carbon responds through the **Tersoff bond-order potential**, a widely used classical interatomic model for covalent solids (parameters from J. Tersoff, *Phys. Rev. B* 39, 5566, 1989; the model family is commonly referenced as "Tersoff 1988").
 
-Forces are computed analytically every frame (F = −∇E) by a browser-side Tersoff engine. By default Atom Dojo runs a WebAssembly kernel inside a Web Worker; if Wasm is unavailable or the worker stalls, it falls back to the JavaScript kernel, and as a final guard to synchronous main-thread execution. Bond breakage, reformation, and thermal vibration all emerge from the integration — nothing is pre-animated.
+Forces are computed analytically every frame (F = −∇E) by a browser-side Tersoff engine. By default Atom Dojo runs a WebAssembly kernel inside a Web Worker; if Wasm is unavailable the engine falls back to a JavaScript kernel, and if the worker stalls it falls back again to synchronous main-thread execution. Bond breakage, reformation, and thermal vibration all emerge from the integration — nothing is pre-animated.
 
-When you create a structural snap or a clean collision, one click publishes the trajectory as a compact binary "capsule" to a short URL. Anyone can watch the cinematic replay, and with one click jump into the interactive engine at the exact frame you shared — positions, velocities, and authored colors all preserved.
+When you create a structural snap or a clean collision, one click publishes the trajectory as a compact binary "capsule" to a short URL. Anyone can watch the cinematic replay, and with one click jump into the interactive engine at the exact frame you shared — atoms, velocities, bonds, camera, and authored colors all preserved.
 
 It is not a replacement for production MD codes. It is an interactive front door to the same family of physics.
 
@@ -30,9 +30,9 @@ It is not a replacement for production MD codes. It is an interactive front door
 
 ### The physics sandbox (Lab)
 
-- **Tersoff bond-order potential for carbon** — dual JS + C/Wasm kernels; the Wasm kernel (compiled with Emscripten) runs ~11% faster than the JS kernel on ~2,400-atom scenes. Wasm is the default; `?kernel=js` forces the JS path.
+- **Tersoff bond-order potential for carbon** — C kernel compiled to WebAssembly (Emscripten) runs as the default, ~11% faster than the JavaScript fallback on ~2,400-atom scenes. `?kernel=js` forces the JS path for debugging.
 - **Worker-first physics with graceful fallback** — simulation runs off the main thread via a snapshot protocol; if the worker stalls (5 s warning, 15 s fatal) the engine recovers or falls back to synchronous execution rather than freezing the page.
-- **Velocity Verlet integrator** — symplectic, time-reversible, second-order accurate; energy-conserving (NVE) by default with an optional damping slider from zero to heavy.
+- **Velocity Verlet integrator** — symplectic, time-reversible, second-order accurate. Approximates NVE (energy-conserving) when damping is off; an adjustable slider lets you dissipate energy from zero to heavy.
 - **Three.js rendering with InstancedMesh** — thousands of atoms drawn in two GPU draw calls with PBR materials and camera-relative lighting.
 - **Direct manipulation** — drag single atoms, translate molecules, or apply torque to spin structures; full touch support on mobile.
 - **15 pre-relaxed geometries** — C60 / C180 / C540 / C720 buckyballs, armchair / zigzag / chiral nanotubes, graphene sheets, diamond.
@@ -49,10 +49,10 @@ It is not a replacement for production MD codes. It is an interactive front door
 
 ### Cloud architecture
 
-Atom Dojo's share-link layer runs entirely on the **Cloudflare serverless stack** — a clean demonstration of how the edge can host compute-heavy browser apps at global scale.
+Atom Dojo's share-link layer runs entirely on the **Cloudflare serverless stack**. Heavy compute (physics, rendering) lives in the browser; Cloudflare hosts the publishing, storage, and remix-loop machinery.
 
-- **Pages Functions + D1 (SQLite at the edge)** — handles OAuth (Google, GitHub), hardened `__Host-` session cookies, CSRF nonces, cursor-paginated account APIs, audit logs, and per-user + per-IP rate limits.
-- **R2 object storage** — stores capsule bodies, addressed by 12-character Crockford Base32 share codes (e.g. `7M4K-2D8Q-9T1V`). R2's zero-egress pricing keeps the cost model flat regardless of traffic.
+- **Pages Functions + D1** — Cloudflare's serverless SQL database (SQLite-compatible) handles OAuth (Google, GitHub), hardened `__Host-` session cookies, CSRF nonces, cursor-paginated account APIs, audit logs, and per-user + per-IP rate limits.
+- **R2 object storage** — stores capsule bodies, addressed by 12-character Crockford Base32 share codes (e.g. `7M4K-2D8Q-9T1V`). R2's zero-egress pricing means bandwidth costs don't scale with traffic — only per-operation and storage fees apply.
 - **Transactional hydration** — the Watch→Lab handoff coordinates the physics engine, worker, renderer, scene/store state, and the metadata/identity/appearance layers, with rollback to the pre-hydrate scene on any failure.
 - **Privacy and safety** — server-enforced 13+ age gate on sign-in and publish, CSRF-protected privacy-request form with deduplication and 180-day retention, and a companion cron Worker that expires sessions, sweeps orphaned R2 objects, and runs audit-retention passes.
 
@@ -118,7 +118,7 @@ npm run test:e2e:pages-dev    # Playwright against `wrangler pages dev` (covers 
 
 ### Scientific validation (Python)
 
-The Tersoff implementation has a Python reference engine under `sim/` with a numerical validation suite. Optional but recommended when touching physics, structure generation, or force derivation:
+A Python reference engine lives in `sim/`, and its validation suite is at `tests/test_*.py`. Optional but recommended when touching physics, structure generation, or force derivation:
 
 ```bash
 pip install numpy numba matplotlib
@@ -131,7 +131,7 @@ See [docs/testing.md](docs/testing.md) for the full test ladder and pass criteri
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) — module map, data flow, state ownership across the five authorities
+- [Architecture](docs/architecture.md) — module map, data flow, state ownership across the physics, worker, renderer, and UI layers
 - [Physics](docs/physics.md) — Tersoff potential, units, validation against the Python reference
 - [Structure Library](docs/structure-library.md) — the 15 canonical structures and how they were generated
 - [Viewer](docs/viewer.md) — Watch app behavior and the Watch→Lab handoff contract
@@ -144,6 +144,28 @@ See [docs/testing.md](docs/testing.md) for the full test ladder and pass criteri
 
 ---
 
+## Contributing
+
+Contributions are welcome. Start with [docs/contributing.md](docs/contributing.md) for workflow, conventions, and the shared-utility catalog, then file an issue or open a PR. For design discussion before code, start an issue or draft PR with the context first — most of the non-obvious tradeoffs are already captured in [docs/decisions.md](docs/decisions.md).
+
+---
+
+## Support
+
+- **Bug reports and feature requests:** [github.com/mikechwu/NanoToybox/issues](https://github.com/mikechwu/NanoToybox/issues)
+- **Privacy or data requests:** the in-app [privacy-request form](https://atomdojo.pages.dev/privacy-request/)
+
+---
+
+## Acknowledgments
+
+- **Jerry Tersoff** for the bond-order empirical potential used throughout the physics engine (*Phys. Rev. B* 37, 6991, 1988; *Phys. Rev. B* 39, 5566, 1989).
+- **The LAMMPS project** for the canonical reference implementation of the Tersoff potential that guided parameter choices and validation.
+- **Three.js** for the WebGL rendering primitives.
+- **Cloudflare** for the serverless platform — Pages, Pages Functions, D1, R2, and Workers — that makes the share-and-remix loop viable without running a backend.
+
+---
+
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © 2026 Michael Wu.
