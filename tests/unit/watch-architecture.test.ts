@@ -110,6 +110,7 @@ describe('WatchPlaybackModel policy commands', () => {
   it('advance() moves time forward at canonical x1 rate', () => {
     const model = loadModel();
     model.startPlayback();
+    model.setSpeed(1);
     expect(model.isPlaying()).toBe(true);
 
     const before = model.getCurrentTimePs();

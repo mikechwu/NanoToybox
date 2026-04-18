@@ -109,7 +109,7 @@ function loadModel() {
 }
 
 describe('WatchPlaybackModel speed', () => {
-  it('default speed is 1x', () => {
+  it('default speed matches SPEED_DEFAULT', () => {
     const pm = loadModel();
     expect(pm.getSpeed()).toBe(SPEED_DEFAULT);
   });
