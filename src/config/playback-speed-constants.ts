@@ -10,7 +10,7 @@ export const SPEED_MIN = 0.5;
 /** Maximum playback speed multiplier. */
 export const SPEED_MAX = 20;
 /** Default playback speed multiplier. */
-export const SPEED_DEFAULT = 1;
+export const SPEED_DEFAULT = 2;
 /** Preset speed values for quick-tap buttons. */
 export const SPEED_PRESETS = [0.5, 1, 2, 4, 8, 16, 20] as const;
 /** Maximum wall-clock delta (ms) before clamping. Prevents huge jumps after tab-background return. */
