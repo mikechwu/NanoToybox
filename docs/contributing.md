@@ -921,3 +921,34 @@ pip install scipy
 # For ML experiments (currently deferred)
 pip install scikit-learn
 ```
+
+---
+
+## Extension Points
+
+Linked from `docs/architecture.md` §4a and §4b. This is the how-to home for "where do I add X?" — architecture.md stays explanation-only.
+
+### Adding a new Lab runtime feature
+
+1. Decide which existing `lab/js/runtime/` subfolder owns the feature (`bonded-groups`, `camera`, `handoff`, `interaction`, `overlay`, `placement`, `timeline`, `worker`). Create a new file inside it; don't flatten back to `runtime/` root.
+2. If the feature is a cross-subsystem seam (like `auth-runtime`, `scene-runtime`, `onboarding`, `ui-bindings`, `publish-size`), it may justify staying at `lab/js/runtime/` root — but default to a subfolder.
+3. Wire into `lab/js/main.ts` at the existing boot order point. `main.ts` is the composition root; it is large by design.
+4. If the feature needs UI, add a React component under `lab/js/components/` (or `lab/js/components/timeline/` if timeline-adjacent). Zustand state goes in `lab/js/store/`.
+5. Pure logic that Watch could reuse belongs in `src/`, not `lab/js/`.
+
+### Adding a new Watch playback feature
+
+1. Identify the domain: `watch/js/document` (file intake), `watch/js/playback` (time/frame logic), `watch/js/view` (rendering/camera), `watch/js/analysis` (bonded groups and similar), `watch/js/settings`, or `watch/js/handoff`.
+2. Add the module to the matching folder. `watch/js/app/watch-controller.ts` is the facade — extend it to expose the feature, but keep domain logic in the domain folder.
+3. UI goes in `watch/js/components/`; hooks in `watch/js/hooks/`. These are Watch UI, not domain.
+4. If the feature is a playback strategy (interpolation, trajectory reconstruction), register it in the existing strategy registry rather than branching `watch-controller`.
+
+### Adding shared logic
+
+Pure, app-agnostic logic belongs in `src/` under the matching domain (`history`, `topology`, `watch-lab-handoff`, `ui`, `config`, `appearance`, `input`, `camera`, `share`, `policy`, `format`, `types`). If the logic is used by only one app, keep it inside that app's tree — `src/` is for genuine sharing.
+
+### Where not to put cross-app code
+
+- Do not import `lab/js/**` from `watch/js/**` or vice versa. Shared code goes through `src/`.
+- Do not add barrel `index.ts` files inside `lab/js/runtime/*` or `watch/js/*` subfolders — concrete file imports are the convention (see the April 2026 architecture convergence refactor).
+- Do not duplicate a concept across both apps "because the names rhyme" (e.g., `lab/js/runtime/bonded-groups/bonded-group-appearance-runtime.ts` vs `watch/js/analysis/watch-bonded-group-appearance.ts`). They belong to different apps and layers; share via `src/appearance/` and `src/history/bonded-group-projection.ts`.

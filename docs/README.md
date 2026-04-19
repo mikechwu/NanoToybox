@@ -1,189 +1,70 @@
-# NanoToybox Developer Documentation
+# Atom Dojo Documentation
 
-Welcome to the NanoToybox project — a browser-based interactive carbon nanostructure simulation playground. Lab authors simulations and publishes compact **capsules** as share-links; the Watch app opens them via short code, URL, or `/c/:code`. Capsule storage, auth, and moderation are handled by a Cloudflare Pages Functions backend (D1 + R2) with a companion cron-sweeper Worker.
+**Atom Dojo** is an interactive molecular dynamics playground that runs entirely in your browser. Build carbon nanostructures, pull on them with real physics, record the trajectory, and publish it as a one-click share link. Two frontends cooperate: **Lab** at `/lab/` for authoring and simulation, **Watch** at `/watch/` for playback and review. A Cloudflare backend (Pages Functions + D1 + R2) handles share links, accounts, and moderation.
 
-## Documentation Index
+> See the repo-root [README](../README.md) for product marketing: live demo, screencast, sample capsule, and physics citation.
 
-| Document | Purpose |
-|----------|---------|
-| [Architecture](architecture.md) | System overview, module map, data flow, state ownership |
-| [Physics & Simulation](physics.md) | Tersoff potential, integrator, units, validation |
-| [Structure Library](structure-library.md) | Canonical structures, generation pipeline, CLI usage |
-| [ML Surrogate](ml-surrogate.md) | Force decomposition, training pipeline, lessons learned |
-| [Testing & Validation](testing.md) | Test ladder, pass criteria, how to run, Pages-dev E2E lane |
-| [Viewer](viewer.md) | Trajectory viewer, Watch app controls, and Watch→Lab handoff entry |
-| [Project Decisions](decisions.md) | Key strategic decisions and their rationale |
-| [Scaling Research](scaling-research.md) | Real-time browser limits, collision benchmarks, bottleneck analysis |
-| [Operations](operations.md) | Share-link deployment runbook: secrets, schedules, alerting, reconciliation, `/privacy-request` operator runbook, Pages-dev E2E lane |
-| [Contributing](contributing.md) | How to continue development, rules, workflow, shared-utility conventions (`b64url`, `error-message`, `http-cache`, `signed-intents`) |
+## What You Can Do Today
+
+- Build and simulate carbon structures in Lab — drag, twist, collide, and watch bonds form and break.
+- Export the trajectory as a compact **capsule** (`.atomdojo`) or a full history (`.atomdojo-history`).
+- Open an exported file in Watch, scrub the timeline, and share the link.
+- From any frame in Watch, click **Interact From Here** to hand off the scene to Lab and take over the engine.
+
+## Repository At A Glance
+
+| Directory | Purpose |
+|---|---|
+| `lab/` | Lab frontend: authoring, simulation loop, React UI, Three.js renderer |
+| `watch/` | Watch frontend: capsule/history playback, review, handoff trigger |
+| `viewer/` | Thin static XYZ viewer (distinct from Watch) |
+| `src/` | Shared TypeScript core: history schema, topology, UI primitives, handoff contract |
+| `functions/` | Cloudflare Pages Functions: share links, auth, moderation APIs |
+| `workers/` | Cloudflare cron worker (capsule cleanup, reconciliation) |
+| `sim/`, `ml/` | Python research and ML surrogate tooling |
+| `migrations/` | D1 schema migrations |
+| `structures/` | Bundled sample structures |
+| `public/`, `account/`, `privacy/`, `privacy-request/`, `terms/` | Static assets and policy/account surfaces |
+| `scripts/` | Build and maintenance scripts |
+| `tests/` | Unit (Vitest) and end-to-end (Playwright) tests |
+| `docs/` | This directory |
 
 ## Quick Start
 
 ```bash
-# Install dependencies (first time only)
-npm install
+npm install              # first time only
+npm run dev              # Vite dev server with HMR
+# → Lab:   http://localhost:5173/lab/
+# → Watch: http://localhost:5173/watch/
 
-# Launch the interactive page (Vite dev server with HMR)
-npm run dev
-# Open http://localhost:5173/lab/
+npm run typecheck
+npm run test:unit
+npm run test:e2e
+npm run build
+```
 
-# Run all checks
-npm run typecheck       # TypeScript type-checking
-npm run test:unit       # Vitest unit tests
-npm run test:e2e        # Playwright E2E browser tests
-npm run build           # Production build → dist/
+Optional — Python physics tests (requires `numpy`, `numba`):
 
-# Python physics tests (requires numpy, numba)
+```bash
 python -m pytest tests/test_*.py -v
 ```
 
-## Pre-Deploy Manual Checklist (WebGL-dependent)
+## Read This Next
 
-These checks require a real browser with WebGL and cannot run in headless CI. Run before merging to main or deploying:
+| Doc | When to read |
+|---|---|
+| [architecture.md](architecture.md) | New engineers and maintainers — system mental model, Lab/Watch/shared/backend boundaries, key runtime flows |
+| [viewer.md](viewer.md) | UI/UX contributors — Lab and Watch viewer behavior, Watch→Lab entry control, tooltip contract |
+| [physics.md](physics.md) | Anyone touching force calculation — Tersoff potential, integrator, units, validation |
+| [testing.md](testing.md) | Before every merge — test ladder, pass criteria, manual WebGL checks, Pages-dev E2E lane |
+| [operations.md](operations.md) | Deploying or on-call — backend runbook, endpoints, cron, privacy-request operator flow |
+| [contributing.md](contributing.md) | Adding code — code style, architecture rules, extension points |
+| [decisions.md](decisions.md) | Why things are shaped this way — historical rationale |
+| [scaling-research.md](scaling-research.md) | Performance research — browser limits, collision benchmarks |
+| [ml-surrogate.md](ml-surrogate.md) | Deferred ML track — force decomposition, training notes |
+| [structure-library.md](structure-library.md) | Bundled structures — generation pipeline, CLI usage |
+| [glossary.md](glossary.md) | Terminology — Lab, Watch, capsule, handoff, share link, and internal terms used in architecture.md |
 
-- [ ] **Main app:** Open `/lab/`, click Add → select a structure → place on canvas → verify atom count in status → open Settings → Clear → verify "Empty playground"
-- [ ] **Drag interactions:** Atom mode (drag single atom), Move mode (translate molecule), Rotate mode (spin molecule). Flick an atom — verify no ghost spring after release
-- [ ] **Settings panel:** Fixed 250px width, scrollbar-gutter stable; open/close settings sheet, switch Dark/Light theme, change speed, boundary mode
-- [ ] **Viewer:** Open `/viewer/`, drag-drop an `.xyz` file, verify atoms and bonds render
-- [ ] Placement camera framing: preview does not cause camera snap, drag past boundary works
-- [ ] Review mode UI lock: enter review → dock Add/mode/Pause disabled with hints → Settings Add Molecule/Clear disabled → Live/Restart exit re-enables
-- [ ] History export: record a timeline with 2+ molecules → open export dialog → export capsule (`.atomdojo`) or full (`.atomdojo-history`) → verify file contains stable atom IDs and metadata
-- [ ] Transfer click INP: on the Download tab, click Transfer → dialog appears immediately (before file sizes fill in); size estimates populate after first paint
-- [ ] Dock stability: Pause ↔ Resume toggle does not shift neighboring controls
-- [ ] Bonded groups: panel expanded by default with Collapse/Expand disclosure hint visible; per-row inline color chip opens preset swatch popover with responsive layout; authored color overrides persist across theme/structure changes; persistent tracked highlight is feature-gated off (hover preview remains active)
-- [ ] Verify bonded-group color persists across topology changes (group merge/split)
-- [ ] Verify multi-color chip shows conic gradient when group has mixed colors
-- [ ] Verify color popover accessible via Escape key
-- [ ] **Watch app:** Open `watch/`, load an exported `.atomdojo` file, verify React shell renders, camera orbit + triad active, authored atom colors correct; playback dock (step/play/speed/repeat) functional at all speed tiers; timeline scrubber syncs with playback; settings sheet (theme/text-size/file-info/help) toggles correctly; load a second file then cancel — verify first document preserved (transactional open); smooth playback on by default — verify visually smooth motion; toggle Smooth off in dock — verify frame-stepping returns to discrete; open Settings → Smooth Playback → switch to Hermite or Catmull-Rom (experimental) — verify experimental label visible and fallback diagnostic appears when method degrades
+## Before Merge
 
-Automated checks (typecheck, build, unit tests, Playwright E2E, deploy smoke) run in CI on every push/PR.
-
-## Architecture Overview
-
-```
-Browser                          Web Worker
-┌─────────────────────┐          ┌──────────────────────┐
-│  React UI (Zustand)  │          │  PhysicsEngine       │
-│  ├── Dock            │          │  ├── Tersoff (JS/Wasm)│
-│  ├── SettingsSheet   │◄─snapshots──┤  ├── Velocity Verlet│
-│  ├── StructureChooser│          │  └── Safety controls  │
-│  ├── StatusBar       │──commands──►│                      │
-│  ├── FPSDisplay      │          └──────────────────────┘
-│  └── SheetOverlay    │
-│                      │
-│  Renderer (Three.js) │          Python (development)
-│  ├── InstancedMesh   │          ┌──────────────────────┐
-│  └── PBR materials   │          │  sim/ reference engine│
-│                      │          │  tests/ validation    │
-│  PlacementController │          │  scripts/ CLI tools   │
-│  StatusController    │          └──────────────────────┘
-│  (hint-only)         │
-│                      │
-│  app/ (2 modules):     │
-│  ├── frame-runtime.ts  │
-│  │   (per-frame update │
-│  │    pipeline seq.)   │
-│  └── app-lifecycle.ts  │
-│      (teardown seq.    │
-│       and reset helpers)│
-│                        │
-│  runtime/ (36 modules):│
-│  ├── SceneRuntime     │
-│  ├── WorkerLifecycle  │
-│  ├── SnapshotReconc.  │
-│  ├── OverlayLayout    │
-│  ├── OverlayRuntime   │
-│  ├── InteractionDisp. │
-│  ├── InputBindings    │
-│  ├── UIBindings       │
-│  ├── AtomSource       │
-│  ├── FocusRuntime     │
-│  ├── Onboarding       │
-│  ├── BondedGroup×6    │  (portal popover for color editing,
-│  │                     │   group color intents → atom overrides)
-│  ├── Timeline×6       │  (recording, review, scrub, restart,
-│  │                     │   clear, subsystem coordinator)
-│  ├── HistoryExport×3  │  (stable atom identity, metadata registry,
-│  │                     │   v1 file builder + download)
-│  ├── RestartAdapter   │
-│  ├── ReconciledSteps  │
-│  ├── OrbitFollow      │
-│  ├── DragTargetRefr.  │
-│  ├── InteractionHi.   │
-│  ├── ReviewModeHints  │
-│  ├── CameraTargetRt.  │
-│  ├── PlacementSolver  │
-│  └── PlacementFraming │
-└─────────────────────┘
-
-src/history/ (6 modules):       watch/js/ (~25 modules):
-├── v1 schema types             ├── 16 runtime modules
-├── bond-policy types           │   (document service, playback model,
-├── connected-component         │    renderer, camera input, overlay,
-│   computation                 │    bonded-groups, settings, trajectory
-├── bonded-group projection     │    interpolation, view service,
-│   (shared by lab/ & watch/)   │    controller, bootstrap)
-├── bonded-group-utils          │
-└── units (FS_PER_PS,           │
-    IMPLAUSIBLE_VELOCITY)       │
-                                ├── 9 React components
-                                │   (shell, dock, timeline, settings
-src/ui/ (13 files):             │    sheet, bonded-groups panel,
-├── core-tokens.css             │    canvas, landing, top bar,
-├── dock-shell.css              │    playback-speed control)
-├── dock-tokens.css             └── react-root
-├── sheet-shell.css
-├── segmented.css               watch/css/ (2 files):
-├── bottom-region.css           ├── watch.css
-├── timeline-track.css          └── watch-dock.css
-├── text-size-tokens.css
-├── review-parity.css           src/topology/ (3 files):
-├── bonded-groups-parity.css    ├── bond-rules.ts
-├── bonded-group-chip-style.ts  ├── build-bond-topology.ts
-├── device-mode.ts              └── bond-policy-resolver.ts
-└── useSheetLifecycle.ts
-    (shared design system:      src/config/ (3 files):
-     CSS tokens, hooks, and     ├── playback-speed-constants.ts
-     component styles used      ├── viewer-defaults.ts
-     by both lab/ and watch/)   └── bond-defaults.ts
-
-                                src/appearance/ (1 file):
-                                └── bonded-group-color-assignments.ts
-
-                                src/input/ (1 file):
-                                └── camera-gesture-constants.ts
-```
-
-### Key Architectural Decisions
-
-- **React-authoritative UI** — all UI surfaces (DockLayout, DockBar, Segmented, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, FPSDisplay) are React components with Zustand store. Imperative controllers remain only for PlacementController (canvas touch listeners) and StatusController (hint/coachmark surface).
-- **Worker-first physics** — simulation runs off-thread via Web Worker with snapshot protocol. Automatic fallback to sync-mode if worker fails (5s warning, 15s fatal).
-- **Dual Tersoff kernels** — JS fallback + C/Wasm kernel (compiled with Emscripten). Wasm enabled by default, ~11% faster. Force via `?kernel=js` for debugging.
-- **Source-level force saturation** — per-atom thresholded smooth saturation for internal forces (Tersoff+wall), and smooth saturation for interaction forces (drag/translate/rotate) at the spring level. Per-atom velocity hard cap (`vHardMax`) as sole post-integration emergency guard.
-- **Runtime module extraction** — main.ts delegates to feature modules in `lab/js/runtime/` and orchestration modules in `lab/js/app/` (frame-runtime.ts, app-lifecycle.ts). See `docs/architecture.md` for the full module inventory.
-
-## Current Status
-
-- **Interactive page: live** — real-time Tersoff simulation with drag, rotate, multi-molecule playground, speed control, and advanced settings
-- **Web Worker physics** — off-thread simulation with snapshot sync, stall detection (5s warning / 15s fatal), automatic sync fallback
-- **React UI** — all UI components are React-authoritative with Zustand store, glassmorphic CSS, responsive layout (phone/tablet/desktop); panel fixed width 250px with scrollbar-gutter stable
-- **Performance optimized** — InstancedMesh rendering (2 draw calls), on-the-fly Tersoff kernel (45% faster), spatial-hash neighbor/bond search (O(N))
-- **Wasm Tersoff kernel** — deployed and enabled by default, automatic JS fallback
-- **CI/CD** — GitHub Actions: typecheck, unit tests, build, E2E, deploy smoke, Python physics tests (120 test files, 2208 tests; run `npx vitest run` for the authoritative live total)
-- **Containment boundary** — dynamic soft wall with Contain/Remove modes, live atom count, auto-scaling radius
-- **Placement camera framing** — smooth camera assist keeps scene + preview visible during molecule placement; continuous drag with pointer capture and per-frame cursor-lock reprojection
-- **Review mode UI lock** — display-only enforcement across all React surfaces during timeline review; centralized selector, runtime guards, ActionHint tooltips (desktop), transient status hints (mobile)
-- **History export** — export simulation timeline as capsule (`.atomdojo`) or full (`.atomdojo-history`) with stable atom identity tracking across topology changes (placement, removal, merge/split); lab appearance uses stable-ID projection model; download trigger
-- Structure library: 15 canonical relaxed structures (60–720 atoms) with derived honeycomb geometry
-- Numba-accelerated force engine: 250–480x faster than pure Python (for server-side use)
-- Three.js trajectory viewer: functional at `viewer/index.html`
-- Performance benchmarks in `lab/bench/`
-- **Bonded group architecture** — display-source-aware projection, capability policy, annotation-model atom color overrides; inline color editing via per-row color chip with portal popover (preset swatches, responsive layout, disclosure-pattern panel expanded by default), conic-gradient multi-color chips, group color intents persist across topology changes; persistent tracked highlight feature-gated off (hover preview remains active); review-mode inspection deferred until historical topology exists
-- **Watch app** — near-parity review viewer at `watch/` with React shell; camera orbit + triad, authored atom colors, playback dock (step/play/speed/repeat), timeline scrubber, settings sheet (theme/text-size/file-info/help); transactional file open preserves current document on failure; bonded-group analysis panel and automatic file-type detection; capsule file support (compact playback with appearance + interaction data, imported via capsule-history-import); smooth playback (on by default) with strategy-based trajectory interpolation (Linear stable default + Hermite/Catmull-Rom experimental), dock Smooth toggle, and settings method picker; cinematic camera (default-on) automatically frames major bonded clusters during playback, adapts to speed (0.5x-20x), pauses on user interaction and resumes after cooldown, toggled in the analysis panel
-- **Watch→Lab handoff** — Watch's bottom-chrome `WatchLabEntryControl` is a single primary pill **"Interact From Here"** with a caret-toggled disclosure popover revealing the secondary **"Open a Fresh Lab"**; the primary snaps to the current frame and hands the capsule to a newly opened Lab tab via a normalized seed (`WatchLabSceneSeed`), `localStorage` handoff token, and `/lab/?from=watch&handoff=…` URL flag that suppresses Lab's default auto-load; Lab consumes the token and runs a transactional hydrate (authored atom colors, camera continuity, and motion state all carried across), and the hydrated scene itself is the arrival acknowledgement — no arrival pill. The popover uses disclosure semantics (`aria-haspopup="true"`, `role="group"`), not menu semantics, and a CSS-only hover tooltip on the primary pill auto-cues at the 50% and 100% timeline milestones (once per file). See [architecture.md](architecture.md) for module boundaries + hydrate flow and [viewer.md](viewer.md) for the control, tooltip, click-ownership contract, and seed builder
-- **Phase 7 — account, privacy, age-gate, erasure** — account surfaces, privacy-request flow (user-facing + `/privacy-request` operator runbook in `docs/operations.md`), age-gate, and erasure pipeline; policy source-of-truth in `src/policy/policy-config.ts` (version `2026-04-14.3`, build-time injected — see `docs/architecture.md`); shared utilities (`b64url`, `error-message`, `http-cache`, `signed-intents`) documented in `docs/contributing.md`; Pages-dev E2E lane in `docs/operations.md` + `docs/testing.md`
-- **Shared design system** — `src/ui/` (13 files: CSS tokens, hooks, component styles) provides the shared design system used by both `lab/` and `watch/`; `src/history/` provides v1 schema types, bond-policy types, connected-component computation, bonded-group projection, bonded-group utilities, and physical unit constants; `src/topology/` provides bond rules, topology builders, and policy resolution; `src/config/` provides playback speed constants, viewer defaults, and bond defaults; `src/appearance/` provides bonded-group color assignments; `src/input/` provides camera gesture constants
-
-## Project Goal
-
-Build an immersive, interactive, scientifically accurate browser-based playground for carbon nanostructures (C60, graphene, CNTs, diamond). Users can explore, drag, rotate, and interact with real molecular dynamics simulations in real-time — and share the results as capsule links that open instantly in the Watch viewer.
+Automated gates (`typecheck`, `test:unit`, `test:e2e`, `build`) run in CI on every push and PR. Manual WebGL-dependent checks live in [testing.md](testing.md); run them before tagging a release or deploying to production.
