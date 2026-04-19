@@ -30,6 +30,7 @@ import { createTimelineRecordingPolicy, type RecordingMode } from './timeline-re
 import { createRecordingOrchestrator } from './timeline-recording-orchestrator';
 import { createTimelineCoordinator, type TimelineCoordinatorDeps } from './simulation-timeline-coordinator';
 import { captureRestartFrameData } from './restart-state-adapter';
+import { syncPhysicsConfigToStore } from '../physics-config-store-sync';
 import { createTimelineAtomIdentityTracker } from './timeline-atom-identity';
 import { createAtomMetadataRegistry } from './atom-metadata-registry';
 import { useAppStore } from '../../store/app-store';
@@ -194,6 +195,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
     clearRendererFeedback: deps.clearRendererFeedback,
     syncBondedGroupsForDisplayFrame: deps.syncBondedGroupsForDisplayFrame,
     syncStoreState,
+    syncPhysicsConfigToStore,
   });
 
   // ── Internal helpers ──

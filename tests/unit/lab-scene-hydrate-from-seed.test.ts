@@ -154,6 +154,9 @@ function makeMockPhysics() {
         return { atomOffset, atomCount: atoms.length };
       }),
       setTimeConfig: vi.fn(),
+      getDamping: vi.fn(() => 0.0),
+      getDragStrength: vi.fn(() => 3.0),
+      getRotateStrength: vi.fn(() => 7.0),
       setDamping: vi.fn(),
       setDragStrength: vi.fn(),
       setRotateStrength: vi.fn(),
@@ -221,6 +224,7 @@ function makeDeps(
     sceneState,
     registry,
     tracker,
+    syncPhysicsConfigToStore: vi.fn(),
     _mockPhysics: makeMockPhysics(),
     ...overrides,
   };
@@ -269,6 +273,51 @@ describe('hydrateFromWatchSeed — success path', () => {
       sourceMeta: sourceMetaFixture(),
       provenance: { historyKind: 'full', velocitySource: 'restart' as const, velocitiesAreApproximated: false, unresolvedVelocityFraction: 0 },
     }));
+
+    // Store sync fires exactly once with the handoff's damping/drag/rotate —
+    // regression-lock against the bug where Settings sliders stayed at
+    // pre-hydrate values while physics held handoff values.
+    expect(deps.syncPhysicsConfigToStore).toHaveBeenCalledTimes(1);
+    expect(deps.syncPhysicsConfigToStore).toHaveBeenCalledWith({
+      damping: expect.any(Number),
+      kDrag: expect.any(Number),
+      kRotate: expect.any(Number),
+    });
+  });
+
+  it('store-sync is NOT invoked on any rollback branch', async () => {
+    // Physics commit failure — sync must not fire, otherwise the store
+    // would land on handoff values while physics rolls back to the
+    // pre-hydrate checkpoint. Symmetric negative of the success test.
+    const deps = makeDeps({}, 'resolve');
+    deps.physics.appendMolecule = vi.fn(() => { throw new Error('boom'); });
+    const result = await hydrateFromWatchSeed(seedFixture(), sourceMetaFixture(), deps);
+    expect(result.status).toBe('error');
+    expect(deps.syncPhysicsConfigToStore).not.toHaveBeenCalled();
+  });
+
+  it('rollback restores pre-hydrate damping/drag/rotate even after step 4 wrote handoff values', async () => {
+    // PhysicsCheckpoint only round-trips pos/vel/bonds; the three
+    // config setters must be explicitly reversed to the pre-hydrate
+    // values captured at transaction start. Regression-lock for the
+    // silent-desync-on-rollback hazard.
+    const deps = makeDeps({}, 'resolve');
+    // Force rollback AFTER step 4's setDamping/setDragStrength/
+    // setRotateStrength have run — throw on refreshTopology (the last
+    // step inside the step-4 try block).
+    deps.physics.refreshTopology = vi.fn(() => { throw new Error('topology failed'); });
+    const setDampingSpy = deps.physics.setDamping as ReturnType<typeof vi.fn>;
+    const setDragSpy = deps.physics.setDragStrength as ReturnType<typeof vi.fn>;
+    const setRotateSpy = deps.physics.setRotateStrength as ReturnType<typeof vi.fn>;
+    const result = await hydrateFromWatchSeed(seedFixture(), sourceMetaFixture(), deps);
+    expect(result).toMatchObject({ status: 'error', reason: 'physics-commit-threw' });
+    // Last setDamping call reverts to the pre-hydrate getDamping() value (0.0).
+    const lastDamping = setDampingSpy.mock.calls[setDampingSpy.mock.calls.length - 1][0];
+    const lastDrag = setDragSpy.mock.calls[setDragSpy.mock.calls.length - 1][0];
+    const lastRotate = setRotateSpy.mock.calls[setRotateSpy.mock.calls.length - 1][0];
+    expect(lastDamping).toBe(0.0);
+    expect(lastDrag).toBe(3.0);
+    expect(lastRotate).toBe(7.0);
   });
 
   // NOTE: the previous test "skips worker commit when worker is

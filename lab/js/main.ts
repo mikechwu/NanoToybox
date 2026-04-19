@@ -31,6 +31,7 @@ import { createInteractionDispatch } from './runtime/interaction/interaction-dis
 import { createOverlayRuntime, type OverlayRuntime } from './runtime/overlay/overlay-runtime';
 import { createInputBindings, type InputBindings } from './runtime/interaction/input-bindings';
 import { registerStoreCallbacks } from './runtime/ui-bindings';
+import { syncPhysicsConfigToStore } from './runtime/physics-config-store-sync';
 import { createAtomSource } from './runtime/interaction/atom-source';
 import { createSceneRuntime, type SceneRuntime } from './runtime/scene-runtime';
 import { consumeWatchToLabHandoffFromLocation } from './runtime/handoff/watch-handoff';
@@ -388,11 +389,15 @@ async function init() {
   // between store defaults and engine defaults — physics owns the truth).
   const store = useAppStore.getState();
   store.setBoundaryMode(physics.getWallMode());
-  store.setDragStrength(physics.getDragStrength());
-  store.setRotateStrength(physics.getRotateStrength());
-  // Reverse damping→slider: d = 0.5 * t³, t = cbrt(2d), slider = t * 100
-  const initDamping = physics.getDamping();
-  store.setDampingSliderValue(initDamping === 0 ? 0 : Math.round(Math.cbrt(2 * initDamping) * 100));
+  // Mirror the engine's post-boot physics config into the store so the
+  // Settings sheet opens with slider positions matching what the engine
+  // is actually running. Routes through the shared helper so the cubic
+  // scale / slider-range constants live in one place (src/ui/damping-slider).
+  syncPhysicsConfigToStore({
+    damping: physics.getDamping(),
+    kDrag: physics.getDragStrength(),
+    kRotate: physics.getRotateStrength(),
+  });
 
   // Status controller (hint-only — status text handled by store/React StatusBar)
   statusCtrl = new StatusController({

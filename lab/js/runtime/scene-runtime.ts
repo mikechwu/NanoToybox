@@ -21,6 +21,7 @@ import { CONFIG } from '../config';
 import { commitMolecule, clearPlayground, addMoleculeToScene } from '../scene';
 import { loadStructure } from '../loader';
 import { useAppStore } from '../store/app-store';
+import { syncPhysicsConfigToStore } from './physics-config-store-sync';
 // focusNewestPlacedMolecule intentionally NOT imported — placement commit
 // does not change focus metadata or camera pivot (Policy A: placement framing
 // is about visibility, not about changing what Center/Follow mean).
@@ -427,6 +428,7 @@ export function createSceneRuntime(deps: SceneRuntimeDeps): SceneRuntime {
         appearance: deps.getAppearanceRuntime?.() ?? null,
         getCameraMode: deps.getCameraMode,
         setHydrationActive: deps.setHydrationActive,
+        syncPhysicsConfigToStore,
         onHydrated: () => {
           // Reuse the existing post-commit path so bonded groups /
           // timeline / store projections all see the new scene in a

@@ -45,6 +45,7 @@ import type { AtomXYZ } from '../../../../src/types/domain';
 import type { BondTuple } from '../../../../src/types/interfaces';
 import type { WorkerCommand, PhysicsConfig } from '../../../../src/types/worker-protocol';
 import type { BondedGroupColorAssignment } from '../../store/app-store';
+import type { MirroredPhysicsConfig } from '../physics-config-store-sync';
 
 /** Marker placed on the synthetic molecule entry so any future code
  *  that wants to "reload from file" knows there is no reload source.
@@ -71,6 +72,9 @@ export interface HydrateFromWatchSeedDeps {
     getBoundarySnapshot(): BoundarySnapshot;
     restoreBoundarySnapshot(snap: BoundarySnapshot): void;
     setTimeConfig(dtFs: number, dampingRefSteps: number, dampingRefDurationFs?: number): void;
+    getDamping(): number;
+    getDragStrength(): number;
+    getRotateStrength(): number;
     setDamping(v: number): void;
     setDragStrength(v: number): void;
     setRotateStrength(v: number): void;
@@ -183,6 +187,16 @@ export interface HydrateFromWatchSeedDeps {
    *  success and rollback paths. Null in test doubles that don't run
    *  a frame loop. */
   setHydrationActive?: (active: boolean) => void;
+
+  /** Mirror the restored physics config (damping + drag/rotate
+   *  strengths) into the Zustand store so the Settings sheet reflects
+   *  the handoff values instead of the pre-hydrate defaults. Required
+   *  (not optional) so a forgotten wiring is a typecheck failure, not
+   *  a silent user-visible desync. Injected rather than imported so
+   *  the transactional core stays store-free; tests pass `vi.fn()`.
+   *  Invoked once on the success branch, after every physics / worker
+   *  / renderer / registry commit. */
+  syncPhysicsConfigToStore: (config: MirroredPhysicsConfig) => void;
 }
 
 /** Shape of a physics checkpoint — passes through the runtime opaquely.
@@ -253,6 +267,15 @@ export async function hydrateFromWatchSeed(
   const capture: {
     physics: PhysicsCheckpoint;
     boundary: BoundarySnapshot;
+    // Physics config (damping, drag, rotate) is captured separately
+    // because `PhysicsCheckpoint` only round-trips pos/vel/bonds —
+    // `restoreCheckpoint` cannot undo the `setDamping`/`setDragStrength`
+    // /`setRotateStrength` calls in step 4. Without this capture, a
+    // rollback after those setters leaves physics on handoff values
+    // while the store returns to pre-hydrate slider positions — the
+    // exact desync this hydrate path's store-sync was introduced to
+    // prevent, just on the failure branch.
+    config: { damping: number; kDrag: number; kRotate: number };
     scene: SceneState;
     registry: AtomMetadataSnapshot;
     tracker: TimelineAtomIdentitySnapshot;
@@ -261,6 +284,11 @@ export async function hydrateFromWatchSeed(
   } = {
     physics: physics.createCheckpoint(),
     boundary: physics.getBoundarySnapshot(),
+    config: {
+      damping: physics.getDamping(),
+      kDrag: physics.getDragStrength(),
+      kRotate: physics.getRotateStrength(),
+    },
     scene: cloneSceneState(sceneState),
     registry: registry.snapshot(),
     tracker: tracker.snapshot(),
@@ -296,6 +324,15 @@ export async function hydrateFromWatchSeed(
       // Domain first.
       physics.restoreCheckpoint(capture.physics);
       physics.restoreBoundarySnapshot(capture.boundary);
+      // Restore damping/drag/rotate from the pre-hydrate capture.
+      // `restoreCheckpoint` only round-trips pos/vel/bonds; if step 4
+      // already called the three config setters, a rollback without
+      // this block leaves physics on handoff values while the store
+      // (never written on the failure branch) stays on pre-hydrate
+      // values — silent desync.
+      physics.setDamping(capture.config.damping);
+      physics.setDragStrength(capture.config.kDrag);
+      physics.setRotateStrength(capture.config.kRotate);
       restoreSceneStateInPlace(sceneState, capture.scene);
       registry.restore(capture.registry);
       tracker.restore(capture.tracker);
@@ -685,6 +722,20 @@ export async function hydrateFromWatchSeed(
   }
 
   // ── 7. Publish success. ──
+  //       Mirror the committed physics config into the Zustand store
+  //       BEFORE firing `onHydrated` so any consumer that reads the
+  //       store in response (status toasts, derived UI) sees the
+  //       post-handoff values. Placed after every physics/worker/
+  //       renderer/registry commit so a failure on any earlier step
+  //       (all of which route through `rollback`) cannot leave the
+  //       store sliders stranded on handoff values while physics has
+  //       reverted. See physics-config-store-sync.ts for the contract.
+  deps.syncPhysicsConfigToStore({
+    damping: payload.workerConfig.damping,
+    kDrag: payload.workerConfig.kDrag,
+    kRotate: payload.workerConfig.kRotate,
+  });
+
   deps.onHydrated?.({
     atomOffset: 0,
     atomCount: payload.n,

@@ -685,6 +685,7 @@ describe('coordinator calls syncBondedGroupsForDisplayFrame on all transitions',
       clearBondedGroupHighlight: vi.fn(),
       clearRendererFeedback: vi.fn(),
       syncBondedGroupsForDisplayFrame: syncSpy,
+      syncPhysicsConfigToStore: vi.fn(),
     };
 
     const coordinator = createTimelineCoordinator(deps);

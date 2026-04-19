@@ -15,6 +15,11 @@ import { useSheetAnimation } from '../hooks/useSheetAnimation';
 import { selectIsReviewLocked } from '../store/selectors/review-ui-lock';
 import { Segmented } from './Segmented';
 import { ReviewLockedListItem } from './ReviewLockedListItem';
+import {
+  DAMPING_SLIDER_MAX,
+  sliderValueToDamping,
+  formatDampingFromSliderValue,
+} from '../../../src/ui/damping-slider';
 
 // ── Slider helper ──
 
@@ -84,18 +89,9 @@ const BOUNDARY_ITEMS = [
   { value: 'remove', label: 'Remove' },
 ];
 
-function formatDamping(sliderVal: number): string {
-  const t = sliderVal / 100;
-  const d = t === 0 ? 0 : 0.5 * t * t * t;
-  if (d === 0) return 'None';
-  if (d < 0.001) return d.toExponential(0);
-  return d.toFixed(3);
-}
-
-function sliderToDamping(sliderVal: number): number {
-  const t = sliderVal / 100;
-  return t === 0 ? 0 : 0.5 * t * t * t;
-}
+// Damping ↔ slider conversion lives in `src/ui/damping-slider` — the
+// single source of truth shared with lab boot, ui-bindings, and the
+// timeline/hydrate store-sync paths.
 
 export function SettingsSheet() {
   const activeSheet = useAppStore((s) => s.activeSheet);
@@ -138,7 +134,7 @@ export function SettingsSheet() {
   const handleDrag = useCallback((v: number) => settingsCallbacks?.onDragChange(v), [settingsCallbacks]);
   const handleRotate = useCallback((v: number) => settingsCallbacks?.onRotateChange(v), [settingsCallbacks]);
   const handleDamping = useCallback((sliderVal: number) => {
-    settingsCallbacks?.onDampingChange(sliderToDamping(sliderVal));
+    settingsCallbacks?.onDampingChange(sliderValueToDamping(sliderVal));
   }, [settingsCallbacks]);
 
   if (!mounted) return null;
@@ -217,10 +213,10 @@ export function SettingsSheet() {
               <SliderRow
                 label="Damping"
                 min={0}
-                max={100}
+                max={DAMPING_SLIDER_MAX}
                 step={1}
                 value={dampingSliderValue}
-                formatValue={formatDamping}
+                formatValue={formatDampingFromSliderValue}
                 onChange={handleDamping}
               />
             </ul>

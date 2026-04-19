@@ -22,6 +22,7 @@
  */
 
 import { useAppStore } from '../store/app-store';
+import { dampingToSliderValue } from '../../../src/ui/damping-slider';
 import { selectIsReviewLocked } from '../store/selectors/review-ui-lock';
 import { showReviewModeActionHint } from './overlay/review-mode-action-hints';
 import type { OverlayRuntime } from './overlay/overlay-runtime';
@@ -131,8 +132,7 @@ export function registerStoreCallbacks(deps: UIBindingsDeps): void {
     },
     onDampingChange: (d: number) => {
       deps.setPhysicsDamping(d);
-      const sliderVal = d === 0 ? 0 : Math.round(Math.cbrt(2 * d) * 100);
-      useAppStore.getState().setDampingSliderValue(sliderVal);
+      useAppStore.getState().setDampingSliderValue(dampingToSliderValue(d));
       if (deps.isWorkerActive()) {
         deps.sendWorkerInteraction({ type: 'setDamping', value: d });
       }

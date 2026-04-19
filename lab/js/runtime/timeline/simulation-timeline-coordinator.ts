@@ -20,6 +20,7 @@ import type { SimulationTimeline, TimelineFrame } from './simulation-timeline';
 import type { PhysicsEngine } from '../../physics';
 import type { Renderer } from '../../renderer';
 import { applyRestartState } from './restart-state-adapter';
+import type { MirroredPhysicsConfig } from '../physics-config-store-sync';
 
 
 export interface TimelineCoordinatorDeps {
@@ -40,6 +41,12 @@ export interface TimelineCoordinatorDeps {
   clearRendererFeedback: () => void;
   /** Refresh bonded-group projection + highlight for the current display frame. */
   syncBondedGroupsForDisplayFrame: () => void;
+  /** Push restored physics config (damping + drag/rotate strengths) into
+   *  the Zustand store so the Settings sheet reflects the restart-frame
+   *  values. Invoked once per restart-from-here, immediately after
+   *  `applyRestartState` writes to the physics engine. Injected (not
+   *  imported) so tests can stub without mounting the real store. */
+  syncPhysicsConfigToStore: (config: MirroredPhysicsConfig) => void;
 }
 
 export interface TimelineCoordinator {
@@ -130,6 +137,11 @@ export function createTimelineCoordinator(deps: TimelineCoordinatorDeps): Timeli
 
       // 1-2. Restore full physics state via the shared adapter
       applyRestartState(physics, rs);
+      // 2a. Mirror the restored config into the store so the Settings
+      //     sheet's damping/drag/rotate sliders reflect the restart-
+      //     frame values instead of their pre-restart positions.
+      //     See physics-config-store-sync.ts for the contract.
+      deps.syncPhysicsConfigToStore(rs.config);
       deps.setSimTimePs(rs.timePs);
 
       // 3. Truncate history after restart point — maintains monotonic timeline
