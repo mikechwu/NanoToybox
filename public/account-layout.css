@@ -410,15 +410,30 @@ button {
 }
 .acct__upload {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(120px, auto) auto;
+  /* thumb · meta · stats · actions — 4 explicit tracks. The first track
+     is sized to the thumb's intrinsic 56px width so meta can start
+     immediately to the right of the artwork instead of floating in a
+     1.5fr column the thumb under-fills. */
+  grid-template-columns: 56px minmax(0, 1.5fr) minmax(120px, auto) auto;
   align-items: center;
-  gap: var(--s-4);
+  column-gap: var(--s-3);
+  row-gap: var(--s-2);
   padding: var(--s-3) 0;
   border-bottom: 1px solid var(--color-border);
 }
 .acct__upload:hover { background: var(--color-surface-hover); }
 
-.acct__upload-meta { min-width: 0; padding-left: 4px; }
+.acct__upload-thumb {
+  display: block;
+  /* Thumb is decorative; it should never expand past its track or vary
+     row height. Fixed box, intrinsic alignment with the meta baseline. */
+  width: 40px;
+  height: 40px;
+  flex: none;
+  justify-self: start;
+}
+
+.acct__upload-meta { min-width: 0; padding-left: 0; }
 .acct__upload-title {
   font-size: 14.5px;
   font-weight: 500;
@@ -465,12 +480,23 @@ button {
 
 @media (max-width: 600px) {
   .acct__upload {
-    grid-template-columns: 1fr;
-    gap: var(--s-2);
+    /* Mobile: keep the thumb anchored at the top-left, let everything else
+       stack to its right. Two columns × auto rows; thumb spans both rows
+       so the artwork stays vertically centered against the textual stack. */
+    grid-template-columns: 40px 1fr;
+    grid-template-areas:
+      "thumb meta"
+      "thumb stats"
+      "thumb actions";
+    column-gap: var(--s-3);
+    row-gap: var(--s-1);
     padding: var(--s-3) 4px;
+    align-items: start;
   }
-  .acct__upload-stats { text-align: left; }
-  .acct__upload-actions { justify-content: flex-start; padding-right: 0; }
+  .acct__upload-thumb { grid-area: thumb; align-self: start; }
+  .acct__upload-meta { grid-area: meta; }
+  .acct__upload-stats { grid-area: stats; text-align: left; }
+  .acct__upload-actions { grid-area: actions; justify-content: flex-start; padding-right: 0; }
 }
 
 .acct__empty {

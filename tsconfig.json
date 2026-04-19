@@ -17,6 +17,8 @@
     "lab/bench/**/*.ts",
     "watch/js/**/*.ts",
     "watch/js/**/*.tsx",
+    "account/**/*.ts",
+    "account/**/*.tsx",
     "src/**/*.ts",
     "tests/unit/**/*.ts",
     "tests/unit/**/*.tsx",
@@ -48,7 +50,9 @@
     "tests/unit/policy-acceptance.test.ts",
     "tests/unit/oauth-state.test.ts",
     "tests/unit/auth-error-route.test.ts",
-    "tests/unit/auth-callback-acceptance.test.ts"
+    "tests/unit/auth-callback-acceptance.test.ts",
+    "tests/unit/poster-endpoint.test.ts",
+    "tests/unit/share-page-og.test.ts"
   ]
   // Coverage: all extracted app/bench source modules are .ts/.tsx and type-checked.
   // Inline <script type="module"> in HTML entrypoints are sanctioned exceptions.

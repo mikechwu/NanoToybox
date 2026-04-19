@@ -10,6 +10,7 @@
 - Export the trajectory as a compact **capsule** (`.atomdojo`) or a full history (`.atomdojo-history`).
 - Open an exported file in Watch, scrub the timeline, and share the link.
 - From any frame in Watch, click **Interact From Here** to hand off the scene to Lab and take over the engine.
+- Share a capsule link anywhere — every `/c/:code` page renders a 1200×630 social preview card, and account upload lists show per-row thumbnails (see [operations.md](operations.md) for the `/api/capsules/:code/preview/poster` endpoint and the `CAPSULE_PREVIEW_DYNAMIC_FALLBACK` env var).
 
 ## Repository At A Glance
 

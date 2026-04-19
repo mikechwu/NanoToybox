@@ -1,0 +1,38 @@
+[
+  {
+    "shareCode": "7M4K2D8Q9T1V",
+    "title": "Diamond cluster relaxation",
+    "kind": "capsule",
+    "atomCount": 64,
+    "frameCount": 240,
+    "sizeBytes": 12345,
+    "createdAt": "2026-04-13T00:00:00Z"
+  },
+  {
+    "shareCode": "ABCDEFGHJKLM",
+    "title": null,
+    "kind": "md-capsule",
+    "atomCount": 12,
+    "frameCount": 60,
+    "sizeBytes": 4096,
+    "createdAt": "2026-04-14T00:00:00Z"
+  },
+  {
+    "shareCode": "NPQRSTUVWXYZ",
+    "title": "  ",
+    "kind": "structure",
+    "atomCount": 512,
+    "frameCount": 1024,
+    "sizeBytes": 200000,
+    "createdAt": "2026-04-15T00:00:00Z"
+  },
+  {
+    "shareCode": "23456789ABCD",
+    "title": "Unknown audience case",
+    "kind": "future-thing",
+    "atomCount": 8,
+    "frameCount": 30,
+    "sizeBytes": 1500,
+    "createdAt": "2026-04-16T00:00:00Z"
+  }
+]

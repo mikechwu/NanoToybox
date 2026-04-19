@@ -57,7 +57,18 @@ export interface CapsuleShareRow {
   rejection_reason: string | null;
 }
 
-/** Public metadata returned by GET /api/capsules/:code */
+import { TEMPLATE_VERSION, fnv1a32Hex } from './capsule-preview';
+
+/**
+ * Public metadata returned by GET /api/capsules/:code.
+ *
+ * **Semantics note (April 2026 — capsule-preview V1):** `preview.posterUrl`
+ * being present means a poster **endpoint** is available for this capsule
+ * (either a stored R2 asset or the dynamically-generated V1 fallback). For
+ * "stored rich asset exists," consumers should branch on
+ * `previewStatus === 'ready'`. Pre-V1, the field was present only when a
+ * stored asset existed; this flipped with the V1 release. See spec §8.
+ */
 export interface ShareMetadataResponse {
   shareCode: string;
   kind: string;
@@ -71,12 +82,45 @@ export interface ShareMetadataResponse {
   hasInteraction: boolean;
   previewStatus: PreviewStatus;
   preview?: {
+    /** Poster endpoint URL — stored or dynamically generated. */
     posterUrl: string;
+    /** Literal — matches the PNG the route produces. */
+    width: 1200;
+    /** Literal — matches the PNG the route produces. */
+    height: 630;
   };
 }
 
+export interface ToMetadataOptions {
+  /**
+   * Mirrors the `CAPSULE_PREVIEW_DYNAMIC_FALLBACK` env flag (spec §7).
+   * When true, every accessible row gets `preview.posterUrl` (stored or
+   * dynamic). When false (or omitted), behavior matches pre-V1 (stored-only).
+   */
+  dynamicFallbackEnabled?: boolean;
+}
+
+function posterUrlFor(shareCode: string, isStored: boolean, storedKey: string | null): string {
+  // Cache-key versioning (spec §12): two independent axes.
+  // - dynamic posters bust on TEMPLATE_VERSION bump
+  // - stored posters bust on first-8-hex of preview_poster_key
+  // Spec §12: per-stored-asset version is the first 8 hex of the poster key.
+  // Stored keys today take the form `capsules/<id>/preview-poster.png`, where
+  // the leading path segments are not guaranteed hex. Deriving the cache key
+  // from a deterministic 8-hex hash of the FULL storedKey gives the same
+  // bust-on-content-change semantics with full key entropy and no parsing
+  // assumption about future storage layouts.
+  const v = isStored && storedKey
+    ? `p${fnv1a32Hex(storedKey)}`
+    : `t${TEMPLATE_VERSION}`;
+  return `/api/capsules/${shareCode}/preview/poster?v=${v}`;
+}
+
 /** Map a D1 row to the public metadata response. */
-export function toMetadataResponse(row: CapsuleShareRow): ShareMetadataResponse {
+export function toMetadataResponse(
+  row: CapsuleShareRow,
+  options: ToMetadataOptions = {},
+): ShareMetadataResponse {
   const response: ShareMetadataResponse = {
     shareCode: row.share_code,
     kind: row.kind,
@@ -91,12 +135,40 @@ export function toMetadataResponse(row: CapsuleShareRow): ShareMetadataResponse 
     previewStatus: row.preview_status,
   };
 
-  // Only include preview.posterUrl when the poster is actually ready
-  if (row.preview_status === 'ready' && row.preview_poster_key) {
+  const hasStored = row.preview_status === 'ready' && !!row.preview_poster_key;
+  const accessible = isAccessibleStatus(row.status);
+
+  if (hasStored) {
     response.preview = {
-      posterUrl: `/api/capsules/${row.share_code}/preview/poster`,
+      posterUrl: posterUrlFor(row.share_code, true, row.preview_poster_key),
+      width: 1200,
+      height: 630,
+    };
+  } else if (accessible && options.dynamicFallbackEnabled) {
+    response.preview = {
+      posterUrl: posterUrlFor(row.share_code, false, null),
+      width: 1200,
+      height: 630,
     };
   }
 
   return response;
+}
+
+/**
+ * Read the V1 dynamic-fallback flag from env (default: on). Spec §7.
+ *
+ * Allowlist semantics: only the explicit truthy strings `"on"`, `"true"`, `"1"`
+ * enable the flag. Anything else (`"off"`, `"disabled"`, `"no"`, typos, the
+ * empty string, etc.) disables it. This avoids the prior denylist footgun
+ * where `CAPSULE_PREVIEW_DYNAMIC_FALLBACK=disabled` silently kept the flag on.
+ * Unset is treated as `"on"` to preserve the V1 default behavior.
+ */
+export function isDynamicPreviewFallbackEnabled(env: {
+  CAPSULE_PREVIEW_DYNAMIC_FALLBACK?: string;
+}): boolean {
+  const raw = env.CAPSULE_PREVIEW_DYNAMIC_FALLBACK;
+  if (raw == null) return true;
+  const v = raw.trim().toLowerCase();
+  return v === 'on' || v === 'true' || v === '1';
 }

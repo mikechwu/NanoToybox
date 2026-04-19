@@ -631,9 +631,11 @@ Two lanes exist and have different backing servers:
 | Command | Server | Use for |
 |---|---|---|
 | `npm run test:e2e` (default) | `vite preview` (static) | Frontend-only specs; Pages Functions are unavailable |
-| `npm run test:e2e:pages-dev` | `wrangler pages dev` | Backend-dependent specs (auth, account, privacy, publish) |
+| `npm run test:e2e:pages-dev` | `wrangler pages dev` | Backend-dependent specs (auth, account, privacy, publish, capsule-preview poster smoke) |
 
 Pages-dev specs must gate themselves via `test.beforeEach(({}, testInfo) => test.skip(testInfo.project.name !== 'pages-dev'))` so they no-op under the default lane.
+
+The pages-dev lane spawns wrangler with `--binding DEV_ADMIN_ENABLED=true` (see `playwright.pages-dev.config.ts`) so the local `/api/admin/seed` is reachable for the deterministic capsule-preview poster smoke (`tests/e2e/poster-smoke.spec.ts`). Do not strip that binding.
 
 ## Next Steps (Priority Order)
 
@@ -691,6 +693,15 @@ must cover them too.
 Anything else is stale and should be updated — the retired UX should
 not dangle in the active codebase's comments or live docs.
 
+When releasing a change to capsule-preview behavior (the
+`/api/capsules/:code/preview/poster` endpoint, the `og:image` emission
+on `/c/:code`, the `CAPSULE_PREVIEW_DYNAMIC_FALLBACK` flag in
+`wrangler.toml`, or anything under `src/share/capsule-preview*` /
+`functions/_lib/capsule-preview-image.tsx`), include the doc surfaces
+that describe it (`docs/architecture.md`, `docs/operations.md`, this
+file) in the same PR. The `wrangler.toml` flag block is the canonical
+rollback handle — keep its comment and the doc copy in lockstep.
+
 #### Production deploy readiness (Cloudflare side)
 
 Before promoting any Workers/Pages change to production, verify the
@@ -724,9 +735,10 @@ The Phase 5 share-and-publish work adds a Cloudflare Pages Functions backend (un
 
 #### Required packages
 
-Already in `devDependencies` — a fresh `npm install` is all you need:
-- `wrangler` — Cloudflare CLI (pages dev, D1 migrations, worker deploy)
-- `@cloudflare/workers-types` — Workers runtime type globals, consumed by `tsconfig.functions.json` and `workers/cron-sweeper/tsconfig.json`
+Already pinned in `package.json` — a fresh `npm install` is all you need:
+- `wrangler` (devDep) — Cloudflare CLI (pages dev, D1 migrations, worker deploy)
+- `@cloudflare/workers-types` (devDep) — Workers runtime type globals, consumed by `tsconfig.functions.json` and `workers/cron-sweeper/tsconfig.json`
+- `@cloudflare/pages-plugin-vercel-og` (runtime dep) — Satori-based OG image renderer used by `functions/api/capsules/[code]/preview/poster.ts`. Adds ~1–2 MB to the Pages Functions bundle. Do not import it from `lab/` or `watch/` — it is functions-only.
 
 #### First-time setup
 
@@ -780,17 +792,21 @@ Local Wrangler state (local D1 + R2 + cache, potentially including seeded/test u
 # Terminal 1
 npm run build && npm run cf:dev
 
-# Terminal 2 (requires DEV_ADMIN_ENABLED=true in .dev.vars)
-npm run seed:capsule -- path/to/capsule.atomdojo
+# Terminal 2 (requires DEV_ADMIN_ENABLED=true in .dev.vars,
+# or run cf:dev with `--binding DEV_ADMIN_ENABLED=true` as the
+# pages-dev playwright lane does)
+npm run seed:capsule                          # defaults to tests/e2e/fixtures/poster-smoke-capsule.json
+npm run seed:capsule -- path/to/capsule.atomdojo   # custom capsule
 ```
 
-The seed command prints `{ shareCode, objectKey }`. The capsule is then reachable via `/c/<shareCode>` and `/watch/?c=<shareCode>`.
+The seed command prints `{ shareCode, objectKey }`. The capsule is then reachable via `/c/<shareCode>` and `/watch/?c=<shareCode>`. The default fixture is the same minimal capsule the pages-dev poster smoke seeds, so the no-arg form is also a quick way to manually reproduce the smoke's pre-state.
 
 #### Testing workflow
 
-- `npm run typecheck` — runs frontend + functions + cron tsconfigs in one command. Prefer this over the granular `typecheck:frontend` / `typecheck:functions` / `typecheck:cron` variants for CI.
-- `npm run test:unit` (vitest) — includes new endpoint handler tests and auth UX tests
+- `npm run typecheck` — runs frontend + functions + cron tsconfigs in one command. Prefer this over the granular `typecheck:frontend` / `typecheck:functions` / `typecheck:cron` variants for CI. The frontend config (`tsconfig.json`) covers `lab/js/**`, `watch/js/**`, `account/**`, and `src/**` (including `.tsx`); the functions config (`tsconfig.functions.json`) covers `functions/**/*.{ts,tsx}`, `src/share/**`, and the listed backend-handler tests, with `jsx: "react-jsx"` and `resolveJsonModule: true` so capsule-preview `.tsx` renderers and `__fixtures__/*.json` typecheck without per-file changes.
+- `npm run test:unit` (vitest) — includes new endpoint handler tests and auth UX tests, plus the capsule-preview unit suite (`tests/unit/capsule-preview*.test.ts`, `poster-endpoint.test.ts`, `share-page-og.test.ts`, `account-capsule-row.test.tsx`).
 - `npm run test:e2e` (playwright) — the share-link flow uses `page.route()` mocking, since Vite preview does not run Pages Functions
+- `npm run test:e2e:pages-dev` — required for the capsule-preview poster smoke (`tests/e2e/poster-smoke.spec.ts`), which deterministically seeds a fixture via `/api/admin/seed` and asserts a real Satori-rendered 1200×630 PNG comes back from `/api/capsules/:code/preview/poster`.
 - `npm run lint:dock-contract` — unchanged from prior phases
 
 To run a single test file, pass the path to vitest / playwright:
@@ -817,6 +833,7 @@ The backend auth tests (`auth-middleware.test.ts`, `session-endpoint.test.ts`) c
 
 - Place the test at `tests/unit/<name>-endpoint.test.ts` (or `<name>-middleware.test.ts` for middleware)
 - Add the filename to **both** `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — this prevents Workers globals from leaking into frontend compilation. There is a precedent block of 18 dual-listed files as of Phase 7 (authoritative count: the exclude list in `tsconfig.json`); follow the existing ordering
+- Adding a new `.tsx` under `functions/` (e.g. another Satori OG renderer) does **not** require a config change: `tsconfig.functions.json` already includes `functions/**/*.tsx` with `jsx: "react-jsx"`, and `functions/**` is excluded from the frontend config by virtue of not appearing in its `include` globs
 - Use hoisted `vi.fn<(...args: unknown[]) => ...>()` for module mocks
 - See `tests/unit/publish-endpoint.test.ts`, `tests/unit/session-endpoint.test.ts`, and `tests/unit/owner-delete-endpoint.test.ts` for the canonical patterns (`minimalValidCapsule()`, `makePermissiveEnv()` helpers; owner-vs-other 404 contract)
 - New account/privacy endpoints should emit responses through `noCacheJson` (from `functions/http-cache.ts`) — tests should assert the no-cache headers are present

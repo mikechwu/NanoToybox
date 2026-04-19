@@ -1,6 +1,6 @@
-# Operations — AtomDojo share-link deployment
+# Operations — Atom Dojo share-link deployment
 
-Operational runbook for the production AtomDojo deployment (Lab + Watch + Viewer
+Operational runbook for the production Atom Dojo deployment (Lab + Watch + Viewer
 backed by Cloudflare Pages Functions, D1, and R2). The other `docs/` files cover
 architecture and code; this one is for operators keeping the deployed system
 healthy.
@@ -50,6 +50,7 @@ values are stored as encrypted Pages Secrets.
 |---|---|---|---|
 | `GOOGLE_CLIENT_ID` | Public var | `wrangler.toml` `[vars]` | Google OAuth app identifier |
 | `GITHUB_CLIENT_ID` | Public var | `wrangler.toml` `[vars]` | GitHub OAuth app identifier |
+| `CAPSULE_PREVIEW_DYNAMIC_FALLBACK` | Public var | `wrangler.toml` `[vars]` | Feature flag (default `"on"`) gating dynamic Satori-rendered poster fallback for `GET /api/capsules/:code/preview/poster`. Allowlist parser: only `on` / `true` / `1` enable; anything else (`off`, `disabled`, typos, empty) disables. See *Capsule preview poster* below for rollback procedure. |
 | `GOOGLE_CLIENT_SECRET` | Secret | Pages Secret | Google OAuth app secret |
 | `GITHUB_CLIENT_SECRET` | Secret | Pages Secret | GitHub OAuth app secret |
 | `SESSION_SECRET` | Secret | Pages Secret | Single key for OAuth signed-state HMAC, session cookie signing, and abuse-report IP hashing. One rotate point, three dependents — read the rotation section before touching it. |
@@ -222,6 +223,7 @@ canaries.
 | `REPORT_DEDUP_DISABLED` | `functions/api/capsules/[code]/report.ts` | See alerting table — repeated here because it's grep-shaped the same way. |
 | `R2_UPLOADED_MISSING` | `functions/api/admin/sweep/orphans.ts` | See alerting table. |
 | `PUBLISH_RECONCILE_LOST` | `functions/api/capsules/publish.ts` | See alerting table. |
+| `[capsule-poster]` | `functions/api/capsules/[code]/preview/poster.ts` | One structured-JSON line per poster-route response: `{"code":"...","mode":"stored\|generated\|error\|flag-off\|inaccessible","durationMs":N,"status":N,"cause":"..."}`. `mode` discriminates the served path; `cause` carries a stable prefix on the non-happy modes. Stable prefixes: `satori-threw:`, `module-import-failed:`, `r2-miss`, `dynamic-not-png:Nb`, `stored-not-png:Nb`, `fallback-fetch-failed:`, plus combined forms when both upstream and fallback fail. Aggregate by `mode` to track stored-hit vs dynamic-render vs error rates; alert on a sustained `error` rate or any `module-import-failed:` (indicates a `@cloudflare/pages-plugin-vercel-og` regression). |
 
 ### Client-side (browser console, surfaces as error events)
 
@@ -365,6 +367,96 @@ the token, the URL no longer carries it, and a browser reload lands on
 a plain `/lab/` with no pending handoff. If a user reports that a
 reload "recovered" a failed handoff, that's a bug — file it, don't
 dismiss it.
+
+---
+
+## Capsule preview poster endpoint
+
+`GET /api/capsules/:code/preview/poster` serves the 1200×630 PNG used by
+OpenGraph / Twitter / link-unfurl consumers. The endpoint multiplexes
+four served paths and registers four cache tiers; the served path is
+visible in the `[capsule-poster]` log line's `mode` field.
+
+### Response contract & cache tiers
+
+| `mode` | Status | Body | `Cache-Control` | Notes |
+|---|---|---|---|---|
+| `stored` | 200 | PNG (R2-stored poster) | `public, max-age=31536000, immutable` | Stored asset for the capsule exists in R2. Browser- and edge-cacheable for one year; the R2 key is content-addressed so the URL changes when the asset does. |
+| `generated` | 200 | PNG (Satori-rendered) | `public, max-age=300, s-maxage=3600, stale-while-revalidate=86400` + `ETag: "v<TEMPLATE_VERSION>-<8hex>"` | Dynamic fallback rendered per request via `@cloudflare/pages-plugin-vercel-og`. Short browser cache, longer edge cache, day-long SWR window. Gated by `CAPSULE_PREVIEW_DYNAMIC_FALLBACK`. |
+| `error` (terminal `/og-fallback.png`) | 200 | PNG (`public/og-fallback.png`, 1200×630) | `public, max-age=60` | Last-resort fallback when both stored and dynamic paths fail. Short cache so a fix propagates fast. |
+| `error` (1×1 safety net) | 200 | 1×1 PNG | `public, max-age=60` | Reached only when even `/og-fallback.png` fetch fails. Short cache; presence in logs (`fallback-fetch-failed:` cause) is itself a signal. |
+| `flag-off` / `inaccessible` | 404 | — | `public, max-age=60` | Capsule row is moderation-deleted, account-deleted, or the flag is off and no stored asset exists. Short cache so a flag flip or moderation reverse takes effect within a minute. |
+
+All responses include `Access-Control-Allow-Origin: *` and
+`X-Content-Type-Options: nosniff` so external unfurlers (Slack, Discord,
+Twitter, iMessage previewer) can fetch cross-origin without preflight
+and browsers don't sniff a fallback to non-PNG MIME.
+
+### Public-API metadata semantics — RELEASE-NOTE
+
+`ShareMetadataResponse.preview` widened from "present only when a
+stored asset exists" to `{posterUrl, width: 1200, height: 630}` for any
+accessible row when `CAPSULE_PREVIEW_DYNAMIC_FALLBACK` is on. The
+preview block is now present even when no stored R2 asset exists —
+`posterUrl` may resolve to a dynamically-rendered Satori PNG.
+
+External consumers that need to branch on "stored asset exists" must
+read `previewStatus === 'ready'`; `preview.posterUrl` presence no
+longer implies a stored asset. This is a contract widening, not a
+break, but downstream caches that keyed off "preview present ⇒ stored"
+need to be re-checked.
+
+### Feature-flag rollback procedure
+
+`CAPSULE_PREVIEW_DYNAMIC_FALLBACK` lives in `wrangler.toml [vars]`.
+**It is not a zero-deploy rollback** — Pages Functions resolve `[vars]`
+at deploy time, so changing the value requires a redeploy.
+
+```bash
+# 1. Edit wrangler.toml [vars] to disable.
+#    (Allowlist parser: only "on"/"true"/"1" enable; "off" disables.)
+#
+#    [vars]
+#    CAPSULE_PREVIEW_DYNAMIC_FALLBACK = "off"
+#
+# 2. Redeploy.
+npx wrangler pages deploy dist --project-name=atomdojo
+```
+
+With the flag off, the dynamic Satori path is skipped entirely; the
+endpoint still serves stored R2 posters at `mode=stored`, and
+otherwise falls through to the 404 `flag-off` mode (or the
+terminal `/og-fallback.png` path if a previously-served URL lands here
+post-flip). `ShareMetadataResponse.preview` reverts to the pre-V1
+"present only when a stored asset exists" semantics.
+
+### Runtime / bundle dependencies
+
+- `@cloudflare/pages-plugin-vercel-og@0.1.2` (pinned exact). Adds
+  ~1–2 MB to the Function bundle; the Pages Functions compressed-bundle
+  ceiling is 10 MB. If a future bump breaches that ceiling, deploy will
+  fail at upload — re-pin or split the dynamic-render path off.
+- **No `compatibility_flags = ["nodejs_compat"]` was added** — the
+  pinned 0.1.2 version does not require it. If a future upgrade
+  introduces a Node-API dependency, the flag must be added to
+  `wrangler.toml` in the same commit.
+- **Bundled font:** `functions/_lib/fonts/inter-regular.ts`
+  (base64-encoded TTF, validated at module init via TTF magic-byte
+  check — a corrupt bundle surfaces as `module-import-failed:` in
+  the `[capsule-poster]` log and the route falls through to the
+  terminal `/og-fallback.png`).
+- **Static asset:** `public/og-fallback.png` (1200×630, copied to
+  `dist/` by Vite). If this asset is missing from `dist/`, the
+  terminal-error path emits `fallback-fetch-failed:` and serves the
+  1×1 safety net.
+- **No D1 migration** — the V1 surface is read-only against existing
+  `capsule_share` rows.
+
+### Brand-string note
+
+`'AtomDojo'` (no space) was removed from user-visible output paths.
+The canonical brand string is `Atom Dojo`. If you see `AtomDojo` in
+a poster body, file it — it indicates a regression in template copy.
 
 ---
 
@@ -907,6 +999,23 @@ Public resolve smoke test (any capsule code from the above):
 curl -I "https://atomdojo.pages.dev/api/capsules/<code>"
 curl -I "https://atomdojo.pages.dev/c/<code>"
 # Expect 200 / redirect respectively.
+```
+
+Capsule preview poster smoke test (use any accessible capsule code):
+
+```bash
+curl -I "https://atomdojo.pages.dev/api/capsules/<code>/preview/poster"
+# Expect 200 with Content-Type: image/png, Access-Control-Allow-Origin: *,
+# X-Content-Type-Options: nosniff, and a Cache-Control header matching
+# one of the four tiers in the Capsule preview poster section above.
+# A stored asset returns max-age=31536000, immutable; a dynamic render
+# returns max-age=300, s-maxage=3600, stale-while-revalidate=86400 with
+# an ETag of shape "v<TEMPLATE_VERSION>-<8hex>".
+#
+# Then tail to confirm the structured log line:
+wrangler pages deployment tail | grep '\[capsule-poster\]'
+# Expect a single JSON line per request with code, mode, durationMs,
+# status, and (on non-happy modes) cause.
 ```
 
 ---

@@ -20,6 +20,15 @@ compatibility_date = "2025-01-01"
 GOOGLE_CLIENT_ID = "102343813766-55tmhfvapk1naibhpc214b3hrgjpauif.apps.googleusercontent.com"
 GITHUB_CLIENT_ID = "Ov23liucwJPJKHZEnwtJ"
 
+# Capsule preview V1 dynamic-fallback flag (spec §7).
+# "on"  → /api/capsules/:code/preview/poster generates a PNG for accessible
+#         capsules without a stored asset; /c/:code emits og:image for every
+#         accessible capsule.
+# "off" → pre-V1 behavior (404 unless preview_status=ready + poster_key set).
+# Rollback: edit this value and redeploy via
+#   npx wrangler pages deploy dist --project-name=atomdojo
+CAPSULE_PREVIEW_DYNAMIC_FALLBACK = "on"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "atomdojo-capsules"

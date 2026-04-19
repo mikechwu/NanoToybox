@@ -29,6 +29,16 @@ Path fragments such as `lab/`, `watch/`, and `viewer/` refer to directories, not
 
 - **bonded group** — a connected-component cluster of bonded atoms. First-class product concept with authored color assignments that persist across topology changes.
 
+## Capsule preview (common nouns — lowercase in prose)
+
+- **Capsule Preview** — the V1 deterministic figure system that powers both the account-row thumbnail and the public OG poster. Proper noun for the subsystem; the rendered artifacts are "preview thumbnail" / "preview poster."
+- **CapsulePreviewDescriptor** — presentation-ready, deterministic descriptor produced by `buildCapsulePreviewDescriptor` in `src/share/capsule-preview.ts`. Pure function of `CapsulePreviewInput`; geometry-affecting fields depend ONLY on `shareCode + kind`.
+- **figure variant** — one of `lattice-hex | lattice-cubic | cluster-orbital | chain-helix | ring-fused | neutral-brand`. The first five are molecular layouts; `neutral-brand` is the safe wordmark tile rendered for unknown / non-molecular `kind` values (the wrong-audience fallback).
+- **TEMPLATE_VERSION** — manually-bumped integer in `src/share/capsule-preview.ts` that busts the dynamic-poster edge cache when the static-figure design changes.
+- **stored poster** — pre-rendered PNG persisted in R2 under `preview_poster_key`, served when `preview_status === 'ready'`.
+- **dynamic fallback poster** — the Satori-rendered PNG returned by `GET /api/capsules/:code/preview/poster` when no stored asset exists. Gated by `CAPSULE_PREVIEW_DYNAMIC_FALLBACK`.
+- **terminal fallback** — the static `public/og-fallback.png` returned when Satori rendering fails. Distinct from "dynamic fallback poster," which is the Satori path itself.
+
 ## Backend (common nouns — lowercase in prose)
 
 - **signed intent** — a short-lived signed payload `{ action, payload, exp }` minted by a Function and consumed by a follow-up Function. Replaces session tokens for authenticated mutations.

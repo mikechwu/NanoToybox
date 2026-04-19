@@ -7,7 +7,7 @@
 
 import type { Env } from '../../env';
 import { normalizeShareInput } from '../../../src/share/share-code';
-import { isAccessibleStatus, toMetadataResponse } from '../../../src/share/share-record';
+import { isAccessibleStatus, isDynamicPreviewFallbackEnabled, toMetadataResponse } from '../../../src/share/share-record';
 import type { CapsuleShareRow } from '../../../src/share/share-record';
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
@@ -43,9 +43,14 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
       }),
   );
 
-  return Response.json(toMetadataResponse(row), {
-    headers: {
-      'Cache-Control': 'public, max-age=60',
+  return Response.json(
+    toMetadataResponse(row, {
+      dynamicFallbackEnabled: isDynamicPreviewFallbackEnabled(context.env),
+    }),
+    {
+      headers: {
+        'Cache-Control': 'public, max-age=60',
+      },
     },
-  });
+  );
 };

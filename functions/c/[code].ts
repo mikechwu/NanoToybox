@@ -5,12 +5,24 @@
  * For bots/unfurlers: the same HTML exposes og: metadata without requiring JS.
  *
  * Returns 404 for non-accessible statuses and unknown codes.
+ *
+ * Capsule-preview V1 (April 2026, spec §9): emits og:image / twitter:image for
+ * every accessible capsule when CAPSULE_PREVIEW_DYNAMIC_FALLBACK is on; uses
+ * canonical brand name "Atom Dojo" (with space) per docs/glossary.md.
  */
 
 import type { Env } from '../env';
 import { normalizeShareInput } from '../../src/share/share-code';
-import { isAccessibleStatus, toMetadataResponse } from '../../src/share/share-record';
+import {
+  isAccessibleStatus,
+  isDynamicPreviewFallbackEnabled,
+  toMetadataResponse,
+} from '../../src/share/share-record';
 import type { CapsuleShareRow } from '../../src/share/share-record';
+import {
+  CAPSULE_TITLE_FALLBACK,
+  sanitizeCapsuleTitle,
+} from '../../src/share/capsule-preview';
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const rawCode = context.params.code;
@@ -33,7 +45,8 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     return new Response('Not found', { status: 404 });
   }
 
-  const meta = toMetadataResponse(row);
+  const dynamicFallbackEnabled = isDynamicPreviewFallbackEnabled(context.env);
+  const meta = toMetadataResponse(row, { dynamicFallbackEnabled });
   const watchUrl = `/watch/?c=${code}`;
 
   // Build description from metadata
@@ -43,19 +56,37 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   if (meta.durationPs) descParts.push(`${meta.durationPs.toFixed(1)} ps`);
   const description = descParts.length > 0
     ? `Molecular simulation: ${descParts.join(', ')}`
-    : 'Molecular simulation capsule on AtomDojo';
+    : 'Molecular simulation capsule on Atom Dojo';
 
-  const title = row.title ?? 'AtomDojo Capsule';
+  // Spec §3 / §9: titles routed to image surfaces ALWAYS pass through the
+  // sanitizer. Canonical fallback is "Atom Dojo Capsule" (with space).
+  const sanitizedTitle = sanitizeCapsuleTitle(row.title);
 
-  // og:image only when poster is actually ready — absolute URL for unfurler reliability
+  // Spec §10 alt-text template (≤420 chars).
+  const altText = (
+    sanitizedTitle === CAPSULE_TITLE_FALLBACK
+      ? `Atom Dojo capsule ${code} — ${meta.atomCount} atoms, ${meta.frameCount} frames`
+      : `${sanitizedTitle} — Atom Dojo capsule ${code} — ${meta.atomCount} atoms, ${meta.frameCount} frames`
+  ).slice(0, 420);
+
+  // og:image only when meta exposes a poster endpoint — absolute URL for
+  // unfurler reliability.
   const absolutePosterUrl = meta.preview?.posterUrl
     ? new URL(meta.preview.posterUrl, context.request.url).toString()
     : null;
-  const ogImageTag = absolutePosterUrl
-    ? `<meta property="og:image" content="${escapeHtml(absolutePosterUrl)}" />`
+  const ogImageTags = absolutePosterUrl
+    ? [
+        `<meta property="og:image" content="${escapeHtml(absolutePosterUrl)}" />`,
+        `<meta property="og:image:width" content="1200" />`,
+        `<meta property="og:image:height" content="630" />`,
+        `<meta property="og:image:alt" content="${escapeHtml(altText)}" />`,
+      ].join('\n  ')
     : '';
-  const twitterImageTag = absolutePosterUrl
-    ? `<meta name="twitter:image" content="${escapeHtml(absolutePosterUrl)}" />`
+  const twitterImageTags = absolutePosterUrl
+    ? [
+        `<meta name="twitter:image" content="${escapeHtml(absolutePosterUrl)}" />`,
+        `<meta name="twitter:image:alt" content="${escapeHtml(altText)}" />`,
+      ].join('\n  ')
     : '';
   const twitterCard = absolutePosterUrl ? 'summary_large_image' : 'summary';
 
@@ -64,15 +95,15 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(title)}</title>
-  <meta property="og:title" content="${escapeHtml(title)}" />
+  <title>${escapeHtml(sanitizedTitle)}</title>
+  <meta property="og:title" content="${escapeHtml(sanitizedTitle)}" />
   <meta property="og:description" content="${escapeHtml(description)}" />
   <meta property="og:type" content="website" />
-  ${ogImageTag}
+  ${ogImageTags}
   <meta name="twitter:card" content="${twitterCard}" />
-  <meta name="twitter:title" content="${escapeHtml(title)}" />
+  <meta name="twitter:title" content="${escapeHtml(sanitizedTitle)}" />
   <meta name="twitter:description" content="${escapeHtml(description)}" />
-  ${twitterImageTag}
+  ${twitterImageTags}
   <meta http-equiv="refresh" content="0;url=${escapeHtml(watchUrl)}" />
 </head>
 <body>

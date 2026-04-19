@@ -1075,3 +1075,70 @@ The transport contract (`localStorage` + 10-min TTL + one-shot consume) is uncha
 **Alternatives rejected:** Fire on every threshold cross (annoying on replay); fire once per session (strands later-loaded files); fire without arming (share-deep-links flash spuriously); fire every milestone crossed per effect run (paused scrubs spam two cues at once); merge `useTimedCue` and `useTimelineMilestoneTokens` into a single hook (couples timeline semantics to the cue primitive, blocks reuse).
 
 **Evidence:** `watch/js/hooks/use-timeline-milestone-tokens.ts` (file-reset / arm-before-fire / seek-coalesce rules), `src/ui/use-timed-cue.ts` (shared cue primitive), `.watch-lab-entry__tooltip` CSS (opacity + `--cue-y` / `--cue-s` translate-and-scale phases), hidden `aria-live="polite"` announcer sibling.
+
+## D130: Capsule Preview V1 OG Render Stack — Vercel OG Plugin In-Process, Bundled Font Bytes
+
+**Status:** Accepted, 2026-04-19.
+
+**Decision:** The V1 dynamic capsule preview path renders OG images in-process on Cloudflare Pages Functions via `@cloudflare/pages-plugin-vercel-og` (Satori + Resvg, all in-Worker). The Latin font is shipped as a base64-encoded byte buffer in `functions/_lib/fonts/inter-regular.ts` with a TTF magic-byte assertion at module init, NOT as a `.ttf` import. Browser Rendering and Workers AI are explicitly NOT used for V1.
+
+**Rationale:** Pages Functions can render OG images directly with no extra binding, no API token, and no cross-service round-trip. Browser Rendering and Workers AI are valid future paths for richer scenes, but they add latency, an operational surface (token management, quota), and cost that the V1 surface does not warrant. The Pages Plugin keeps the entire render inside the Worker that already serves the route. The font bytes ship as base64-in-TS because the Pages Functions esbuild pipeline has no `.ttf` loader; embedding the bytes in a TS module gives a deterministic cold start and a labeled error path — the magic-byte assertion at module init turns "font corrupted at build time" from a silent first-request 500 into a fail-loud module-load error.
+
+**Trade-off (binding):** Satori implements a strict subset of CSS. Implementation already hit one rejection (`display: -webkit-box`); resolved by removing it. Future template work must be validated against Satori's supported-property list before ship; any unsupported property is a Satori parse error, not a render fallback.
+
+**Alternatives rejected:** Browser Rendering (real Chromium, full CSS — but adds a binding, an API token, and ~hundreds of ms latency per cold render, none warranted at V1 stakes); Workers AI image generation (cost/latency profile incompatible with the per-request render budget, and the design language is deterministic-by-shareCode, not generative); `.ttf` import (no esbuild loader on Pages Functions — would require a custom build step or runtime fetch, both worse than embedded bytes); fetching the font from R2/KV at request time (cold-start latency hit on every isolate, no upside).
+
+**Evidence:** `@cloudflare/pages-plugin-vercel-og` in dependencies, `functions/_lib/fonts/inter-regular.ts` (base64 + TTF magic-byte validator), Satori CSS subset documented in plugin upstream.
+
+## D131: Capsule Preview Geometry Identity — `shareCode + kind` Is the Sole Seed
+
+**Status:** Accepted, 2026-04-19.
+
+**Decision:** The deterministic figure rendered for a capsule preview is a pure function of `(shareCode, kind)`. Title, theme, `createdAt`, `sizeBytes`, and any other capsule metadata MUST NOT participate in the geometry seed. The descriptor type splits the identity tuple from the presentation tuple to make this a type-system invariant rather than a code-review convention.
+
+**Rationale:** The same capsule renders in two surfaces — the account-row thumb tile and the public OG card — and both must be visually identical for the same `shareCode`, even after the owner edits the title. If title (or any mutable presentation field) leaked into the seed, a title edit would re-roll the figure, breaking the "this is the same capsule" recognition that the deterministic-figure design exists to provide. Splitting identity from presentation in the descriptor type means the geometry-build site cannot accidentally read a title field — the field is not on the identity tuple it receives.
+
+**Alternatives rejected:** Seed on `(shareCode, kind, title)` (would re-roll on title edit, defeating the visual-identity property); seed on `(shareCode, kind, createdAt)` (createdAt is immutable but adds no entropy and complicates the seed contract for no benefit — `shareCode` is already globally unique); convention-only "don't pass title to the seed" with a single tuple (degrades under refactor; the type split makes the violation a compile error).
+
+## D132: `preview.posterUrl` Semantics — Endpoint-Existence, Not Asset-Existence
+
+**Status:** Accepted, 2026-04-19.
+
+**Decision:** As of V1, `preview.posterUrl` on the public capsule metadata response means "a poster endpoint exists for this accessible capsule (stored OR dynamic)" — NOT "a stored poster asset exists." External consumers that need to branch on stored-vs-dynamic MUST discriminate on `previewStatus === 'ready'` (stored asset exists) rather than on `posterUrl` presence. The migration surface is JSDoc on the field, the unit test suite asserting both branches, and this ADR.
+
+**Rationale:** Pre-V1 the field was overloaded as a stored-asset existence signal because the dynamic path did not exist. With the dynamic poster route shipped, the absence of a stored asset no longer implies the absence of a poster — every accessible capsule has a poster URL. Repurposing `posterUrl` to mean "endpoint exists" lets clients treat it uniformly (always render the image), and pushes the stored-vs-dynamic decision into a separate discriminator (`previewStatus`) that names what it actually represents. Keeping the legacy semantics would force every client to know about the dynamic route to avoid double-rendering or skipping previews for dynamic-only capsules.
+
+**Alternatives rejected:** Keep `posterUrl` meaning "stored exists" and add a separate `dynamicPosterUrl` (doubles the surface area and forces clients to know about both paths); deprecate `posterUrl` and introduce a fresh field name (breaks every existing consumer for a rename, when the meaning shift is what we actually want them to adopt).
+
+**Evidence:** JSDoc on `preview.posterUrl`, tests asserting `previewStatus === 'ready'` is the stored-discriminator, this ADR.
+
+## D133: Two-Axis `?v=` Cache Key, Route Ignores `?v=`
+
+**Status:** Accepted, 2026-04-19.
+
+**Decision:** The poster URL carries a `?v=` query parameter on a single key with two independent axes:
+
+- **Dynamic posters:** `?v=t<N>` where `N` is the integer `TEMPLATE_VERSION` constant. Bumping `TEMPLATE_VERSION` invalidates every dynamic poster cache entry in one step.
+- **Stored posters:** `?v=p<8hex>` where the 8 hex chars are an FNV-1a digest of `preview_poster_key`. Re-uploading the stored asset under a new key rotates the digest and invalidates only that capsule's cache entry.
+
+The Pages Function route handler MUST ignore `?v=` entirely — it is a cache-key fingerprint for downstream caches, not a route input. The route reads its parameters from path segments and headers only.
+
+**Rationale:** Stored and dynamic posters need independent invalidation cadences: dynamic figures evolve as we tune the static-figure design (template version bumps in lockstep with code deploys), while stored assets are richer and rotate per-capsule on re-upload. Sharing one query-key name with two prefixes (`t` / `p`) keeps the URL shape uniform across both paths so consumers don't branch on URL syntax. Having the route ignore `?v=` is the load-bearing half: it means we can change the cache fingerprint scheme (e.g., switch from FNV-1a to a longer hash) without touching the route, and any stale URL with an old fingerprint still resolves correctly because the route never read the fingerprint to begin with.
+
+**Alternatives rejected:** Two separate query keys (`?tv=` and `?pv=`) (forces consumers to know which path generated the URL); embed the fingerprint in the path (`/preview/poster/<shareCode>/v/<fingerprint>`) (couples the route surface to the cache scheme — every fingerprint scheme change becomes a route change); have the route validate `?v=` matches the live fingerprint and 404 on mismatch (turns a stale-cache miss into a hard error, defeating the point of cache busting).
+
+## D134: Capsule Preview Ops Surface — Allowlist Flag, Wrangler.toml Rollback
+
+**Status:** Accepted, 2026-04-19.
+
+**Decision:** Two ops-layer choices for the V1 dynamic poster path:
+
+1. **Allowlist flag parser:** `CAPSULE_PREVIEW_DYNAMIC_FALLBACK` is enabled ONLY for the values `on`, `true`, `1` (case-insensitive). Every other value — including typos like `disabled`, `enabled`, `yes`, empty string — disables the flag. The default is off.
+2. **Rollback model:** `wrangler.toml [vars]` is the source of truth for the flag. Rollback is "edit one line in `wrangler.toml`, redeploy" — NOT a zero-deploy dashboard toggle or a runtime remote-config fetch. Cloudflare's dashboard env-var editing is disabled while `wrangler.toml` is present, so there is no out-of-band edit path that can drift from the repo.
+
+**Rationale:**
+
+- **Allowlist over denylist:** an earlier draft used a denylist ("anything not in `off/0/false` enables"); an ops engineer set `disabled` intending to disable and silently kept the flag on. Allowlist makes typos fail-safe-off — the ambiguous case (`disabled`) lands on the safer side instead of the surprising side. The cost (one extra value to remember when enabling) is negligible compared to the silent-on failure mode.
+- **Wrangler.toml as single source of truth:** a true zero-deploy rollback (dashboard secret edit, or a runtime fetch of remote config) would require a new ops surface — either trusting dashboard edits to not drift from the repo, or adding a remote-config fetch with its own latency, cache, and failure modes. The dynamic-preview path is not high-stakes enough to justify either. Edit-and-redeploy gives auditable history (the rollback shows up in git), the same review path as code, and no new runtime dependency. If the feature ever grows into something high-stakes (e.g., a user-data path), that is the trigger to introduce a remote-config surface — not now.
+
+**Alternatives rejected:** Denylist parser (silently enabled the flag on typos — already burned us once); dashboard env-var rollback (drifts from repo, no audit trail, requires removing `wrangler.toml`'s env-var section); runtime remote-config fetch with a KV/D1 backing (new failure surface, cold-start latency, no incremental benefit at V1 stakes).

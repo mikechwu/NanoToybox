@@ -46,6 +46,7 @@ It is not a replacement for production MD codes. It is an interactive front door
 - **Full transport controls** — play / pause / scrub / step, repeat, and a logarithmic speed dial from 0.5× to 20×.
 - **Interact From Here** — a transactional handoff from Watch to Lab: scrub to any frame, click the primary pill, and a fresh Lab tab opens already loaded with that exact state (atoms, velocities, bonds, camera, and authored colors). Failures roll back cleanly to the default scene with a toast.
 - **Capsule + full-history file support** — opens both the compact capsule format (position + authored appearance) and full simulation histories that carry bonds and motion state.
+- **Branded link previews** — every `/c/:code` share link unfurls in Slack, X, Facebook, LinkedIn, etc. as a 1200×630 image card. A stored R2 poster is served when present; otherwise a deterministic Satori-rendered figure is generated on the fly from the same descriptor used to draw the compact thumbnail next to each row in the signed-in `/account/` uploads list.
 
 ### Cloud architecture
 
@@ -53,6 +54,7 @@ Atom Dojo's share-link layer runs entirely on the **Cloudflare serverless stack*
 
 - **Pages Functions + D1** — Cloudflare's serverless SQL database (SQLite-compatible) handles OAuth (Google, GitHub), hardened `__Host-` session cookies, CSRF nonces, cursor-paginated account APIs, audit logs, and per-user + per-IP rate limits.
 - **R2 object storage** — stores capsule bodies, addressed by 12-character Crockford Base32 share codes (e.g. `7M4K-2D8Q-9T1V`). R2's zero-egress pricing means bandwidth costs don't scale with traffic — only per-operation and storage fees apply.
+- **On-demand OG posters** — `GET /api/capsules/:code/preview/poster` returns a 1200×630 PNG for any accessible capsule, rendered through `@cloudflare/pages-plugin-vercel-og`. The dynamic path is gated by the `CAPSULE_PREVIEW_DYNAMIC_FALLBACK` env var (default `"on"`); set it to `"off"` and redeploy to revert to stored posters only, with `public/og-fallback.png` as the last-resort image.
 - **Transactional hydration** — the Watch→Lab handoff coordinates the physics engine, worker, renderer, scene/store state, and the metadata/identity/appearance layers, with rollback to the pre-hydrate scene on any failure.
 - **Privacy and safety** — server-enforced 13+ age gate on sign-in and publish, CSRF-protected privacy-request form with deduplication and 180-day retention, and a companion cron Worker that expires sessions, sweeps orphaned R2 objects, and runs audit-retention passes.
 

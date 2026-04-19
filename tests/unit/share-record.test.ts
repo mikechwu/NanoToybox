@@ -7,10 +7,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   isAccessibleStatus,
+  isDynamicPreviewFallbackEnabled,
   toMetadataResponse,
   type CapsuleShareRow,
   type ShareRecordStatus,
 } from '../../src/share/share-record';
+import { TEMPLATE_VERSION } from '../../src/share/capsule-preview';
 
 describe('isAccessibleStatus', () => {
   it('returns true for ready', () => {
@@ -96,19 +98,92 @@ describe('toMetadataResponse', () => {
     expect(meta.preview).toBeUndefined();
   });
 
-  it('includes preview.posterUrl when preview_status is "ready"', () => {
+  it('includes preview.posterUrl with stored cache key when preview_status is "ready"', () => {
+    // Stored-asset key first 8 hex chars become the `?v=p…` cache key (spec §12).
     const row = makeRow({
       preview_status: 'ready',
-      preview_poster_key: 'capsules/test-id/preview-poster.png',
+      preview_poster_key: 'capsules/abc123def456/preview-poster.png',
     });
     const meta = toMetadataResponse(row);
     expect(meta.previewStatus).toBe('ready');
-    expect(meta.preview?.posterUrl).toBe('/api/capsules/7M4K2D8Q9T1V/preview/poster');
+    expect(meta.preview?.posterUrl).toMatch(
+      /^\/api\/capsules\/7M4K2D8Q9T1V\/preview\/poster\?v=p[0-9a-f]{8}$/,
+    );
+    expect(meta.preview?.width).toBe(1200);
+    expect(meta.preview?.height).toBe(630);
   });
 
-  it('omits preview even if preview_status=ready but no poster key', () => {
+  it('omits preview when preview_status=ready, no poster key, and dynamic flag off', () => {
     const row = makeRow({ preview_status: 'ready', preview_poster_key: null });
-    const meta = toMetadataResponse(row);
+    const meta = toMetadataResponse(row, { dynamicFallbackEnabled: false });
     expect(meta.preview).toBeUndefined();
+  });
+
+  // ─── V1 capsule-preview cases (spec §8) ─────────────────────────────────
+
+  it('V1: accessible row with no stored asset + flag on → dynamic poster URL', () => {
+    const row = makeRow({ preview_status: 'pending', preview_poster_key: null });
+    const meta = toMetadataResponse(row, { dynamicFallbackEnabled: true });
+    expect(meta.preview?.posterUrl).toBe(
+      `/api/capsules/7M4K2D8Q9T1V/preview/poster?v=t${TEMPLATE_VERSION}`,
+    );
+    expect(meta.preview?.width).toBe(1200);
+    expect(meta.preview?.height).toBe(630);
+  });
+
+  it('V1: accessible row + flag off → preview.posterUrl absent', () => {
+    const row = makeRow({ preview_status: 'pending', preview_poster_key: null });
+    const meta = toMetadataResponse(row, { dynamicFallbackEnabled: false });
+    expect(meta.preview).toBeUndefined();
+  });
+
+  it('V1: previewStatus === "ready" remains the proxy for stored-asset existence — independent of preview.posterUrl presence', () => {
+    // With flag on, both the dynamic-fallback row and the stored row will
+    // expose preview.posterUrl. They must remain distinguishable via
+    // previewStatus, NOT via the presence of preview.posterUrl.
+    const dynamicRow = makeRow({ preview_status: 'pending', preview_poster_key: null });
+    const storedRow = makeRow({
+      preview_status: 'ready',
+      preview_poster_key: 'capsules/abcdef0123/preview-poster.png',
+    });
+    const dynamic = toMetadataResponse(dynamicRow, { dynamicFallbackEnabled: true });
+    const stored = toMetadataResponse(storedRow, { dynamicFallbackEnabled: true });
+    expect(dynamic.preview).toBeDefined();
+    expect(stored.preview).toBeDefined();
+    expect(dynamic.previewStatus).toBe('pending');
+    expect(stored.previewStatus).toBe('ready');
+  });
+
+  it('V1: inaccessible row + flag on → no dynamic poster URL', () => {
+    const row = makeRow({ status: 'rejected', preview_status: 'none', preview_poster_key: null });
+    const meta = toMetadataResponse(row, { dynamicFallbackEnabled: true });
+    expect(meta.preview).toBeUndefined();
+  });
+
+  it('V1: stored asset takes precedence over dynamic flag', () => {
+    const row = makeRow({
+      preview_status: 'ready',
+      preview_poster_key: 'capsules/abcdef0123/preview-poster.png',
+    });
+    const meta = toMetadataResponse(row, { dynamicFallbackEnabled: true });
+    expect(meta.preview?.posterUrl).toMatch(/\?v=p[0-9a-f]{8}$/);
+  });
+});
+
+describe('isDynamicPreviewFallbackEnabled', () => {
+  it('defaults to true when unset', () => {
+    expect(isDynamicPreviewFallbackEnabled({})).toBe(true);
+  });
+  it('is true for "on"', () => {
+    expect(isDynamicPreviewFallbackEnabled({ CAPSULE_PREVIEW_DYNAMIC_FALLBACK: 'on' })).toBe(true);
+  });
+  it('is false for "off"', () => {
+    expect(isDynamicPreviewFallbackEnabled({ CAPSULE_PREVIEW_DYNAMIC_FALLBACK: 'off' })).toBe(false);
+  });
+  it('is false for "false"', () => {
+    expect(isDynamicPreviewFallbackEnabled({ CAPSULE_PREVIEW_DYNAMIC_FALLBACK: 'false' })).toBe(false);
+  });
+  it('is false for "0"', () => {
+    expect(isDynamicPreviewFallbackEnabled({ CAPSULE_PREVIEW_DYNAMIC_FALLBACK: '0' })).toBe(false);
   });
 });

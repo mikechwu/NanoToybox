@@ -45,7 +45,12 @@ export default defineConfig({
   webServer: {
     // `wrangler pages dev` serves dist/ over a real Pages runtime,
     // including all functions/* handlers + cookie semantics.
-    command: 'npx wrangler pages dev dist --port 8788 --ip 127.0.0.1',
+    // DEV_ADMIN_ENABLED=true is REQUIRED for the deterministic capsule-
+    // preview poster smoke (tests/e2e/poster-smoke.spec.ts) — that test
+    // seeds a real D1 row via /api/admin/seed so the dynamic Satori
+    // render path is exercised end-to-end. The admin gate stays defense-
+    // in-depth (localhost-only — see functions/admin-gate.ts).
+    command: 'npx wrangler pages dev dist --port 8788 --ip 127.0.0.1 --binding DEV_ADMIN_ENABLED=true',
     url: 'http://127.0.0.1:8788/lab/',
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,

@@ -162,7 +162,7 @@ Where to add code → see [contributing.md#extension-points](contributing.md#ext
 | `src/appearance/` | Bonded-group color assignments (authored overrides, persistence keys) |
 | `src/input/` | Camera gesture constants (shared by Lab + Watch camera input) |
 | `src/camera/` | Cinematic camera primitives |
-| `src/share/` | Share-code format, share-record shape |
+| `src/share/` | Share-code format, share-record shape, capsule-preview descriptor + figure mapping (`capsule-preview.ts`, `capsule-preview-figure.ts`, `capsule-preview-denylist.ts`) |
 | `src/policy/` | Policy version + acceptance config (consumed by functions and frontend) |
 | `src/format/` | Byte formatting helpers |
 | `src/types/` | Shared interface declarations |
@@ -174,6 +174,7 @@ Three domains in this list carry more weight than the others:
 - `src/history/` is the schema authority. Every exported file, every capsule, every handoff seed flows through the types here. Breaking changes to the v1 schema require careful migration thought; see [decisions.md](decisions.md).
 - `src/watch-lab-handoff/` is the contract between the two apps. Both Watch (seed build) and Lab (hydrate) import from it. It is the only place either app should look up the handoff shape.
 - `src/ui/` is the design system. Tokens, dock and sheet shells, segmented controls, timeline track, bonded-group chip styling, and lifecycle hooks all live here. Changes ripple into both Lab and Watch; visual regressions in either app often trace back to a change here.
+- `src/share/capsule-preview*` is the descriptor authority for capsule previews. Two callers consume it: the account-row thumbnail (`account/main.tsx`, decorative SVG) and the dynamic poster Function (`functions/api/capsules/[code]/preview/poster.ts`). Both render from the same `CapsulePreviewDescriptor` and the same descriptor → `FigureGraph` mapping, so a given capsule looks identical in the account list and as an OG poster. Figure geometry is a pure function of `shareCode + kind` only; title/theme/createdAt/sizeBytes affect presentation fields but never geometry. The title sanitizer here is the sole non-Latin fallback boundary in V1, and `TEMPLATE_VERSION` is the cache-key constant for the dynamic-poster axis (see [Capsule preview](#flow-capsule-preview)).
 
 ## Backend <a id="backend"></a>
 
@@ -181,7 +182,7 @@ The backend is Cloudflare-native: Pages Functions for APIs, D1 for metadata, R2 
 
 ### Services
 
-- **Pages Functions** (`functions/`) serve the API surface: share-link publish/read, auth, account, moderation, policy, privacy-request, admin gate. One Function per route; shared helpers live at `functions/` root (auth-middleware, http-cache, oauth-helpers, signed-intents, policy-acceptance).
+- **Pages Functions** (`functions/`) serve the API surface: share-link publish/read, auth, account, moderation, policy, privacy-request, admin gate, capsule preview poster. One Function per route; shared helpers live at `functions/` root (auth-middleware, http-cache, oauth-helpers, signed-intents, policy-acceptance) and Function-only libs live under `functions/_lib/` (capsule-preview Satori composer + bundled Latin font as base64, since Pages Functions esbuild has no `.ttf` loader).
 - **D1** is the authoritative metadata store: share records, user accounts, policy acceptance history, audit trail. Schema lives in `migrations/`.
 - **R2** stores capsule blobs keyed by share code. Blob reads go through a Function to apply privacy and moderation rules.
 - **Cron worker** (`workers/cron-sweeper/`) runs scheduled reconciliation: orphan-blob cleanup, abandoned-capsule pruning, audit-log rotation.
@@ -210,9 +211,9 @@ These three contracts are enforced at the Function boundary, not in the frontend
 
 ## Key Flows <a id="key-flows"></a>
 
-Six flows cover the majority of product behavior. Each lists the modules involved; implementation details are in the linked code.
+Seven flows cover the majority of product behavior. Each lists the modules involved; implementation details are in the linked code.
 
-The flows are ordered roughly by how often they fire. The Lab simulation loop runs tens of times per second; the other five run on user actions. Reading the loop first sets up vocabulary (store, runtime, reconcile) that the later flows reuse.
+The flows are ordered roughly by how often they fire. The Lab simulation loop runs tens of times per second; the others run on user actions or share-link fetches. Reading the loop first sets up vocabulary (store, runtime, reconcile) that the later flows reuse.
 
 ### Lab simulation loop <a id="flow-lab-loop"></a>
 
@@ -299,6 +300,34 @@ browser
 Publish is the reverse: Lab builds the capsule, POSTs to the publish Function, which writes D1 + R2 and returns the short code. Endpoint-level detail is in [operations.md](operations.md).
 
 The privacy and moderation gate on the read path is non-negotiable: a capsule that is pending moderation, has been flagged, or is tied to a user who has requested erasure will not serve its bytes even if the share code still resolves. Failure modes — 404, 403, or a quarantined-capsule response — are documented in [operations.md](operations.md).
+
+### Capsule preview <a id="flow-capsule-preview"></a>
+
+A capsule has two presentation surfaces beyond its bytes: a thumbnail in the account list and an Open Graph poster on a `/c/:code` share. Both render from the same descriptor.
+
+```
+GET /api/capsules/:CODE/preview/poster
+  → resolve capsule + flags (D1)
+  → if stored R2 poster present → serve R2 bytes
+  else if CAPSULE_PREVIEW_DYNAMIC_FALLBACK on
+      → build CapsulePreviewDescriptor (src/share/capsule-preview)
+      → map to FigureGraph (src/share/capsule-preview-figure)
+      → compose ImageResponse via functions/_lib/capsule-preview-image.tsx (Satori, bundled Latin font)
+  else → terminal /og-fallback.png
+  fallthrough → 1×1 PNG safety net
+  every branch → structured log line
+```
+
+The account-row thumbnail (`account/main.tsx` → inline `CapsulePreviewThumb`) consumes the same descriptor and the same descriptor → `FigureGraph` mapping, downsampled to ≤20 DOM elements per thumb. Identity is by `shareCode + kind` only; that is what makes the thumb and the poster recognizably the same capsule.
+
+Two cache-key axes, decoupled by lifecycle:
+
+- **Dynamic posters** bust on `TEMPLATE_VERSION` bump (`?v=t<N>`). Bumping the constant invalidates every dynamically composed poster without touching stored bytes.
+- **Stored posters** bust on FNV-1a hash of `preview_poster_key` (`?v=p<8hex>`). Re-uploading R2 bytes for a capsule changes the key hash and forces a fresh fetch independent of the template axis.
+
+Public metadata contract: `ShareMetadataResponse.preview` is `{posterUrl, width: 1200, height: 630}` and is present for any accessible row when the flag is on. Whether stored R2 bytes exist is signaled by `previewStatus === 'ready'`, **not** by the presence of `preview.posterUrl` — the URL is always advertised; the status field gates the stored-vs-dynamic expectation.
+
+D1 schema is unchanged in V1; no migration shipped with the preview module.
 
 ### Auth / signed-intent flow <a id="flow-auth"></a>
 

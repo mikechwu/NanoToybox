@@ -22,6 +22,8 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { buildCapsulePreviewDescriptor } from '../src/share/capsule-preview';
+import { buildFigureGraph, type FigureGraph } from '../src/share/capsule-preview-figure';
 
 interface AccountMe {
   userId: string;
@@ -80,6 +82,109 @@ function formatDate(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+// ── Capsule preview thumbnail (spec §5) ─────────────────────────────────
+//
+// Inline component (NOT extracted to a separate file): account/ is outside the
+// frontend tsconfig include glob, and §5 explicitly prefers inlining over a
+// silent typecheck blind spot. Consumes the pure geometry graph from
+// src/share/capsule-preview-figure.ts (which IS typechecked) and renders it
+// to inline SVG. No per-row network request — V1 deliberately renders client-
+// side for fast list paint.
+//
+// Decorative: aria-hidden="true" — the row's code/title text is the
+// authoritative label.
+
+// Matches the `.acct__upload-thumb` track width in public/account-layout.css.
+// Keep these in sync so the SVG renders 1:1 (no DPR upscaling smear).
+const THUMB_SIZE = 40;
+
+/**
+ * Spec §2 budget: ≤20 DOM elements per thumb. The SVG element itself counts,
+ * so child budget = 19. Strategy is layout-preserving:
+ *
+ *   - Reserve a minimum of min(4, total) edges so the thumb keeps its
+ *     structural signal even at high density.
+ *   - Pick exactly min(nodeBudget, total) nodes via even-spaced index
+ *     sampling across [0, nodes.length - 1]. This actually USES the node
+ *     budget instead of stride-stepping, which would round down and waste
+ *     slots (e.g. 18 nodes / 15 budget → stride 2 → only 9 nodes kept).
+ *   - Drop links whose endpoints didn't survive sampling.
+ *   - Cap remaining link budget at childBudget − keptNodes.
+ *
+ * Pure transform — exported for testing.
+ */
+export function downsampleFigureForThumb(
+  graph: FigureGraph,
+  childBudget = 19,
+): { nodes: FigureGraph['nodes']; links: FigureGraph['links'] } {
+  const totalLinks = graph.links.length;
+  const minEdges = Math.min(4, totalLinks);
+  const nodeBudget = Math.max(1, childBudget - minEdges);
+  const sampledNodes = sampleEvenly(graph.nodes, nodeBudget);
+  const survivingIds = new Set(sampledNodes.map((n) => n.id));
+  const survivingLinks = graph.links.filter(
+    (l) => survivingIds.has(l.from) && survivingIds.has(l.to),
+  );
+  const edgeBudget = Math.max(0, childBudget - sampledNodes.length);
+  return { nodes: sampledNodes, links: survivingLinks.slice(0, edgeBudget) };
+}
+
+/** Pick exactly `target` items from `items`, evenly spaced across the range.
+ *  Always includes index 0 (and index n-1 when target ≥ 2) so the figure's
+ *  visual extents survive sampling. Returns at most `target` items. */
+function sampleEvenly<T>(items: ReadonlyArray<T>, target: number): T[] {
+  const n = items.length;
+  if (n === 0 || target <= 0) return [];
+  if (n <= target) return items.slice();
+  if (target === 1) return [items[Math.floor((n - 1) / 2)]];
+  // n > target ≥ 2 → step ≥ 1, so Math.round((i*(n-1))/(target-1)) is
+  // strictly monotone in i and never collides. No dedup needed.
+  const out: T[] = [];
+  const denom = target - 1;
+  for (let i = 0; i < target; i++) {
+    const idx = Math.round((i * (n - 1)) / denom);
+    out.push(items[idx]);
+  }
+  return out;
+}
+
+export function CapsulePreviewThumb({ graph }: { graph: FigureGraph }): React.ReactElement {
+  const { nodes, links } = downsampleFigureForThumb(graph);
+  return (
+    <svg
+      className="acct__upload-thumb"
+      width={THUMB_SIZE}
+      height={THUMB_SIZE}
+      viewBox="0 0 100 100"
+      role="presentation"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {links.map((l) => {
+        const a = graph.nodes.find((n) => n.id === l.from);
+        const b = graph.nodes.find((n) => n.id === l.to);
+        if (!a || !b) return null;
+        return (
+          <line
+            key={l.id}
+            x1={a.x * 100} y1={a.y * 100}
+            x2={b.x * 100} y2={b.y * 100}
+            stroke="currentColor" strokeOpacity="0.35" strokeWidth="1"
+          />
+        );
+      })}
+      {nodes.map((n) => (
+        <circle
+          key={n.id}
+          cx={n.x * 100} cy={n.y * 100}
+          r={Math.max(2, n.r * 80)}
+          fill={graph.accentColor}
+        />
+      ))}
+    </svg>
+  );
 }
 
 function monogramOf(me: AccountMe): string {
@@ -613,8 +718,22 @@ function AccountApp() {
                     // titles fall through to the shareCode — otherwise
                     // the confirm prompt would render "Delete ?".
                     const rowName = title || c.shareCode;
+                    // Spec §5: per-row preview thumbnail. Same descriptor the
+                    // OG poster route consumes — proven by the shared fixture
+                    // test (see tests/unit/capsule-preview.test.ts).
+                    const previewDescriptor = buildCapsulePreviewDescriptor({
+                      shareCode: c.shareCode,
+                      title: c.title,
+                      kind: c.kind,
+                      atomCount: c.atomCount,
+                      frameCount: c.frameCount,
+                      sizeBytes: c.sizeBytes,
+                      createdAt: c.createdAt,
+                    });
+                    const previewGraph = buildFigureGraph(previewDescriptor);
                     return (
                     <li key={c.shareCode} className="acct__upload">
+                      <CapsulePreviewThumb graph={previewGraph} />
                       <div className="acct__upload-meta">
                         {title ? (
                           <>
