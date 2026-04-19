@@ -18,7 +18,7 @@
  * indirectly. Any regression here affects both instrumentation sites.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { measureSync } from '../../lab/js/components/timeline-performance';
+import { measureSync } from '../../lab/js/components/timeline/timeline-performance';
 
 type MarkFn = typeof performance.mark;
 type MeasureFn = typeof performance.measure;

@@ -10,7 +10,7 @@
  * together with the same callback shape the controller uses. It
  * proves the two services interoperate correctly when wired
  * correctly. It does NOT prove the production controller
- * (`watch/js/watch-controller.ts`) wires them the same way at
+ * (`watch/js/app/watch-controller.ts`) wires them the same way at
  * runtime — that is covered by
  * `watch-cinematic-camera-controller.test.ts`, which runs against
  * the real controller with mocked factories.
@@ -21,9 +21,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createWatchCameraInput } from '../../watch/js/watch-camera-input';
-import { createWatchCinematicCameraService } from '../../watch/js/watch-cinematic-camera';
-import type { WatchBondedGroups, BondedGroupSummary } from '../../watch/js/watch-bonded-groups';
+import { createWatchCameraInput } from '../../watch/js/view/watch-camera-input';
+import { createWatchCinematicCameraService } from '../../watch/js/view/watch-cinematic-camera';
+import type { WatchBondedGroups, BondedGroupSummary } from '../../watch/js/analysis/watch-bonded-groups';
 import { createWatchRendererStub } from '../helpers/watch-renderer-stub';
 
 function makeBondedGroups(): WatchBondedGroups {

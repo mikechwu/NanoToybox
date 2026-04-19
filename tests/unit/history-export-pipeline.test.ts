@@ -8,10 +8,10 @@
  *   - history file builder (full envelope)
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createTimelineAtomIdentityTracker } from '../../lab/js/runtime/timeline-atom-identity';
-import { createAtomMetadataRegistry } from '../../lab/js/runtime/atom-metadata-registry';
-import { buildFullHistoryFile, validateFullHistoryFile } from '../../lab/js/runtime/history-export';
-import type { TimelineExportData } from '../../lab/js/runtime/history-export';
+import { createTimelineAtomIdentityTracker } from '../../lab/js/runtime/timeline/timeline-atom-identity';
+import { createAtomMetadataRegistry } from '../../lab/js/runtime/timeline/atom-metadata-registry';
+import { buildFullHistoryFile, validateFullHistoryFile } from '../../lab/js/runtime/timeline/history-export';
+import type { TimelineExportData } from '../../lab/js/runtime/timeline/history-export';
 
 // ── Atom identity tracker ──
 
@@ -190,7 +190,7 @@ describe('buildFullHistoryFile', () => {
 
 describe('full export after stop → restart lifecycle', () => {
   it('produces a valid file after stop and restart recording', async () => {
-    const { createTimelineSubsystem } = await import('../../lab/js/runtime/timeline-subsystem');
+    const { createTimelineSubsystem } = await import('../../lab/js/runtime/timeline/timeline-subsystem');
     const { useAppStore } = await import('../../lab/js/store/app-store');
     const { vi } = await import('vitest');
 
@@ -274,7 +274,7 @@ describe('full export after stop → restart lifecycle', () => {
   });
 
   it('validates with multiple molecules in shuffled order', async () => {
-    const { createTimelineSubsystem } = await import('../../lab/js/runtime/timeline-subsystem');
+    const { createTimelineSubsystem } = await import('../../lab/js/runtime/timeline/timeline-subsystem');
     const { useAppStore } = await import('../../lab/js/store/app-store');
     const { vi } = await import('vitest');
 

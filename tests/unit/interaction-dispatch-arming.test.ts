@@ -16,7 +16,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as THREE from 'three';
-import { createInteractionDispatch } from '../../lab/js/runtime/interaction-dispatch';
+import { createInteractionDispatch } from '../../lab/js/runtime/interaction/interaction-dispatch';
 import { useAppStore } from '../../lab/js/store/app-store';
 
 function makeDeps(workerActive = false) {

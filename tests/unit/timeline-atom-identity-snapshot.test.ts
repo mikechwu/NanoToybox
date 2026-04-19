@@ -4,7 +4,7 @@
  * integration tests.
  */
 import { describe, it, expect } from 'vitest';
-import { createTimelineAtomIdentityTracker } from '../../lab/js/runtime/timeline-atom-identity';
+import { createTimelineAtomIdentityTracker } from '../../lab/js/runtime/timeline/timeline-atom-identity';
 
 describe('TimelineAtomIdentityTracker snapshot + restore', () => {
   it('snapshot of an empty tracker has zero ids + zero counter', () => {

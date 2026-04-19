@@ -14,8 +14,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createWatchOverlayLayout } from '../../watch/js/watch-overlay-layout';
-import type { WatchRenderer } from '../../watch/js/watch-renderer';
+import { createWatchOverlayLayout } from '../../watch/js/view/watch-overlay-layout';
+import type { WatchRenderer } from '../../watch/js/view/watch-renderer';
 
 // JSDOM does not provide ResizeObserver — controllable stub for testing
 let _roInstances: { cb: Function; observed: Element[]; disconnected: boolean }[] = [];
@@ -84,7 +84,7 @@ describe('Playback bar selector contract', () => {
 
   it('watch-overlay-layout.ts queries [data-watch-bottom-chrome]', async () => {
     const fs = await import('fs');
-    const source = fs.readFileSync('watch/js/watch-overlay-layout.ts', 'utf-8');
+    const source = fs.readFileSync('watch/js/view/watch-overlay-layout.ts', 'utf-8');
     expect(source).toContain('[data-watch-bottom-chrome]');
     expect(source).not.toContain('.watch-playback-bar');
   });

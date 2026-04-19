@@ -6,7 +6,7 @@
 
 import React, { useRef, useEffect } from 'react';
 import { VIEWER_DEFAULTS } from '../../../src/config/viewer-defaults';
-import type { WatchController } from '../watch-controller';
+import type { WatchController } from '../app/watch-controller';
 
 interface WatchCanvasProps {
   controller: WatchController;

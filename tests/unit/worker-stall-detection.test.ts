@@ -45,7 +45,7 @@ const dummyConfig = {
 async function createInitedRuntime() {
   const onFailure = vi.fn();
   const onSchedulerTiming = vi.fn();
-  const mod = await import('../../lab/js/runtime/worker-lifecycle');
+  const mod = await import('../../lab/js/runtime/worker/worker-lifecycle');
   const runtime = mod.createWorkerRuntime({ onSchedulerTiming, onFailure });
 
   const initP = runtime.init(dummyConfig, [{ x: 0, y: 0, z: 0 }], [[0, 1, 1.42] as any]);

@@ -8,7 +8,7 @@
  * Depends on:  nothing (pure functions)
  * Called by:    src/share/publish-core.ts (generation on persist),
  *              functions/api/capsules/[code].ts (normalization on resolve),
- *              watch/js/watch-controller.ts (normalization on user input)
+ *              watch/js/app/watch-controller.ts (normalization on user input)
  */
 
 // Crockford Base32 alphabet: 0-9 A-Z excluding I, L, O, U

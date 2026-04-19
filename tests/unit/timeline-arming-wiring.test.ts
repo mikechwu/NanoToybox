@@ -21,7 +21,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createTimelineSubsystem, type TimelineSubsystem } from '../../lab/js/runtime/timeline-subsystem';
+import { createTimelineSubsystem, type TimelineSubsystem } from '../../lab/js/runtime/timeline/timeline-subsystem';
 import { useAppStore } from '../../lab/js/store/app-store';
 
 // ── Minimal stubs matching main.ts construction ──

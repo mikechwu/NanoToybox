@@ -8,10 +8,10 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { createWatchCinematicCameraService } from '../../watch/js/watch-cinematic-camera';
-import type { WatchRenderer } from '../../watch/js/watch-renderer';
-import type { WatchBondedGroups } from '../../watch/js/watch-bonded-groups';
-import type { BondedGroupSummary } from '../../watch/js/watch-bonded-groups';
+import { createWatchCinematicCameraService } from '../../watch/js/view/watch-cinematic-camera';
+import type { WatchRenderer } from '../../watch/js/view/watch-renderer';
+import type { WatchBondedGroups } from '../../watch/js/analysis/watch-bonded-groups';
+import type { BondedGroupSummary } from '../../watch/js/analysis/watch-bonded-groups';
 import {
   DEFAULT_CINEMATIC_CONFIG,
   DEFAULT_CINEMATIC_SPEED_TUNING,

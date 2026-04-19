@@ -9,10 +9,10 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { createWatchBondedGroups } from '../../watch/js/watch-bonded-groups';
-import { createWatchViewService } from '../../watch/js/watch-view-service';
-import { createWatchController } from '../../watch/js/watch-controller';
-import { importFullHistory } from '../../watch/js/full-history-import';
+import { createWatchBondedGroups } from '../../watch/js/analysis/watch-bonded-groups';
+import { createWatchViewService } from '../../watch/js/view/watch-view-service';
+import { createWatchController } from '../../watch/js/app/watch-controller';
+import { importFullHistory } from '../../watch/js/document/full-history-import';
 
 // ── Fixtures ──
 

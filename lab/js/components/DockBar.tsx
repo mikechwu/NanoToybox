@@ -16,7 +16,7 @@ import React, { useCallback, useLayoutEffect, useRef } from 'react';
 import { useAppStore } from '../store/app-store';
 import { selectDockSurface } from '../store/selectors/dock';
 import { selectIsReviewLocked, REVIEW_LOCK_TOOLTIP } from '../store/selectors/review-ui-lock';
-import { showReviewModeActionHint } from '../runtime/review-mode-action-hints';
+import { showReviewModeActionHint } from '../runtime/overlay/review-mode-action-hints';
 import { Segmented } from './Segmented';
 import { ReviewLockedControl } from './ReviewLockedControl';
 import { IconAdd, IconCheck, IconCancel, IconPause, IconResume, IconSettings } from './Icons';

@@ -22,7 +22,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, act, fireEvent } from '@testing-library/react';
 import { useAppStore, type TimelineCallbacks } from '../../lab/js/store/app-store';
-import { TimelineBar } from '../../lab/js/components/TimelineBar';
+import { TimelineBar } from '../../lab/js/components/timeline/TimelineBar';
 import { AccountControl } from '../../lab/js/components/AccountControl';
 import {
   createAuthRuntime,

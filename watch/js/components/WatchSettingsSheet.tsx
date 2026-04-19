@@ -15,12 +15,12 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { formatTime } from '../../../lab/js/components/timeline-format';
+import { formatTime } from '../../../lab/js/components/timeline/timeline-format';
 import { Segmented } from '../../../lab/js/components/Segmented';
 import { useSheetLifecycle } from '../../../src/ui/useSheetLifecycle';
-import { WATCH_HELP_SECTIONS } from '../settings-content';
-import type { WatchInterpolationMode } from '../watch-settings';
-import type { FallbackReason, InterpolationMethodMetadata } from '../watch-trajectory-interpolation';
+import { WATCH_HELP_SECTIONS } from '../settings/settings-content';
+import type { WatchInterpolationMode } from '../settings/watch-settings';
+import type { FallbackReason, InterpolationMethodMetadata } from '../playback/watch-trajectory-interpolation';
 
 const THEME_ITEMS = [
   { value: 'dark' as const, label: 'Dark' },
@@ -46,7 +46,7 @@ function buildProductMethodItems(
   methods: readonly InterpolationMethodMetadata[],
 ): { value: WatchInterpolationMode; label: string }[] {
   const product = methods.filter(
-    (m): m is import('../watch-trajectory-interpolation').ProductMethodMetadata =>
+    (m): m is import('../playback/watch-trajectory-interpolation').ProductMethodMetadata =>
       m.availability === 'product',
   );
   const stable = product.filter(m => m.stability === 'stable');

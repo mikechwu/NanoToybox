@@ -4,7 +4,7 @@
  * Since E2E tests run against vite preview (static server, no Pages Functions),
  * all /api/capsules/* requests are intercepted via page.route() with mock responses.
  *
- * Uses ?e2e=1 test hooks from watch/js/main.ts:
+ * Uses ?e2e=1 test hooks from watch/js/app/main.ts:
  *   _getWatchState()                → snapshot fields
  *
  * Covers:

@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useAppStore, type BondedGroupColorAssignment } from '../../lab/js/store/app-store';
-import { createBondedGroupAppearanceRuntime } from '../../lab/js/runtime/bonded-group-appearance-runtime';
+import { createBondedGroupAppearanceRuntime } from '../../lab/js/runtime/bonded-groups/bonded-group-appearance-runtime';
 
 function makeRuntime() {
   const groupAtoms: Record<string, number[]> = { g1: [0, 1], g2: [2, 3] };

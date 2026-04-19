@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
-import type { WatchController } from '../watch-controller';
+import type { WatchController } from '../app/watch-controller';
 import { WatchOpenPanel } from './WatchOpenPanel';
 import { WatchTopBar } from './WatchTopBar';
 import { WatchCanvas } from './WatchCanvas';
@@ -43,7 +43,7 @@ export function WatchApp({ controller }: WatchAppProps) {
     [controller, snapshot.smoothPlayback],
   );
   const handleSetInterpolationMode = useCallback(
-    (mode: import('../watch-settings').WatchInterpolationMode) => controller.setInterpolationMode(mode),
+    (mode: import('../settings/watch-settings').WatchInterpolationMode) => controller.setInterpolationMode(mode),
     [controller],
   );
 

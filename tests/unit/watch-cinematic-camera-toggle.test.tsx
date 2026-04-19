@@ -12,7 +12,7 @@ import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { WatchCinematicCameraToggle } from '../../watch/js/components/WatchCinematicCameraToggle';
-import type { SnapshotCinematicCameraStatus } from '../../watch/js/watch-cinematic-camera';
+import type { SnapshotCinematicCameraStatus } from '../../watch/js/view/watch-cinematic-camera';
 
 afterEach(() => { cleanup(); });
 

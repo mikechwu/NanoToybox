@@ -9,7 +9,7 @@
  */
 
 import React, { useRef, useCallback } from 'react';
-import { formatTime } from '../../../lab/js/components/timeline-format';
+import { formatTime } from '../../../lab/js/components/timeline/timeline-format';
 
 interface WatchTimelineProps {
   currentTimePs: number;

@@ -1,7 +1,7 @@
 /**
  * Watch Round 6 E2E — smooth playback, interpolation method, and settings UI.
  *
- * Uses ?e2e=1 test hooks exposed by watch/js/main.ts:
+ * Uses ?e2e=1 test hooks exposed by watch/js/app/main.ts:
  *   _getWatchState()                   → snapshot fields
  *   _watchOpenFile(text, name)         → programmatic file load
  *   _watchToggleSmooth()               → flip smooth playback on/off

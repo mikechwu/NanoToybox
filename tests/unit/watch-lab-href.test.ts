@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect } from 'vitest';
-import { buildLabHref, readE2EBoolean, readE2ENumber } from '../../watch/js/watch-lab-href';
+import { buildLabHref, readE2EBoolean, readE2ENumber } from '../../watch/js/handoff/watch-lab-href';
 
 describe('buildLabHref', () => {
   it('returns a path with BASE_URL prefix and trailing slash', () => {

@@ -14,11 +14,11 @@
 
 import { CONFIG } from '../config';
 import { computeTargetSpeed, computeSubstepCount, updateOverloadState, computeEffectiveSpeed, updateMaxSpeedEstimate, shouldSkipRender } from '../scheduler-pure';
-import { resolveInteractionHighlight } from '../runtime/interaction-highlight-runtime';
-import { resolveReconciledSteps } from '../runtime/reconciled-steps';
-import { updateOrbitFollowFromStore, type OrbitFollowRendererSurface } from '../runtime/orbit-follow-update';
-import { resolveReturnTarget, type FocusRendererSurface } from '../runtime/focus-runtime';
-import { computePlacementFramingGoal, filterVisiblePoints, type PlacementFramingPoint } from '../runtime/placement-camera-framing';
+import { resolveInteractionHighlight } from '../runtime/interaction/interaction-highlight-runtime';
+import { resolveReconciledSteps } from '../runtime/worker/reconciled-steps';
+import { updateOrbitFollowFromStore, type OrbitFollowRendererSurface } from '../runtime/camera/orbit-follow-update';
+import { resolveReturnTarget, type FocusRendererSurface } from '../runtime/camera/focus-runtime';
+import { computePlacementFramingGoal, filterVisiblePoints, type PlacementFramingPoint } from '../runtime/placement/placement-camera-framing';
 import { useAppStore } from '../store/app-store';
 
 // ── Narrow dependency interface ──

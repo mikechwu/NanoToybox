@@ -23,7 +23,7 @@ import type { Renderer } from './renderer';
 import type { PhysicsEngine } from './physics';
 import type { StateMachine } from './state-machine';
 import type { InputManager } from './input';
-import { solvePlacement, type SceneAtom } from './runtime/placement-solver';
+import { solvePlacement, type SceneAtom } from './runtime/placement/placement-solver';
 
 /** A parsed atom from an XYZ structure file. */
 export interface StructureAtom {

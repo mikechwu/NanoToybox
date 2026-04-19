@@ -2,8 +2,8 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi } from 'vitest';
-import { createWatchPlaybackModel } from '../../watch/js/watch-playback-model';
-import { importCapsuleHistory } from '../../watch/js/capsule-history-import';
+import { createWatchPlaybackModel } from '../../watch/js/playback/watch-playback-model';
+import { importCapsuleHistory } from '../../watch/js/document/capsule-history-import';
 import * as topologyModule from '../../src/topology/build-bond-topology';
 import type { AtomDojoPlaybackCapsuleFileV1 } from '../../src/history/history-file-v1';
 

@@ -33,14 +33,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // observe what flows into the cinematic service.
 let capturedCameraInputOpts: { onUserCameraInteraction?: (p: any) => void } | undefined;
 
-vi.mock('../../watch/js/watch-renderer', async () => {
+vi.mock('../../watch/js/view/watch-renderer', async () => {
   const { createWatchRendererStub } = await vi.importActual<typeof import('../helpers/watch-renderer-stub')>('../helpers/watch-renderer-stub');
   return {
     createWatchRenderer: vi.fn(() => createWatchRendererStub()),
   };
 });
 
-vi.mock('../../watch/js/watch-camera-input', () => ({
+vi.mock('../../watch/js/view/watch-camera-input', () => ({
   createWatchCameraInput: vi.fn((_renderer, opts) => {
     capturedCameraInputOpts = opts;
     return { destroy: vi.fn() };
@@ -50,7 +50,7 @@ vi.mock('../../watch/js/watch-camera-input', () => ({
 // Stub cinematic service — we want a spy on markUserCameraInteraction
 // so we can assert the phase forwarded by the controller.
 const createServiceSpy = vi.fn();
-vi.mock('../../watch/js/watch-cinematic-camera', () => ({
+vi.mock('../../watch/js/view/watch-cinematic-camera', () => ({
   createWatchCinematicCameraService: (..._args: any[]) => {
     const service = {
       getState: vi.fn(() => ({
@@ -73,11 +73,11 @@ vi.mock('../../watch/js/watch-cinematic-camera', () => ({
 
 // Overlay layout is a side-dependency of createRenderer — stub so
 // we don't need to build a full DOM layout harness.
-vi.mock('../../watch/js/watch-overlay-layout', () => ({
+vi.mock('../../watch/js/view/watch-overlay-layout', () => ({
   createWatchOverlayLayout: vi.fn(() => ({ destroy: vi.fn() })),
 }));
 
-import { createWatchController } from '../../watch/js/watch-controller';
+import { createWatchController } from '../../watch/js/app/watch-controller';
 
 // ── Test ──
 
@@ -167,7 +167,7 @@ describe('WatchController cinematic wiring (real controller, mocked factories)',
   it('deriveCinematicCameraStatus overrides all non-off statuses when following', async () => {
     // Behavioral test of the extracted pure helper — tests the actual
     // function the controller calls in buildSnapshot, not source text.
-    const { deriveCinematicCameraStatus } = await import('../../watch/js/watch-controller');
+    const { deriveCinematicCameraStatus } = await import('../../watch/js/app/watch-controller');
 
     // Not following: all statuses pass through.
     expect(deriveCinematicCameraStatus('tracking', false)).toBe('tracking');

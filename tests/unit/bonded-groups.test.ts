@@ -13,8 +13,8 @@
  * - Panel expand/collapse via store
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createBondedGroupRuntime } from '../../lab/js/runtime/bonded-group-runtime';
-import type { BondedGroupDisplaySource } from '../../lab/js/runtime/bonded-group-display-source';
+import { createBondedGroupRuntime } from '../../lab/js/runtime/bonded-groups/bonded-group-runtime';
+import type { BondedGroupDisplaySource } from '../../lab/js/runtime/bonded-groups/bonded-group-display-source';
 import { useAppStore } from '../../lab/js/store/app-store';
 
 function makeSource(components: { atoms: number[]; size: number }[]): BondedGroupDisplaySource {

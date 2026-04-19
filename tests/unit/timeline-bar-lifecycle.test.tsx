@@ -21,17 +21,17 @@ import { render, cleanup, act, fireEvent } from '@testing-library/react';
 // verification, not these unit tests. MUST be a vi.fn so individual
 // tests can override its implementation (e.g. to capture the callback
 // for close/tab-switch cancellation tests).
-vi.mock('../../lab/js/components/timeline-after-paint', () => ({
+vi.mock('../../lab/js/components/timeline/timeline-after-paint', () => ({
   scheduleAfterNextPaint: vi.fn((work: () => void) => {
     work();
     return () => {};
   }),
 }));
 
-import { scheduleAfterNextPaint } from '../../lab/js/components/timeline-after-paint';
+import { scheduleAfterNextPaint } from '../../lab/js/components/timeline/timeline-after-paint';
 import { useAppStore } from '../../lab/js/store/app-store';
 import type { TimelineCallbacks } from '../../lab/js/store/app-store';
-import { TimelineBar } from '../../lab/js/components/TimelineBar';
+import { TimelineBar } from '../../lab/js/components/timeline/TimelineBar';
 import { HINT_DELAY_MS } from '../../lab/js/components/ActionHint';
 
 const noop = () => {};

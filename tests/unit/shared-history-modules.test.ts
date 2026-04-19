@@ -8,20 +8,20 @@
  *   - src/history/bonded-group-projection.ts
  *
  * Also tests watch-side modules:
- *   - watch/js/history-file-loader.ts (load decision)
- *   - watch/js/full-history-import.ts (normalization)
- *   - watch/js/watch-playback-model.ts (sampling)
- *   - watch/js/watch-bonded-groups.ts (group tracking)
+ *   - watch/js/document/history-file-loader.ts (load decision)
+ *   - watch/js/document/full-history-import.ts (normalization)
+ *   - watch/js/playback/watch-playback-model.ts (sampling)
+ *   - watch/js/analysis/watch-bonded-groups.ts (group tracking)
  */
 
 import { describe, it, expect } from 'vitest';
 import { detectHistoryFile, validateFullHistoryFile, type AtomDojoHistoryFileV1 } from '../../src/history/history-file-v1';
 import { computeConnectedComponents } from '../../src/history/connected-components';
 import { createBondedGroupProjection } from '../../src/history/bonded-group-projection';
-import { loadHistoryFile } from '../../watch/js/history-file-loader';
-import { importFullHistory } from '../../watch/js/full-history-import';
-import { createWatchPlaybackModel } from '../../watch/js/watch-playback-model';
-import { createWatchBondedGroups } from '../../watch/js/watch-bonded-groups';
+import { loadHistoryFile } from '../../watch/js/document/history-file-loader';
+import { importFullHistory } from '../../watch/js/document/full-history-import';
+import { createWatchPlaybackModel } from '../../watch/js/playback/watch-playback-model';
+import { createWatchBondedGroups } from '../../watch/js/analysis/watch-bonded-groups';
 
 // ── Fixtures ──
 

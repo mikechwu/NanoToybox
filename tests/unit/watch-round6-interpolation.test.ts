@@ -22,16 +22,16 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { importFullHistory } from '../../watch/js/full-history-import';
+import { importFullHistory } from '../../watch/js/document/full-history-import';
 import {
   createWatchTrajectoryInterpolation,
   type InterpolationStrategy,
   type InterpolationResult,
   BUILTIN_STRATEGIES,
-} from '../../watch/js/watch-trajectory-interpolation';
+} from '../../watch/js/playback/watch-trajectory-interpolation';
 import { FS_PER_PS, IMPLAUSIBLE_VELOCITY_A_PER_FS } from '../../src/history/units';
 import type { AtomDojoHistoryFileV1 } from '../../src/history/history-file-v1';
-import { createWatchController } from '../../watch/js/watch-controller';
+import { createWatchController } from '../../watch/js/app/watch-controller';
 
 // ── Fixture builders ──
 
@@ -694,21 +694,21 @@ function stripComments(src: string): string {
 describe('Controller unified render pipeline', () => {
   it('watch-controller source: exactly one direct call to interpolation.resolve()', async () => {
     const fs = await import('fs');
-    const src = stripComments(fs.readFileSync('watch/js/watch-controller.ts', 'utf-8'));
+    const src = stripComments(fs.readFileSync('watch/js/app/watch-controller.ts', 'utf-8'));
     const matches = src.match(/interpolation\.resolve\(/g) ?? [];
     expect(matches.length).toBe(1);
   });
 
   it('watch-controller source: exactly one direct call to renderer.updateReviewFrame()', async () => {
     const fs = await import('fs');
-    const src = stripComments(fs.readFileSync('watch/js/watch-controller.ts', 'utf-8'));
+    const src = stripComments(fs.readFileSync('watch/js/app/watch-controller.ts', 'utf-8'));
     const matches = src.match(/renderer\.updateReviewFrame\(/g) ?? [];
     expect(matches.length).toBe(1);
   });
 
   it('watch-controller source: exactly four physical applyReviewFrameAtTime call sites (tick, renderAtCurrentTime, openFile, createRenderer)', async () => {
     const fs = await import('fs');
-    const src = stripComments(fs.readFileSync('watch/js/watch-controller.ts', 'utf-8'));
+    const src = stripComments(fs.readFileSync('watch/js/app/watch-controller.ts', 'utf-8'));
     // 1 declaration + 4 calls = 5 total in stripped source.
     const allCalls = src.match(/applyReviewFrameAtTime\(/g) ?? [];
     expect(allCalls.length).toBe(5);
@@ -717,7 +717,7 @@ describe('Controller unified render pipeline', () => {
 
   it('watch-controller source: RAF tick uses render=false followed by updateFollow + renderer.render', async () => {
     const fs = await import('fs');
-    const src = fs.readFileSync('watch/js/watch-controller.ts', 'utf-8');
+    const src = fs.readFileSync('watch/js/app/watch-controller.ts', 'utf-8');
     expect(src).toMatch(/applyReviewFrameAtTime\([^,]+,\s*\{\s*render:\s*false\s*\}/);
     expect(src).toContain('viewService.updateFollow(dtMs, renderer)');
   });

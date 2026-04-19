@@ -16,7 +16,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { WatchOpenProgress } from '../watch-controller';
+import type { WatchOpenProgress } from '../app/watch-controller';
 import { formatBytes } from '../../../src/format/bytes';
 
 export interface WatchOpenPanelProps {

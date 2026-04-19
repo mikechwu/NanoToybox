@@ -11,7 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { render, act, fireEvent } from '@testing-library/react';
 import { WatchApp } from '../../watch/js/components/WatchApp';
-import type { WatchController, WatchControllerSnapshot } from '../../watch/js/watch-controller';
+import type { WatchController, WatchControllerSnapshot } from '../../watch/js/app/watch-controller';
 
 // Mock WatchCanvas since Three.js doesn't work in jsdom
 vi.mock('../../watch/js/components/WatchCanvas', () => ({

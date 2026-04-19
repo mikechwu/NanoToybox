@@ -12,8 +12,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createSceneRuntime, type SceneRuntimeDeps } from '../../lab/js/runtime/scene-runtime';
-import { createAtomMetadataRegistry } from '../../lab/js/runtime/atom-metadata-registry';
-import { createTimelineAtomIdentityTracker } from '../../lab/js/runtime/timeline-atom-identity';
+import { createAtomMetadataRegistry } from '../../lab/js/runtime/timeline/atom-metadata-registry';
+import { createTimelineAtomIdentityTracker } from '../../lab/js/runtime/timeline/timeline-atom-identity';
 import { useAppStore } from '../../lab/js/store/app-store';
 import type {
   WatchLabSceneSeed,

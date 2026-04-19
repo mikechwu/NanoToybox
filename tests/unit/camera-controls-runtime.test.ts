@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as THREE from 'three';
 import { useAppStore } from '../../lab/js/store/app-store';
-import { createOverlayRuntime } from '../../lab/js/runtime/overlay-runtime';
+import { createOverlayRuntime } from '../../lab/js/runtime/overlay/overlay-runtime';
 
 // ── overlay-runtime.close() behavior ──
 
@@ -30,7 +30,7 @@ describe('overlay-runtime.close() clears transient UI', () => {
 
 // ── Center Object: tests call the real handleCenterObject from focus-runtime ──
 
-import { handleCenterObject } from '../../lab/js/runtime/focus-runtime';
+import { handleCenterObject } from '../../lab/js/runtime/camera/focus-runtime';
 
 describe('Center Object (handleCenterObject from focus-runtime)', () => {
   let mockRenderer: any;
@@ -98,7 +98,7 @@ describe('Center Object (handleCenterObject from focus-runtime)', () => {
 
 // ── Interaction dispatch — normal start (no pick-focus) ──
 
-import { createInteractionDispatch } from '../../lab/js/runtime/interaction-dispatch';
+import { createInteractionDispatch } from '../../lab/js/runtime/interaction/interaction-dispatch';
 
 describe('interaction-dispatch normal start', () => {
   beforeEach(() => {

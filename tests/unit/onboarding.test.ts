@@ -277,7 +277,7 @@ describe('onboarding controller', () => {
 // Tests that the triad source wrappers in input-bindings emit achievements
 // with correct mode-gating. Uses the real createInputBindings with mocked deps.
 
-import { createInputBindings } from '../../lab/js/runtime/input-bindings';
+import { createInputBindings } from '../../lab/js/runtime/interaction/input-bindings';
 import { CONFIG } from '../../lab/js/config';
 import * as THREE from 'three';
 

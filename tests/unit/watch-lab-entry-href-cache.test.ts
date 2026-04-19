@@ -61,7 +61,7 @@ describe('controller.buildCurrentFrameLabHref — cache + debounce (rev 7)', () 
   });
 
   it('cache hit: calling twice at the same frame writes localStorage only once', async () => {
-    const mod = await import('../../watch/js/watch-controller');
+    const mod = await import('../../watch/js/app/watch-controller');
     const controller = mod.createWatchController();
     try {
       await loadFixtureCapsule(controller);
@@ -78,7 +78,7 @@ describe('controller.buildCurrentFrameLabHref — cache + debounce (rev 7)', () 
   });
 
   it('cache invalidation on document change: next build mints a fresh token', async () => {
-    const mod = await import('../../watch/js/watch-controller');
+    const mod = await import('../../watch/js/app/watch-controller');
     const controller = mod.createWatchController();
     try {
       await loadFixtureCapsule(controller);
@@ -99,7 +99,7 @@ describe('controller.buildCurrentFrameLabHref — cache + debounce (rev 7)', () 
 
   it('notifyContinueIdle debounces invalidation by 500 ms', async () => {
     vi.useFakeTimers();
-    const mod = await import('../../watch/js/watch-controller');
+    const mod = await import('../../watch/js/app/watch-controller');
     const controller = mod.createWatchController();
     try {
       await loadFixtureCapsule(controller);
@@ -125,7 +125,7 @@ describe('controller.buildCurrentFrameLabHref — cache + debounce (rev 7)', () 
   });
 
   it('snapshot.labCurrentFrameHref reads cache without minting (no write on publish)', async () => {
-    const mod = await import('../../watch/js/watch-controller');
+    const mod = await import('../../watch/js/app/watch-controller');
     const controller = mod.createWatchController();
     try {
       await loadFixtureCapsule(controller);
@@ -149,7 +149,7 @@ describe('controller.buildCurrentFrameLabHref — camera identity in cache (plan
   beforeEach(() => { clearHandoffKeys(); });
 
   it('with no renderer attached, cameraIdentity is null on both sides → cache hits', async () => {
-    const mod = await import('../../watch/js/watch-controller');
+    const mod = await import('../../watch/js/app/watch-controller');
     const controller = mod.createWatchController();
     try {
       await loadFixtureCapsule(controller);
@@ -163,7 +163,7 @@ describe('controller.buildCurrentFrameLabHref — camera identity in cache (plan
   });
 
   it('document-change cache-miss purges the prior localStorage entry', async () => {
-    const mod = await import('../../watch/js/watch-controller');
+    const mod = await import('../../watch/js/app/watch-controller');
     const controller = mod.createWatchController();
     try {
       await loadFixtureCapsule(controller);

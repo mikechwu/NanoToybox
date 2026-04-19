@@ -13,13 +13,13 @@ import { useAppStore } from '../../lab/js/store/app-store';
 import {
   resolveBondedGroupDisplaySource,
   type BondedGroupDisplaySourceDeps,
-} from '../../lab/js/runtime/bonded-group-display-source';
+} from '../../lab/js/runtime/bonded-groups/bonded-group-display-source';
 import {
   selectBondedGroupCapabilities,
 } from '../../lab/js/store/selectors/bonded-group-capabilities';
 import {
   createBondedGroupAppearanceRuntime,
-} from '../../lab/js/runtime/bonded-group-appearance-runtime';
+} from '../../lab/js/runtime/bonded-groups/bonded-group-appearance-runtime';
 
 // ── Display Source Tests ──
 
@@ -582,7 +582,7 @@ describe('coloring before interaction with eager tracker init', () => {
 
 // ── handleAppend invariant ──
 
-import { createTimelineAtomIdentityTracker } from '../../lab/js/runtime/timeline-atom-identity';
+import { createTimelineAtomIdentityTracker } from '../../lab/js/runtime/timeline/timeline-atom-identity';
 
 describe('handleAppend non-contiguous append invariant', () => {
   it('throws on gap between existing tracker state and append offset', () => {
@@ -636,8 +636,8 @@ describe('bonded-group color persistence (annotation model)', () => {
 
 // ── Coordinator lifecycle: appearance re-projection on display-frame transitions ──
 
-import { createTimelineCoordinator, type TimelineCoordinatorDeps } from '../../lab/js/runtime/simulation-timeline-coordinator';
-import { createSimulationTimeline } from '../../lab/js/runtime/simulation-timeline';
+import { createTimelineCoordinator, type TimelineCoordinatorDeps } from '../../lab/js/runtime/timeline/simulation-timeline-coordinator';
+import { createSimulationTimeline } from '../../lab/js/runtime/timeline/simulation-timeline';
 
 describe('coordinator calls syncBondedGroupsForDisplayFrame on all transitions', () => {
   function makeCoordinatorWithSpy() {

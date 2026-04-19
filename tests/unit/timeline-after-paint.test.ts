@@ -12,7 +12,7 @@
  * at each stage, and paired rAF/cAF selection under partial globals.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { scheduleAfterNextPaint } from '../../lab/js/components/timeline-after-paint';
+import { scheduleAfterNextPaint } from '../../lab/js/components/timeline/timeline-after-paint';
 
 type RafHandler = (time: number) => void;
 

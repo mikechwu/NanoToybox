@@ -7,8 +7,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { serializeForWorkerRestore, applyRestartState } from '../../lab/js/runtime/restart-state-adapter';
-import type { RestartState } from '../../lab/js/runtime/simulation-timeline';
+import { serializeForWorkerRestore, applyRestartState } from '../../lab/js/runtime/timeline/restart-state-adapter';
+import type { RestartState } from '../../lab/js/runtime/timeline/simulation-timeline';
 
 function makePhysics(n = 10) {
   const pos = new Float64Array(n * 3);

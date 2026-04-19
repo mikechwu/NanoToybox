@@ -10,14 +10,14 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { importFullHistory } from '../../watch/js/full-history-import';
-import { importCapsuleHistory } from '../../watch/js/capsule-history-import';
-import { createWatchPlaybackModel } from '../../watch/js/watch-playback-model';
-import { createWatchBondedGroups } from '../../watch/js/watch-bonded-groups';
-import { buildCapsuleHistoryFile, type CapsuleExportDeps } from '../../lab/js/runtime/history-export';
+import { importFullHistory } from '../../watch/js/document/full-history-import';
+import { importCapsuleHistory } from '../../watch/js/document/capsule-history-import';
+import { createWatchPlaybackModel } from '../../watch/js/playback/watch-playback-model';
+import { createWatchBondedGroups } from '../../watch/js/analysis/watch-bonded-groups';
+import { buildCapsuleHistoryFile, type CapsuleExportDeps } from '../../lab/js/runtime/timeline/history-export';
 import { validateCapsuleFile } from '../../src/history/history-file-v1';
 import type { AtomDojoHistoryFileV1, AtomDojoPlaybackCapsuleFileV1 } from '../../src/history/history-file-v1';
-import type { TimelineFrame } from '../../lab/js/runtime/simulation-timeline';
+import type { TimelineFrame } from '../../lab/js/runtime/timeline/simulation-timeline';
 
 // ── Shared geometry: 4 atoms, pair (0,1) drifts apart ──
 

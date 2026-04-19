@@ -6,8 +6,8 @@
  *
  * Owns:        v1 envelope types, file detection, file validation
  * Depends on:  nothing (pure types + functions)
- * Called by:   lab/js/runtime/history-export.ts (build + validate before download),
- *              watch/js/history-file-loader.ts (detect + validate on import)
+ * Called by:   lab/js/runtime/timeline/history-export.ts (build + validate before download),
+ *              watch/js/document/history-file-loader.ts (detect + validate on import)
  */
 
 // ── V1 envelope types ──

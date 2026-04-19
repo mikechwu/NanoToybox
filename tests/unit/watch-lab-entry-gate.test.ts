@@ -64,7 +64,7 @@ describe('P1 — seed-identity cache key (tighter than displayFrameKey alone)', 
   });
 
   it('projection nulls the cached href when the display frame changes', async () => {
-    const mod = await import('../../watch/js/watch-controller');
+    const mod = await import('../../watch/js/app/watch-controller');
     const controller = mod.createWatchController();
     try {
       await loadCapsule(controller);
@@ -92,7 +92,7 @@ describe('P2 — openLabFromCurrentFrame fails closed when remint fails', () => 
     const openSpy = vi.fn(() => ({ focus: () => {} }) as unknown as Window);
     vi.stubGlobal('open', openSpy);
     try {
-      const mod = await import('../../watch/js/watch-controller');
+      const mod = await import('../../watch/js/app/watch-controller');
       // Reproduce: call openLabFromCurrentFrame BEFORE loading any
       // file — the controller cannot project a frame, cache is empty,
       // so the fail-closed branch fires.

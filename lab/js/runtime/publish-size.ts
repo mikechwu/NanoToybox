@@ -35,7 +35,7 @@
  *   413 header:  X-Max-Publish-Bytes: <decimal bytes>
  */
 
-import { formatBytes } from './history-export';
+import { formatBytes } from './timeline/history-export';
 import {
   MAX_PUBLISH_BYTES,
   PAYLOAD_TOO_LARGE_MESSAGE,

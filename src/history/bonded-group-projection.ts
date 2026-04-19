@@ -1,13 +1,13 @@
 /**
  * Pure bonded-group projection — overlap reconciliation, stable IDs, display ordering.
  *
- * Extracted from lab/js/runtime/bonded-group-runtime.ts so both lab/ (Zustand store)
+ * Extracted from lab/js/runtime/bonded-groups/bonded-group-runtime.ts so both lab/ (Zustand store)
  * and watch/ (local state) can use the same projection logic without store coupling.
  *
  * Owns:        overlap scoring, stable ID assignment, sort ordering, summary construction
  * Depends on:  nothing (pure state machine)
- * Called by:   lab/js/runtime/bonded-group-runtime.ts (store adapter),
- *              watch/js/watch-bonded-groups.ts (local adapter)
+ * Called by:   lab/js/runtime/bonded-groups/bonded-group-runtime.ts (store adapter),
+ *              watch/js/analysis/watch-bonded-groups.ts (local adapter)
  */
 
 export interface BondedGroupSummary {

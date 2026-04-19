@@ -77,7 +77,7 @@ describe('controller.openLab — window.open contract (rev 7)', () => {
     const openSpy = vi.fn(() => ({ focus: () => {} }) as unknown as Window);
     vi.stubGlobal('open', openSpy);
     try {
-      const mod = await import('../../watch/js/watch-controller');
+      const mod = await import('../../watch/js/app/watch-controller');
       const controller = mod.createWatchController();
       controller.openLab();
       expect(openSpy).toHaveBeenCalledTimes(1);
@@ -104,7 +104,7 @@ describe('controller.openLab — window.open contract (rev 7)', () => {
     const openSpy = vi.fn(() => null);
     vi.stubGlobal('open', openSpy);
     try {
-      const mod = await import('../../watch/js/watch-controller');
+      const mod = await import('../../watch/js/app/watch-controller');
       const controller = mod.createWatchController();
       expect(() => controller.openLab()).not.toThrow();
       expect(openSpy).toHaveBeenCalled();

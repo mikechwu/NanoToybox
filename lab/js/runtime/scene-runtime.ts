@@ -29,16 +29,16 @@ import type { PhysicsEngine } from '../physics';
 import type { Renderer } from '../renderer';
 import type { StateMachine } from '../state-machine';
 import type { PlacementController } from '../placement';
-import type { WorkerRuntime } from './worker-lifecycle';
-import type { InputBindings } from './input-bindings';
-import type { SnapshotReconciler } from './snapshot-reconciler';
-import type { AtomMetadataRegistry } from './atom-metadata-registry';
-import type { TimelineAtomIdentityTracker } from './timeline-atom-identity';
+import type { WorkerRuntime } from './worker/worker-lifecycle';
+import type { InputBindings } from './interaction/input-bindings';
+import type { SnapshotReconciler } from './worker/snapshot-reconciler';
+import type { AtomMetadataRegistry } from './timeline/atom-metadata-registry';
+import type { TimelineAtomIdentityTracker } from './timeline/timeline-atom-identity';
 import {
   hydrateFromWatchSeed as hydrateTransaction,
   type HydrateResult,
   type HydrateFailureReason,
-} from './hydrate-from-watch-seed';
+} from './handoff/hydrate-from-watch-seed';
 import type {
   WatchLabSceneSeed,
   WatchToLabHandoffPayload,
@@ -106,7 +106,7 @@ export interface SceneRuntimeDeps {
   dispatch: (cmd: import('../state-machine').Command) => void;
   fullSchedulerReset: () => void;
   partialProfilerReset: () => void;
-  recoverFromWorkerFailure: (reason: string, lastSnapshot?: import('./worker-lifecycle').RecoverySnapshot) => void;
+  recoverFromWorkerFailure: (reason: string, lastSnapshot?: import('./worker/worker-lifecycle').RecoverySnapshot) => void;
   getPauseSyncPromise?: () => Promise<void> | null;
   /** Hydration-lock setter — main.ts owns the flag that the rAF frame
    *  loop reads via `FrameRuntimeSurface.isHydrating()`. The scene-

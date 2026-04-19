@@ -9,7 +9,7 @@
  * the whole transaction.
  */
 import { describe, it, expect } from 'vitest';
-import { createAtomMetadataRegistry } from '../../lab/js/runtime/atom-metadata-registry';
+import { createAtomMetadataRegistry } from '../../lab/js/runtime/timeline/atom-metadata-registry';
 
 describe('AtomMetadataRegistry snapshot + restore', () => {
   it('snapshot() of an empty registry is an empty array', () => {

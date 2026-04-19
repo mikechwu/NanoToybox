@@ -106,7 +106,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** Moves the O(N·neighbors²) Tersoff force computation off the main thread, preventing jank on the render/input thread. The protocol provides mutation acks with scene versioning, `requestFrame`/`frameResult` round-trip for position snapshots, and generation bumping to invalidate in-flight requests on scene clear. Automatic fallback to sync-mode physics if the worker fails or stalls (5s warning, 15s fatal).
 
-**Evidence:** `lab/js/simulation-worker.ts`, `lab/js/worker-bridge.ts`, `src/types/worker-protocol.ts`, `lab/js/runtime/worker-lifecycle.ts`, `lab/js/runtime/snapshot-reconciler.ts`
+**Evidence:** `lab/js/simulation-worker.ts`, `lab/js/worker-bridge.ts`, `src/types/worker-protocol.ts`, `lab/js/runtime/worker/worker-lifecycle.ts`, `lab/js/runtime/worker/snapshot-reconciler.ts`
 
 ## D15: React + Zustand for UI Chrome
 
@@ -122,7 +122,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** Desktop users orbit via right-drag, but touch devices had no orbit gesture. The triad is the primary mobile orbit control because it is always visible and works regardless of scene density. Background orbit (1-finger on empty space) is a secondary convenience — unreliable in dense scenes where atoms fill the viewport. Both gestures use the same rotation convention (drag-up = camera rotates down). Gesture priority: triad hit > atom raycast > background orbit. Atom hit always wins — no heuristics. Three triad gesture levels: drag=orbit, tap-axis=snap-to-canonical-view (±X/±Y/±Z), double-tap-center=reset. Dynamic `controls.touches.ONE` toggle per-gesture for background orbit. `CONFIG.isTouchInteraction()` (coarse pointer + no hover) gates mobile-only behavior — stable across resize, excludes hybrid desktops.
 
-**Evidence:** `lab/js/input.ts` (triad drag/tap/double-tap, background orbit), `lab/js/renderer.ts` (applyOrbitDelta, snapToAxis, animatedResetView, getNearestAxisEndpoint, showAxisHighlight, pulseTriad), `lab/js/config.ts` (CONFIG.orbit, isTouchInteraction), `lab/js/runtime/input-bindings.ts` (triad source wiring), `docs/testing.md` (B1-B8, C1-C6, D1-D9)
+**Evidence:** `lab/js/input.ts` (triad drag/tap/double-tap, background orbit), `lab/js/renderer.ts` (applyOrbitDelta, snapToAxis, animatedResetView, getNearestAxisEndpoint, showAxisHighlight, pulseTriad), `lab/js/config.ts` (CONFIG.orbit, isTouchInteraction), `lab/js/runtime/interaction/input-bindings.ts` (triad source wiring), `docs/testing.md` (B1-B8, C1-C6, D1-D9)
 
 ## D17: Two-Mode Camera System (Orbit + Free-Look)
 
@@ -142,7 +142,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Store is sole authority for camera mode** (`cameraMode: 'orbit' | 'freelook'`). Renderer, input, and UI are consumers only.
 
-**Evidence:** `lab/js/components/CameraControls.tsx`, `lab/js/components/OnboardingOverlay.tsx`, `lab/js/renderer.ts` (applyFreeLookDelta, resetOrientation, setOrbitControlsForMode), `lab/js/input.ts` (mode-aware routing), `lab/js/runtime/onboarding.ts`, `lab/js/runtime/focus-runtime.ts` (ensureFollowTarget), `lab/js/store/app-store.ts` (cameraMode, orbitFollowEnabled, onboardingPhase, cameraCallbacks)
+**Evidence:** `lab/js/components/CameraControls.tsx`, `lab/js/components/OnboardingOverlay.tsx`, `lab/js/renderer.ts` (applyFreeLookDelta, resetOrientation, setOrbitControlsForMode), `lab/js/input.ts` (mode-aware routing), `lab/js/runtime/onboarding.ts`, `lab/js/runtime/camera/focus-runtime.ts` (ensureFollowTarget), `lab/js/store/app-store.ts` (cameraMode, orbitFollowEnabled, onboardingPhase, cameraCallbacks)
 
 ## D18: Simulation Timeline with Review and Restart
 
@@ -164,7 +164,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Update:** The original implementation incorrectly armed on `startPlacement` and on several non-atom callbacks (pause, speed, physics settings). This was narrowed to atom-interaction-only arming, the method was renamed from `markUserEngaged()` to `markAtomInteractionStarted()`, and arming was moved from the `sendWorkerInteraction` callback (which was gated by `isWorkerActive`) into the dispatch function itself (unconditional). This ensures recording arms in both worker and sync/local modes.
 
-**Evidence:** `lab/js/runtime/timeline-recording-policy.ts`, `lab/js/runtime/interaction-dispatch.ts`, `tests/unit/interaction-dispatch-arming.test.ts`, `tests/unit/store-callbacks-arming.test.ts`
+**Evidence:** `lab/js/runtime/timeline/timeline-recording-policy.ts`, `lab/js/runtime/interaction/interaction-dispatch.ts`, `tests/unit/interaction-dispatch-arming.test.ts`, `tests/unit/store-callbacks-arming.test.ts`
 
 ## D21: Object View Panel
 
@@ -172,7 +172,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** The old cluster relied on hidden gestures (long-press for follow, "?" glyph for help) that were not discoverable. Center and Follow are now separate visible buttons. Follow uses `ensureFollowTarget()`: resolve a valid target first, then enable tracking. If no molecules exist, follow stays off. Touch devices show secondary hint text; desktop uses title tooltips. The panel is positioned below the status block via `[data-status-root]` layout anchor with named tokens (`STATUS_TO_OBJECT_VIEW_GAP`, `OBJECT_VIEW_FALLBACK_TOP`, `SAFE_EDGE_INSET`).
 
-**Evidence:** `lab/js/components/CameraControls.tsx`, `lab/js/components/Icons.tsx`, `lab/js/runtime/focus-runtime.ts` (ensureFollowTarget), `lab/js/runtime/overlay-layout.ts`, `tests/unit/camera-controls-render.test.tsx`, `tests/unit/focus-runtime.test.ts`
+**Evidence:** `lab/js/components/CameraControls.tsx`, `lab/js/components/Icons.tsx`, `lab/js/runtime/camera/focus-runtime.ts` (ensureFollowTarget), `lab/js/runtime/overlay/overlay-layout.ts`, `tests/unit/camera-controls-render.test.tsx`, `tests/unit/focus-runtime.test.ts`
 
 ## D22: Page-Load Onboarding Overlay
 
@@ -196,7 +196,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** Physics applies force to the full connected component in Move and Rotate modes. Highlighting only the picked atom made the interaction appear narrower than it actually was. The resolver (`interaction-highlight-runtime.ts`) maps interaction state + session mode to the correct highlight target using live `physics.componentId` / `physics.components`. The renderer has separate interaction and panel highlight channels so bonded-group panel selection is not clobbered. Both layers coexist additively — panel highlight stays visible during interaction (see D31-D33 for the composition model that superseded the earlier save/restore pattern). Review mode clears both channels.
 
-**Evidence:** `lab/js/runtime/interaction-highlight-runtime.ts`, `lab/js/renderer.ts` (setInteractionHighlightedAtoms, clearInteractionHighlight, updateFeedback with sessionMode), `lab/js/main.ts` (resolveInteractionHighlight in frame loop), `tests/unit/interaction-highlight.test.ts`, `tests/unit/renderer-interaction-highlight.test.ts`
+**Evidence:** `lab/js/runtime/interaction/interaction-highlight-runtime.ts`, `lab/js/renderer.ts` (setInteractionHighlightedAtoms, clearInteractionHighlight, updateFeedback with sessionMode), `lab/js/main.ts` (resolveInteractionHighlight in frame loop), `tests/unit/interaction-highlight.test.ts`, `tests/unit/renderer-interaction-highlight.test.ts`
 
 ## D25: Placement Orientation — Camera-First Vertical-Preferred Policy
 
@@ -204,7 +204,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** Molecules displayed upright relative to the user's viewport are the most immediately readable default. The threshold prevents degenerate near-horizontal alignments from being forced vertical — when m1 is nearly parallel to the camera's right axis, the vertical family would produce a foreshortened, unreadable orientation. If the primary axis is foreshortened in the camera plane entirely (`PROJ_WEAK`), an m2 fallback is attempted before defaulting to vertical.
 
-**Evidence:** `lab/js/runtime/placement-solver.ts` (chooseCameraFamily, VERT_READABLE_THRESHOLD = 0.25)
+**Evidence:** `lab/js/runtime/placement/placement-solver.ts` (chooseCameraFamily, VERT_READABLE_THRESHOLD = 0.25)
 
 ## D26: Geometry-Aware Family Selection as Final Runtime Arbiter
 
@@ -212,7 +212,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** `chooseCameraFamily()` operates on the molecule's intrinsic frame axes and the camera, without seeing how the actual atom cloud appears after rotation. The geometry-aware selector closes this gap by scoring what the user will actually see. Both candidate rotations are fully built and projected before comparison, so the decision is grounded in observable readability, not axis algebra alone. The 20% margin prevents jittery family flipping when both orientations are similarly readable.
 
-**Evidence:** `lab/js/runtime/placement-solver.ts` (selectOrientationByGeometry, GEOMETRY_FAMILY_SWITCH_MARGIN = 0.2, scoreProjectedReadability)
+**Evidence:** `lab/js/runtime/placement/placement-solver.ts` (selectOrientationByGeometry, GEOMETRY_FAMILY_SWITCH_MARGIN = 0.2, scoreProjectedReadability)
 
 ## D27: Perspective-Projected 2D PCA Geometry Refinement
 
@@ -220,7 +220,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** The frame-alignment rotation places the molecule's intrinsic axis near the policy target, but residual twist can leave the visible silhouette rotated away from the intended screen-space direction. Perspective projection (not orthographic) is used so the refinement optimizes exactly what the user sees. The clamp prevents over-rotation from noisy PCA on near-circular projections. Two passes handle cases where the first correction shifts the silhouette enough to reveal a second-order error.
 
-**Evidence:** `lab/js/runtime/placement-solver.ts` (refineOrientationFromGeometry, computeGeometryError, projected2DPCA, BASE_GEOMETRY_CORRECTION = 0.12)
+**Evidence:** `lab/js/runtime/placement/placement-solver.ts` (refineOrientationFromGeometry, computeGeometryError, projected2DPCA, BASE_GEOMETRY_CORRECTION = 0.12)
 
 ## D28: Scored Regime Classification (Planarity Wins Ties)
 
@@ -228,7 +228,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** The original threshold-order classification checked elongation first, causing thin sheets like graphene to misroute through the line-dominant solver when their major/mid ratio happened to exceed the elongation threshold. Scored comparison fixes this: graphene's mid/minor ratio (planarity) is much stronger than its major/mid ratio (elongation), so it correctly routes through the plane-facing solver. Planarity wins ties because thin sheets benefit more from the plane-facing solver than near-round rods benefit from the line solver.
 
-**Evidence:** `lab/js/runtime/placement-solver.ts` (classifyFrameMode, lineScore, planeScore)
+**Evidence:** `lab/js/runtime/placement/placement-solver.ts` (classifyFrameMode, lineScore, planeScore)
 
 ## D29: No Vertical Bias — Purely Readability-Driven Solver
 
@@ -236,7 +236,7 @@ Key strategic and technical decisions made during development, with rationale.
 
 **Rationale:** An earlier iteration applied a vertical bias to make molecules "look nicer" by tilting them upright regardless of geometry. This created incorrect orientations for molecules whose readable axis was horizontal in the camera frame (e.g., a CNT viewed from the side). The vertical preference in `chooseCameraFamily()` (D25) provides a soft default, but it is overridable by geometry scoring (D26), keeping the solver purely readability-driven.
 
-**Evidence:** `lab/js/runtime/placement-solver.ts` (no VERTICAL_BIAS constant, no bias term in scoring)
+**Evidence:** `lab/js/runtime/placement/placement-solver.ts` (no VERTICAL_BIAS constant, no bias term in scoring)
 
 ## D30: Placement Test Suite — 3-Layer Acceptance Architecture
 
@@ -313,7 +313,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Placement framing is about keeping what the user was already viewing plus the preview visible — not about framing the entire scene. The pure solver enables thorough unit testing without DOM/WebGL dependencies. The adaptive search prefers target shift over zoom-out, matching the UX goal of "making room" rather than "backing away."
 
-**Evidence:** `lab/js/runtime/placement-camera-framing.ts` (pure solver), `tests/unit/placement-camera-framing.test.ts` (20 tests including orientation independence and visible-anchor regressions), `lab/js/app/frame-runtime.ts` (frozen anchor capture + orchestration)
+**Evidence:** `lab/js/runtime/placement/placement-camera-framing.ts` (pure solver), `tests/unit/placement-camera-framing.test.ts` (20 tests including orientation independence and visible-anchor regressions), `lab/js/app/frame-runtime.ts` (frozen anchor capture + orchestration)
 
 ## D39: Placement Focus Decoupled from Commit (Policy A)
 
@@ -321,7 +321,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Placement framing handles visibility; Center/Follow handle explicit focus. Coupling these caused a sudden camera jump on Place click. Decoupling makes focus selection and camera framing different concerns.
 
-**Evidence:** `lab/js/runtime/scene-runtime.ts` (no focusNewestPlaced import), `lab/js/runtime/focus-runtime.ts` (function removed, module header updated), `tests/unit/focus-runtime.test.ts` (Policy A tests)
+**Evidence:** `lab/js/runtime/scene-runtime.ts` (no focusNewestPlaced import), `lab/js/runtime/camera/focus-runtime.ts` (function removed, module header updated), `tests/unit/focus-runtime.test.ts` (Policy A tests)
 
 ## D40: Continuous Drag with Pointer Capture and Per-Frame Reprojection
 
@@ -353,7 +353,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** The bonded-group system was live-only by architecture. Making it display-source-aware prepares for review-mode bonded-group inspection without duplicating topology logic. The abstraction allows future review topology to plug in without changing the runtime.
 
-**Evidence:** `lab/js/runtime/bonded-group-display-source.ts`, `lab/js/runtime/bonded-group-runtime.ts` (getDisplaySource, getDisplaySourceKind), `lab/js/main.ts` (wiring with resolveBondedGroupDisplaySource)
+**Evidence:** `lab/js/runtime/bonded-groups/bonded-group-display-source.ts`, `lab/js/runtime/bonded-groups/bonded-group-runtime.ts` (getDisplaySource, getDisplaySourceKind), `lab/js/main.ts` (wiring with resolveBondedGroupDisplaySource)
 
 ## D44: Bonded Group Capability Policy
 
@@ -361,7 +361,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Hardcoded `timelineMode === 'review'` blocks were scattered across components and runtimes. A centralized policy makes capability changes a single-selector edit. Primitive selectors avoid React infinite-render issues with object selectors.
 
-**Evidence:** `lab/js/store/selectors/bonded-group-capabilities.ts`, `lab/js/components/BondedGroupsPanel.tsx` (selectCanInspectBondedGroups), `lab/js/runtime/bonded-group-highlight-runtime.ts` (canInspectBondedGroupsNow)
+**Evidence:** `lab/js/store/selectors/bonded-group-capabilities.ts`, `lab/js/components/BondedGroupsPanel.tsx` (selectCanInspectBondedGroups), `lab/js/runtime/bonded-groups/bonded-group-highlight-runtime.ts` (canInspectBondedGroupsNow)
 
 ## D45: Annotation Model for Atom Color Persistence (Option B)
 
@@ -371,7 +371,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Update:** Group-level color intents (D46) now supplement per-atom overrides. The appearance runtime resolves `groupColorIntents` into per-atom overrides, filling only atoms with no existing override. Per-atom overrides remain the renderer-facing contract; group intents are a higher-level annotation layer.
 
-**Evidence:** `lab/js/store/app-store.ts` (AtomColorOverrideMap, bondedGroupColorOverrides), `lab/js/runtime/bonded-group-appearance-runtime.ts`, `lab/js/renderer.ts` (setAtomColorOverrides, _applyAtomColorOverrides), `tests/unit/bonded-group-prefeature.test.ts` (persistence semantics)
+**Evidence:** `lab/js/store/app-store.ts` (AtomColorOverrideMap, bondedGroupColorOverrides), `lab/js/runtime/bonded-groups/bonded-group-appearance-runtime.ts`, `lab/js/renderer.ts` (setAtomColorOverrides, _applyAtomColorOverrides), `tests/unit/bonded-group-prefeature.test.ts` (persistence semantics)
 
 ## D46: Group Color Intents Over Per-Atom-Only Overrides
 
@@ -542,7 +542,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Smooth playback produces visibly better motion between recorded frames with negligible cost (linear interpolation is a single lerp per component). Defaulting to on means first-time users see the best available visual quality immediately. The default mode is linear because it is the only stable strategy (see D69). Users who prefer exact recorded frames can disable smooth playback in settings.
 
-**Evidence:** `watch/js/watch-settings.ts` (`_smoothPlayback = true`, `_interpolationMode: WatchInterpolationMode = 'linear'`)
+**Evidence:** `watch/js/settings/watch-settings.ts` (`_smoothPlayback = true`, `_interpolationMode: WatchInterpolationMode = 'linear'`)
 
 ## D69: Linear Stable, Hermite + Catmull-Rom Experimental (metadata.stability)
 
@@ -550,7 +550,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Linear interpolation is unconditionally safe — it always succeeds, never overshoots, and has no data requirements beyond two adjacent frames. Hermite requires aligned velocity data and can produce overshoot if velocities are noisy. Catmull-Rom requires a valid 4-frame window and can overshoot away from knots. Marking these as experimental allows the UI to warn users and prevents accidental promotion of methods that may produce visual artifacts in edge cases.
 
-**Evidence:** `watch/js/watch-trajectory-interpolation.ts` (`LinearStrategy.metadata.stability: 'stable'`, `HermiteStrategy.metadata.stability: 'experimental'`, `CatmullRomStrategy.metadata.stability: 'experimental'`)
+**Evidence:** `watch/js/playback/watch-trajectory-interpolation.ts` (`LinearStrategy.metadata.stability: 'stable'`, `HermiteStrategy.metadata.stability: 'experimental'`, `CatmullRomStrategy.metadata.stability: 'experimental'`)
 
 ## D70: Strategy Registry Pattern (Map + InterpolationStrategy Interface)
 
@@ -558,7 +558,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** An if/else or switch chain would require editing the resolution loop for every new method, creating coupling between method implementation and orchestration. The registry pattern inverts this: the resolution loop is closed to modification — it reads strategy metadata to decide what inputs to prepare (velocities, 4-frame window), calls `run()`, and handles decline/fallback generically. Dev-only or research strategies can register with arbitrary string IDs without widening the productized `WatchInterpolationMode` union.
 
-**Evidence:** `watch/js/watch-trajectory-interpolation.ts` (`registry: Map<InterpolationMethodId, InterpolationStrategy>`, `registerStrategy()`, `unregisterStrategy()`, `InterpolationStrategy` interface)
+**Evidence:** `watch/js/playback/watch-trajectory-interpolation.ts` (`registry: Map<InterpolationMethodId, InterpolationStrategy>`, `registerStrategy()`, `unregisterStrategy()`, `InterpolationStrategy` interface)
 
 ## D71: Capability Layer Precomputed at Import Time
 
@@ -566,7 +566,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Capability determination involves cross-frame comparisons (atom count parity, atomId equality, velocity plausibility, 4-frame window consistency) that are invariant for a given file. Recomputing per frame would waste cycles on the hot path. Precomputing at import and storing as `Uint8Array` flags (`bracketSafe`, `hermiteSafe`, `window4Safe`) gives O(1) lookup during playback. Diagnostic reason arrays (`bracketReason`, `velocityReason`, `window4Reason`) are regular arrays on the cold path for UI messaging.
 
-**Evidence:** `watch/js/full-history-import.ts` (`computeInterpolationCapability()`, `InterpolationCapability` interface, typed-array flags on `LoadedFullHistory`)
+**Evidence:** `watch/js/document/full-history-import.ts` (`computeInterpolationCapability()`, `InterpolationCapability` interface, typed-array flags on `LoadedFullHistory`)
 
 ## D72: Unified Render Pipeline — Single applyReviewFrameAtTime() Helper
 
@@ -574,7 +574,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Multiple call sites for resolve or updateReviewFrame would allow them to diverge (different arguments, missing steps, inconsistent ordering). A single helper guarantees that every rendered frame goes through the same sequence: interpolation resolve, topology lookup, renderer update, appearance sync, analysis update, highlight application. The meta-test prevents regression — adding a second direct call to either function will fail the test.
 
-**Evidence:** `watch/js/watch-controller.ts` (`applyReviewFrameAtTime()` — sole caller), `tests/unit/watch-round6-interpolation.test.ts` (`'Controller unified render pipeline'` describe block — source grep meta-tests)
+**Evidence:** `watch/js/app/watch-controller.ts` (`applyReviewFrameAtTime()` — sole caller), `tests/unit/watch-round6-interpolation.test.ts` (`'Controller unified render pipeline'` describe block — source grep meta-tests)
 
 ## D73: Follow Excluded from Render Helper (Rate-Based Easing)
 
@@ -582,7 +582,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** `Renderer.updateOrbitFollow()` uses frame-rate-independent exponential easing (`1 - Math.exp(-8 * (dtMs / 1000))`). If follow were inside the render helper, scrub and load paths would call it with `dtMs = 0`, producing a blend factor of zero — a no-op that would make follow appear broken on non-RAF paths. Keeping follow in the RAF tick ensures it always receives real elapsed time. The render helper's `render` flag (true for scrub/load/rollback, false for RAF tick) cleanly separates the two concerns: the helper owns frame data, the tick owns camera animation.
 
-**Evidence:** `watch/js/watch-controller.ts` (RAF tick: `applyReviewFrameAtTime(…, { render: false })` then `viewService.updateFollow(dtMs, renderer)` then `renderer.render()`), `lab/js/renderer.ts` (`updateOrbitFollow` — `Math.exp(-8 * (dtMs / 1000))` easing)
+**Evidence:** `watch/js/app/watch-controller.ts` (RAF tick: `applyReviewFrameAtTime(…, { render: false })` then `viewService.updateFollow(dtMs, renderer)` then `renderer.render()`), `lab/js/renderer.ts` (`updateOrbitFollow` — `Math.exp(-8 * (dtMs / 1000))` easing)
 
 ## D74: Conservative At-or-Before Fallback Policy
 
@@ -590,7 +590,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** "Nearest" lookup can return a future frame, violating temporal monotonicity: if the user scrubs forward past a boundary, the displayed frame could jump backward to the nearest neighbor behind. At-or-before guarantees that the displayed frame's timestamp is always less than or equal to the requested time, preserving forward-only temporal progression. This is consistent with the binary search policy (`bsearchAtOrBefore`) and the bracket lookup, which both use `<=` as the match criterion.
 
-**Evidence:** `watch/js/watch-trajectory-interpolation.ts` (`bsearchAtOrBefore()` — `frames[lo].timePs <= timePs`, `atOrBeforeReference()` used on all fallback paths), `tests/unit/watch-round6-interpolation.test.ts` (`'Conservative fallback policy (at-or-before)'` describe block)
+**Evidence:** `watch/js/playback/watch-trajectory-interpolation.ts` (`bsearchAtOrBefore()` — `frames[lo].timePs <= timePs`, `atOrBeforeReference()` used on all fallback paths), `tests/unit/watch-round6-interpolation.test.ts` (`'Conservative fallback policy (at-or-before)'` describe block)
 
 ## D75: Discriminated Metadata Union (Product vs. Dev Methods)
 
@@ -598,7 +598,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** The settings UI picker must show only productized methods and use their IDs as `WatchInterpolationMode` without unsafe casts. Dev-only or research methods need arbitrary string IDs that do not widen the product type. The discriminated union lets the UI narrow via `m.availability === 'product'` and then safely read `m.id` as `WatchInterpolationMode`. Without the union, either the registry would need a separate dev-only map (duplication) or the product type would need to accept arbitrary strings (loss of type safety).
 
-**Evidence:** `watch/js/watch-trajectory-interpolation.ts` (`ProductMethodMetadata`, `DevMethodMetadata`, `InterpolationMethodMetadata` union, `availability` discriminant)
+**Evidence:** `watch/js/playback/watch-trajectory-interpolation.ts` (`ProductMethodMetadata`, `DevMethodMetadata`, `InterpolationMethodMetadata` union, `availability` discriminant)
 
 ## D76: Registry Metadata Not in Snapshot (Stable Frozen Accessor)
 
@@ -606,7 +606,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Registry metadata is configuration metadata (what methods exist), not per-frame state. Including it in the snapshot would cause reference-inequality churn on every `buildSnapshot()` call, triggering unnecessary React re-renders in the settings UI. The frozen array reference changes only when the registry is mutated (register/unregister/dispose), so React components that call the accessor will not re-render on every frame tick. The snapshot carries only the scalar results of interpolation (`activeInterpolationMethod`, `lastFallbackReason`).
 
-**Evidence:** `watch/js/watch-controller.ts` (`getRegisteredInterpolationMethods()` — separate from `WatchControllerSnapshot`), `watch/js/watch-trajectory-interpolation.ts` (`_cachedMethods` — frozen, rebuilt only on registry mutation)
+**Evidence:** `watch/js/app/watch-controller.ts` (`getRegisteredInterpolationMethods()` — separate from `WatchControllerSnapshot`), `watch/js/playback/watch-trajectory-interpolation.ts` (`_cachedMethods` — frozen, rebuilt only on registry mutation)
 
 ## D77: CSS Tokens Scoped to .watch-workspace (Not :root)
 
@@ -622,7 +622,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Lab and Watch both need bond topology. The physics engine's bond computation was tightly coupled to its spatial hash and state. Three entry points serve different callers without leaking physics internals.
 
-**Evidence:** `src/topology/bond-rules.ts`, `src/topology/build-bond-topology.ts`, `lab/js/physics.ts` (delegates to `buildBondTopologyAccelerated`), `watch/js/topology-sources/reconstructed-topology-source.ts` (uses `buildBondTopologyFromPositions`)
+**Evidence:** `src/topology/bond-rules.ts`, `src/topology/build-bond-topology.ts`, `lab/js/physics.ts` (delegates to `buildBondTopologyAccelerated`), `watch/js/playback/topology-sources/reconstructed-topology-source.ts` (uses `buildBondTopologyFromPositions`)
 
 ## D79: Neutral Bond-Policy Module
 
@@ -646,7 +646,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Full history files include pre-computed topology in restart frames. Reduced files omit restart frames entirely — topology must be reconstructed from dense-frame positions and the shared bond builders. A common interface lets the playback model delegate without file-kind conditionals in every topology access.
 
-**Evidence:** `watch/js/watch-playback-model.ts` (`WatchTopologySource`), `watch/js/topology-sources/`
+**Evidence:** `watch/js/playback/watch-playback-model.ts` (`WatchTopologySource`), `watch/js/playback/topology-sources/`
 
 ## D82: Fail-Fast Element Lookup in Reconstruction
 
@@ -654,7 +654,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** An earlier version silently substituted `'C'` for unknown atom IDs. This masked data-integrity bugs in reduced-file import — wrong element assignments would produce wrong bond cutoffs with no diagnostic. Throwing immediately at the reconstruction call site surfaces the root cause.
 
-**Evidence:** `src/topology/build-bond-topology.ts` (`buildBondTopologyFromPositions`), `watch/js/capsule-history-import.ts` (builds `elementById` map with uniqueness validation)
+**Evidence:** `src/topology/build-bond-topology.ts` (`buildBondTopologyFromPositions`), `watch/js/document/capsule-history-import.ts` (builds `elementById` map with uniqueness validation)
 
 ## D83: Playback Capsule File Format
 
@@ -662,7 +662,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** The codebase needed a cloud-friendly compact format. Capsule is smaller than full (no restart frames, checkpoints, or per-frame interaction/boundary) while preserving topology reconstruction, authored colors, and interaction semantics.
 
-**Evidence:** `src/history/history-file-v1.ts` (capsule types), `watch/js/capsule-history-import.ts`, `lab/js/runtime/history-export.ts` (`buildCapsuleHistoryFile`)
+**Evidence:** `src/history/history-file-v1.ts` (capsule types), `watch/js/document/capsule-history-import.ts`, `lab/js/runtime/timeline/history-export.ts` (`buildCapsuleHistoryFile`)
 
 ## D84: Stable Atom ID Appearance Model
 
@@ -670,7 +670,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** The original model froze dense slot indices, which drifted after compaction/reorder. Watch already used stable `atomIds`. Unifying both apps on the same identity model eliminates the Lab/Watch rendering mismatch.
 
-**Evidence:** `lab/js/runtime/bonded-group-appearance-runtime.ts` (`projectOverridesFromAtomIds`, `syncToRenderer`), `lab/js/store/app-store.ts` (`BondedGroupColorAssignment.atomIds`)
+**Evidence:** `lab/js/runtime/bonded-groups/bonded-group-appearance-runtime.ts` (`projectOverridesFromAtomIds`, `syncToRenderer`), `lab/js/store/app-store.ts` (`BondedGroupColorAssignment.atomIds`)
 
 ## D85: Replay Removed from Lab Export UI
 
@@ -678,7 +678,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** Replay was a legacy format with no implementation path. Keeping it in the UI created dead product surface and confused the export state machine.
 
-**Evidence:** `lab/js/components/timeline-export-dialog.tsx`, `lab/js/store/app-store.ts`
+**Evidence:** `lab/js/components/timeline/timeline-export-dialog.tsx`, `lab/js/store/app-store.ts`
 
 ## D86: Capsule Share-Link Architecture — Metadata-First Control Plane + Private R2 Data Plane
 
@@ -758,7 +758,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Alternatives rejected:** Two separate buttons (fragmented UX, duplicated state); one button that silently does the "right" thing (breaks discoverability for the non-default destination).
 
-**UPDATE 2026-04-17:** The Timeline Transfer trigger's user-facing label and tooltip are now canonicalized as **"Share & Download"** (NOT "Transfer history", "Export", or "Share" alone); the string is exported as `TRANSFER_HINT_COPY` from `lab/js/components/timeline-transfer-dialog.tsx`. A timed discoverability cue (1 s fade-in / 3 s hold / 1 s fade-out) fires once per page load, 5 s after the first atom interaction (signal: `useAppStore.hasAtomInteraction`), bypassing the `@media (hover: none)` touch-hide via `.timeline-hint--force-visible` so the cue is device-agnostic. The underlying dialog architecture (single dialog, busy guard, availability-driven tab visibility, subtle non-blocking warning pills) is unchanged.
+**UPDATE 2026-04-17:** The Timeline Transfer trigger's user-facing label and tooltip are now canonicalized as **"Share & Download"** (NOT "Transfer history", "Export", or "Share" alone); the string is exported as `TRANSFER_HINT_COPY` from `lab/js/components/timeline/timeline-transfer-dialog.tsx`. A timed discoverability cue (1 s fade-in / 3 s hold / 1 s fade-out) fires once per page load, 5 s after the first atom interaction (signal: `useAppStore.hasAtomInteraction`), bypassing the `@media (hover: none)` touch-hide via `.timeline-hint--force-visible` so the cue is device-agnostic. The underlying dialog architecture (single dialog, busy guard, availability-driven tab visibility, subtle non-blocking warning pills) is unchanged.
 
 ## D96: tsconfig Split — Frontend / Functions / Cron
 
@@ -834,7 +834,7 @@ This layering ensures that a policy change triggers conformance failures (intent
 
 **Rationale:** With a single `string | null` field, a 429 rate-limit message could leak into the auth-prompt UI after an opportunistic signed-out flip happened between the error being set and the component re-rendering, because both branches shared the same string slot. A discriminator makes cross-branch bleed a type error: a rate-limit message cannot be stored under `kind: 'auth'` and therefore cannot render as an auth note. The same structure also prevents the reverse (auth messages appearing as generic red error pills).
 
-**Evidence:** `lab/js/components/TimelineBar.tsx`, `lab/js/components/timeline-transfer-dialog.tsx`, `lab/js/store/app-store.ts` (`ShareError` type)
+**Evidence:** `lab/js/components/timeline/TimelineBar.tsx`, `lab/js/components/timeline/timeline-transfer-dialog.tsx`, `lab/js/store/app-store.ts` (`ShareError` type)
 
 ## D105: `TopRightControls` Flex Container for Account + FPS
 
@@ -1070,7 +1070,7 @@ The transport contract (`localStorage` + 10-min TTL + one-shot consume) is uncha
 - **Arm-then-fire**: a share-code deep-link that resumes at 80 % would otherwise flash both the 50 % and 100 % cues simultaneously at mount, since both thresholds are already crossed on first observation. Requiring each to be observed below-threshold at least once makes "passing through" a necessary condition for firing.
 - **Paused-seek coalescing**: a user scrubbing past both thresholds while paused is expressing intent to reach a destination, not to watch the trajectory. Firing the end cue only (and skipping halfway) matches that intent without suppressing cues on normal playback, where the effect runs once per threshold cross.
 
-**Shared hook extraction:** The animation-side of the cue lives in `src/ui/use-timed-cue.ts` — `useTimedCue({ triggerToken, durationMs }) → { active, animKey }` — encapsulating baseline-on-first-observation, duration timer, and `animKey` for React re-key-on-firing. Splitting milestone detection (`useTimelineMilestoneTokens`) from cue animation (`useTimedCue`) lets other surfaces reuse the cue primitive without inheriting timeline semantics. `TransferTrigger` in `lab/js/components/timeline-transfer-dialog.tsx` deliberately does **not** consume `useTimedCue` because its trigger shape (boolean event + 5 s-delay-then-show) differs from Watch's (token-change + immediate-show) — forcing a single hook across both would require parameterizing the delay model and lose the clarity of "token bumps mean fire now."
+**Shared hook extraction:** The animation-side of the cue lives in `src/ui/use-timed-cue.ts` — `useTimedCue({ triggerToken, durationMs }) → { active, animKey }` — encapsulating baseline-on-first-observation, duration timer, and `animKey` for React re-key-on-firing. Splitting milestone detection (`useTimelineMilestoneTokens`) from cue animation (`useTimedCue`) lets other surfaces reuse the cue primitive without inheriting timeline semantics. `TransferTrigger` in `lab/js/components/timeline/timeline-transfer-dialog.tsx` deliberately does **not** consume `useTimedCue` because its trigger shape (boolean event + 5 s-delay-then-show) differs from Watch's (token-change + immediate-show) — forcing a single hook across both would require parameterizing the delay model and lose the clarity of "token bumps mean fire now."
 
 **Alternatives rejected:** Fire on every threshold cross (annoying on replay); fire once per session (strands later-loaded files); fire without arming (share-deep-links flash spuriously); fire every milestone crossed per effect run (paused scrubs spam two cues at once); merge `useTimedCue` and `useTimelineMilestoneTokens` into a single hook (couples timeline semantics to the cue primitive, blocks reuse).
 

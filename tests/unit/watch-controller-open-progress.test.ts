@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { normalizeTotalBytes } from '../../watch/js/watch-controller';
+import { normalizeTotalBytes } from '../../watch/js/app/watch-controller';
 
 // ── normalizeTotalBytes helper contract ──
 
@@ -50,7 +50,7 @@ describe('normalizeTotalBytes', () => {
 
 // ── openProgress state machine: metadata fetch + derived loadingShareCode ──
 
-import { createWatchController } from '../../watch/js/watch-controller';
+import { createWatchController } from '../../watch/js/app/watch-controller';
 
 // jsdom's fetch may not exist — install a controllable stub per test.
 const originalFetch = globalThis.fetch;

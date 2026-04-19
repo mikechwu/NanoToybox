@@ -5,7 +5,7 @@
  * copy for unknown-total streams).
  *
  * Kept in `src/` because both apps consume it; previously lived in
- * `lab/js/runtime/history-export.ts` and was reached into from
+ * `lab/js/runtime/timeline/history-export.ts` and was reached into from
  * `watch/js/components/WatchOpenPanel.tsx`, which violated the
  * "shared utilities belong in `src/`" convention in
  * `docs/contributing.md`.

@@ -7,7 +7,7 @@
  * - Review with more bonds than live renders the full historical set
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { createSimulationTimeline, type SimulationTimeline } from '../../lab/js/runtime/simulation-timeline';
+import { createSimulationTimeline, type SimulationTimeline } from '../../lab/js/runtime/timeline/simulation-timeline';
 
 // ── Timeline historical bond lookup ──
 
@@ -62,7 +62,7 @@ describe('getReviewBondTopology', () => {
 
 describe('coordinator applyReviewFrame integration', () => {
   it('passes historical bonds from timeline to renderer', async () => {
-    const { createTimelineCoordinator } = await import('../../lab/js/runtime/simulation-timeline-coordinator');
+    const { createTimelineCoordinator } = await import('../../lab/js/runtime/timeline/simulation-timeline-coordinator');
 
     const historicalBonds: [number, number, number][] = [[0, 1, 1.5], [1, 2, 1.6]];
     const frame = { frameId: 1, timePs: 0.5, n: 3, positions: new Float64Array(9), interaction: null, boundary: {} as any };
@@ -107,7 +107,7 @@ describe('coordinator applyReviewFrame integration', () => {
   });
 
   it('passes empty array when no historical topology exists', async () => {
-    const { createTimelineCoordinator } = await import('../../lab/js/runtime/simulation-timeline-coordinator');
+    const { createTimelineCoordinator } = await import('../../lab/js/runtime/timeline/simulation-timeline-coordinator');
 
     const frame = { frameId: 1, timePs: 0.1, n: 2, positions: new Float64Array(6), interaction: null, boundary: {} as any };
 

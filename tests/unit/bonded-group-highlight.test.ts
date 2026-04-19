@@ -15,9 +15,9 @@
  * - Clear Highlight clears persistent tracked set
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from '../../lab/js/runtime/bonded-group-highlight-runtime';
+import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from '../../lab/js/runtime/bonded-groups/bonded-group-highlight-runtime';
 import { useAppStore } from '../../lab/js/store/app-store';
-import type { BondedGroupRuntime } from '../../lab/js/runtime/bonded-group-runtime';
+import type { BondedGroupRuntime } from '../../lab/js/runtime/bonded-groups/bonded-group-runtime';
 
 // Mock canTrackBondedGroupHighlightNow — default true for semantic tests,
 // individual tests override to false for gating verification.

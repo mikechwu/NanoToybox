@@ -9,7 +9,7 @@
 import React, { useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 import { selectIsReviewLocked } from '../store/selectors/review-ui-lock';
-import { showReviewModeActionHint } from '../runtime/review-mode-action-hints';
+import { showReviewModeActionHint } from '../runtime/overlay/review-mode-action-hints';
 import { ReviewLockedControl } from './ReviewLockedControl';
 import { useSheetAnimation } from '../hooks/useSheetAnimation';
 

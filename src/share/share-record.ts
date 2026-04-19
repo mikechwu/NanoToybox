@@ -7,7 +7,7 @@
  * Owns:        status enums, accessibility predicates
  * Depends on:  nothing (pure types + functions)
  * Called by:    functions/api/capsules/* (status checks),
- *              watch/js/watch-controller.ts (error mapping)
+ *              watch/js/app/watch-controller.ts (error mapping)
  */
 
 export type ShareRecordStatus =

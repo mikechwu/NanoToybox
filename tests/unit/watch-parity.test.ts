@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { partitionBondedGroups, SMALL_CLUSTER_THRESHOLD } from '../../src/history/bonded-group-utils';
 import type { BondedGroupSummary } from '../../src/history/bonded-group-projection';
-import { createWatchController, type WatchController } from '../../watch/js/watch-controller';
+import { createWatchController, type WatchController } from '../../watch/js/app/watch-controller';
 import { CONFIG } from '../../lab/js/config';
 
 // ── partitionBondedGroups (shared extraction) ──

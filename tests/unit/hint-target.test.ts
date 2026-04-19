@@ -15,7 +15,7 @@ import {
   computeOnScreenCentroid,
   rayBoxExit,
   type ProjectedAtom,
-} from '../../lab/js/runtime/hint-target';
+} from '../../lab/js/runtime/overlay/hint-target';
 
 // ─────────────────────────────────────────────────────────────────────
 // convexHull2D

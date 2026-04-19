@@ -17,19 +17,19 @@ import { render, cleanup, act, fireEvent } from '@testing-library/react';
 // synchronously under test. Real production code yields a paint via
 // rAF + setTimeout; that timing is covered by manual verification.
 // MUST be a vi.fn so individual tests can override the implementation.
-vi.mock('../../lab/js/components/timeline-after-paint', () => ({
+vi.mock('../../lab/js/components/timeline/timeline-after-paint', () => ({
   scheduleAfterNextPaint: vi.fn((work: () => void) => {
     work();
     return () => {};
   }),
 }));
 
-import { scheduleAfterNextPaint } from '../../lab/js/components/timeline-after-paint';
-import { formatBytes, generateExportFileName, saveHistoryFile } from '../../lab/js/runtime/history-export';
+import { scheduleAfterNextPaint } from '../../lab/js/components/timeline/timeline-after-paint';
+import { formatBytes, generateExportFileName, saveHistoryFile } from '../../lab/js/runtime/timeline/history-export';
 import { useAppStore } from '../../lab/js/store/app-store';
 import type { TimelineCallbacks } from '../../lab/js/store/app-store';
-import { TimelineBar } from '../../lab/js/components/TimelineBar';
-import { TimelineExportDialog, useExportDialog } from '../../lab/js/components/timeline-export-dialog';
+import { TimelineBar } from '../../lab/js/components/timeline/TimelineBar';
+import { TimelineExportDialog, useExportDialog } from '../../lab/js/components/timeline/timeline-export-dialog';
 
 // Reset the scheduler mock to synchronous default before each test so
 // per-case overrides do not leak into the next test.

@@ -12,18 +12,18 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { createStoredTopologySource } from '../../watch/js/topology-sources/stored-topology-source';
-import { createReconstructedTopologySource } from '../../watch/js/topology-sources/reconstructed-topology-source';
-import { importReducedAsCapsule, importCapsuleHistory, type LoadedCapsuleHistory } from '../../watch/js/capsule-history-import';
-import { importFullHistory } from '../../watch/js/full-history-import';
+import { createStoredTopologySource } from '../../watch/js/playback/topology-sources/stored-topology-source';
+import { createReconstructedTopologySource } from '../../watch/js/playback/topology-sources/reconstructed-topology-source';
+import { importReducedAsCapsule, importCapsuleHistory, type LoadedCapsuleHistory } from '../../watch/js/document/capsule-history-import';
+import { importFullHistory } from '../../watch/js/document/full-history-import';
 import { BOND_DEFAULTS } from '../../src/config/bond-defaults';
 import {
   buildCapsuleInterpolationCapability,
   createWatchTrajectoryInterpolationForCapsule,
-} from '../../watch/js/watch-trajectory-interpolation';
+} from '../../watch/js/playback/watch-trajectory-interpolation';
 import type { AtomDojoHistoryFileV1, AtomDojoReducedFileV1, AtomDojoPlaybackCapsuleFileV1 } from '../../src/history/history-file-v1';
 import { validateReducedFile, validateCapsuleFile } from '../../src/history/history-file-v1';
-import { loadHistoryFile } from '../../watch/js/history-file-loader';
+import { loadHistoryFile } from '../../watch/js/document/history-file-loader';
 import { buildExportBondPolicy } from '../../src/topology/bond-policy-resolver';
 
 // ── Fixtures ──
@@ -386,7 +386,7 @@ describe('importReducedAsCapsule', () => {
 
 // ── Bonded-group parity ──
 
-import { createWatchBondedGroups } from '../../watch/js/watch-bonded-groups';
+import { createWatchBondedGroups } from '../../watch/js/analysis/watch-bonded-groups';
 
 describe('Bonded-group parity: stored vs reconstructed topology', () => {
   it('same topology input produces same bonded-group summaries', () => {
@@ -417,7 +417,7 @@ describe('Bonded-group parity: stored vs reconstructed topology', () => {
 
 // ── Controller integration (file-kind dispatch) ──
 
-import { createWatchController } from '../../watch/js/watch-controller';
+import { createWatchController } from '../../watch/js/app/watch-controller';
 
 describe('Controller loads both file kinds', () => {
   it('full-history file loads and produces topology', async () => {
@@ -958,7 +958,7 @@ describe('Watch appearance import (importColorAssignments)', () => {
   });
 });
 
-import { createWatchBondedGroupAppearance } from '../../watch/js/watch-bonded-group-appearance';
+import { createWatchBondedGroupAppearance } from '../../watch/js/analysis/watch-bonded-group-appearance';
 
 describe('importColorAssignments domain-level behavior', () => {
   function makeAppearanceDeps() {
@@ -1037,7 +1037,7 @@ describe('importColorAssignments domain-level behavior', () => {
 
 // ── Phase 3a: Interaction query (getInteractionAtTime) ──
 
-import { createWatchPlaybackModel } from '../../watch/js/watch-playback-model';
+import { createWatchPlaybackModel } from '../../watch/js/playback/watch-playback-model';
 
 describe('getInteractionAtTime (Tier 1: time-based query)', () => {
   it('returns null for full-history files (no interaction timeline)', () => {
@@ -1105,8 +1105,8 @@ describe('getInteractionAtTime (Tier 1: time-based query)', () => {
 
 // ── Phase 3a: Capsule export builder ──
 
-import { buildCapsuleHistoryFile, type CapsuleExportDeps } from '../../lab/js/runtime/history-export';
-import type { TimelineFrame } from '../../lab/js/runtime/simulation-timeline';
+import { buildCapsuleHistoryFile, type CapsuleExportDeps } from '../../lab/js/runtime/timeline/history-export';
+import type { TimelineFrame } from '../../lab/js/runtime/timeline/simulation-timeline';
 
 function makeExportDeps(overrides?: Partial<CapsuleExportDeps>): CapsuleExportDeps {
   const frames: TimelineFrame[] = [

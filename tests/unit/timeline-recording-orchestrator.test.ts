@@ -10,9 +10,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createRecordingOrchestrator } from '../../lab/js/runtime/timeline-recording-orchestrator';
-import { createSimulationTimeline } from '../../lab/js/runtime/simulation-timeline';
-import { createTimelineRecordingPolicy } from '../../lab/js/runtime/timeline-recording-policy';
+import { createRecordingOrchestrator } from '../../lab/js/runtime/timeline/timeline-recording-orchestrator';
+import { createSimulationTimeline } from '../../lab/js/runtime/timeline/simulation-timeline';
+import { createTimelineRecordingPolicy } from '../../lab/js/runtime/timeline/timeline-recording-policy';
 
 function makePhysics(n = 60) {
   const pos = new Float64Array(n * 3);

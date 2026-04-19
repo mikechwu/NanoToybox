@@ -7,7 +7,7 @@
  * events) and per-method overrides.
  */
 import { vi } from 'vitest';
-import type { WatchRenderer } from '../../watch/js/watch-renderer';
+import type { WatchRenderer } from '../../watch/js/view/watch-renderer';
 
 export function createWatchRendererStub(
   overrides: Partial<WatchRenderer> & { _canvas?: HTMLCanvasElement } = {},

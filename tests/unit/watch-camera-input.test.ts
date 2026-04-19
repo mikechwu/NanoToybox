@@ -25,8 +25,8 @@ import {
   TAP_MAX_DURATION_MS,
   DOUBLE_TAP_WINDOW_MS,
 } from '../../src/input/camera-gesture-constants';
-import { createWatchCameraInput } from '../../watch/js/watch-camera-input';
-import type { WatchRenderer } from '../../watch/js/watch-renderer';
+import { createWatchCameraInput } from '../../watch/js/view/watch-camera-input';
+import type { WatchRenderer } from '../../watch/js/view/watch-renderer';
 
 // ── Shared gesture constants ──
 
@@ -650,7 +650,7 @@ describe('Gesture cancellation emits end phase', () => {
 describe('Controller lifecycle wiring', () => {
   it('watch-controller.ts imports and uses createWatchCameraInput', async () => {
     const fs = await import('fs');
-    const source = fs.readFileSync('watch/js/watch-controller.ts', 'utf-8');
+    const source = fs.readFileSync('watch/js/app/watch-controller.ts', 'utf-8');
     expect(source).toContain("import { createWatchCameraInput");
     expect(source).toContain("createWatchCameraInput(renderer,");
   });
@@ -661,14 +661,14 @@ describe('Controller lifecycle wiring', () => {
 
   it('watch-controller.ts imports and uses createWatchOverlayLayout', async () => {
     const fs = await import('fs');
-    const source = fs.readFileSync('watch/js/watch-controller.ts', 'utf-8');
+    const source = fs.readFileSync('watch/js/app/watch-controller.ts', 'utf-8');
     expect(source).toContain("import { createWatchOverlayLayout");
     expect(source).toContain("createWatchOverlayLayout(renderer)");
   });
 
   it('detachRenderer tears down overlayLayout, then cameraInput, then renderer', async () => {
     const fs = await import('fs');
-    const source = fs.readFileSync('watch/js/watch-controller.ts', 'utf-8');
+    const source = fs.readFileSync('watch/js/app/watch-controller.ts', 'utf-8');
     const overlayDestroyIdx = source.indexOf('overlayLayout');
     const cameraDestroyIdx = source.indexOf('cameraInput.destroy()');
     const rendererDestroyIdx = source.indexOf('renderer.destroy()');
@@ -702,7 +702,7 @@ describe('No duplicate orbit-math', () => {
   it('watch-camera-input does not import from orbit-math.ts (uses renderer adapter)', async () => {
     // Static check: the camera-input file should NOT import orbit-math
     const fs = await import('fs');
-    const source = fs.readFileSync('watch/js/watch-camera-input.ts', 'utf-8');
+    const source = fs.readFileSync('watch/js/view/watch-camera-input.ts', 'utf-8');
     expect(source).not.toContain('orbit-math');
   });
 });

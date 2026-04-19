@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createWatchBondedGroupAppearance } from '../../watch/js/watch-bonded-group-appearance';
+import { createWatchBondedGroupAppearance } from '../../watch/js/analysis/watch-bonded-group-appearance';
 
 // ── Mock dependencies ──
 
@@ -218,7 +218,7 @@ describe('Renderer _getDisplayedAtomCount regression', () => {
 describe('Controller lifecycle wiring', () => {
   it('controller imports and creates appearance domain', async () => {
     const fs = await import('fs');
-    const source = fs.readFileSync('watch/js/watch-controller.ts', 'utf-8');
+    const source = fs.readFileSync('watch/js/app/watch-controller.ts', 'utf-8');
     expect(source).toContain('createWatchBondedGroupAppearance');
     expect(source).toContain('appearance.reset()');
     expect(source).toContain('appearance.projectAndSync');
@@ -226,7 +226,7 @@ describe('Controller lifecycle wiring', () => {
 
   it('appearance.reset() is called in openFile, not detachRenderer', async () => {
     const fs = await import('fs');
-    const source = fs.readFileSync('watch/js/watch-controller.ts', 'utf-8');
+    const source = fs.readFileSync('watch/js/app/watch-controller.ts', 'utf-8');
     // Reset in openFile
     expect(source).toContain('appearance.reset()');
     // detachRenderer does NOT clear appearance

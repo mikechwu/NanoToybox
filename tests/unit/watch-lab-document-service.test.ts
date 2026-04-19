@@ -7,7 +7,7 @@ import {
   deriveDocumentKey,
   fnv1a32Hex,
   type DocumentMetadata,
-} from '../../watch/js/watch-document-service';
+} from '../../watch/js/document/watch-document-service';
 
 /** Build a capsule file minimal enough to pass the importer. */
 function makeMinimalCapsuleFile(): string {

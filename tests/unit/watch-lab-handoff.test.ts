@@ -7,8 +7,8 @@ import {
   removeWatchToLabHandoff,
   mintToken,
   WatchHandoffWriteError,
-} from '../../watch/js/watch-lab-handoff';
-import { consumeWatchToLabHandoffFromLocation } from '../../lab/js/runtime/watch-handoff';
+} from '../../watch/js/handoff/watch-lab-handoff';
+import { consumeWatchToLabHandoffFromLocation } from '../../lab/js/runtime/handoff/watch-handoff';
 import {
   HANDOFF_STORAGE_PREFIX,
   SEED_MAX_ATOMS,

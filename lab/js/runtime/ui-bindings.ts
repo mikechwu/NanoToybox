@@ -23,8 +23,8 @@
 
 import { useAppStore } from '../store/app-store';
 import { selectIsReviewLocked } from '../store/selectors/review-ui-lock';
-import { showReviewModeActionHint } from './review-mode-action-hints';
-import type { OverlayRuntime } from './overlay-runtime';
+import { showReviewModeActionHint } from './overlay/review-mode-action-hints';
+import type { OverlayRuntime } from './overlay/overlay-runtime';
 import type { WorkerInteractionCommand } from '../worker-bridge';
 
 /** Returns true (and shows hint) if review mode blocks the action.

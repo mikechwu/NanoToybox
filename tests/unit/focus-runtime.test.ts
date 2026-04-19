@@ -11,7 +11,7 @@ import {
   focusMoleculeByAtom,
   findMoleculeForAtom,
   resolveReturnTarget,
-} from '../../lab/js/runtime/focus-runtime';
+} from '../../lab/js/runtime/camera/focus-runtime';
 
 function mockRenderer(centroid: THREE.Vector3 | null = new THREE.Vector3(1, 2, 3)) {
   const bounds = centroid ? { center: centroid, radius: 3.5 } : null;
@@ -134,7 +134,7 @@ describe('Scene-runtime caller contracts (Policy A: placement commit decoupled)'
 
 // ── Follow enable with no prior target (Phase 2) ──
 
-import { handleCenterObject, ensureFollowTarget } from '../../lab/js/runtime/focus-runtime';
+import { handleCenterObject, ensureFollowTarget } from '../../lab/js/runtime/camera/focus-runtime';
 
 describe('display-aware focus resolution (review mode)', () => {
   beforeEach(() => {

@@ -17,7 +17,7 @@ import { SheetOverlay } from './components/SheetOverlay';
 import { SettingsSheet } from './components/SettingsSheet';
 import { StructureChooser } from './components/StructureChooser';
 import { BondedGroupsPanel } from './components/BondedGroupsPanel';
-import { TimelineBar } from './components/TimelineBar';
+import { TimelineBar } from './components/timeline/TimelineBar';
 import { OnboardingOverlay } from './components/OnboardingOverlay';
 import { TopRightControls } from './components/TopRightControls';
 

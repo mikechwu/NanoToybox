@@ -5,7 +5,7 @@
  */
 
 import React from 'react';
-import type { SnapshotCinematicCameraStatus } from '../watch-cinematic-camera';
+import type { SnapshotCinematicCameraStatus } from '../view/watch-cinematic-camera';
 
 interface Props {
   enabled: boolean;

@@ -20,7 +20,7 @@ import {
   buildBondTopologyAccelerated,
   createBondTopologyWorkspace,
 } from '../../src/topology/build-bond-topology';
-import { captureRestartFrameData } from '../../lab/js/runtime/restart-state-adapter';
+import { captureRestartFrameData } from '../../lab/js/runtime/timeline/restart-state-adapter';
 
 // ── Fixtures ──
 

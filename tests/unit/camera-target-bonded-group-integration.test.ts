@@ -8,8 +8,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as THREE from 'three';
 import { useAppStore } from '../../lab/js/store/app-store';
-import { handleCenterObject, ensureFollowTarget } from '../../lab/js/runtime/focus-runtime';
-import { updateOrbitFollowFromStore } from '../../lab/js/runtime/orbit-follow-update';
+import { handleCenterObject, ensureFollowTarget } from '../../lab/js/runtime/camera/focus-runtime';
+import { updateOrbitFollowFromStore } from '../../lab/js/runtime/camera/orbit-follow-update';
 
 function mockRendererWithGroupAtoms() {
   return {

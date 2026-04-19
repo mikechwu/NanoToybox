@@ -9,7 +9,7 @@
 
 import { useState, useRef, useCallback, useEffect, useId } from 'react';
 import { HINT_DELAY_MS } from '../components/ActionHint';
-import { showReviewModeActionHint } from '../runtime/review-mode-action-hints';
+import { showReviewModeActionHint } from '../runtime/overlay/review-mode-action-hints';
 
 export interface UseReviewLockedInteractionResult {
   tooltipId: string;

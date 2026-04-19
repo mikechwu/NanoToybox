@@ -41,7 +41,7 @@ describe('follow mode freezes target', () => {
   });
 
   it('focusMoleculeByAtom updates target when follow is off', async () => {
-    const { focusMoleculeByAtom } = await import('../../lab/js/runtime/focus-runtime');
+    const { focusMoleculeByAtom } = await import('../../lab/js/runtime/camera/focus-runtime');
     const mockRenderer = {
       getMoleculeCentroid: vi.fn(() => ({ x: 0, y: 0, z: 0 })),
       getMoleculeBounds: vi.fn(() => null),
@@ -56,7 +56,7 @@ describe('follow mode freezes target', () => {
   });
 
   it('focusMoleculeByAtom does NOT update target when follow is on', async () => {
-    const { focusMoleculeByAtom } = await import('../../lab/js/runtime/focus-runtime');
+    const { focusMoleculeByAtom } = await import('../../lab/js/runtime/camera/focus-runtime');
     useAppStore.getState().setOrbitFollowEnabled(true);
 
     const mockRenderer = {

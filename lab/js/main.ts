@@ -25,34 +25,34 @@ import { StatusController } from './status';
 import { PlacementController } from './placement';
 import { mountReactUI, unmountReactUI } from './react-root';
 import { useAppStore } from './store/app-store';
-import { createOverlayLayout, type OverlayLayout } from './runtime/overlay-layout';
+import { createOverlayLayout, type OverlayLayout } from './runtime/overlay/overlay-layout';
 import { getDeviceMode } from '../../src/ui/device-mode';
-import { createInteractionDispatch } from './runtime/interaction-dispatch';
-import { createOverlayRuntime, type OverlayRuntime } from './runtime/overlay-runtime';
-import { createInputBindings, type InputBindings } from './runtime/input-bindings';
+import { createInteractionDispatch } from './runtime/interaction/interaction-dispatch';
+import { createOverlayRuntime, type OverlayRuntime } from './runtime/overlay/overlay-runtime';
+import { createInputBindings, type InputBindings } from './runtime/interaction/input-bindings';
 import { registerStoreCallbacks } from './runtime/ui-bindings';
-import { createAtomSource } from './runtime/atom-source';
+import { createAtomSource } from './runtime/interaction/atom-source';
 import { createSceneRuntime, type SceneRuntime } from './runtime/scene-runtime';
-import { consumeWatchToLabHandoffFromLocation } from './runtime/watch-handoff';
+import { consumeWatchToLabHandoffFromLocation } from './runtime/handoff/watch-handoff';
 import { isWatchHandoffBoot } from '../../src/watch-lab-handoff/watch-handoff-url';
-import { handleCenterObject as _handleCenterObject, resolveReturnTarget } from './runtime/focus-runtime';
-import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/snapshot-reconciler';
-import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker-lifecycle';
+import { handleCenterObject as _handleCenterObject, resolveReturnTarget } from './runtime/camera/focus-runtime';
+import { createSnapshotReconciler, type SnapshotReconciler } from './runtime/worker/snapshot-reconciler';
+import { createWorkerRuntime, type WorkerRuntime } from './runtime/worker/worker-lifecycle';
 import { createOnboardingController, subscribeOnboardingReadiness, markOnboardingDismissed } from './runtime/onboarding';
-import { createAtomInteractionHint, type AtomInteractionHintRuntime } from './runtime/atom-interaction-hint';
-import { createDragTargetRefresh, dragRefreshAction } from './runtime/drag-target-refresh';
-import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-group-runtime';
-import { resolveBondedGroupDisplaySource } from './runtime/bonded-group-display-source';
-import { createBondedGroupAppearanceRuntime, type BondedGroupAppearanceRuntime } from './runtime/bonded-group-appearance-runtime';
-import { handleBondedGroupFollowToggle } from './runtime/bonded-group-follow-actions';
-import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from './runtime/bonded-group-highlight-runtime';
-import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './runtime/bonded-group-coordinator';
-import { createTimelineSubsystem, type TimelineSubsystem } from './runtime/timeline-subsystem';
-import { buildFullHistoryFile, validateFullHistoryFile, buildCapsuleHistoryFile, formatBytes, generateExportFileName, saveHistoryFile, type AtomDojoHistoryFileV1 } from './runtime/history-export';
+import { createAtomInteractionHint, type AtomInteractionHintRuntime } from './runtime/overlay/atom-interaction-hint';
+import { createDragTargetRefresh, dragRefreshAction } from './runtime/interaction/drag-target-refresh';
+import { createBondedGroupRuntime, type BondedGroupRuntime } from './runtime/bonded-groups/bonded-group-runtime';
+import { resolveBondedGroupDisplaySource } from './runtime/bonded-groups/bonded-group-display-source';
+import { createBondedGroupAppearanceRuntime, type BondedGroupAppearanceRuntime } from './runtime/bonded-groups/bonded-group-appearance-runtime';
+import { handleBondedGroupFollowToggle } from './runtime/bonded-groups/bonded-group-follow-actions';
+import { createBondedGroupHighlightRuntime, type BondedGroupHighlightRuntime } from './runtime/bonded-groups/bonded-group-highlight-runtime';
+import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './runtime/bonded-groups/bonded-group-coordinator';
+import { createTimelineSubsystem, type TimelineSubsystem } from './runtime/timeline/timeline-subsystem';
+import { buildFullHistoryFile, validateFullHistoryFile, buildCapsuleHistoryFile, formatBytes, generateExportFileName, saveHistoryFile, type AtomDojoHistoryFileV1 } from './runtime/timeline/history-export';
 import { validateCapsuleFile, type AtomDojoPlaybackCapsuleFileV1 } from '../../src/history/history-file-v1';
 import { executeFrame, type FrameRuntimeSurface } from './app/frame-runtime';
 import { teardownAllSubsystems, resetSchedulerState, resetSessionState, resetEffectsGate, type TeardownSurface } from './app/app-lifecycle';
-import { serializeForWorkerRestore } from './runtime/restart-state-adapter';
+import { serializeForWorkerRestore } from './runtime/timeline/restart-state-adapter';
 import {
   createAuthRuntime,
   consumeResumePublishIntent,
@@ -297,7 +297,7 @@ let _hydrationActive = false;
 let _dispatch: ((cmd: import('./state-machine').Command, sx?: number, sy?: number) => { dragTarget?: number[] }) | null = null;
 
 // Per-frame drag target refresh (fixes stale world-space target when atom moves under spring)
-let _dragRefresh: import('./runtime/drag-target-refresh').DragTargetRefresh | null = null;
+let _dragRefresh: import('./runtime/interaction/drag-target-refresh').DragTargetRefresh | null = null;
 
 /** Register a global listener and track it for teardown. Options forwarded to both add/remove. */
 function addGlobalListener(target: EventTarget, event: string, handler: EventListener, options?: boolean | AddEventListenerOptions) {
@@ -1422,7 +1422,7 @@ function _buildWorkerConfig(): import('../../src/types/worker-protocol').Physics
  *  would see the wrong scene alongside the hydrate's "couldn't
  *  remix" banner. The hydrate classifies the failure itself and
  *  surfaces the appropriate copy. Logged so ops can correlate. */
-function recoverLocalPhysicsAfterWorkerFailure(reason: string, lastSnapshot?: import('./runtime/worker-lifecycle').RecoverySnapshot) {
+function recoverLocalPhysicsAfterWorkerFailure(reason: string, lastSnapshot?: import('./runtime/worker/worker-lifecycle').RecoverySnapshot) {
   if (_hydrationActive) {
     console.warn(
       '[worker] failure during hydrate transaction — deferring to hydrate rollback:',

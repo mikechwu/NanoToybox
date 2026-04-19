@@ -82,7 +82,7 @@ The bonded-group panel is display-source-aware: it projects from live physics to
 
 Authored atom color overrides (`bondedGroupColorOverrides`) are global annotations that persist across live/review mode transitions. They are applied via `renderer.setAtomColorOverrides()` independently of highlight overlays. Colors survive theme changes, structure appends, scrub, and restart.
 
-**Snapshot / restore API** (`lab/js/runtime/bonded-group-appearance-runtime.ts`):
+**Snapshot / restore API** (`lab/js/runtime/bonded-groups/bonded-group-appearance-runtime.ts`):
 
 - `snapshotAssignments()` returns a structural deep-copy of the current assignments (safe to hold across mutations).
 - `restoreAssignments(prev)` installs `prev` as the complete authoritative state — **REPLACE semantics, not additive**. An empty array wipes prior state entirely. This is what the Watch → Lab hydrate transaction uses to atomically apply (and, on failure, revert) authored Watch colors.
@@ -196,7 +196,7 @@ All 5 timeline interactive controls have `ActionHint` hover/focus tooltips (desk
 | Review (enter) | "Enter review mode at the current time." |
 | Review (disabled) | "No recorded history to review yet." |
 | Restart here | No wrapping `ActionHint` tooltip — the label "Restart here" plus the circular-arrow icon are self-explanatory, and the older wrapping hint duplicated that signal. See Restart Affordance below |
-| Transfer (transfer icon) | "Share & Download" (opens the Download + Share dialog). A timed discoverability cue (1 s fade-in / 3 s hold / 1 s fade-out) fires 5 s after the first atom interaction (gated on `useAppStore.hasAtomInteraction`), once per page load. The cue is device-agnostic — it bypasses the `@media (hover: none)` touch-hide via `.timeline-hint--force-visible`. `TRANSFER_HINT_COPY` is exported from `lab/js/components/timeline-transfer-dialog.tsx` |
+| Transfer (transfer icon) | "Share & Download" (opens the Download + Share dialog). A timed discoverability cue (1 s fade-in / 3 s hold / 1 s fade-out) fires 5 s after the first atom interaction (gated on `useAppStore.hasAtomInteraction`), once per page load. The cue is device-agnostic — it bypasses the `@media (hover: none)` touch-hide via `.timeline-hint--force-visible`. `TRANSFER_HINT_COPY` is exported from `lab/js/components/timeline/timeline-transfer-dialog.tsx` |
 | Clear (close icon) | "Stop recording and clear timeline history." |
 
 On touch/coarse-pointer devices, `ActionHint` tooltips are CSS-hidden. Touch discoverability relies on visible button labels and `aria-label` attributes instead.
@@ -283,7 +283,7 @@ The runtime never silently falls through to a same-tab redirect — destructive 
 
 ### Placement Solver
 
-The placement solver (`lab/js/runtime/placement-solver.ts`) computes a rigid transform (rotation + translation) for molecule preview placement in the user's current camera frame. `PlacementController` calls `solvePlacement()` and consumes the result; the solver does not own preview lifecycle, drag-plane, or commit flow.
+The placement solver (`lab/js/runtime/placement/placement-solver.ts`) computes a rigid transform (rotation + translation) for molecule preview placement in the user's current camera frame. `PlacementController` calls `solvePlacement()` and consumes the result; the solver does not own preview lifecycle, drag-plane, or commit flow.
 
 **Orientation Pipeline**
 
@@ -545,7 +545,7 @@ Watch can open capsules hosted in the cloud via a 12-char Crockford Base32 share
 
 Invalid or unparseable input produces an "Invalid share code or URL" error without disturbing the current document.
 
-**Fetch pipeline:** `openSharedCapsule()` (in `watch/js/watch-controller.ts`) first calls `/api/capsules/:code` for metadata (existence / accessibility check), then `/api/capsules/:code/blob` for the capsule JSON. The response is wrapped in a `File` object and handed to the same `openFile()` entry point used by drag-drop and file-picker flows, so all validation, transactional rollback, and commit-phase checks are shared between local and remote opens. Network or server errors surface through the error overlay.
+**Fetch pipeline:** `openSharedCapsule()` (in `watch/js/app/watch-controller.ts`) first calls `/api/capsules/:code` for metadata (existence / accessibility check), then `/api/capsules/:code/blob` for the capsule JSON. The response is wrapped in a `File` object and handed to the same `openFile()` entry point used by drag-drop and file-picker flows, so all validation, transactional rollback, and commit-phase checks are shared between local and remote opens. Network or server errors surface through the error overlay.
 
 ### Workspace
 
@@ -636,7 +636,7 @@ The dock (`WatchDock`) is a 3-zone hierarchical toolbar using shared `dock-shell
 
 **Speed control:** `PlaybackSpeedControl` owns the full Zone 2 column: a continuous logarithmic slider (0.5x to 20x) on top, and a centered "Speed · 1.0x" meta row below. The slider maps `[0,1]` to `[SPEED_MIN, SPEED_MAX]` via `sliderToSpeed()`/`speedToSlider()` (shared from `src/config/playback-speed-constants.ts`). Logarithmic mapping gives ~37% of slider travel to the 0.5x-2x range where fine control matters most. The numeric readout (`.watch-dock__speed-value`) is a click-to-reset button (disabled at default to make the no-op visible). The slider sits inside a fixed-height row (`.watch-dock__speed-slider-row`, 18 px = `.dock-icon` baseline) so its thumb centerline aligns with the icon centerlines in neighboring columns across browsers (native range height varies 16–24 px).
 
-**Smooth playback** is configured in **Settings only** (default ON via `_smoothPlayback = true` in `watch/js/watch-settings.ts`). It was previously a dock toggle but moved to Settings to give the speed slider room and to keep the dock format uniform (every column = icon+label).
+**Smooth playback** is configured in **Settings only** (default ON via `_smoothPlayback = true` in `watch/js/settings/watch-settings.ts`). It was previously a dock toggle but moved to Settings to give the speed slider room and to keep the dock format uniform (every column = icon+label).
 
 ### Timeline
 
@@ -756,7 +756,7 @@ The primary pill and the secondary anchor have distinct owners; duplicating owne
 
 Both primary and secondary anchors carry `target="_blank"` — the new-tab invariant is preserved across the redesign.
 
-**Controller methods** (in `watch/js/watch-controller.ts`, consumed by `WatchApp`):
+**Controller methods** (in `watch/js/app/watch-controller.ts`, consumed by `WatchApp`):
 
 | Method | Purpose |
 |--------|---------|
@@ -778,11 +778,11 @@ The two controller APIs (`openLabFromCurrentFrame`, `buildCurrentFrameLabHref`) 
 
 **Seed extraction (what the primary pill mints):**
 
-`watch/js/watch-lab-seed.ts` builds the Lab scene seed from the current playback frame:
+`watch/js/handoff/watch-lab-seed.ts` builds the Lab scene seed from the current playback frame:
 
 - **`canBuildWatchLabSceneSeed({ history, timePs, playback })`** — O(log n) predicate used to gate `labCurrentFrameAvailable`. Safe to call per snapshot; does no allocation
 - **`buildWatchLabSceneSeed(...)`** — full seed builder, called by `openLabFromCurrentFrame()` at mint time. Optional `BuildArgs` include `getColorAssignments` (authored Watch-side colors to carry into Lab) and `getOrbitCameraSnapshot` (exact orbit pose: position, target, up, fovDeg). Unknown atomIds in color assignments are dropped with a `console.warn` at build time
-- Helpers in `watch/js/watch-playback-model.ts` — `getDisplayFrameIndexAtTime`, `getTopologyFrameIdAtTime`, `canApproximateVelocityAtDisplayFrame`, `getNearestRestartFrameIdAtTime` — are the per-channel queries the seed builder composes. Each is a binary-search over its respective index so gating stays O(log n)
+- Helpers in `watch/js/playback/watch-playback-model.ts` — `getDisplayFrameIndexAtTime`, `getTopologyFrameIdAtTime`, `canApproximateVelocityAtDisplayFrame`, `getNearestRestartFrameIdAtTime` — are the per-channel queries the seed builder composes. Each is a binary-search over its respective index so gating stays O(log n)
 
 **Motion-state provenance** (per-atom velocity source, collapsed to a single tag on the seed):
 
@@ -794,7 +794,7 @@ The two controller APIs (`openLabFromCurrentFrame`, `buildCurrentFrameLabHref`) 
 
 Motion-state is the preferred term over "momentum" (per-atom mass is not tracked on the wire).
 
-**Handoff writer (`watch/js/watch-lab-handoff.ts`):**
+**Handoff writer (`watch/js/handoff/watch-lab-handoff.ts`):**
 
 The writer persists the minted seed to `localStorage` under `atomdojo.watchLabHandoff:<token>` with a 10-minute TTL. A pre-write sweep removes expired entries so orphan accumulation is bounded regardless of how many handoff mints a user fires off. Lab's reader (documented in `architecture.md`) always scrubs the URL token whether or not hydration succeeds.
 
@@ -807,7 +807,7 @@ Every storage-touching operation (iteration during the sweep, the `setItem` writ
 
 The controller catches these and calls `setErrorKeepingCurrentState` with mode-specific copy so the failure is visible in the existing error overlay without disturbing the loaded document or the current playback position.
 
-**Document metadata:** `WatchDocumentService` (`watch/js/watch-document-service.ts`) exposes `shareCode`, `documentFingerprint`, and `fileByteLength` on the document metadata. These propagate into the handoff payload's provenance record.
+**Document metadata:** `WatchDocumentService` (`watch/js/document/watch-document-service.ts`) exposes `shareCode`, `documentFingerprint`, and `fileByteLength` on the document metadata. These propagate into the handoff payload's provenance record.
 
 **No arrival pill.** The previous Lab-side "From Watch" / "From shared scene" arrival banner has been removed. Hydrate success is acknowledged by the rendered scene itself — the camera, colors, and motion state appearing as authored in Watch are the user-visible confirmation. The provenance trail is emitted as a `console.info` boot trace instead:
 
@@ -839,7 +839,7 @@ Two camera-snapshot helpers are exposed for camera-continuity specs in `tests/e2
 
 | Hook | Location | Gating |
 |------|----------|--------|
-| `window._getWatchCameraSnapshot()` | `watch/js/main.ts` | Gated on `?e2e=1` |
+| `window._getWatchCameraSnapshot()` | `watch/js/app/main.ts` | Gated on `?e2e=1` |
 | `window._getLabCameraSnapshot()` | `lab/js/main.ts` | Unconditional — the Lab tab opened from Watch has no `?e2e` param, so the hook must be available by default |
 
 Both return the live orbit-camera pose (`position`, `target`, `up`, `fovDeg`) in the same `WatchLabOrbitCamera` shape that travels on the seed, so specs can assert round-trip fidelity directly.

@@ -6,9 +6,9 @@
  * boundaries: slow selection at ~500ms, fast center at ~100ms.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { createWatchCinematicCameraService } from '../../watch/js/watch-cinematic-camera';
+import { createWatchCinematicCameraService } from '../../watch/js/view/watch-cinematic-camera';
 import { DEFAULT_CINEMATIC_CONFIG, DEFAULT_CINEMATIC_CENTER_REFRESH_TUNING } from '../../src/camera/cinematic-camera';
-import type { WatchBondedGroups, BondedGroupSummary } from '../../watch/js/watch-bonded-groups';
+import type { WatchBondedGroups, BondedGroupSummary } from '../../watch/js/analysis/watch-bonded-groups';
 import { createWatchRendererStub } from '../helpers/watch-renderer-stub';
 
 describe('Two-cadence integration: slow selection + fast center', () => {

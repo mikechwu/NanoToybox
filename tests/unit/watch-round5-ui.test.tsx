@@ -93,7 +93,7 @@ describe('WatchSettingsSheet structure', () => {
 
 describe('Watch settings content', () => {
   it('WATCH_HELP_SECTIONS has expected sections', async () => {
-    const { WATCH_HELP_SECTIONS } = await import('../../watch/js/settings-content');
+    const { WATCH_HELP_SECTIONS } = await import('../../watch/js/settings/settings-content');
     expect(WATCH_HELP_SECTIONS.length).toBeGreaterThanOrEqual(4);
     const titles = WATCH_HELP_SECTIONS.map(s => s.title);
     expect(titles).toContain('Playback');
@@ -151,14 +151,14 @@ describe('Shared CSS token contracts', () => {
 describe('Playback direction model (unified state)', () => {
   it('playback model has no setPlaying method (unified direction model)', async () => {
     const fs = await import('fs');
-    const source = fs.readFileSync('watch/js/watch-playback-model.ts', 'utf-8');
+    const source = fs.readFileSync('watch/js/playback/watch-playback-model.ts', 'utf-8');
     // Interface should not have setPlaying
     expect(source).not.toMatch(/setPlaying\(/);
   });
 
   it('isPlaying is derived from playDirection', async () => {
     const fs = await import('fs');
-    const source = fs.readFileSync('watch/js/watch-playback-model.ts', 'utf-8');
+    const source = fs.readFileSync('watch/js/playback/watch-playback-model.ts', 'utf-8');
     expect(source).toContain('isPlaying: () => _playDirection !== 0');
   });
 });

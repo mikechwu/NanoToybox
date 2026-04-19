@@ -4,7 +4,7 @@
  * Verifies mode-aware highlight: Atom → single atom, Move/Rotate → bonded group.
  */
 import { describe, it, expect } from 'vitest';
-import { resolveInteractionHighlight, type InteractionFeedbackState, type InteractionHighlightPhysicsSurface } from '../../lab/js/runtime/interaction-highlight-runtime';
+import { resolveInteractionHighlight, type InteractionFeedbackState, type InteractionHighlightPhysicsSurface } from '../../lab/js/runtime/interaction/interaction-highlight-runtime';
 
 function mockPhysics(n = 60, componentAtoms = [0, 1, 2, 3, 4]): InteractionHighlightPhysicsSurface {
   const componentId = new Int32Array(n);

@@ -11,8 +11,8 @@ import {
   SPEED_MIN, SPEED_MAX, SPEED_DEFAULT, SPEED_PRESETS, PLAYBACK_GAP_CLAMP_MS,
   sliderToSpeed, speedToSlider, formatSpeed,
 } from '../../src/config/playback-speed-constants';
-import { createWatchPlaybackModel } from '../../watch/js/watch-playback-model';
-import { importFullHistory } from '../../watch/js/full-history-import';
+import { createWatchPlaybackModel } from '../../watch/js/playback/watch-playback-model';
+import { importFullHistory } from '../../watch/js/document/full-history-import';
 
 // ── Shared constants ──
 

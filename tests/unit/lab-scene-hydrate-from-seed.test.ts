@@ -15,14 +15,14 @@ import {
   type HydrateFromWatchSeedDeps,
   type PhysicsCheckpoint,
   type BoundarySnapshot,
-} from '../../lab/js/runtime/hydrate-from-watch-seed';
+} from '../../lab/js/runtime/handoff/hydrate-from-watch-seed';
 import type { SceneState } from '../../lab/js/scene';
 import type {
   WatchLabSceneSeed,
   WatchToLabHandoffPayload,
 } from '../../src/watch-lab-handoff/watch-lab-handoff-shared';
-import { createAtomMetadataRegistry } from '../../lab/js/runtime/atom-metadata-registry';
-import { createTimelineAtomIdentityTracker } from '../../lab/js/runtime/timeline-atom-identity';
+import { createAtomMetadataRegistry } from '../../lab/js/runtime/timeline/atom-metadata-registry';
+import { createTimelineAtomIdentityTracker } from '../../lab/js/runtime/timeline/timeline-atom-identity';
 
 // ── Fixtures ────────────────────────────────────────────────────────────
 

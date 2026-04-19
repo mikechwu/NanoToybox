@@ -15,7 +15,7 @@ import {
   SWATCH_DIAMETER, ACTIVE_SCALE, RING_GAP, computeHexGeometry,
 } from '../../../src/appearance/bonded-group-color-assignments';
 import { chipBackgroundValue } from '../../../src/ui/bonded-group-chip-style';
-import type { BondedGroupSummary } from '../watch-bonded-groups';
+import type { BondedGroupSummary } from '../analysis/watch-bonded-groups';
 import { IconCenter, IconFollow } from '../../../lab/js/components/Icons';
 
 // ── Color layout (precomputed from shared constants) ──

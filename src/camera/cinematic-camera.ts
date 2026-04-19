@@ -3,7 +3,7 @@
  * default-on automatic framing mode.
  *
  * Framework-free / WebGL-free by design. Watch's
- * `watch/js/watch-cinematic-camera.ts` adapter plugs this into its
+ * `watch/js/view/watch-cinematic-camera.ts` adapter plugs this into its
  * renderer + bonded-groups services; Lab reuse works the same way.
  *
  * Owns:

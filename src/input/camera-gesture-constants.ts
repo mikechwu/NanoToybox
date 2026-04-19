@@ -1,7 +1,7 @@
 /**
  * Shared camera-gesture discrimination constants.
  *
- * Both lab/js/input.ts and watch/js/watch-camera-input.ts import from this
+ * Both lab/js/input.ts and watch/js/view/watch-camera-input.ts import from this
  * single source so triad tap/drag/double-tap behavior stays numerically
  * identical across both apps.
  */

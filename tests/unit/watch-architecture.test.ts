@@ -12,10 +12,10 @@
 import { describe, it, expect } from 'vitest';
 import { VIEWER_DEFAULTS } from '../../src/config/viewer-defaults';
 import { CONFIG } from '../../lab/js/config';
-import { createWatchDocumentService } from '../../watch/js/watch-document-service';
-import { createWatchPlaybackModel } from '../../watch/js/watch-playback-model';
-import { createWatchController } from '../../watch/js/watch-controller';
-import { importFullHistory } from '../../watch/js/full-history-import';
+import { createWatchDocumentService } from '../../watch/js/document/watch-document-service';
+import { createWatchPlaybackModel } from '../../watch/js/playback/watch-playback-model';
+import { createWatchController } from '../../watch/js/app/watch-controller';
+import { importFullHistory } from '../../watch/js/document/full-history-import';
 
 // ── Shared fixture ──
 
@@ -259,7 +259,7 @@ describe('Architecture ownership boundaries', () => {
     const path = await import('path');
     const { fileURLToPath } = await import('url');
     const dir = path.dirname(fileURLToPath(import.meta.url));
-    const src = fs.readFileSync(path.resolve(dir, '../../watch/js/watch-controller.ts'), 'utf8');
+    const src = fs.readFileSync(path.resolve(dir, '../../watch/js/app/watch-controller.ts'), 'utf8');
     // Controller must not call file parsing functions at runtime.
     // Runtime imports from history-file-loader are forbidden entirely.
     expect(src).not.toContain("from './history-file-loader'");
@@ -280,7 +280,7 @@ describe('Architecture ownership boundaries', () => {
     const path = await import('path');
     const { fileURLToPath } = await import('url');
     const dir = path.dirname(fileURLToPath(import.meta.url));
-    const src = fs.readFileSync(path.resolve(dir, '../../watch/js/watch-controller.ts'), 'utf8');
+    const src = fs.readFileSync(path.resolve(dir, '../../watch/js/app/watch-controller.ts'), 'utf8');
     expect(src).not.toContain('PS_PER_MS_AT_1X');
     expect(src).not.toContain('baseSimRatePsPerSecond');
   });
@@ -290,7 +290,7 @@ describe('Architecture ownership boundaries', () => {
     const path = await import('path');
     const { fileURLToPath } = await import('url');
     const dir = path.dirname(fileURLToPath(import.meta.url));
-    const src = fs.readFileSync(path.resolve(dir, '../../watch/js/watch-playback-model.ts'), 'utf8');
+    const src = fs.readFileSync(path.resolve(dir, '../../watch/js/playback/watch-playback-model.ts'), 'utf8');
     expect(src).toContain('PS_PER_MS_AT_1X');
     expect(src).toContain('VIEWER_DEFAULTS');
   });
@@ -371,9 +371,9 @@ describe('Watch decoupled from lab CONFIG', () => {
     const path = await import('path');
     const { fileURLToPath } = await import('url');
     const dir = path.dirname(fileURLToPath(import.meta.url));
-    const src = fs.readFileSync(path.resolve(dir, '../../watch/js/watch-controller.ts'), 'utf8');
-    expect(src).not.toContain("from '../../lab/js/config'");
-    expect(src).not.toContain('from "../../lab/js/config"');
+    const src = fs.readFileSync(path.resolve(dir, '../../watch/js/app/watch-controller.ts'), 'utf8');
+    expect(src).not.toContain("from '../../../lab/js/config'");
+    expect(src).not.toContain('from "../../../lab/js/config"');
   });
 
   it('watch-playback-model imports from shared viewer-defaults', async () => {
@@ -381,7 +381,7 @@ describe('Watch decoupled from lab CONFIG', () => {
     const path = await import('path');
     const { fileURLToPath } = await import('url');
     const dir = path.dirname(fileURLToPath(import.meta.url));
-    const src = fs.readFileSync(path.resolve(dir, '../../watch/js/watch-playback-model.ts'), 'utf8');
-    expect(src).toContain("from '../../src/config/viewer-defaults'");
+    const src = fs.readFileSync(path.resolve(dir, '../../watch/js/playback/watch-playback-model.ts'), 'utf8');
+    expect(src).toContain("from '../../../src/config/viewer-defaults'");
   });
 });

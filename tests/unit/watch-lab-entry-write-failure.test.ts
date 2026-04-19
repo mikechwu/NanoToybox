@@ -65,7 +65,7 @@ describe('controller.buildCurrentFrameLabHref — writer failure surfacing (§10
     const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new DOMException('Quota reached', 'QuotaExceededError');
     });
-    const mod = await import('../../watch/js/watch-controller');
+    const mod = await import('../../watch/js/app/watch-controller');
     const controller = mod.createWatchController();
     try {
       await loadFixtureCapsule(controller);
@@ -85,7 +85,7 @@ describe('controller.buildCurrentFrameLabHref — writer failure surfacing (§10
     const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new DOMException('The operation is insecure.', 'SecurityError');
     });
-    const mod = await import('../../watch/js/watch-controller');
+    const mod = await import('../../watch/js/app/watch-controller');
     const controller = mod.createWatchController();
     try {
       await loadFixtureCapsule(controller);
@@ -105,7 +105,7 @@ describe('controller.buildCurrentFrameLabHref — writer failure surfacing (§10
     const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new DOMException('Quota reached', 'QuotaExceededError');
     });
-    const mod = await import('../../watch/js/watch-controller');
+    const mod = await import('../../watch/js/app/watch-controller');
     const controller = mod.createWatchController();
     try {
       await loadFixtureCapsule(controller);
@@ -129,7 +129,7 @@ describe('controller.buildCurrentFrameLabHref — writer failure surfacing (§10
     const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new DOMException('The operation is insecure.', 'SecurityError');
     });
-    const mod = await import('../../watch/js/watch-controller');
+    const mod = await import('../../watch/js/app/watch-controller');
     const controller = mod.createWatchController();
     try {
       await loadFixtureCapsule(controller);
@@ -153,7 +153,7 @@ describe('controller.buildCurrentFrameLabHref — writer failure surfacing (§10
     const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new DOMException('Quota reached', 'QuotaExceededError');
     });
-    const mod = await import('../../watch/js/watch-controller');
+    const mod = await import('../../watch/js/app/watch-controller');
     const controller = mod.createWatchController();
     try {
       await loadFixtureCapsule(controller);
