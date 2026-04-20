@@ -46,16 +46,15 @@ import {
   type CapsulePreviewRenderScene,
 } from '../src/share/capsule-preview-project';
 import {
-  AUDIT_LARGE_PRESET,
-  POSTER_PRESET,
-  THUMB_PRESET,
-  buildPreviewSketchPrimitives,
   renderPreviewSketchSvgNode,
-  renderPreviewSketchSvgString,
-  toSketchSceneFromProjectedScene,
-  type PreviewColorMode,
-  type PreviewSketchSurfacePreset,
 } from '../src/share/capsule-preview-sketch';
+import {
+  PERSPECTIVE_LARGE_PRESET,
+  PERSPECTIVE_POSTER_PRESET,
+  PERSPECTIVE_THUMB_PRESET,
+  renderPerspectiveSketch,
+  type PerspectivePreset,
+} from '../src/share/capsule-preview-sketch-perspective';
 import { projectCapsuleToSceneJson } from '../src/share/publish-core';
 import {
   parsePreviewSceneV1,
@@ -133,12 +132,14 @@ function deriveViews(capsule: AtomDojoPlaybackCapsuleFileV1): DerivedViews | { e
     const scene3D = runStage('buildPreviewSceneFromCapsule', () =>
       buildPreviewSceneFromCapsule(capsule),
     );
-    // padding:0 enforces the single-fit contract — the sketch preset
-    // is the sole owner of outer framing (see capsule-preview-sketch).
+    // Canonical projection — drives the "Pipeline metadata" section
+    // and still reflects the baseline path production ships. The
+    // experimental figures use their own perspective-projection +
+    // minor-axis camera (see capsule-preview-sketch-perspective).
     const projected = runStage('projectPreviewScene', () =>
       projectPreviewScene(scene3D, {
-        targetWidth: AUDIT_LARGE_PRESET.width,
-        targetHeight: AUDIT_LARGE_PRESET.height,
+        targetWidth: 800,
+        targetHeight: 800,
         padding: 0,
       }),
     );
@@ -216,9 +217,7 @@ class FigureErrorBoundary extends Component<
 
 interface SketchFigureProps {
   title: string;
-  tag: 'current' | 'experimental';
-  preset: PreviewSketchSurfacePreset;
-  colorMode: PreviewColorMode;
+  preset: PerspectivePreset;
   views: DerivedViews;
   /** True → figure spans the full row (`grid-column: 1 / -1`). The
    *  parent grid handles sizing for non-full figures via its `cols-2`
@@ -229,29 +228,88 @@ interface SketchFigureProps {
 }
 
 function SketchFigure(props: SketchFigureProps): React.ReactElement {
-  const { title, tag, preset, colorMode, views, fullWidth, caption } = props;
-  const effectivePreset: PreviewSketchSurfacePreset = { ...preset, colorMode };
-  const sketch = toSketchSceneFromProjectedScene(views.projected, views.projectedBonds);
-  const prim = buildPreviewSketchPrimitives(sketch, effectivePreset);
-  const svgText = renderPreviewSketchSvgString(prim);
+  const { title, preset, views, fullWidth, caption } = props;
+  const cutoff = views.capsule.bondPolicy?.cutoff ?? 1.85;
+  const minDist = views.capsule.bondPolicy?.minDist ?? 0.5;
+  const { svg, stats } = renderPerspectiveSketch(views.scene3D, preset, {
+    cutoff,
+    minDist,
+  });
+  // Explicit empty state so a 0-atom scene does not silently render as
+  // a blank white panel indistinguishable from a successful render.
+  const isEmpty = stats.atoms === 0;
   return (
     <figure className={`pa-figure${fullWidth ? ' span-row' : ''}`}>
       <div className="pa-figure-head">
         <h3 className="pa-figure-title">{title}</h3>
-        <span className={`pa-tag pa-tag--${tag}`}>{tag}</span>
+        <span className="pa-tag pa-tag--experimental">experimental</span>
       </div>
-      <div
-        className="pa-surface"
-        dangerouslySetInnerHTML={{ __html: svgText }}
-      />
+      {/*
+        Two distinct surfaces — the normal path uses
+        dangerouslySetInnerHTML to splat the renderer's SVG string,
+        and the empty-state path uses a plain child. Keeping them as
+        separate elements avoids React's runtime refusal to accept
+        both `children` and `dangerouslySetInnerHTML` on one node
+        (including the `false` that a `{isEmpty && …}` expression
+        produces in the non-empty case).
+      */}
+      {isEmpty ? (
+        <div className="pa-surface">
+          <div className="pa-empty">Scene has no atoms — nothing to project.</div>
+        </div>
+      ) : (
+        <div
+          className="pa-surface"
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      )}
       <figcaption className="pa-caption">
         {caption}
         <span className="tech">
-          {preset.width}×{preset.height} · colorMode={colorMode} · atoms={prim.circles.length} · bonds={prim.lines.length}
+          {preset.width}×{preset.height} · atoms={stats.atoms} · bonds={stats.bonds}
+          {stats.droppedBonds > 0 ? ` (dropped ${stats.droppedBonds})` : ''}
+          {' · '}perspective s∈[{stats.minScale.toFixed(2)}, {stats.maxScale.toFixed(2)}]
+          {stats.degenerateDepth ? ' (orthographic — depth span ≈ 0)' : ''}
+          {' · '}camera {stats.classification}, K={stats.cameraDistanceFactor}
+          {' · '}scale source={stats.scaleSource}
         </span>
       </figcaption>
     </figure>
   );
+}
+
+// ── "Loaded …" status line ────────────────────────────────────────────
+
+function LoadedLine({
+  parsing,
+  source,
+  onReset,
+}: {
+  parsing: boolean;
+  source: Source;
+  onReset: () => void;
+}): React.ReactElement {
+  if (parsing) return <span className="pa-loaded-meta">parsing…</span>;
+  if (source.kind === 'fixture') {
+    return (
+      <>
+        <span className="pa-loaded-name">fixture / {source.id}</span>
+        <span className="pa-loaded-meta">{source.label}</span>
+      </>
+    );
+  }
+  if (source.kind === 'file') {
+    return (
+      <>
+        <span className="pa-loaded-name">{source.name}</span>
+        <span className="pa-loaded-meta">{formatBytes(source.sizeBytes)}</span>
+        <button type="button" className="pa-reset" onClick={onReset}>
+          reset to fixture
+        </button>
+      </>
+    );
+  }
+  return <span className="pa-loaded-meta">nothing loaded yet</span>;
 }
 
 // ── Baseline figures — production shared modules ──────────────────────
@@ -397,7 +455,6 @@ function AuditApp(): React.ReactElement {
   const [capsule, setCapsule] = useState<AtomDojoPlaybackCapsuleFileV1 | null>(null);
   const [source, setSource] = useState<Source>({ kind: 'none' });
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [colorMode, setColorMode] = useState<PreviewColorMode>('flat');
   const [dragActive, setDragActive] = useState(false);
   const [parsing, setParsing] = useState(false);
   // Ref-counted drag depth — needed because dragover/dragleave bubble
@@ -603,79 +660,54 @@ function AuditApp(): React.ReactElement {
 
             <div className="pa-loaded" aria-live="polite">
               <span className="pa-loaded-label">Loaded</span>
-              {parsing ? (
-                <span className="pa-loaded-meta">parsing…</span>
-              ) : source.kind === 'fixture' ? (
-                <>
-                  <span className="pa-loaded-name">fixture / {source.id}</span>
-                  <span className="pa-loaded-meta">{source.label}</span>
-                </>
-              ) : source.kind === 'file' ? (
-                <>
-                  <span className="pa-loaded-name">{source.name}</span>
-                  <span className="pa-loaded-meta">{formatBytes(source.sizeBytes)}</span>
-                  <button type="button" className="pa-reset" onClick={resetToFixture}>
-                    reset to fixture
-                  </button>
-                </>
-              ) : (
-                <span className="pa-loaded-meta">nothing loaded yet</span>
-              )}
+              <LoadedLine
+                parsing={parsing}
+                source={source}
+                onReset={resetToFixture}
+              />
             </div>
           </section>
 
-          {/* § 2 — Display options ──────────────────────────────────── */}
+          {/* § 2 — Rendering model ──────────────────────────────────── */}
           <section className="pa-section" id="display">
             <header className="pa-section-head">
               <span className="pa-section-num">§ 2</span>
-              <h2 className="pa-section-title">Display options</h2>
+              <h2 className="pa-section-title">Rendering model</h2>
             </header>
             <p className="pa-section-prose">
-              The three experimental figures re-run the unified sketch renderer
-              in the chosen color mode. Current baselines are always CPK-colored
-              because that is what ships today.
+              Experimental figures use a single rendering contract, documented
+              here so the per-figure captions can stay short.
             </p>
-
-            <div className="pa-field">
-              <label id="pa-colormode-label">Color mode (experimental figures)</label>
-              <div className="pa-radios" role="radiogroup" aria-labelledby="pa-colormode-label">
-                <label className="pa-radios__opt">
-                  <input
-                    type="radio"
-                    name="pa-color"
-                    value="flat"
-                    checked={colorMode === 'flat'}
-                    onChange={() => setColorMode('flat')}
-                  />
-                  <span>flat</span>
-                </label>
-                <label className="pa-radios__opt">
-                  <input
-                    type="radio"
-                    name="pa-color"
-                    value="cpk"
-                    checked={colorMode === 'cpk'}
-                    onChange={() => setColorMode('cpk')}
-                  />
-                  <span>cpk</span>
-                </label>
-              </div>
-
-              <dl className="pa-def">
-                <dt>flat</dt>
-                <dd>
-                  Every atom painted the same ink. Isolates depth, bond legibility
-                  and layout from color variation — the preferred mode while tuning
-                  geometry.
-                </dd>
-                <dt>cpk</dt>
-                <dd>
-                  Per-atom color from the stored scene (Corey–Pauling–Koltun
-                  convention — O red, N blue, Si tan, H white, C near-black).
-                  Preserves mixed-element recognizability.
-                </dd>
-              </dl>
-            </div>
+            <dl className="pa-def">
+              <dt>Camera</dt>
+              <dd>
+                PCA basis with the smallest eigenvector (e₃) as the depth axis;
+                no fixed display tilt. Planar clouds read face-on, tubes read
+                side-on, spheres render axis-aligned.
+              </dd>
+              <dt>Projection</dt>
+              <dd>
+                Pinhole perspective (Hartley &amp; Zisserman, <em>Multiple View
+                Geometry</em> Ch. 6 — the same perspective divide used by
+                OpenGL/WebGL). For each atom, screen position and radius scale
+                by <code>s(z) = D / (D + z_max − z)</code> with
+                <code> D = K·span</code> and <code>K = 1.5</code>, so the
+                farthest atom renders at 60% of the closest. Bond widths use
+                the midpoint scale.
+              </dd>
+              <dt>Atoms</dt>
+              <dd>
+                Dark-gray fill (<code>#333</code>) with a thin dark outline.
+                No CPK — flat color lets depth and bond geometry carry the
+                reading.
+              </dd>
+              <dt>Bonds</dt>
+              <dd>
+                Thick body stroke (≈3× the prior "rail" width) with a thin
+                darker border, so a bond reads as a single bar with a crisp
+                edge rather than a double-line pair.
+              </dd>
+            </dl>
           </section>
 
           {/* § 3 — Pipeline metadata — shell ALWAYS rendered so TOC anchor
@@ -743,7 +775,7 @@ function AuditApp(): React.ReactElement {
               <h2 className="pa-section-title">Experimental variants</h2>
             </header>
             <p className="pa-section-prose">
-              The unified-sketch renderer at three presets. The <em>large</em>{' '}
+              The perspective renderer at three presets. The <em>large</em>{' '}
               figure is the design authority for tuning; the <em>poster</em>{' '}
               and <em>thumb</em> scale down from that authority. Compare
               each against the matching current baseline above.
@@ -753,26 +785,20 @@ function AuditApp(): React.ReactElement {
                 <div className="pa-figures cols-3">
                   <SketchFigure
                     title="Large (design authority)"
-                    tag="experimental"
-                    preset={AUDIT_LARGE_PRESET}
-                    colorMode={colorMode}
+                    preset={PERSPECTIVE_LARGE_PRESET}
                     views={viewsOk}
                     fullWidth
-                    caption={<>Flat-ink reference at 800×800. Primary surface for tuning geometry, bond weights, and depth cues before scaling to the smaller presets.</>}
+                    caption={<>800×800 working surface. Minor-axis camera + pinhole perspective: nearest atoms render larger, and bonds thin down with distance.</>}
                   />
                   <SketchFigure
                     title="Poster"
-                    tag="experimental"
-                    preset={POSTER_PRESET}
-                    colorMode={colorMode}
+                    preset={PERSPECTIVE_POSTER_PRESET}
                     views={viewsOk}
                     caption={<>Proposed replacement for the OG-poster pane. Compare against <em>Poster pane</em> above.</>}
                   />
                   <SketchFigure
                     title="Thumb"
-                    tag="experimental"
-                    preset={THUMB_PRESET}
-                    colorMode={colorMode}
+                    preset={PERSPECTIVE_THUMB_PRESET}
                     views={viewsOk}
                     caption={<>Proposed replacement for the 40×40 account-row thumb. Compare against <em>Account-row thumb</em> above.</>}
                   />

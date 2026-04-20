@@ -543,17 +543,25 @@
         background: var(--mark-experimental-soft);
       }
 
+      /* Zero padding + no default min-height so the SVG's own white
+         background extends to the 1 px panel border — no extra
+         whitespace around poster/thumb renders. Large figure keeps
+         its own min-height. */
       .pa-surface {
         background: var(--paper-raised);
         border: 1px solid var(--rule);
         border-radius: 2px;
-        padding: var(--s-4);
+        padding: 0;
         display: flex;
         align-items: center;
         justify-content: center;
-        min-height: 220px;
+        overflow: hidden;
       }
-      .pa-surface svg { display: block; max-width: 100%; height: auto; }
+      .pa-surface svg {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
       .pa-figure.span-row .pa-surface { min-height: 460px; }
 
       .pa-caption {
