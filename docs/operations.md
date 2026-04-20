@@ -223,7 +223,13 @@ canaries.
 | `REPORT_DEDUP_DISABLED` | `functions/api/capsules/[code]/report.ts` | See alerting table — repeated here because it's grep-shaped the same way. |
 | `R2_UPLOADED_MISSING` | `functions/api/admin/sweep/orphans.ts` | See alerting table. |
 | `PUBLISH_RECONCILE_LOST` | `functions/api/capsules/publish.ts` | See alerting table. |
-| `[capsule-poster]` | `functions/api/capsules/[code]/preview/poster.ts` | One structured-JSON line per poster-route response: `{"code":"...","mode":"stored\|generated\|error\|flag-off\|inaccessible","durationMs":N,"status":N,"cause":"..."}`. `mode` discriminates the served path; `cause` carries a stable prefix on the non-happy modes. Stable prefixes: `satori-threw:`, `module-import-failed:`, `r2-miss`, `dynamic-not-png:Nb`, `stored-not-png:Nb`, `fallback-fetch-failed:`, plus combined forms when both upstream and fallback fail. Aggregate by `mode` to track stored-hit vs dynamic-render vs error rates; alert on a sustained `error` rate or any `module-import-failed:` (indicates a `@cloudflare/pages-plugin-vercel-og` regression). |
+| `[capsule-poster]` | `functions/api/capsules/[code]/preview/poster.ts` | One structured-JSON line per poster-route response: `{"code":"...","mode":"stored\|generated\|error\|flag-off\|inaccessible","durationMs":N,"status":N,"cause":"..."}`. `mode` discriminates the served path; `cause` carries a stable prefix on the non-happy modes. V2 taxonomy (full list — all non-success causes funnel through `serveTerminalFallback` so the response stays a valid 200 PNG with `Cache-Control: public, max-age=60`): `satori-threw:<msg>`, `module-import-failed:<msg>`, `r2-miss`, `dynamic-not-png:Nb`, `stored-not-png:Nb`, `fallback-fetch-failed:<msg>` (combined with original cause via `;`), `scene-missing` (lazy-backfill hit but R2 blob absent), `capsule-parse-failed:<msg>` (R2 blob present but rejected by `validateCapsuleFile`), `no-dense-frames` (capsule's `timeline.denseFrames[]` empty). Aggregate by `mode` to track stored-hit vs dynamic-render vs error rates; alert on a sustained `error` rate or any `module-import-failed:` (indicates a `@cloudflare/pages-plugin-vercel-og` regression). |
+| `[scene-store] thumb-malformed: <reason>` | `src/share/capsule-preview-scene-store.ts` | Parsed `preview_scene_v1` storage carried an invalid `thumb` field; scene is still returned, thumb is dropped (read path falls back to live sampling). Reasons: `invalid-rev`, `no-atoms`, `atom-not-an-object`, `atom-nonfinite-or-malformed`, `bond-not-an-object`, `bond-nonint-indices`. One-offs are a single bad historical row; a sustained rate means the writer is emitting malformed thumbs and needs investigation. |
+| `[scene-store] thumb-rev-stale: stored=N current=M` | `src/share/capsule-preview-scene-store.ts` | Stored thumb is at an older revision than `CURRENT_THUMB_REV`; read path falls back to live sampling. Size this signal to know whether backfill is lagging — rate should drop to zero after the post-rev-bump backfill completes (see *Rollout procedure for a thumb-algorithm change* below). |
+| `[scene-store] derive-threw: <msg>` | `src/share/capsule-preview-scene-store.ts` | Entry-level catch in `derivePreviewThumbV1`. The account list endpoint no longer 500s on one bad row — it returns `null` and the client renders a placeholder. Persistent volume indicates a projection bug, not a data issue. |
+| `[publish] preview-scene-skipped: <msg>` | `src/share/publish-core.ts` | Publish succeeded but the preview-scene projection failed; row stored with `preview_scene_v1 = NULL`, later backfillable by `scripts/backfill-preview-scenes.ts` or by the poster route's lazy-backfill path. |
+| `[publish] stored-thumb-skipped: <errName>:<msg> atoms=N bonds=M` | `src/share/publish-core.ts` | Narrow catch around the full-atoms thumb builder only. Poster scene still valid, thumb absent — read path falls back to live sampling. Distinct from `preview-scene-skipped` (which indicates the whole scene failed). |
+| `[publish] bonds-skipped: <msg>` | `src/share/publish-core.ts` | Bond derivation step threw; poster is atoms-only. Cosmetic degradation; no downstream data loss. |
 
 ### Client-side (browser console, surfaces as error events)
 
@@ -370,19 +376,26 @@ dismiss it.
 
 ---
 
-## Capsule preview poster endpoint
+## Capsule preview poster endpoint (V2)
 
 `GET /api/capsules/:code/preview/poster` serves the 1200×630 PNG used by
 OpenGraph / Twitter / link-unfurl consumers. The endpoint multiplexes
 four served paths and registers four cache tiers; the served path is
 visible in the `[capsule-poster]` log line's `mode` field.
 
+V2 rendering is driven by the **publish-time preview scene** persisted
+in `capsule_share.preview_scene_v1` (migration `0009`), not by sampling
+the R2 blob at poster-request time. The dynamic Satori path reads the
+stored projection; on a cache miss (row has `preview_scene_v1 IS NULL`)
+the route lazy-backfills by fetching the R2 blob, projecting the scene,
+and writing it back to D1.
+
 ### Response contract & cache tiers
 
 | `mode` | Status | Body | `Cache-Control` | Notes |
 |---|---|---|---|---|
 | `stored` | 200 | PNG (R2-stored poster) | `public, max-age=31536000, immutable` | Stored asset for the capsule exists in R2. Browser- and edge-cacheable for one year; the R2 key is content-addressed so the URL changes when the asset does. |
-| `generated` | 200 | PNG (Satori-rendered) | `public, max-age=300, s-maxage=3600, stale-while-revalidate=86400` + `ETag: "v<TEMPLATE_VERSION>-<8hex>"` | Dynamic fallback rendered per request via `@cloudflare/pages-plugin-vercel-og`. Short browser cache, longer edge cache, day-long SWR window. Gated by `CAPSULE_PREVIEW_DYNAMIC_FALLBACK`. |
+| `generated` | 200 | PNG (Satori-rendered from `preview_scene_v1`) | `public, max-age=300, s-maxage=3600, stale-while-revalidate=86400` + `ETag: "v2-<FNV1a32 over [TEMPLATE_VERSION, scene.hash, sanitizedTitle, shareCode]>"` | Dynamic render per request via `@cloudflare/pages-plugin-vercel-og`. Short browser cache, longer edge cache, day-long SWR window. Gated by `CAPSULE_PREVIEW_DYNAMIC_FALLBACK`. |
 | `error` (terminal `/og-fallback.png`) | 200 | PNG (`public/og-fallback.png`, 1200×630) | `public, max-age=60` | Last-resort fallback when both stored and dynamic paths fail. Short cache so a fix propagates fast. |
 | `error` (1×1 safety net) | 200 | 1×1 PNG | `public, max-age=60` | Reached only when even `/og-fallback.png` fetch fails. Short cache; presence in logs (`fallback-fetch-failed:` cause) is itself a signal. |
 | `flag-off` / `inaccessible` | 404 | — | `public, max-age=60` | Capsule row is moderation-deleted, account-deleted, or the flag is off and no stored asset exists. Short cache so a flag flip or moderation reverse takes effect within a minute. |
@@ -392,19 +405,30 @@ All responses include `Access-Control-Allow-Origin: *` and
 Twitter, iMessage previewer) can fetch cross-origin without preflight
 and browsers don't sniff a fallback to non-PNG MIME.
 
+### Cache-busting URL scheme
+
+`posterUrlFor()` in `src/share/share-record.ts` emits two URL shapes,
+keyed by whether a stored R2 poster asset exists for the row:
+
+- **Dynamic** (no stored asset): `/api/capsules/<code>/preview/poster?v=t<TEMPLATE_VERSION>` — currently `?v=t2`. Busts on `TEMPLATE_VERSION` bump.
+- **Stored** (R2 asset present): `/api/capsules/<code>/preview/poster?v=p<FNV1a32 first-8-hex of preview_poster_key>`. Busts on any change to the stored key (content-addressed).
+
+`TEMPLATE_VERSION` lives in `src/share/capsule-preview.ts` and is currently `2`.
+
 ### Public-API metadata semantics — RELEASE-NOTE
 
-`ShareMetadataResponse.preview` widened from "present only when a
+`ShareMetadataResponse.preview` is widened from "present only when a
 stored asset exists" to `{posterUrl, width: 1200, height: 630}` for any
 accessible row when `CAPSULE_PREVIEW_DYNAMIC_FALLBACK` is on. The
-preview block is now present even when no stored R2 asset exists —
-`posterUrl` may resolve to a dynamically-rendered Satori PNG.
+preview block is present even when no stored R2 asset exists —
+`posterUrl` may resolve to a dynamically-rendered Satori PNG driven by
+`capsule_share.preview_scene_v1`.
 
 External consumers that need to branch on "stored asset exists" must
-read `previewStatus === 'ready'`; `preview.posterUrl` presence no
-longer implies a stored asset. This is a contract widening, not a
-break, but downstream caches that keyed off "preview present ⇒ stored"
-need to be re-checked.
+read `previewStatus === 'ready'`; `preview.posterUrl` presence does
+NOT imply a stored asset. This is a contract widening, not a break,
+but downstream caches that keyed off "preview present ⇒ stored" need
+to be re-checked.
 
 ### Feature-flag rollback procedure
 
@@ -428,7 +452,11 @@ endpoint still serves stored R2 posters at `mode=stored`, and
 otherwise falls through to the 404 `flag-off` mode (or the
 terminal `/og-fallback.png` path if a previously-served URL lands here
 post-flip). `ShareMetadataResponse.preview` reverts to the pre-V1
-"present only when a stored asset exists" semantics.
+"present only when a stored asset exists" semantics. Note that
+disabling the flag does NOT affect the `preview_scene_v1` column or
+the backfill scripts — those keep running against fresh publishes so
+that re-enabling the flag is a single-deploy operation with zero
+warm-up.
 
 ### Runtime / bundle dependencies
 
@@ -449,8 +477,84 @@ post-flip). `ShareMetadataResponse.preview` reverts to the pre-V1
   `dist/` by Vite). If this asset is missing from `dist/`, the
   terminal-error path emits `fallback-fetch-failed:` and serves the
   1×1 safety net.
-- **No D1 migration** — the V1 surface is read-only against existing
-  `capsule_share` rows.
+- **D1 migration `0009_capsule_preview_scene_v1.sql`** — adds a nullable
+  `capsule_share.preview_scene_v1 TEXT` column. Additive; NULL for pre-V2
+  rows (which the poster route lazy-backfills on first miss). Stored
+  JSON shape: `{ v:1, atoms[], bonds?, hash, thumb?: { rev, atoms, bonds? } }`.
+  `thumb.rev` is currently `2` (see `CURRENT_THUMB_REV` in
+  `src/share/capsule-preview-scene-store.ts`).
+
+### Backfill runbooks (populate `preview_scene_v1`)
+
+Two lanes — production and local dev — both idempotent, both safe to
+re-run. The poster route's lazy-backfill path handles any row either
+script misses, so V2 can ship before a full backfill completes.
+
+**Production backfill** — `scripts/backfill-preview-scenes.ts`:
+
+```typescript
+import { backfillPreviewScenes } from './scripts/backfill-preview-scenes';
+import { CURRENT_THUMB_REV } from './src/share/capsule-preview-scene-store';
+
+// Run under a wrangler context that provides DB + R2_BUCKET bindings.
+const summary = await backfillPreviewScenes({
+  db, r2,
+  currentThumbRev: CURRENT_THUMB_REV,   // required; decouples script from module internals
+  pageSize: 100,                        // optional
+  verbose: false,                       // optional
+  force: false,                         // optional — see below
+});
+```
+
+By default the script rebakes rows where `preview_scene_v1 IS NULL` OR
+`IFNULL(json_extract(preview_scene_v1, '$.thumb.rev'), 0) < currentThumbRev`
+— i.e. missing scenes and stale thumb revisions. Pass `force: true` to
+rebake every row (operator escape hatch for algorithm changes that need
+to propagate everywhere, including rows that already carry the current
+rev).
+
+Always snapshot D1 before a production backfill:
+
+```bash
+wrangler d1 export atomdojo-capsules --output backup.sql
+npx tsx scripts/backfill-preview-scenes.ts   # driven by operator per environment
+```
+
+**Local dev backfill** — `npm run capsule-preview:backfill:local`
+(alias for `node scripts/backfill-local.mjs`). Reads/writes the
+Miniflare sqlite under `.wrangler/state/v3/` directly and reads R2
+blobs from the on-disk blobstore. Accepts `--force` with the same
+semantics as the production script:
+
+```bash
+npm run capsule-preview:backfill:local            # rebake null + out-of-rev
+npm run capsule-preview:backfill:local -- --force # rebake every row
+```
+
+### Rollout procedure for a thumb-algorithm change
+
+When the publish-time thumb projection changes (new featurizer, new
+sampling, etc.), the stored thumbs across D1 need to be rebaked. The
+system is designed to ship the code change before the backfill
+completes — existing rows just fall back to live sampling with a
+`[scene-store] thumb-rev-stale` log line until they're updated.
+
+1. Bump `CURRENT_THUMB_REV` in `src/share/capsule-preview-scene-store.ts`.
+2. Deploy. New publishes write rows at the new rev immediately. Existing
+   rows have their stored `thumb.rev` compared against `CURRENT_THUMB_REV`
+   on every read; the mismatch is non-fatal (logs `[scene-store] thumb-rev-stale`
+   and falls back to live sampling from the stored atoms array).
+3. Run `scripts/backfill-preview-scenes.ts` WITHOUT `force: true` — the
+   rev predicate selects only stale rows, so this is the cheap path.
+4. The `[scene-store] thumb-rev-stale` log rate should drop to zero
+   once the backfill completes. A non-zero steady-state rate after
+   that means some rows are failing to update (check `summary.failed`
+   from the script) — usually because the R2 blob is missing for a
+   row that never got cleaned up by the orphan sweeper.
+
+`force: true` is only required when an algorithm change needs to
+propagate to rows that already carry the new rev (e.g. an internal
+bug in the v2 pipeline that shipped for some rows before being caught).
 
 ### Brand-string note
 
@@ -918,6 +1022,21 @@ Current migrations (in `migrations/`, applied in order by wrangler):
 - `0003_capsule_object_key_index.sql` — `idx_capsule_object_key` (required
   for orphan sweep performance — without it, the D1 join per R2 object is
   O(N²) over the full share table).
+- `0004_capsule_delete_clears_body_metadata.sql` — moderation/owner delete
+  clears body metadata at delete time (not just status flip).
+- `0005_user_tombstone.sql` — adds `users.deleted_at` tombstone column for
+  account-delete cascade.
+- `0006_user_policy_acceptance.sql` — `user_policy_acceptance` table
+  (composite PK `(user_id, policy_kind)`) for age-13+ clickwrap.
+- `0007_privacy_requests.sql` — `privacy_requests` + `privacy_request_quota_window`
+  tables for the `/privacy-request` channel.
+- `0008_capsule_share_object_key_nullable.sql` — relaxes `object_key NOT NULL`
+  so moderation/owner delete can NULL the R2 pointer in place.
+- `0009_capsule_preview_scene_v1.sql` — adds nullable `capsule_share.preview_scene_v1 TEXT`
+  column for the V2 capsule-preview poster pipeline. NULL for pre-V2 rows;
+  populated by `scripts/backfill-preview-scenes.ts` or lazy-backfilled by
+  the poster route on first miss. See *Capsule preview poster endpoint (V2)*
+  above.
 
 Remote application is automatic on deploy: `.github/workflows/deploy.yml`
 runs `wrangler d1 migrations apply atomdojo-capsules --remote` right
@@ -1010,7 +1129,8 @@ curl -I "https://atomdojo.pages.dev/api/capsules/<code>/preview/poster"
 # one of the four tiers in the Capsule preview poster section above.
 # A stored asset returns max-age=31536000, immutable; a dynamic render
 # returns max-age=300, s-maxage=3600, stale-while-revalidate=86400 with
-# an ETag of shape "v<TEMPLATE_VERSION>-<8hex>".
+# an ETag of shape "v2-<8hex>" (FNV1a32 over [TEMPLATE_VERSION, scene.hash,
+# sanitizedTitle, shareCode]; TEMPLATE_VERSION is currently 2).
 #
 # Then tail to confirm the structured log line:
 wrangler pages deployment tail | grep '\[capsule-poster\]'

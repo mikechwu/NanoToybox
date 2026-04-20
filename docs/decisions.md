@@ -1092,7 +1092,7 @@ The transport contract (`localStorage` + 10-min TTL + one-shot consume) is uncha
 
 ## D131: Capsule Preview Geometry Identity — `shareCode + kind` Is the Sole Seed
 
-**Status:** Accepted, 2026-04-19.
+**Status:** Superseded by D135 (2026-04-19). The synthetic-figure identity described below was retired when V2 replaced shareCode-seeded geometry with real frame-projected scenes. See D135 for the steady-state replacement.
 
 **Decision:** The deterministic figure rendered for a capsule preview is a pure function of `(shareCode, kind)`. Title, theme, `createdAt`, `sizeBytes`, and any other capsule metadata MUST NOT participate in the geometry seed. The descriptor type splits the identity tuple from the presentation tuple to make this a type-system invariant rather than a code-review convention.
 
@@ -1142,3 +1142,32 @@ The Pages Function route handler MUST ignore `?v=` entirely — it is a cache-ke
 - **Wrangler.toml as single source of truth:** a true zero-deploy rollback (dashboard secret edit, or a runtime fetch of remote config) would require a new ops surface — either trusting dashboard edits to not drift from the repo, or adding a remote-config fetch with its own latency, cache, and failure modes. The dynamic-preview path is not high-stakes enough to justify either. Edit-and-redeploy gives auditable history (the rollback shows up in git), the same review path as code, and no new runtime dependency. If the feature ever grows into something high-stakes (e.g., a user-data path), that is the trigger to introduce a remote-config surface — not now.
 
 **Alternatives rejected:** Denylist parser (silently enabled the flag on typos — already burned us once); dashboard env-var rollback (drifts from repo, no audit trail, requires removing `wrangler.toml`'s env-var section); runtime remote-config fetch with a KV/D1 backing (new failure surface, cold-start latency, no incremental benefit at V1 stakes).
+
+## D135: Capsule Preview V2 — Frame-Projected Scenes via Publish-Time Pre-Bake
+
+**Status:** Accepted, 2026-04-19. Supersedes D131.
+
+**Context:** V1 preview identity (D131) seeded a synthetic figure from `(shareCode, kind)`. The resulting image was recognizable-but-not-real: it did not resemble the capsule the owner actually published, which defeated the social-card use case (the whole point of the OG card is "this is that capsule"). V2 replaces the synthetic pipeline with a real frame-projected 2D projection of the published capsule's atoms and bonds, computed once at publish time.
+
+**Decision:**
+
+1. **Publish-time pre-bake into D1.** The projected scene is serialized as `PreviewSceneV1` JSON and stored in the new `capsule_share.preview_scene_v1 TEXT` column (migration `0009_capsule_preview_scene_v1.sql`). The dynamic poster route and the account-list endpoint read the scene from D1 — no per-request R2 fetch + parse on the hot path.
+2. **Two artifacts per row, one JSON.** The stored scene carries: (a) a **poster-scene** (≤32 atoms + bonds) sized for the 1200×630 OG card, AND (b) an embedded **`thumb` (`PreviewStoredThumbV1`, `rev: 2`)** pre-baked directly from the FULL capsule atom set, NOT from the 32-atom poster subset. Projecting the thumb from the full set avoids the N → 32 → 12 double-downsampling that produced sparse, non-representative thumbs on dense scenes.
+3. **Independent version constants.** `TEMPLATE_VERSION` bumped `1 → 2` (in `src/share/capsule-preview.ts`) for poster-template changes; `CURRENT_THUMB_REV = 2` (in `src/share/capsule-preview-scene-store.ts`) is a SEPARATE constant versioned independently so thumb-algorithm changes (sampler, margin math, visibility filter) do not force a poster cache invalidation and vice versa.
+4. **Content-bound dynamic-poster ETag.** The ETag rebinds to the canonical scene hash: `"v2-<FNV1a32 of [TEMPLATE_VERSION, scene.hash, sanitizedTitle, shareCode]>"` (`functions/api/capsules/[code]/preview/poster.ts::dynamicPosterETag`). Any observable input to the render changes the ETag; no observable input change leaves a stale cache entry valid.
+5. **Account-list fast path.** `/api/account/capsules` returns `previewThumb: PreviewThumbV1 | null` per row, derived server-side via the stored-thumb fast path (decode D1 JSON → emit pre-baked atoms/bonds) with a live-sampling fallback when the thumb is absent/stale. Zero R2 reads on the hot path.
+6. **Canonical PCA camera.** The projection uses a canonical PCA basis with deterministic sign normalization, scene-shape classification (spherical / planar / linear / general), and a fixed 5°/10° tilt — so the same capsule always projects to the same 2D scene regardless of its stored orientation.
+7. **Graph-aware bonded sampler and tiered visibility.** `sampleForBondedThumb` selects a connected subgraph that preserves visual structure (not random atoms). Visibility policy is tiered: strict (3 viewBox units) → relaxed (2 viewBox units on dense scenes) → atoms-only fallback when no bond subset survives.
+
+**Consequences:**
+
+- Atoms-only and bonded thumb modes coexist behind a single `PreviewStoredThumbV1` type; the ≤20-element DOM budget per thumb is preserved across both modes.
+- **Forward-compatible staggered deploys:** the stored-thumb fast path gates on `thumb.rev >= CURRENT_THUMB_REV` (NOT `===`). A newer isolate writes `rev = 3` thumbs; an older isolate still reading must not downgrade them. The `>=` gate makes that explicit.
+- **Cold-row handling:** pre-V2 rows have `preview_scene_v1 = NULL`. The poster route performs a lazy backfill on first miss (fetch blob → project → write back to D1). Account-list surfaces a neutral placeholder when NULL. Backfill scripts sweep stale rows where `preview_scene_v1.thumb.rev < CURRENT_THUMB_REV`.
+- D131 is superseded. `(shareCode, kind)` is no longer the preview identity — the projected scene (hashed into `scene.hash`) is. Owner title edits still don't re-roll the figure (title is not in the render path), so the visual-identity property D131 cared about is preserved by a different mechanism.
+
+**NOT in this ADR:** any one-shot operational cleanup (e.g. invalidating surviving V1 stored posters on the V1→V2 cutover). That category is rollout operations, not steady-state design — no such script was needed at launch because `TEMPLATE_VERSION=2` cache-busts the dynamic path and stored-V1 posters age out naturally via `CURRENT_THUMB_REV`-gated rebakes. Runbooks for future pipeline bumps live in `docs/operations.md`.
+
+**Related ADRs:** D130 (V1 OG render stack — still in force; V2 uses the same Vercel OG plugin / bundled-font pipeline, only the scene source changed). D132 (`posterUrl` semantics — unchanged; "endpoint exists" still applies, and V2 narrows the "dynamic vs. stored" discriminator because every accessible capsule now has a pre-baked scene). D133 (two-axis `?v=` cache key — `?v=t2` now reflects `TEMPLATE_VERSION = 2`; the scheme is unchanged). D134 (`CAPSULE_PREVIEW_DYNAMIC_FALLBACK` allowlist flag — still the rollback lever for the dynamic poster path; V2 did not retire it).
+
+**Evidence:** `src/share/capsule-preview.ts` (`TEMPLATE_VERSION = 2`); `src/share/capsule-preview-scene-store.ts` (`CURRENT_THUMB_REV = 2`, `PreviewStoredThumbV1`, `rev >= CURRENT_THUMB_REV` fast-path gate); `migrations/0009_capsule_preview_scene_v1.sql`; `functions/api/capsules/[code]/preview/poster.ts::dynamicPosterETag` (`"v${TEMPLATE_VERSION}-${fnv1a32Hex(...)}"`).

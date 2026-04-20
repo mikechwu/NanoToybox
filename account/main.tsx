@@ -22,8 +22,13 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { buildCapsulePreviewDescriptor } from '../src/share/capsule-preview';
-import { buildFigureGraph, type FigureGraph } from '../src/share/capsule-preview-figure';
+import type { PreviewThumbV1 } from '../src/share/capsule-preview-scene-store';
+import {
+  ATOM_HALO_WIDTH,
+  resolveAtomsOnlyRadius,
+  resolveBondStrokeWidth,
+  resolveBondedAtomRadius,
+} from '../src/share/capsule-preview-thumb-render';
 
 interface AccountMe {
   userId: string;
@@ -44,6 +49,10 @@ interface CapsuleSummary {
   kind: string;
   status: string;
   previewStatus: string;
+  /** V2 compact preview payload — atoms-only, ≤ ROW_ATOM_CAP atoms.
+   *  Null when the row has no usable scene (pre-V2 rows not yet backfilled,
+   *  kind ≠ 'capsule', etc.) — the client renders {@link PlaceholderThumb}. */
+  previewThumb: PreviewThumbV1 | null;
 }
 
 interface CapsulesPage {
@@ -84,14 +93,26 @@ function formatDate(iso: string): string {
   }
 }
 
-// ── Capsule preview thumbnail (spec §5) ─────────────────────────────────
+// ── Capsule preview thumbnail (V2 — frame-projected atoms) ─────────────────
 //
-// Inline component (NOT extracted to a separate file): account/ is outside the
-// frontend tsconfig include glob, and §5 explicitly prefers inlining over a
-// silent typecheck blind spot. Consumes the pure geometry graph from
-// src/share/capsule-preview-figure.ts (which IS typechecked) and renders it
-// to inline SVG. No per-row network request — V1 deliberately renders client-
-// side for fast list paint.
+// V2 contract (spec §Account Integration §5 + follow-up bonds-in-thumb):
+// the component consumes the `previewThumb: PreviewThumbV1` payload from
+// the account API verbatim — no client-side projection, no downsampling.
+// Server is the single point of downsampling on the read path (AC #26).
+//
+// Two regimes, both capped at 20 DOM elements:
+//   - ATOMS-ONLY: up to 18 `<circle>` glyphs. Chosen when the source
+//     scene has no storage bonds, isn't dense enough, or when the
+//     derivation's visibility filter rejected too many bonds.
+//   - BONDS-AWARE: up to 12 `<circle>` glyphs + up to 6 `<line>`
+//     bonds, rendered bonds-under-atoms. Only chosen when the server
+//     confirms at least `MIN_ACCEPTABLE_BONDS` bonds survive
+//     visibility filtering.
+//
+// Visual constants (atom radius, bond stroke width) come from
+// `src/share/capsule-preview-thumb-render.ts` — the same module the
+// server-side visibility filter reads from, so the "bond visible
+// after subtracting endpoint radii" calculation stays correct.
 //
 // Decorative: aria-hidden="true" — the row's code/title text is the
 // authoritative label.
@@ -100,58 +121,24 @@ function formatDate(iso: string): string {
 // Keep these in sync so the SVG renders 1:1 (no DPR upscaling smear).
 const THUMB_SIZE = 40;
 
-/**
- * Spec §2 budget: ≤20 DOM elements per thumb. The SVG element itself counts,
- * so child budget = 19. Strategy is layout-preserving:
- *
- *   - Reserve a minimum of min(4, total) edges so the thumb keeps its
- *     structural signal even at high density.
- *   - Pick exactly min(nodeBudget, total) nodes via even-spaced index
- *     sampling across [0, nodes.length - 1]. This actually USES the node
- *     budget instead of stride-stepping, which would round down and waste
- *     slots (e.g. 18 nodes / 15 budget → stride 2 → only 9 nodes kept).
- *   - Drop links whose endpoints didn't survive sampling.
- *   - Cap remaining link budget at childBudget − keptNodes.
- *
- * Pure transform — exported for testing.
- */
-export function downsampleFigureForThumb(
-  graph: FigureGraph,
-  childBudget = 19,
-): { nodes: FigureGraph['nodes']; links: FigureGraph['links'] } {
-  const totalLinks = graph.links.length;
-  const minEdges = Math.min(4, totalLinks);
-  const nodeBudget = Math.max(1, childBudget - minEdges);
-  const sampledNodes = sampleEvenly(graph.nodes, nodeBudget);
-  const survivingIds = new Set(sampledNodes.map((n) => n.id));
-  const survivingLinks = graph.links.filter(
-    (l) => survivingIds.has(l.from) && survivingIds.has(l.to),
-  );
-  const edgeBudget = Math.max(0, childBudget - sampledNodes.length);
-  return { nodes: sampledNodes, links: survivingLinks.slice(0, edgeBudget) };
-}
-
-/** Pick exactly `target` items from `items`, evenly spaced across the range.
- *  Always includes index 0 (and index n-1 when target ≥ 2) so the figure's
- *  visual extents survive sampling. Returns at most `target` items. */
-function sampleEvenly<T>(items: ReadonlyArray<T>, target: number): T[] {
-  const n = items.length;
-  if (n === 0 || target <= 0) return [];
-  if (n <= target) return items.slice();
-  if (target === 1) return [items[Math.floor((n - 1) / 2)]];
-  // n > target ≥ 2 → step ≥ 1, so Math.round((i*(n-1))/(target-1)) is
-  // strictly monotone in i and never collides. No dedup needed.
-  const out: T[] = [];
-  const denom = target - 1;
-  for (let i = 0; i < target; i++) {
-    const idx = Math.round((i * (n - 1)) / denom);
-    out.push(items[idx]);
-  }
-  return out;
-}
-
-export function CapsulePreviewThumb({ graph }: { graph: FigureGraph }): React.ReactElement {
-  const { nodes, links } = downsampleFigureForThumb(graph);
+export function CapsulePreviewThumb({
+  thumb,
+}: {
+  thumb: PreviewThumbV1;
+}): React.ReactElement {
+  // Radius + connectivity strategy at 40×40 (viewBox 100). Constants
+  // come from `capsule-preview-thumb-render` so the derivation's
+  // visibility filter stays in lockstep with the actual rendered
+  // geometry; adjusting either side without the other silently drops
+  // visible bonds or clips glyphs against the cell edge.
+  //
+  // DOM budget: svg(1) + rect(1) + up to 12 circles + up to 6 lines = 20.
+  const n = thumb.atoms.length;
+  const hasBonds = !!(thumb.bonds && thumb.bonds.length > 0);
+  const densityRadius = hasBonds
+    ? resolveBondedAtomRadius(n)
+    : resolveAtomsOnlyRadius(n);
+  const bondWidth = resolveBondStrokeWidth(n);
   return (
     <svg
       className="acct__upload-thumb"
@@ -162,27 +149,84 @@ export function CapsulePreviewThumb({ graph }: { graph: FigureGraph }): React.Re
       aria-hidden="true"
       focusable="false"
     >
-      {links.map((l) => {
-        const a = graph.nodes.find((n) => n.id === l.from);
-        const b = graph.nodes.find((n) => n.id === l.to);
-        if (!a || !b) return null;
+      <rect
+        x={0} y={0} width={100} height={100} rx={12}
+        fill="currentColor" fillOpacity={0.06}
+      />
+      {hasBonds && thumb.bonds!.map((b, i) => {
+        const a = thumb.atoms[b.a];
+        const c = thumb.atoms[b.b];
+        if (!a || !c) return null;
         return (
           <line
-            key={l.id}
-            x1={a.x * 100} y1={a.y * 100}
-            x2={b.x * 100} y2={b.y * 100}
-            stroke="currentColor" strokeOpacity="0.35" strokeWidth="1"
+            key={`l${i}`}
+            x1={a.x * 100}
+            y1={a.y * 100}
+            x2={c.x * 100}
+            y2={c.y * 100}
+            // Darker neutral so the 2.5-viewBox stroke reads as a line,
+            // not a ghost. Using `currentColor` or a lighter grey makes
+            // the stroke disappear at 1-physical-pixel on the light page.
+            stroke="rgba(55,65,80,0.90)"
+            strokeWidth={bondWidth}
+            strokeLinecap="round"
           />
         );
       })}
-      {nodes.map((n) => (
-        <circle
-          key={n.id}
-          cx={n.x * 100} cy={n.y * 100}
-          r={Math.max(2, n.r * 80)}
-          fill={graph.accentColor}
-        />
-      ))}
+      {thumb.atoms.map((a, i) => {
+        // In bonded mode the density radius is deliberately tight so
+        // the atom glyphs don't swallow the bond strokes between them —
+        // we pin atoms to that tighter value regardless of the stored
+        // scaling. In atoms-only mode, the stored radius may exceed the
+        // floor (sparse scenes get chunkier dots), so we take the
+        // larger. `Number.isFinite` guards a crafted-NaN payload.
+        const scaled = Number.isFinite(a.r) ? a.r * 100 : 0;
+        const r = hasBonds ? densityRadius : Math.max(densityRadius, scaled);
+        return (
+          <circle
+            key={`c${i}`}
+            cx={a.x * 100}
+            cy={a.y * 100}
+            r={r}
+            fill={a.c}
+            fillOpacity={0.95}
+            // Explicit light halo (not `currentColor`) — currentColor
+            // on a light theme resolves to the dark body text, which
+            // has almost no contrast against the #222222 carbon fill
+            // and failed to separate adjacent atoms. A soft white
+            // stroke reliably reads as a halo on both themes without
+            // eating the bond stroke. Width sourced from the shared
+            // render-constants module so the derivation's fit-glyph
+            // margin accounts for it.
+            stroke="rgba(255,255,255,0.85)"
+            strokeWidth={ATOM_HALO_WIDTH}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
+/** Neutral placeholder thumb for rows without a usable preview scene
+ *  (pre-V2 rows not yet backfilled, kind ≠ 'capsule', etc.). 3 elements
+ *  total — well under the 20-element budget and visually quiet so the
+ *  CSS grid track does not collapse. */
+export function PlaceholderThumb(): React.ReactElement {
+  return (
+    <svg
+      className="acct__upload-thumb"
+      width={THUMB_SIZE}
+      height={THUMB_SIZE}
+      viewBox="0 0 100 100"
+      role="presentation"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect
+        x={0} y={0} width={100} height={100} rx={12}
+        fill="currentColor" fillOpacity={0.10}
+      />
+      <circle cx={50} cy={50} r={4} fill="currentColor" fillOpacity={0.30} />
     </svg>
   );
 }
@@ -718,22 +762,17 @@ function AccountApp() {
                     // titles fall through to the shareCode — otherwise
                     // the confirm prompt would render "Delete ?".
                     const rowName = title || c.shareCode;
-                    // Spec §5: per-row preview thumbnail. Same descriptor the
-                    // OG poster route consumes — proven by the shared fixture
-                    // test (see tests/unit/capsule-preview.test.ts).
-                    const previewDescriptor = buildCapsulePreviewDescriptor({
-                      shareCode: c.shareCode,
-                      title: c.title,
-                      kind: c.kind,
-                      atomCount: c.atomCount,
-                      frameCount: c.frameCount,
-                      sizeBytes: c.sizeBytes,
-                      createdAt: c.createdAt,
-                    });
-                    const previewGraph = buildFigureGraph(previewDescriptor);
+                    // V2 preview thumbnail (spec §Account Integration §5):
+                    // consume the server-derived `previewThumb` verbatim.
+                    // Null rows render a neutral placeholder instead of
+                    // synthesizing a fake figure.
                     return (
                     <li key={c.shareCode} className="acct__upload">
-                      <CapsulePreviewThumb graph={previewGraph} />
+                      {c.previewThumb ? (
+                        <CapsulePreviewThumb thumb={c.previewThumb} />
+                      ) : (
+                        <PlaceholderThumb />
+                      )}
                       <div className="acct__upload-meta">
                         {title ? (
                           <>

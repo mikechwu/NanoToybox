@@ -149,7 +149,7 @@ Phase 5 tests ship across three tsconfigs because the frontend and the Pages Fun
 | Config | What it covers | Why |
 |--------|---------------|-----|
 | `tsconfig.json` (frontend) | `lab/`, `watch/`, `account/**`, `src/**`, `tests/unit/**/*.{ts,tsx}`, `vite.config.ts` | DOM + React + Three.js. `account/**` is included under the frontend gate so the inline `CapsulePreviewThumb` component typechecks alongside the rest of the React surface. Excludes the Workers-typed backend-handler/middleware tests (the exclude list in `tsconfig.json` is authoritative) — including the new `poster-endpoint.test.ts` and `share-page-og.test.ts`, which import from `functions/**` and live under the functions tsconfig — because they import Workers-typed symbols that would fail the DOM-only typecheck. |
-| `tsconfig.functions.json` (Workers) | `functions/**`, `functions/**/*.tsx`, `src/share/**`, `src/share/__fixtures__/*.json`, selected `src/history/*-v1.ts`, the Workers-typed test files (Phase 5/6 core: `admin-gate`, `publish-endpoint`, `report-endpoint`, `admin-delete-endpoint`, `admin-orphans-endpoint`, `admin-sessions-endpoint`, `auth-middleware`, `session-endpoint`, `cron-sweeper`; Phase 7 additions: `signed-intents`, `age-confirmation-endpoint`, `audit-sweep-endpoint`, `auth-start-age-intent`, `owner-delete-endpoint`, `publish-age-gate`, `account-delete-cascade`, `account-capsules-pagination`, `privacy-request-endpoint`; Capsule Preview V1 additions: `poster-endpoint`, `share-page-og`), `workers/cron-sweeper/src/**` | `strict: true`, `types: ["@cloudflare/workers-types"]`, plus Capsule Preview V1: `jsx: "react-jsx"`, `jsxImportSource: "react"`, `resolveJsonModule: true` (so the Satori-driven poster route under `functions/**/*.tsx` and the shared `src/share/__fixtures__/capsule-preview-inputs.json` fixture compile under this config). Gives the handlers and the auth middleware real `PagesFunction`, `R2Bucket`, `D1Database`, `ExecutionContext` types. |
+| `tsconfig.functions.json` (Workers) | `functions/**`, `functions/**/*.tsx`, `src/share/**`, `src/share/__fixtures__/*.json`, selected `src/history/*-v1.ts`, the Workers-typed test files (Phase 5/6 core: `admin-gate`, `publish-endpoint`, `report-endpoint`, `admin-delete-endpoint`, `admin-orphans-endpoint`, `admin-sessions-endpoint`, `auth-middleware`, `session-endpoint`, `cron-sweeper`; Phase 7 additions: `signed-intents`, `age-confirmation-endpoint`, `audit-sweep-endpoint`, `auth-start-age-intent`, `owner-delete-endpoint`, `publish-age-gate`, `account-delete-cascade`, `account-capsules-pagination`, `privacy-request-endpoint`; Capsule Preview additions: `poster-endpoint`, `share-page-og`, `account-api-preview-thumb`), `workers/cron-sweeper/src/**` | `strict: true`, `types: ["@cloudflare/workers-types"]`, plus Capsule Preview: `jsx: "react-jsx"`, `jsxImportSource: "react"`, `resolveJsonModule: true` (so the Satori-driven poster route under `functions/**/*.tsx` and the shared `src/share/__fixtures__/capsule-preview-frames.json` fixture compile under this config). Gives the handlers and the auth middleware real `PagesFunction`, `R2Bucket`, `D1Database`, `ExecutionContext` types. |
 | `workers/cron-sweeper/tsconfig.json` | The cron Worker package itself | Worker has its own `wrangler.toml`/deploy pipeline; its tsconfig keeps deploy-time typechecking independent of the Pages build. |
 
 The partitioning is enforced by `tsconfig.json`'s explicit `exclude` list — the Workers-typed tests are owned by the functions config, so they compile exactly once, under the lib set they actually need. The exclude list grew from 8 entries (Phase 5) → 10 (Phase 6, adding `auth-middleware` + `session-endpoint`) → 18 (Phase 7, adding the nine account-erasure / age-gate / signed-intent backend tests enumerated above; `tsconfig.json` is the authoritative source if this count drifts). Keep the list in sync whenever a new backend-handler test is introduced: the symptom of forgetting is a DOM-lib typecheck failure on Workers-typed symbols under `npm run typecheck:frontend`. Vitest still discovers and runs every file in `tests/unit/`; the split only affects `tsc`. `npm run typecheck` fans out across all three configs (frontend → functions → cron) so a Workers-typed test file will be typechecked even though `tsconfig.json` excludes it.
@@ -332,7 +332,7 @@ test.beforeEach(({}, testInfo) => {
 });
 ```
 
-That means `pages-dev-flows.spec.ts` and `poster-smoke.spec.ts` are harmless to `npm run test:e2e` (both self-skip under the default project name) but become live under `npm run test:e2e:pages-dev`, whose config defines a project named `pages-dev`. See [Capsule Preview V1 Test Layout](#capsule-preview-v1-test-layout) for the poster-smoke probe breakdown and the `--binding DEV_ADMIN_ENABLED=true` env detail.
+That means `pages-dev-flows.spec.ts` and `poster-smoke.spec.ts` are harmless to `npm run test:e2e` (both self-skip under the default project name) but become live under `npm run test:e2e:pages-dev`, whose config defines a project named `pages-dev`. See [Capsule Preview V2 Test Layout](#capsule-preview-v2-test-layout) for the poster-smoke probe breakdown and the `--binding DEV_ADMIN_ENABLED=true` env detail.
 
 **Prerequisites.**
 
@@ -346,40 +346,64 @@ That means `pages-dev-flows.spec.ts` and `poster-smoke.spec.ts` are harmless to 
 - Before merging changes to age-gate UX that depend on real `/api/account/age-confirmation` responses (mocked `page.route()` is not sufficient — the signed-nonce round-trip must hit the real endpoint).
 - Not required for pure lab/watch UI changes; the default lane remains the fast feedback loop for those.
 
-### Capsule Preview V1 Test Layout
+### Capsule Preview V2 Test Layout
 
-Capsule Preview V1 added the share-poster pipeline: a deterministic descriptor builder + figure layout, a title sanitizer, an OG-image route under `functions/`, the `/c/:code` HTML share page, and an inline `CapsulePreviewThumb` rendered in the account capsule list. Backend routes follow the same tsconfig/mocking pattern as Phase 5/6/7 (hoisted `vi.fn`, real `Request` objects, hand-built minimal context); the inline React component sits under the frontend tsconfig (jsdom). The deterministic-poster smoke joins the pages-dev-only Playwright lane.
+Capsule Preview V2 replaced the V1 descriptor/figure builder with a scene-based pipeline: `buildPreviewSceneFromCapsule` extracts a `PreviewScene` directly from stored frames, `projectCapsuleToSceneJson` bakes it into a storable `preview_scene_v1` payload, and `derivePreviewThumbV1` projects that payload into the `PreviewThumbV1` the account list + share card consume. The title sanitizer survives unchanged. The OG-image route still lives under `functions/`, now keyed by a scene-hash ETag (`"v2-<8hex>"`). Backend routes still follow the Phase 5/6/7 mocking pattern (hoisted `vi.fn`, real `Request` objects, hand-built minimal context); the pure V2 modules and the inline `CapsulePreviewThumb` sit under the frontend tsconfig (jsdom). The deterministic-poster smoke still runs on the pages-dev Playwright lane with its ETag regex broadened to `^"v\d+-[0-9a-f]{8}"$`.
 
-#### Capsule Preview V1 Unit Tests (`tests/unit/`)
+#### V1 → V2 Disposition
 
-| File | Purpose |
-|------|---------|
-| `capsule-preview.test.ts` | Descriptor builder: identity contract (title, theme, createdAt, sizeBytes do NOT affect geometry), wrong-audience fallback, density-bucket assignment, fixture-driven stability against `src/share/__fixtures__/capsule-preview-inputs.json`. Typechecked under functions tsconfig. |
-| `capsule-preview-figure.test.ts` | Pure geometry: same descriptor produces a deep-equal graph; density bucket maps to expected node count; positions stay inside the unit canvas; neutral-brand emits no edges. Typechecked under functions tsconfig. |
-| `capsule-preview-sanitize.test.ts` | Title-sanitizer safety contract: NFC normalize, control / bidi strip, ZWJ collapse, denylist enforcement, 60-codepoint truncation, non-Latin (CJK / Arabic / emoji) collapse to fallback. Typechecked under functions tsconfig. |
-| `poster-endpoint.test.ts` | Full branch coverage of the poster route: stored, dynamic, terminal fallback, fallback-for-the-fallback, R2 miss, dynamic-not-png and stored-not-png body validation, dual-cause logging, ETag content-binding (changes when title or atom/frame counts change), and ETag stability across identical inputs. Uses the `__setRendererForTesting` seam to swap the Satori renderer. Typechecked under functions tsconfig. |
-| `share-page-og.test.ts` | `/c/:code` HTML route: og:image emitted when the flag is on and omitted when off, stored vs dynamic cache-key shape, `AtomDojo` (no-space) drift removed, alt-text construction, 404 paths. Typechecked under functions tsconfig. |
-| `account-capsule-row.test.tsx` | JSDOM render of the inline `CapsulePreviewThumb` plus `downsampleFigureForThumb` invariants: ≤19 children, edge preservation on dense graphs, surviving-endpoint constraint, neutral-brand zero-link case, even-spaced sampler endpoint inclusion. Runs under the frontend tsconfig (jsdom + React). |
+| Test file | V1 → V2 |
+|-----------|---------|
+| `capsule-preview.test.ts` | **Deleted** (V1 descriptor builder gone) |
+| `capsule-preview-figure.test.ts` | **Deleted** (V1 synthetic figure gone) |
+| `capsule-preview-sanitize.test.ts` | **Kept** unchanged — title sanitizer still load-bearing |
+| `capsule-preview-frame.test.ts` | **New** — `buildPreviewSceneFromCapsule` extraction, color resolution, bounds, `PreviewSceneBuildException` kinds |
+| `capsule-preview-colors.test.ts` | **New** — CPK fallback, per-group fan-out, malformed-assignment tolerance |
+| `capsule-preview-camera.test.ts` | **New** — PCA classification {spherical, planar, linear, general, degenerate}, sign normalization, determinism |
+| `capsule-preview-project.test.ts` | **New** — fit-to-bounds, depth sort, `deriveBondPairs` edge cases |
+| `capsule-preview-sampling.test.ts` | **New** — `sampleEvenly`, `sampleForSilhouette` (extrema + FPS, small-target correctness), `sampleForBondedThumb` (graph-aware BFS) |
+| `capsule-preview-scene-store.test.ts` | **New** — serialize/parse round-trip, `sceneHash`, `derivePreviewThumbV1` (stored-thumb fast path, bonds-aware gate at `BONDS_AWARE_SOURCE_THRESHOLD=14`, refit glyph-aware fill, atoms-only fallback, per-atom degree cap, visibility filter, Tier 1/Tier 2 policy) |
+| `capsule-preview-dense-outcomes.test.ts` | **New** — synthetic graphene/CNT/fullerene/crystal fixtures; asserts majority produce bonded thumbs |
+| `capsule-preview-pipeline.test.ts` | **New** — full pipeline: real C60 / graphene / CNT capsules through `projectCapsuleToSceneJson → derivePreviewThumbV1`; stored thumb at `CURRENT_THUMB_REV`, visible bonds, distinct geometry |
+| `account-api-preview-thumb.test.ts` | **New** — account list hot-path: no R2 reads, bonds stripped for sparse scenes, dense-with-long-bonds fixture produces bonded thumb, null for malformed `preview_scene_v1` (functions tsconfig) |
+| `poster-endpoint.test.ts` | **Rewritten** — scene-hash-bound ETag `"v2-<8hex>"`, lazy-backfill path, new `cause:` taxonomy (`scene-missing`, `capsule-parse-failed`, `no-dense-frames`, …); `__setRendererForTesting` seam preserved |
+| `share-page-og.test.ts` | **Rewritten** — `?v=t2` cache key + `preview_scene_v1: null` field added to row fixture; og:image flag on/off, 404 paths, alt-text construction preserved |
+| `account-capsule-row.test.tsx` | **Rewritten** — `CapsulePreviewThumb({thumb})` consumes `PreviewThumbV1` verbatim; atoms-only and bonds-aware regimes; `PlaceholderThumb` for null; renderer/derivation coupling locks (atom radius ≤ 2.8 in bonded mode, etc.) |
+| `share-record.test.ts` | **Rewritten** — `preview_scene_v1` field added to `CapsuleShareRow` |
+| `publish-core.test.ts` | **Rewritten** — asserts `previewSceneV1Json` non-null on valid capsules, determinism |
+| `poster-smoke.spec.ts` (E2E) | **Updated** — ETag regex broadened to `^"v\d+-[0-9a-f]{8}"$` (matches V2's `v2-…`); seeds a dimer capsule |
 
-Shared fixture: `src/share/__fixtures__/capsule-preview-inputs.json` is consumed by both `capsule-preview.test.ts` and `account-capsule-row.test.tsx`; spec §5 (shared identity) is proved by construction because both sides feed off the same input set.
+Shared fixture: `src/share/__fixtures__/capsule-preview-frames.json` replaces the V1 `capsule-preview-inputs.json`. Consumed by the pure scene-extraction / pipeline tests.
 
-#### Capsule Preview V1 E2E (`tests/e2e/`)
+Tsconfig residency: the pure V2 modules (`capsule-preview-{frame,colors,camera,project,sampling,scene-store,dense-outcomes,pipeline}.test.ts`) share frontend infrastructure (React, DOM, Three math types) and stay under `tsconfig.json` (frontend). `account-api-preview-thumb.test.ts`, `poster-endpoint.test.ts`, and `share-page-og.test.ts` remain Workers-typed and live under `tsconfig.functions.json`.
+
+#### Outcome-Level vs Contract-Level Coverage
+
+V2 introduces **pipeline-path / outcome-level** assertions alongside the per-module contract tests. These catch product regressions that contract tests cannot — a test can prove `derivePreviewThumbV1` returns a well-typed payload while the end-to-end pipeline silently drops every bond. Load-bearing outcome assertions:
+
+- `capsule-preview-pipeline.test.ts` — "derived thumbs for dense fixtures carry bonds with visible segments": real C60 must produce ≥2 visible bonds after the full publish → derive pipeline.
+- `capsule-preview-scene-store.test.ts` — "refit stretches a shrunken storage layout to fill the thumb (glyph-aware)": guards against margin over-reservation.
+- `capsule-preview-dense-outcomes.test.ts` — synthetic dense fixtures (graphene/CNT/fullerene/crystal): asserts the majority produce bonded thumbs, not atoms-only.
+
+Treat the pure scene-extraction / sampling / scene-store tests as contract tests (module I/O under well-defined inputs) and the pipeline / dense-outcomes / account-hot-path tests as the product-behavior gate.
+
+#### Capsule Preview V2 E2E (`tests/e2e/`)
 
 | File | Lane | Purpose |
 |------|------|---------|
-| `poster-smoke.spec.ts` | **Pages-dev-only** | Three probes against the dev poster pipeline. Self-skipped outside the `pages-dev` Playwright project (same `test.beforeEach` gate documented above). |
+| `poster-smoke.spec.ts` | **Pages-dev-only** | Three probes against the dev poster pipeline. Self-skipped outside the `pages-dev` Playwright project (same `test.beforeEach` gate documented above). Seeds a dimer capsule. |
 
 The three probes are intentionally tiered:
 
 1. **Probe 1: unknown share code → 404.** Proves the route module's TOP-LEVEL imports resolve under workerd. Does NOT exercise the lazy import or Satori.
 2. **Probe 2: GET `/og-fallback.png` → 200, IHDR-asserted 1200×630.** Proves static-asset bundling.
-3. **Probe 3: deterministic seeded path.** POSTs the checked-in fixture to `/api/admin/seed`, then GETs the dynamic poster and asserts 200, `image/png`, V1 cache-control, matching ETag pattern, PNG signature, IHDR 1200×630, and body > 1000 bytes (excludes the 1×1 fallback). This is the probe that exercises the lazy import, the Satori render, and the bundled font end-to-end.
+3. **Probe 3: deterministic seeded path.** POSTs the checked-in dimer fixture to `/api/admin/seed`, then GETs the dynamic poster and asserts 200, `image/png`, V2 cache-control, ETag matching `^"v\d+-[0-9a-f]{8}"$` (accepts V2's `v2-…`), PNG signature, IHDR 1200×630, and body > 1000 bytes (excludes the 1×1 fallback). This is the probe that exercises the lazy import, the Satori render, and the bundled font end-to-end.
 
-Pages-dev lane env: `playwright.pages-dev.config.ts` now launches wrangler with `--binding DEV_ADMIN_ENABLED=true` so the admin seed endpoint is reachable from localhost. The admin gate stays defense-in-depth (localhost hostname check), so flipping the binding does not weaken production posture.
+Pages-dev lane env: `playwright.pages-dev.config.ts` launches wrangler with `--binding DEV_ADMIN_ENABLED=true` so the admin seed endpoint is reachable from localhost. The admin gate stays defense-in-depth (localhost hostname check), so flipping the binding does not weaken production posture.
 
-Fixtures: `tests/e2e/fixtures/poster-smoke-capsule.json` — the minimal valid capsule Probe 3 seeds. This fixture is also the new default payload for `npm run seed:capsule`.
+Fixtures: `tests/e2e/fixtures/poster-smoke-capsule.json` — the minimal valid capsule Probe 3 seeds. This fixture is also the default payload for `npm run seed:capsule`.
 
-When to run: before merging any change that touches the poster route, the descriptor / figure / sanitizer modules, the `/c/:code` HTML route, the bundled poster font, or the inline `CapsulePreviewThumb`. Mocked `page.route()` is not sufficient for Probe 3 — the Satori render must hit the real worker.
+When to run: before merging any change that touches the poster route, the scene-extraction / projection / sampling / scene-store / sanitizer modules, the `/c/:code` HTML route, the bundled poster font, or the inline `CapsulePreviewThumb`. Mocked `page.route()` is not sufficient for Probe 3 — the Satori render must hit the real worker.
 
 ### Known Pre-Existing Flake: `worker-integration.spec.ts`
 
@@ -609,7 +633,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **End-to-end pipeline:** load → import → playback → groups.
 
-*As of Capsule Preview V1, 2735+ unit tests (Vitest) + 12 E2E tests (Playwright, default lane) + the pages-dev-only `poster-smoke.spec.ts` pass across the lab + watch + share + auth + account-erasure + handoff + capsule-preview surfaces. Run `npx vitest run` for the authoritative live unit total, `npm run test:e2e` for the default E2E lane, and `npm run test:e2e:pages-dev` for the pages-dev lane.*
+*As of Capsule Preview V2, the unit suite (Vitest) + 12 E2E tests (Playwright, default lane) + the pages-dev-only `poster-smoke.spec.ts` pass across the lab + watch + share + auth + account-erasure + handoff + capsule-preview surfaces. Run `npx vitest run` for the authoritative live unit total, `npm run test:e2e` for the default E2E lane, and `npm run test:e2e:pages-dev` for the pages-dev lane.*
 
 ### Bond Topology Parity (23 tests)
 

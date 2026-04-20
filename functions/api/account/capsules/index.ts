@@ -20,6 +20,24 @@
  * Page size is fixed at PAGE_SIZE per call. The previous implementation
  * silently capped at 500 with no cursor, so power users had invisible
  * uploads — see also `delete-all` which loops on `moreAvailable`.
+ *
+ * V2 capsule preview (spec §Account Integration, post-launch follow-up):
+ * each row carries a `previewThumb` field of type
+ * {@link PreviewThumbV1 | null}, derived server-side from the
+ * `preview_scene_v1` D1 column. **No R2 access on the hot path.**
+ *
+ * Downsampling is silhouette-preserving (extrema + farthest-point; see
+ * `src/share/capsule-preview-sampling.ts:sampleForSilhouette`), applied
+ * here to produce either:
+ *   - an atoms-only thumb at `ROW_ATOM_CAP_ATOMS_ONLY` (18) atoms for
+ *     scenes with fewer than `BONDS_AWARE_SOURCE_THRESHOLD` (14) source
+ *     atoms or no storage bonds, OR
+ *   - a bonds-aware thumb at `ROW_ATOM_CAP_WITH_BONDS` (12) atoms plus
+ *     up to `ROW_BOND_CAP` (6) coverage-selected `<line>` bonds for
+ *     dense scenes whose storage carries connectivity data.
+ *
+ * This is the single point of downsampling on the read path (spec AC #26);
+ * the account client renders `previewThumb` verbatim.
  */
 
 import type { Env } from '../../../env';
@@ -27,6 +45,15 @@ import { authenticateRequest } from '../../../auth-middleware';
 import { noCacheHeaders, noCacheJson } from '../../../http-cache';
 import { b64urlEncode, b64urlDecode } from '../../../../src/share/b64url';
 import { errorMessage } from '../../../../src/share/error-message';
+import {
+  derivePreviewThumbV1,
+  ROW_ATOM_CAP_ATOMS_ONLY,
+  ROW_ATOM_CAP_WITH_BONDS,
+  ROW_BOND_CAP,
+  type PreviewSceneAtomV1,
+  type PreviewThumbV1,
+} from '../../../../src/share/capsule-preview-scene-store';
+import { sampleForSilhouette } from '../../../../src/share/capsule-preview-sampling';
 
 const PAGE_SIZE = 50;
 
@@ -40,6 +67,22 @@ interface CapsuleRow {
   kind: string;
   status: string;
   preview_status: string;
+  preview_scene_v1: string | null;
+}
+
+export interface AccountCapsuleSummary {
+  shareCode: string;
+  createdAt: string;
+  sizeBytes: number;
+  frameCount: number;
+  atomCount: number;
+  title: string | null;
+  kind: string;
+  status: string;
+  previewStatus: string;
+  /** Null when the scene column is absent, malformed, or carries zero atoms —
+   *  the client renders a neutral placeholder thumb in that case. */
+  previewThumb: PreviewThumbV1 | null;
 }
 
 /** Encode the keyset cursor. The alphabet is base64url so the value
@@ -82,7 +125,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   const stmt = cursor
     ? context.env.DB.prepare(
         `SELECT share_code, created_at, size_bytes, frame_count,
-                atom_count, title, kind, status, preview_status
+                atom_count, title, kind, status, preview_status, preview_scene_v1
            FROM capsule_share
           WHERE owner_user_id = ?
             AND status != 'deleted'
@@ -92,7 +135,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
       ).bind(userId, cursor.createdAt, cursor.createdAt, cursor.shareCode, PAGE_SIZE + 1)
     : context.env.DB.prepare(
         `SELECT share_code, created_at, size_bytes, frame_count,
-                atom_count, title, kind, status, preview_status
+                atom_count, title, kind, status, preview_status, preview_scene_v1
            FROM capsule_share
           WHERE owner_user_id = ?
             AND status != 'deleted'
@@ -105,7 +148,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   const page = hasMore ? rows.results.slice(0, PAGE_SIZE) : rows.results;
   const last = page[page.length - 1];
 
-  const capsules = page.map((r) => ({
+  const capsules: AccountCapsuleSummary[] = page.map((r) => ({
     shareCode: r.share_code,
     createdAt: r.created_at,
     sizeBytes: r.size_bytes,
@@ -115,6 +158,19 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     kind: r.kind,
     status: r.status,
     previewStatus: r.preview_status,
+    previewThumb: derivePreviewThumbV1(r.preview_scene_v1, {
+      atomCap: ROW_ATOM_CAP_ATOMS_ONLY,
+      bondsAwareAtomCap: ROW_ATOM_CAP_WITH_BONDS,
+      bondCap: ROW_BOND_CAP,
+      // Silhouette-preserving sampler — extrema + farthest-point picks so
+      // the structure's visual envelope survives downsampling to 12–18.
+      sampler: (atoms, target) => sampleForSilhouette<PreviewSceneAtomV1>(
+        atoms,
+        target,
+        (a) => a.x,
+        (a) => a.y,
+      ),
+    }),
   }));
 
   return noCacheJson({

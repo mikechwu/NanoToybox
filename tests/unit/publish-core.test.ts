@@ -149,6 +149,27 @@ describe('preparePublishRecord', () => {
     const r2 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', appVersion: '0.1.0' });
     expect(r1.id).not.toBe(r2.id);
   });
+
+  // ── V2 publish-time pre-bake (spec §S1, AC #25) ────────────────────────
+  it('V2: attaches previewSceneV1Json for a valid capsule', async () => {
+    const r = await preparePublishRecord({
+      capsuleJson: makeValidCapsuleJson(),
+      ownerUserId: 'u',
+      appVersion: '0.1.0',
+    });
+    expect(r.previewSceneV1Json).not.toBeNull();
+    const parsed = JSON.parse(r.previewSceneV1Json!);
+    expect(parsed.v).toBe(1);
+    expect(parsed.atoms.length).toBe(2);
+    expect(parsed.hash).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it('V2: previewSceneV1Json is deterministic for identical capsule JSON', async () => {
+    const json = makeValidCapsuleJson();
+    const r1 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', appVersion: '0.1.0' });
+    const r2 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', appVersion: '0.1.0' });
+    expect(r1.previewSceneV1Json).toBe(r2.previewSceneV1Json);
+  });
 });
 
 // ── persistRecord tests with mock D1 ──

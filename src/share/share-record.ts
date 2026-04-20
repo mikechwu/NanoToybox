@@ -55,6 +55,12 @@ export interface CapsuleShareRow {
   published_at: string | null;
   last_accessed_at: string | null;
   rejection_reason: string | null;
+  /** V2 capsule preview — compact JSON of the publish-time-projected scene
+   *  (PreviewSceneV1). Populated by preparePublishRecord; lazy-backfilled by
+   *  the poster route on pre-V2 rows. NULL on rows that have not been
+   *  rendered under V2 yet (account list endpoint emits previewThumb: null
+   *  for those rows, driving the placeholder thumbnail). */
+  preview_scene_v1: string | null;
 }
 
 import { TEMPLATE_VERSION, fnv1a32Hex } from './capsule-preview';

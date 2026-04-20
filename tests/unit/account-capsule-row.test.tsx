@@ -1,166 +1,186 @@
 /**
  * @vitest-environment jsdom
  *
- * Tests for the account uploads-row preview thumbnail (spec §5).
+ * Tests for the account uploads-row preview thumbnail (spec §Account
+ * Integration §5, follow-up: bonds reopened for dense thumbs).
  *
- * Closes the gap left by account/ being outside the original tsconfig include
- * glob: this file imports the actual account/main.tsx component used at
- * runtime (not a mock) and asserts the thumb renders an SVG within the
- * per-thumb DOM-node budget defined by spec §2.
+ * Coverage:
+ *   - decorative SVG / aria attributes
+ *   - one <circle> per atom (verbatim, no client-side downsampling)
+ *   - optional bonds rendered as <line> under the atoms
+ *   - DOM budget ≤ 20 at the worst-case 12 atoms + 6 bonds payload
+ *   - PlaceholderThumb renders for null previewThumb
+ *   - distinctiveness: two different fixtures render materially different
+ *     thumb geometry (regression against "all thumbs look the same" bug)
  */
 
 import { describe, it, expect } from 'vitest';
-// jsdom is the default vitest env via vite.config.ts test config
 import { render } from '@testing-library/react';
-import { CapsulePreviewThumb, downsampleFigureForThumb } from '../../account/main';
-import { buildCapsulePreviewDescriptor } from '../../src/share/capsule-preview';
-import { buildFigureGraph } from '../../src/share/capsule-preview-figure';
+import { CapsulePreviewThumb, PlaceholderThumb } from '../../account/main';
+import type { PreviewThumbV1 } from '../../src/share/capsule-preview-scene-store';
 
-function thumbForFixture() {
-  const descriptor = buildCapsulePreviewDescriptor({
-    shareCode: '7M4K2D8Q9T1V',
-    title: 'Diamond cluster',
-    kind: 'capsule',
-    atomCount: 64,
-    frameCount: 240,
-  });
-  return buildFigureGraph(descriptor);
+function thumbFixture(n: number, seed = 0): PreviewThumbV1 {
+  const atoms = [];
+  for (let i = 0; i < n; i++) {
+    atoms.push({
+      x: ((i + seed) % n) / Math.max(1, n - 1),
+      y: (i % 3) / 2,
+      r: 0.04,
+      c: i % 2 === 0 ? '#222222' : '#3050f8',
+    });
+  }
+  return { v: 1, atoms };
 }
 
-describe('CapsulePreviewThumb (account row)', () => {
+function thumbWithBonds(n: number, bondCount: number): PreviewThumbV1 {
+  const base = thumbFixture(n);
+  const bonds = [];
+  for (let i = 0; i < bondCount; i++) {
+    bonds.push({ a: i % n, b: (i + 1) % n });
+  }
+  return { ...base, bonds };
+}
+
+describe('CapsulePreviewThumb — atoms-only payload', () => {
   it('renders a decorative SVG marked aria-hidden', () => {
-    const { container } = render(<CapsulePreviewThumb graph={thumbForFixture()} />);
+    const { container } = render(<CapsulePreviewThumb thumb={thumbFixture(8)} />);
     const svg = container.querySelector('svg');
     expect(svg).not.toBeNull();
     expect(svg?.getAttribute('aria-hidden')).toBe('true');
     expect(svg?.getAttribute('role')).toBe('presentation');
   });
 
-  it('contains nodes from the figure graph', () => {
-    const { container } = render(<CapsulePreviewThumb graph={thumbForFixture()} />);
-    expect(container.querySelectorAll('circle').length).toBeGreaterThan(0);
+  it('renders one circle per atom (verbatim — no client-side downsampling)', () => {
+    const thumb = thumbFixture(5);
+    const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
+    expect(container.querySelectorAll('circle').length).toBe(thumb.atoms.length);
   });
 
-  it('stays within the per-thumb DOM-node budget (≤20 elements)', () => {
-    const { container } = render(<CapsulePreviewThumb graph={thumbForFixture()} />);
-    expect(container.querySelectorAll('*').length).toBeLessThanOrEqual(20);
+  it('uses per-atom stored color', () => {
+    const thumb = thumbFixture(2);
+    const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
+    const circles = container.querySelectorAll('circle');
+    expect(circles[0].getAttribute('fill')).toBe('#222222');
+    expect(circles[1].getAttribute('fill')).toBe('#3050f8');
   });
 
-  it('uses the descriptor accent color for the node fill', () => {
-    const graph = thumbForFixture();
-    const { container } = render(<CapsulePreviewThumb graph={graph} />);
-    const circle = container.querySelector('circle');
-    expect(circle?.getAttribute('fill')).toBe(graph.accentColor);
-  });
-
-  it('preserves at least one edge when the source graph has links and budget allows', () => {
-    // Use a high-density graph (atomCount > 256 → 18 nodes + edges).
-    const descriptor = buildCapsulePreviewDescriptor({
-      shareCode: '7M4K2D8Q9T1V',
-      title: 'dense',
-      kind: 'capsule',
-      atomCount: 1024,
-      frameCount: 240,
-    });
-    const graph = buildFigureGraph(descriptor);
-    expect(graph.links.length).toBeGreaterThan(0); // sanity for the source
-    const { container } = render(<CapsulePreviewThumb graph={graph} />);
-    expect(container.querySelectorAll('line').length).toBeGreaterThan(0);
+  it('renders no <line> elements when the payload has no bonds', () => {
+    const { container } = render(<CapsulePreviewThumb thumb={thumbFixture(10)} />);
+    expect(container.querySelectorAll('line').length).toBe(0);
   });
 });
 
-describe('downsampleFigureForThumb', () => {
-  it('produces ≤ childBudget total elements', () => {
-    const descriptor = buildCapsulePreviewDescriptor({
-      shareCode: '7M4K2D8Q9T1V',
-      title: null,
-      kind: 'capsule',
-      atomCount: 1024,
-      frameCount: 240,
-    });
-    const graph = buildFigureGraph(descriptor);
-    const out = downsampleFigureForThumb(graph, 19);
-    expect(out.nodes.length + out.links.length).toBeLessThanOrEqual(19);
+describe('CapsulePreviewThumb — bonds-aware payload', () => {
+  it('renders one <line> per bond, under the atoms', () => {
+    const thumb = thumbWithBonds(6, 4);
+    const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
+    const lines = container.querySelectorAll('line');
+    expect(lines.length).toBe(4);
+    const svg = container.querySelector('svg')!;
+    // Bonds rendered before atoms in paint order so atoms occlude the stroke
+    // endpoints visually. Check DOM order: first line index < first circle.
+    const firstLine = Array.from(svg.children).findIndex((n) => n.tagName.toLowerCase() === 'line');
+    const firstCircleAfterRect = Array.from(svg.children).findIndex(
+      (n, idx) => n.tagName.toLowerCase() === 'circle' && idx > 0,
+    );
+    expect(firstLine).toBeLessThan(firstCircleAfterRect);
   });
 
-  it('reserves edge budget so dense graphs keep some links', () => {
-    const descriptor = buildCapsulePreviewDescriptor({
-      shareCode: '7M4K2D8Q9T1V',
-      title: null,
-      kind: 'capsule',
-      atomCount: 1024,
-      frameCount: 240,
-    });
-    const graph = buildFigureGraph(descriptor);
-    expect(graph.links.length).toBeGreaterThan(0);
-    const out = downsampleFigureForThumb(graph, 19);
-    expect(out.links.length).toBeGreaterThan(0);
+  it('stays within the ≤20-element DOM budget at the worst-case (12 atoms + 6 bonds)', () => {
+    const thumb = thumbWithBonds(12, 6);
+    const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
+    expect(container.querySelectorAll('*').length).toBeLessThanOrEqual(20);
   });
 
-  it('every kept link has both endpoints in the kept node set', () => {
-    const descriptor = buildCapsulePreviewDescriptor({
-      shareCode: '7M4K2D8Q9T1V',
-      title: null,
-      kind: 'capsule',
-      atomCount: 1024,
-      frameCount: 240,
-    });
-    const graph = buildFigureGraph(descriptor);
-    const out = downsampleFigureForThumb(graph, 19);
-    const keptIds = new Set(out.nodes.map((n) => n.id));
-    for (const l of out.links) {
-      expect(keptIds.has(l.from)).toBe(true);
-      expect(keptIds.has(l.to)).toBe(true);
-    }
+  it('skips bonds whose endpoints exceed the atom array', () => {
+    const thumb: PreviewThumbV1 = {
+      ...thumbFixture(3),
+      bonds: [{ a: 0, b: 99 }, { a: 5, b: 1 }],
+    };
+    const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
+    // Both bonds reference out-of-range indices → no <line> elements.
+    expect(container.querySelectorAll('line').length).toBe(0);
+  });
+});
+
+describe('CapsulePreviewThumb — visual distinctiveness', () => {
+  it('two different atom layouts produce different DOM geometry', () => {
+    const a = thumbFixture(10, 0);
+    const b = thumbFixture(10, 3);
+    const { container: ca } = render(<CapsulePreviewThumb thumb={a} />);
+    const { container: cb } = render(<CapsulePreviewThumb thumb={b} />);
+    const posA = Array.from(ca.querySelectorAll('circle')).map(
+      (c) => `${c.getAttribute('cx')},${c.getAttribute('cy')}`,
+    ).join('|');
+    const posB = Array.from(cb.querySelectorAll('circle')).map(
+      (c) => `${c.getAttribute('cx')},${c.getAttribute('cy')}`,
+    ).join('|');
+    expect(posA).not.toBe(posB);
+  });
+});
+
+describe('CapsulePreviewThumb — renderer/derivation coupling', () => {
+  it('renders bonded-mode atoms at the radius the derivation filter assumes (2.8 viewBox)', () => {
+    // `derivePreviewThumbV1` filters bonds by `visible = len − 2×atomRadius`
+    // where `atomRadius=2.8` for n>6 bonded thumbs. If the renderer ever
+    // enlarges its bonded atom radius above 2.8 without updating the
+    // derivation constant, silently-visible-to-derivation bonds will be
+    // occluded by larger rendered glyphs. This test locks the renderer
+    // side of that contract.
+    const thumb: PreviewThumbV1 = {
+      v: 1,
+      atoms: Array.from({ length: 12 }, (_, i) => ({
+        x: 0.1 + (i / 11) * 0.8,
+        y: 0.5,
+        r: 0.028,
+        c: '#222222',
+      })),
+      bonds: [{ a: 0, b: 1 }],
+    };
+    const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
+    const circles = container.querySelectorAll('circle');
+    const r = parseFloat(circles[0].getAttribute('r') ?? '0');
+    expect(r).toBeLessThanOrEqual(2.8);
   });
 
-  it('actually fills the reserved node budget on dense graphs', () => {
-    // Regression for the under-utilization bug: the previous stride
-    // sampler turned an 18-node, 15-budget input into 9 kept nodes.
-    // The replacement must hit the budget (15 nodes, 4 edges = 19).
-    const descriptor = buildCapsulePreviewDescriptor({
-      shareCode: '7M4K2D8Q9T1V',
-      title: null,
-      kind: 'capsule',
-      atomCount: 1024,
-      frameCount: 240,
-    });
-    const graph = buildFigureGraph(descriptor);
-    expect(graph.nodes.length).toBe(18); // density=high → 18 nodes
-    const out = downsampleFigureForThumb(graph, 19);
-    // With 4 reserved edge slots and 15 available node slots, we should
-    // keep all 15 of the requested nodes (or be within a tight tolerance).
-    expect(out.nodes.length).toBeGreaterThanOrEqual(15);
+  it('renders low-N bonded atoms at ≤ 3.5 viewBox (derivation constant)', () => {
+    const thumb: PreviewThumbV1 = {
+      v: 1,
+      atoms: Array.from({ length: 5 }, (_, i) => ({
+        x: 0.1 + (i / 4) * 0.8,
+        y: 0.5,
+        r: 0.028,
+        c: '#222222',
+      })),
+      bonds: [{ a: 0, b: 1 }],
+    };
+    const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
+    const r = parseFloat(container.querySelector('circle')!.getAttribute('r') ?? '0');
+    expect(r).toBeLessThanOrEqual(3.5);
   });
 
-  it('keeps endpoints — first and last source nodes — when sampling', () => {
-    // Even-spaced sampling must always include index 0 and index n-1 so
-    // the thumb retains the visual extents of the figure.
-    const descriptor = buildCapsulePreviewDescriptor({
-      shareCode: '7M4K2D8Q9T1V',
-      title: null,
-      kind: 'capsule',
-      atomCount: 1024,
-      frameCount: 240,
-    });
-    const graph = buildFigureGraph(descriptor);
-    const out = downsampleFigureForThumb(graph, 19);
-    expect(out.nodes[0].id).toBe(graph.nodes[0].id);
-    expect(out.nodes[out.nodes.length - 1].id).toBe(graph.nodes[graph.nodes.length - 1].id);
+  it('renders atoms-only sparse atoms at ≤ 8 viewBox (derivation constant)', () => {
+    const thumb: PreviewThumbV1 = {
+      v: 1,
+      atoms: [{ x: 0.5, y: 0.5, r: 0.028, c: '#222222' }],
+    };
+    const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
+    const r = parseFloat(container.querySelector('circle')!.getAttribute('r') ?? '0');
+    expect(r).toBeLessThanOrEqual(8);
+  });
+});
+
+describe('PlaceholderThumb', () => {
+  it('renders a small presentational SVG', () => {
+    const { container } = render(<PlaceholderThumb />);
+    const svg = container.querySelector('svg');
+    expect(svg).not.toBeNull();
+    expect(svg?.getAttribute('aria-hidden')).toBe('true');
+    expect(svg?.getAttribute('role')).toBe('presentation');
   });
 
-  it('neutral-brand graph (no links) downsamples to nodes-only', () => {
-    const descriptor = buildCapsulePreviewDescriptor({
-      shareCode: '7M4K2D8Q9T1V',
-      title: null,
-      kind: 'unknown',
-      atomCount: 64,
-      frameCount: 60,
-    });
-    const graph = buildFigureGraph(descriptor);
-    expect(graph.links.length).toBe(0);
-    const out = downsampleFigureForThumb(graph, 19);
-    expect(out.links.length).toBe(0);
-    expect(out.nodes.length).toBeGreaterThan(0);
+  it('keeps a well-under-budget element count (≤ 5 elements)', () => {
+    const { container } = render(<PlaceholderThumb />);
+    expect(container.querySelectorAll('*').length).toBeLessThanOrEqual(5);
   });
 });

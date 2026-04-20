@@ -39,6 +39,7 @@ function makeRow(over: Partial<CapsuleShareRow> = {}): CapsuleShareRow {
     published_at: '2026-04-13T00:00:00Z',
     last_accessed_at: null,
     rejection_reason: null,
+    preview_scene_v1: null,
     ...over,
   };
 }

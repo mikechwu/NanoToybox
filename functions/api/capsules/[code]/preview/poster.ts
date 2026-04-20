@@ -1,14 +1,22 @@
 /**
- * GET /api/capsules/:code/preview/poster — serve preview poster image (spec §6).
+ * GET /api/capsules/:code/preview/poster — serve preview poster image.
  *
  * Branches:
  *   stored ready → 200 image/png from R2, immutable for a year
- *   dynamic       → 200 image/png generated via Satori/ImageResponse (V1 fallback)
+ *   dynamic       → 200 image/png generated via Satori/ImageResponse
+ *                   from the pre-baked preview_scene_v1 (lazy-backfilled
+ *                   from R2 on V2 cold rows)
  *   render error  → 200 image/png from /og-fallback.png (terminal fallback)
  *   inaccessible / flag-off & not stored → 404
  *
- * Every response emits a structured log line for observability (spec §13).
+ * Every response emits a structured log line for observability.
  * The `?v=` query param is a cache key only and is ignored by the route.
+ *
+ * V2 notes (spec §S1): the dynamic branch reads `preview_scene_v1` from D1
+ * instead of reconstructing the scene from row metadata. When the column is
+ * NULL (pre-V2 rows that haven't been backfilled), the route fetches the
+ * capsule blob from R2 ONCE, projects the scene, writes it back to D1, and
+ * renders. Subsequent requests hit the fast path.
  */
 
 import type { Env } from '../../../../env';
@@ -19,13 +27,27 @@ import {
 } from '../../../../../src/share/share-record';
 import type { CapsuleShareRow } from '../../../../../src/share/share-record';
 import {
-  buildCapsulePreviewDescriptor,
   fnv1a32Hex,
+  sanitizeCapsuleTitle,
   TEMPLATE_VERSION,
-  type CapsulePreviewInput,
 } from '../../../../../src/share/capsule-preview';
+import {
+  parsePreviewSceneV1,
+  type PreviewSceneV1,
+} from '../../../../../src/share/capsule-preview-scene-store';
+import { projectCapsuleToSceneJson } from '../../../../../src/share/publish-core';
+import {
+  validateCapsuleFile,
+  type AtomDojoPlaybackCapsuleFileV1,
+} from '../../../../../src/history/history-file-v1';
 
 type PosterMode = 'stored' | 'generated' | 'error' | 'flag-off' | 'inaccessible';
+
+export interface PosterRenderMeta {
+  sanitizedTitle: string;
+  subtitle: string;
+  shareCode: string;
+}
 
 interface PosterLogEntry {
   code: string;
@@ -53,7 +75,7 @@ function looksLikePng(bytes: Uint8Array): boolean {
   return true;
 }
 
-// 1×1 transparent PNG — fallback-for-the-fallback (spec §4).
+// 1×1 transparent PNG — fallback-for-the-fallback.
 const TRANSPARENT_PIXEL_PNG = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
   0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -66,16 +88,16 @@ const TRANSPARENT_PIXEL_PNG = new Uint8Array([
   0x42, 0x60, 0x82,
 ]);
 
-function rowToPreviewInput(row: CapsuleShareRow): CapsulePreviewInput {
-  return {
-    shareCode: row.share_code,
-    title: row.title,
-    kind: row.kind,
-    atomCount: row.atom_count,
-    frameCount: row.frame_count,
-    sizeBytes: row.size_bytes,
-    createdAt: row.created_at ?? null,
-  };
+function formatSubtitle(row: CapsuleShareRow): string {
+  const parts: string[] = [];
+  if (Number.isFinite(row.atom_count) && row.atom_count > 0) {
+    parts.push(`${row.atom_count} atoms`);
+  }
+  if (Number.isFinite(row.frame_count) && row.frame_count > 0) {
+    parts.push(`${row.frame_count} frames`);
+  }
+  if (parts.length === 0) return 'Interactive molecular dynamics scene';
+  return parts.join(' · ');
 }
 
 async function serveTerminalFallback(
@@ -133,16 +155,17 @@ async function serveTerminalFallback(
 
 /** Test seam — vitest can swap in a synchronous renderer so the route can run
  *  outside the workerd runtime. Production codepath uses `import()` of
- *  `_lib/capsule-preview-image`. The seam takes the same descriptor the
- *  production renderer takes (no separate input thread) so the contract is
- *  identical across paths. */
-type DescriptorRenderer = (
-  descriptor: ReturnType<typeof buildCapsulePreviewDescriptor>,
+ *  `_lib/capsule-preview-image`. The seam takes the same scene + meta the
+ *  production renderer takes so the contract is identical across paths
+ *  (spec §V1 Carry-Over Checklist, updated for V2). */
+type SceneRenderer = (
+  scene: PreviewSceneV1,
+  meta: PosterRenderMeta,
 ) => Promise<Response> | Response;
 
-let rendererOverride: DescriptorRenderer | null = null;
+let rendererOverride: SceneRenderer | null = null;
 
-export function __setRendererForTesting(fn: DescriptorRenderer | null): void {
+export function __setRendererForTesting(fn: SceneRenderer | null): void {
   rendererOverride = fn;
 }
 
@@ -150,9 +173,10 @@ export function __setRendererForTesting(fn: DescriptorRenderer | null): void {
  *  surface with distinct cause strings, so the structured log doesn't
  *  falsely accuse Satori for a font/wasm/plugin import problem. */
 async function generateDynamicPoster(
-  descriptor: ReturnType<typeof buildCapsulePreviewDescriptor>,
+  scene: PreviewSceneV1,
+  meta: PosterRenderMeta,
 ): Promise<Response> {
-  if (rendererOverride) return rendererOverride(descriptor);
+  if (rendererOverride) return rendererOverride(scene, meta);
   let mod: typeof import('../../../../_lib/capsule-preview-image');
   try {
     mod = await import('../../../../_lib/capsule-preview-image');
@@ -160,28 +184,82 @@ async function generateDynamicPoster(
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`module-import-failed:${msg}`);
   }
-  return mod.renderCapsulePosterImage(descriptor);
+  return mod.renderCapsulePosterImage(scene, meta);
 }
 
 /**
  * Stable, content-bound ETag for a dynamic poster — derived from a
- * canonical serialization of the actual render-affecting descriptor fields
- * (spec §6 contract). Changes whenever any of: TEMPLATE_VERSION, sanitized
- * title, subtitle, figure variant, accent color, or density change.
+ * canonical serialization of the actual rendered scene (spec §ETag binding).
+ * Changes whenever any of: TEMPLATE_VERSION, scene hash, sanitized title,
+ * or share code change.
  */
 function dynamicPosterETag(
-  descriptor: ReturnType<typeof buildCapsulePreviewDescriptor>,
+  scene: PreviewSceneV1,
+  sanitizedTitle: string,
+  shareCode: string,
 ): string {
   const canonical = [
     `t${TEMPLATE_VERSION}`,
-    descriptor.title,
-    descriptor.subtitle,
-    descriptor.figureVariant,
-    descriptor.accentColor,
-    descriptor.density,
-    descriptor.shareCode,
+    scene.hash,
+    sanitizedTitle,
+    shareCode,
   ].join('|');
   return `"v${TEMPLATE_VERSION}-${fnv1a32Hex(canonical)}"`;
+}
+
+/**
+ * Lazy-backfill path: fetch the capsule blob from R2, project the scene,
+ * write the serialized JSON back to D1. Writes are awaited but failures
+ * do NOT prevent serving the poster (the scene is already computed in
+ * memory). Subsequent requests for this row will hit the fast path.
+ */
+async function lazyBackfillScene(
+  env: Env,
+  row: CapsuleShareRow,
+): Promise<{ scene: PreviewSceneV1; sceneJson: string } | { error: string }> {
+  if (!row.object_key) return { error: 'blob-missing' };
+  const obj = await env.R2_BUCKET.get(row.object_key);
+  if (!obj) return { error: 'blob-missing' };
+  let text: string;
+  try {
+    text = await obj.text();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { error: `blob-read-failed:${msg}` };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { error: `capsule-parse-failed:${msg}` };
+  }
+  const errors = validateCapsuleFile(parsed);
+  if (errors.length > 0) {
+    return { error: `capsule-parse-failed:${errors[0]}` };
+  }
+  const capsule = parsed as AtomDojoPlaybackCapsuleFileV1;
+  const sceneJson = projectCapsuleToSceneJson(capsule);
+  if (!sceneJson) return { error: 'no-dense-frames' };
+  const scene = parsePreviewSceneV1(sceneJson);
+  if (!scene || scene.atoms.length === 0) return { error: 'scene-empty' };
+  // Fire-and-observe: write back to D1 so the next request hits the fast
+  // path. Await it so errors surface — but a failed write does NOT block
+  // serving the poster we already have in memory.
+  try {
+    // Include the IS NULL gate so a concurrent writer (or a post-V2
+    // publish on the same row) cannot be overwritten by a stale lazy
+    // backfill. deriveScene is deterministic, so losing the race is a
+    // benign no-op rather than a consistency hazard.
+    await env.DB.prepare(
+      `UPDATE capsule_share SET preview_scene_v1 = ?
+         WHERE id = ? AND preview_scene_v1 IS NULL`,
+    ).bind(sceneJson, row.id).run();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[capsule-poster] lazy-backfill write failed: ${msg}`);
+  }
+  return { scene, sceneJson };
 }
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
@@ -210,15 +288,13 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     return new Response('Not found', { status: 404, headers: { 'Cache-Control': 'public, max-age=60' } });
   }
 
-  // Selection (spec §6): stored takes precedence; dynamic gated on flag.
+  // Selection: stored takes precedence; dynamic gated on flag.
   const hasStored = row.preview_status === 'ready' && !!row.preview_poster_key;
   const dynamicEnabled = isDynamicPreviewFallbackEnabled(context.env);
 
   if (hasStored) {
     const object = await context.env.R2_BUCKET.get(row.preview_poster_key!);
     if (!object) {
-      // R2 miss for a "ready" row — degrade to terminal fallback so the
-      // social card still has an image.
       return serveTerminalFallback(context.request, code, startedAt, 'r2-miss');
     }
     // Materialize R2 stream before re-wrapping. Same workerd quirk as the
@@ -247,13 +323,34 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     return new Response('Not found', { status: 404, headers: { 'Cache-Control': 'public, max-age=60' } });
   }
 
+  // V2 dynamic branch: read pre-baked scene; fall back to lazy backfill.
+  let scene: PreviewSceneV1 | null = parsePreviewSceneV1(row.preview_scene_v1);
+  if (!scene || scene.atoms.length === 0) {
+    // preview_scene_v1 is absent OR malformed — treat malformed as null so
+    // the lazy-backfill rewrites the cell with a fresh render on next call.
+    if (row.preview_scene_v1 != null && scene == null) {
+      // Diagnostic breadcrumb for ops — malformed JSON in a TEXT column is
+      // rare enough that we want a signal when it happens.
+      console.warn(`[capsule-poster] scene-parse-failed for share=${code}`);
+    }
+    const backfill = await lazyBackfillScene(context.env, row);
+    if ('error' in backfill) {
+      const cause = backfill.error === 'blob-missing'
+        ? 'scene-missing'
+        : backfill.error;
+      return serveTerminalFallback(context.request, code, startedAt, cause);
+    }
+    scene = backfill.scene;
+  }
+
   try {
-    const input = rowToPreviewInput(row);
-    const descriptor = buildCapsulePreviewDescriptor(input, {
-      mode: 'static-figure',
-      themeVariant: 'light',
-    });
-    const response = await generateDynamicPoster(descriptor);
+    const sanitizedTitle = sanitizeCapsuleTitle(row.title);
+    const meta: PosterRenderMeta = {
+      sanitizedTitle,
+      subtitle: formatSubtitle(row),
+      shareCode: row.share_code,
+    };
+    const response = await generateDynamicPoster(scene, meta);
     // Materialize the body before re-wrapping. workerd's stream pipeline
     // can drop bytes when an ImageResponse stream is handed straight to a
     // new Response; reading to an ArrayBuffer first sidesteps that and is
@@ -273,10 +370,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
       'Cache-Control',
       'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400',
     );
-    // Spec §6 — ETag is bound to the actual render inputs, so any sanitized-
-    // title / subtitle / variant / accent / density / template-version change
-    // produces a different validator and conditional GETs revalidate.
-    headers.set('ETag', dynamicPosterETag(descriptor));
+    headers.set('ETag', dynamicPosterETag(scene, sanitizedTitle, row.share_code));
     headers.set('Access-Control-Allow-Origin', '*');
     headers.set('X-Content-Type-Options', 'nosniff');
     logPoster({ code, mode: 'generated', status: 200, durationMs: Date.now() - startedAt });

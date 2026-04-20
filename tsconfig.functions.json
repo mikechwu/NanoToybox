@@ -42,6 +42,7 @@
     "tests/unit/oauth-state.test.ts",
     "tests/unit/auth-error-route.test.ts",
     "tests/unit/auth-callback-acceptance.test.ts",
+    "tests/unit/account-api-preview-thumb.test.ts",
     "workers/cron-sweeper/src/**/*.ts"
   ]
 }

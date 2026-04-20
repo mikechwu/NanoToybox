@@ -162,7 +162,7 @@ Where to add code → see [contributing.md#extension-points](contributing.md#ext
 | `src/appearance/` | Bonded-group color assignments (authored overrides, persistence keys) |
 | `src/input/` | Camera gesture constants (shared by Lab + Watch camera input) |
 | `src/camera/` | Cinematic camera primitives |
-| `src/share/` | Share-code format, share-record shape, capsule-preview descriptor + figure mapping (`capsule-preview.ts`, `capsule-preview-figure.ts`, `capsule-preview-denylist.ts`) |
+| `src/share/` | Share-code format, share-record shape, capsule-preview V2 pipeline (projection → PCA camera → scene + thumb store → shared render constants) |
 | `src/policy/` | Policy version + acceptance config (consumed by functions and frontend) |
 | `src/format/` | Byte formatting helpers |
 | `src/types/` | Shared interface declarations |
@@ -174,7 +174,16 @@ Three domains in this list carry more weight than the others:
 - `src/history/` is the schema authority. Every exported file, every capsule, every handoff seed flows through the types here. Breaking changes to the v1 schema require careful migration thought; see [decisions.md](decisions.md).
 - `src/watch-lab-handoff/` is the contract between the two apps. Both Watch (seed build) and Lab (hydrate) import from it. It is the only place either app should look up the handoff shape.
 - `src/ui/` is the design system. Tokens, dock and sheet shells, segmented controls, timeline track, bonded-group chip styling, and lifecycle hooks all live here. Changes ripple into both Lab and Watch; visual regressions in either app often trace back to a change here.
-- `src/share/capsule-preview*` is the descriptor authority for capsule previews. Two callers consume it: the account-row thumbnail (`account/main.tsx`, decorative SVG) and the dynamic poster Function (`functions/api/capsules/[code]/preview/poster.ts`). Both render from the same `CapsulePreviewDescriptor` and the same descriptor → `FigureGraph` mapping, so a given capsule looks identical in the account list and as an OG poster. Figure geometry is a pure function of `shareCode + kind` only; title/theme/createdAt/sizeBytes affect presentation fields but never geometry. The title sanitizer here is the sole non-Latin fallback boundary in V1, and `TEMPLATE_VERSION` is the cache-key constant for the dynamic-poster axis (see [Capsule preview](#flow-capsule-preview)).
+- `src/share/capsule-preview*` is the V2 preview pipeline — projection, canonical camera, scene-store serializer, and the shared render constants that bind the account thumb and the OG poster to the same geometry. Two callers consume it: the account-row thumbnail (`account/main.tsx`, decorative SVG from the stored `PreviewThumbV1` payload) and the dynamic poster Function (`functions/api/capsules/[code]/preview/poster.ts`, Satori ImageResponse from the stored `PreviewSceneV1`). Both render from bytes that were projected once at publish time from the FIRST dense frame of the capsule, so a given capsule looks identical in the account list and as an OG poster. Module roles:
+  - `capsule-preview.ts` — `sanitizeCapsuleTitle`, `TEMPLATE_VERSION = 2`, FNV-1a32 helpers (the title sanitizer here is the sole non-Latin fallback boundary, and `TEMPLATE_VERSION` is the dynamic-poster cache-key constant).
+  - `capsule-preview-frame.ts` — `buildPreviewSceneFromCapsule` picks `timeline.denseFrames[0]`.
+  - `capsule-preview-colors.ts` — CPK element table + per-bonded-group appearance fan-out.
+  - `capsule-preview-camera.ts` — PCA (Jacobi) + `{spherical, planar, linear, general, degenerate}` classification + deterministic sign normalization + fixed 5°/10° tilt.
+  - `capsule-preview-project.ts` — 3D → 2D projection; `deriveBondPairs` runs the distance-cutoff rule from `bondPolicy`.
+  - `capsule-preview-sampling.ts` — `sampleEvenly`, `sampleForSilhouette` (extrema + FPS), `sampleForBondedThumb` (graph-aware BFS + connection-count scoring + FPS fill).
+  - `capsule-preview-scene-store.ts` — types (`PreviewSceneV1`, `PreviewStoredThumbV1` with `CURRENT_THUMB_REV = 2`, `PreviewThumbV1`), `buildPreviewSceneV1`, `buildStoredThumbFromFullScene`, `parsePreviewSceneV1` (malformed-thumb and non-finite guards), `derivePreviewThumbV1` (stored-thumb fast path + tiered-visibility live-sampling fallback).
+  - `capsule-preview-thumb-render.ts` — shared constants (`BONDED_ATOM_RADIUS = 2.8`, `BOND_STROKE_WIDTH = 2.5`, `MIN_VISIBLE_BOND_VIEWBOX = 3`, `RELAXED_VISIBLE_BOND_VIEWBOX = 2.0`, atoms-only density floor, margin resolvers) imported by BOTH the scene-store visibility filter and `account/main.tsx` — a single-point coupling that keeps the publish-time refit math in sync with the renderer.
+  - `capsule-preview-denylist.ts` — title denylist (shared with the publish path).
 
 ## Backend <a id="backend"></a>
 
@@ -303,31 +312,80 @@ The privacy and moderation gate on the read path is non-negotiable: a capsule th
 
 ### Capsule preview <a id="flow-capsule-preview"></a>
 
-A capsule has two presentation surfaces beyond its bytes: a thumbnail in the account list and an Open Graph poster on a `/c/:code` share. Both render from the same descriptor.
+A capsule has two presentation surfaces beyond its bytes: a thumbnail in the account list and an Open Graph poster on a `/c/:code` share. Both render from the **same stored payload**, projected once at publish time from the first dense frame of the capsule.
+
+#### Stored payload (D1 `capsule_share.preview_scene_v1 TEXT NULLABLE`, migration 0009)
+
+A single JSON cell per row carries two artifacts inside one `PreviewSceneV1` shape:
 
 ```
-GET /api/capsules/:CODE/preview/poster
+{ v: 1,
+  atoms: [{x,y,r,c}],           // up to SCENE_ATOM_CAP=32 — feeds the 1200×630 poster
+  bonds?: [{a,b}],              // up to SCENE_BOND_CAP=64 — indices into atoms[]
+  hash: "<8hex FNV-1a32>",      // over the atom array; bond-independent
+  thumb?: {                     // pre-baked at publish time from the FULL capsule
+    rev: 2,                     //   (CURRENT_THUMB_REV, bumps when algorithm changes)
+    atoms: [{x,y,r,c}],         //   up to 12 atoms, already refit into the 40×40 thumb cell
+    bonds?: [{a,b}]             //   up to 6 bonds (coverage-selected, degree-capped)
+  } }
+```
+
+The critical property: the `thumb` payload is derived from the **full** capsule atoms, not from the 32-atom poster subset. That avoids the 60 → 32 → 12 double-downsampling cascade that would erase dense-structure topology (C60 et al.). Atoms + bonds in the thumb are already refit into the 40×40 thumb cell in 0..1-normalized space, so the account API emits them verbatim. `rev` lets backfill scripts identify stale rows when the thumb pipeline changes.
+
+#### Publish flow (single-parse boundary)
+
+`src/share/publish-core.ts:preparePublishRecord` runs the whole preview pipeline in memory, with no D1 or R2 I/O:
+
+1. Parse + validate the capsule file.
+2. `buildPreviewSceneFromCapsule` picks the first dense frame.
+3. `capsule-preview-camera` computes the PCA canonical camera + tilt.
+4. `capsule-preview-project` projects 3D → 2D and derives bond pairs from the capsule's `bondPolicy`.
+5. Build the 32-atom **poster scene** (`buildPreviewSceneV1`) AND the 12-atom **full-atoms thumb** (`buildStoredThumbFromFullScene`); attach the thumb to the scene.
+6. Return `previewSceneV1Json` on the `PreparedPublishRecord`.
+
+`persistRecord` INSERTs the JSON into `preview_scene_v1` unchanged. The whole pipeline runs once per publish; read paths never re-project.
+
+#### Read flows
+
+```
+GET /api/capsules/:CODE/preview/poster          (functions/api/capsules/[code]/preview/poster.ts)
   → resolve capsule + flags (D1)
-  → if stored R2 poster present → serve R2 bytes
-  else if CAPSULE_PREVIEW_DYNAMIC_FALLBACK on
-      → build CapsulePreviewDescriptor (src/share/capsule-preview)
-      → map to FigureGraph (src/share/capsule-preview-figure)
-      → compose ImageResponse via functions/_lib/capsule-preview-image.tsx (Satori, bundled Latin font)
-  else → terminal /og-fallback.png
-  fallthrough → 1×1 PNG safety net
-  every branch → structured log line
+  → if preview_status='ready' + preview_poster_key → serve R2 bytes (stored mode)
+  else if dynamic fallback flag on →
+        parsePreviewSceneV1(row.preview_scene_v1)
+        if null → lazy-backfill: R2 blob → project → UPDATE … WHERE preview_scene_v1 IS NULL
+        compose ImageResponse via functions/_lib/capsule-preview-image.tsx (Satori, bundled Latin font)
+        ETag `"v2-<8hex>"` bound to [TEMPLATE_VERSION, scene.hash, sanitizedTitle, shareCode]
+  else            → 404
+  any render/import error → terminal /og-fallback.png
+  fallthrough             → 1×1 transparent PNG safety net
+  every branch            → structured log line
 ```
 
-The account-row thumbnail (`account/main.tsx` → inline `CapsulePreviewThumb`) consumes the same descriptor and the same descriptor → `FigureGraph` mapping, downsampled to ≤20 DOM elements per thumb. Identity is by `shareCode + kind` only; that is what makes the thumb and the poster recognizably the same capsule.
+Lazy backfill is a one-shot self-heal: a pre-V2 row that still carries `preview_scene_v1 = NULL` triggers a single R2 fetch + projection + conditional UPDATE on the first poster miss; subsequent requests hit the fast path. The conditional `WHERE preview_scene_v1 IS NULL` clause makes a concurrent publish-time write always win.
 
-Two cache-key axes, decoupled by lifecycle:
+```
+GET /api/account/capsules                       (functions/api/account/capsules/index.ts)
+  → authenticate → keyset query of capsule_share (ORDER BY created_at DESC, share_code DESC)
+  → derivePreviewThumbV1(row.preview_scene_v1, { sampler: sampleForSilhouette, caps, … })
+      fast path: if scene.thumb present at rev ≥ CURRENT_THUMB_REV → return verbatim
+      fallback:  atoms-only (≤18) or tiered bonded (≤12 atoms + ≤6 bonds)
+  → return AccountCapsuleSummary[] with `previewThumb: PreviewThumbV1 | null`
+```
 
-- **Dynamic posters** bust on `TEMPLATE_VERSION` bump (`?v=t<N>`). Bumping the constant invalidates every dynamically composed poster without touching stored bytes.
+**No R2 access on the hot path.** Every row is served from the single D1 read. When `preview_scene_v1` is null, malformed, or empty, `derivePreviewThumbV1` returns null and the client renders `PlaceholderThumb` instead.
+
+#### Account UI render (`account/main.tsx`)
+
+`CapsulePreviewThumb({thumb})` renders the server-derived payload verbatim in two regimes keyed off payload shape: **atoms-only** (≤18 `<circle>` elements) or **bonds-aware** (≤12 circles + ≤6 `<line>` elements). DOM budget is ≤20 elements per thumb. `PlaceholderThumb` covers `previewThumb: null` rows. The renderer imports `capsule-preview-thumb-render.ts` so radius, stroke, and halo values are the same constants the scene-store used when filtering bond visibility.
+
+#### Cache-key axes
+
+- **Dynamic posters** bust on `TEMPLATE_VERSION` bump (`?v=t<N>`, currently `t2`). The ETag `"v2-<8hex>"` additionally binds to `scene.hash`, the sanitized title, and the share code.
 - **Stored posters** bust on FNV-1a hash of `preview_poster_key` (`?v=p<8hex>`). Re-uploading R2 bytes for a capsule changes the key hash and forces a fresh fetch independent of the template axis.
+- `/c/:code` share pages emit the poster URL with `?v=t2` in the OG tag.
 
-Public metadata contract: `ShareMetadataResponse.preview` is `{posterUrl, width: 1200, height: 630}` and is present for any accessible row when the flag is on. Whether stored R2 bytes exist is signaled by `previewStatus === 'ready'`, **not** by the presence of `preview.posterUrl` — the URL is always advertised; the status field gates the stored-vs-dynamic expectation.
-
-D1 schema is unchanged in V1; no migration shipped with the preview module.
+Public metadata contract: `ShareMetadataResponse.preview` is `{posterUrl, width: 1200, height: 630}` and is present for any accessible row when the flag is on. Whether stored R2 bytes exist is signaled by `previewStatus === 'ready'`, **not** by the presence of `preview.posterUrl`.
 
 ### Auth / signed-intent flow <a id="flow-auth"></a>
 

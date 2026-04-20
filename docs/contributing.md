@@ -100,6 +100,7 @@ Shared TypeScript and CSS modules live in `src/` and are imported by both `lab/`
 | `src/topology/` | Bond rules (`bond-rules.ts`), topology builders (`build-bond-topology.ts`: naive + accelerated), policy resolution (`bond-policy-resolver.ts`) |
 | `src/config/` | Playback speed constants, viewer defaults (base sim rate, etc.), bond-policy defaults (`bond-defaults.ts`) |
 | `src/history/` | History file v1 types/validation (including capsule types), connected components, bonded-group projection/utils, physical unit constants (`units.ts`: `FS_PER_PS`, `IMPLAUSIBLE_VELOCITY_A_PER_FS`), bond-policy wire types (`bond-policy-v1.ts`) |
+| `src/share/` | Publish/share backend primitives (`publish-core.ts`, `share-code.ts`, `share-record.ts`, `rate-limit.ts`, `audit.ts`, `capsule-delete.ts`, `d1-types.ts`, `constants.ts`, `b64url.ts`, `error-message.ts`), and the V2 capsule-preview pipeline split across `capsule-preview.ts` (slim: sanitizer + `TEMPLATE_VERSION = 2` + FNV helpers) plus per-concern modules `capsule-preview-{frame,colors,camera,project,sampling,scene-store,thumb-render,denylist}.ts`. `capsule-preview-thumb-render.ts` is the single source of truth for thumb render constants (`BONDED_ATOM_RADIUS`, `BOND_STROKE_WIDTH`, `MIN_VISIBLE_BOND_VIEWBOX`, …) — both `account/main.tsx` (the DOM/SVG renderer) and `capsule-preview-scene-store.ts` (the derivation path) import from here; do not duplicate these numbers anywhere else |
 | `src/types/` | Worker protocol types |
 
 ### CSS Architecture
@@ -693,6 +694,19 @@ must cover them too.
 Anything else is stale and should be updated — the retired UX should
 not dangle in the active codebase's comments or live docs.
 
+Capsule-preview V1 terms are likewise retired. Before opening a
+release PR, run:
+
+```
+rg -n 'figureVariant|buildCapsulePreviewDescriptor|FigureGraph|capsule-preview-figure|TEMPLATE_VERSION = 1' \
+  docs/ functions/ lab/js/ watch/js/ account/ src/ tests/ README.md *.md
+```
+
+Any match under `docs/` (outside a dated decision entry that explicitly
+records the V1 → V2 transition for historical context) is drift — the
+V2 pipeline replaced the figure abstraction, `TEMPLATE_VERSION` is now
+`2`, and `capsule-preview-figure.ts` has been deleted.
+
 When releasing a change to capsule-preview behavior (the
 `/api/capsules/:code/preview/poster` endpoint, the `og:image` emission
 on `/c/:code`, the `CAPSULE_PREVIEW_DYNAMIC_FALLBACK` flag in
@@ -701,6 +715,58 @@ on `/c/:code`, the `CAPSULE_PREVIEW_DYNAMIC_FALLBACK` flag in
 that describe it (`docs/architecture.md`, `docs/operations.md`, this
 file) in the same PR. The `wrangler.toml` flag block is the canonical
 rollback handle — keep its comment and the doc copy in lockstep.
+
+##### Capsule-preview V2 module layout and contracts
+
+The V2 pipeline is split across the following shared modules — do not
+collapse them back into a monolith, and do not reintroduce a
+`capsule-preview-figure.ts`:
+
+- `src/share/capsule-preview.ts` — slim entry: sanitizer, `TEMPLATE_VERSION = 2`, FNV helpers
+- `src/share/capsule-preview-frame.ts` — frame selection / trim
+- `src/share/capsule-preview-colors.ts` — palette + color assignment
+- `src/share/capsule-preview-camera.ts` — camera framing math
+- `src/share/capsule-preview-project.ts` — 3D → 2D projection
+- `src/share/capsule-preview-sampling.ts` — atom sampling (preserves storage-array references and order)
+- `src/share/capsule-preview-scene-store.ts` — scene derivation, `CURRENT_THUMB_REV`, `ThumbAtomSampler`
+- `src/share/capsule-preview-thumb-render.ts` — thumb render constants (single source of truth)
+- `src/share/capsule-preview-denylist.ts` — denylist / sanitization gate
+
+Load-bearing contracts when touching this pipeline:
+
+1. **Shared render constants live in `capsule-preview-thumb-render.ts`.**
+   Both the DOM/SVG renderer in `account/main.tsx` and the scene-store
+   derivation import `BONDED_ATOM_RADIUS`, `BOND_STROKE_WIDTH`,
+   `MIN_VISIBLE_BOND_VIEWBOX`, etc. from that module. Never inline or
+   duplicate these numbers in either path — a drift breaks
+   renderer/derivation agreement silently.
+2. **`ThumbAtomSampler` implementations MUST preserve storage-array
+   references and return items in storage-array order.** Any
+   clone/normalize/filter that changes identity or ordering breaks
+   bond-index translation and will silently corrupt thumbs.
+3. **Bump `CURRENT_THUMB_REV` on any thumb-pipeline change.** It lives
+   in `src/share/capsule-preview-scene-store.ts` and gates the backfill
+   scripts: rows with `rev < CURRENT_THUMB_REV` get re-baked. If the
+   algorithm changes and you forget to bump, every stored thumb in the
+   wild becomes stale without any rebake trigger.
+4. **Rebake after a bump:**
+   - Local dev: `npm run capsule-preview:backfill:local` (driven by
+     `scripts/backfill-local.mjs`).
+   - Production rollout: document the rollout via
+     `scripts/backfill-preview-scenes.ts` in the release PR.
+
+##### Capsule-preview test layout
+
+Unit coverage lives under `tests/unit/capsule-preview-*`:
+`capsule-preview-frame.test.ts`, `capsule-preview-colors.test.ts`,
+`capsule-preview-camera.test.ts`, `capsule-preview-project.test.ts`,
+`capsule-preview-sampling.test.ts`, `capsule-preview-scene-store.test.ts`,
+`capsule-preview-sanitize.test.ts`, `capsule-preview-dense-outcomes.test.ts`,
+and the regression gate `capsule-preview-pipeline.test.ts` (runs real
+C60 / graphene / CNT capsules through the full publish → derive chain).
+When you change a module, extend its targeted suite **and** confirm
+`capsule-preview-pipeline.test.ts` still passes — that suite is the
+end-to-end contract between renderer and derivation.
 
 #### Production deploy readiness (Cloudflare side)
 

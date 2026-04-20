@@ -31,13 +31,20 @@ Path fragments such as `lab/`, `watch/`, and `viewer/` refer to directories, not
 
 ## Capsule preview (common nouns — lowercase in prose)
 
-- **Capsule Preview** — the V1 deterministic figure system that powers both the account-row thumbnail and the public OG poster. Proper noun for the subsystem; the rendered artifacts are "preview thumbnail" / "preview poster."
-- **CapsulePreviewDescriptor** — presentation-ready, deterministic descriptor produced by `buildCapsulePreviewDescriptor` in `src/share/capsule-preview.ts`. Pure function of `CapsulePreviewInput`; geometry-affecting fields depend ONLY on `shareCode + kind`.
-- **figure variant** — one of `lattice-hex | lattice-cubic | cluster-orbital | chain-helix | ring-fused | neutral-brand`. The first five are molecular layouts; `neutral-brand` is the safe wordmark tile rendered for unknown / non-molecular `kind` values (the wrong-audience fallback).
-- **TEMPLATE_VERSION** — manually-bumped integer in `src/share/capsule-preview.ts` that busts the dynamic-poster edge cache when the static-figure design changes.
-- **stored poster** — pre-rendered PNG persisted in R2 under `preview_poster_key`, served when `preview_status === 'ready'`.
-- **dynamic fallback poster** — the Satori-rendered PNG returned by `GET /api/capsules/:code/preview/poster` when no stored asset exists. Gated by `CAPSULE_PREVIEW_DYNAMIC_FALLBACK`.
-- **terminal fallback** — the static `public/og-fallback.png` returned when Satori rendering fails. Distinct from "dynamic fallback poster," which is the Satori path itself.
+- **Capsule Preview** — the V2 frame-projected scene system that powers both the account-row thumbnail and the public OG poster. Proper noun for the subsystem; the rendered artifacts are "preview thumbnail" / "preview poster."
+- **atoms-only thumb** — the degraded per-row thumbnail variant rendered when bonds are unavailable or over the denylist cap; atoms are drawn as dots using `capsule-preview-colors` without bond segments. Contrast with "bonded thumb."
+- **bonded thumb** — the preferred per-row thumbnail variant rendered when both atoms and bonds are present; atoms + bond segments are composited via `capsule-preview-thumb-render`. Contrast with "atoms-only thumb."
+- **canonical preview camera** — the single deterministic camera pose computed by `src/share/capsule-preview-camera.ts` and shared by poster renderer and thumb renderer, so the stored thumb matches the stored poster framing.
+- **CURRENT_THUMB_REV** — integer constant tracking the current `PreviewStoredThumbV1.rev` shape. Rebake rule: any row with `preview_scene_v1.thumb.rev < CURRENT_THUMB_REV` is re-baked by backfill.
+- **lazy backfill** — on-read rebake performed by `/api/account/capsules` (and backfill scripts) when a row's stored thumb rev is behind `CURRENT_THUMB_REV`, so clients always receive a current-rev `previewThumb`.
+- **preview scene** — the V2 payload stored in the D1 column `preview_scene_v1` (added by `migrations/0009_capsule_preview_scene_v1.sql`). JSON shape `{ v:1, atoms[], bonds?, hash, thumb?: PreviewStoredThumbV1 }`, pre-baked at publish time from the full capsule atoms.
+- **preview_scene_v1** — the D1 TEXT NULLABLE column that holds the per-capsule preview scene JSON. Source of truth for poster + thumb rendering.
+- **PreviewStoredThumbV1** — the pre-baked thumb payload embedded in `preview_scene_v1.thumb`, currently at `rev: 2`. Shape `{ rev, atoms, bonds? }` — the bytes the account-row thumbnail renders from without running the full pipeline.
+- **previewThumb** — the nullable field on `/api/account/capsules` rows (`PreviewThumbV1 | null`) that carries the current-rev stored thumb out to the account UI.
+- **TEMPLATE_VERSION** — manually-bumped integer in `src/share/capsule-preview.ts` (currently `2`) that busts the dynamic-poster edge cache when the scene-rendering template changes.
+- **stored poster** — pre-rendered PNG persisted in R2 under `preview_poster_key`, served when `preview_status === 'ready'`. Cache key `?v=p<8hex>`.
+- **dynamic fallback poster** — the PNG returned by `GET /api/capsules/:code/preview/poster` when no stored asset exists, rendered from `preview_scene_v1`. Cache key `?v=t<TEMPLATE_VERSION>`; ETag `"v<TEMPLATE_VERSION>-<8hex>"` bound to `[TEMPLATE_VERSION, scene.hash, sanitizedTitle, shareCode]`. Gated by `CAPSULE_PREVIEW_DYNAMIC_FALLBACK`.
+- **terminal fallback** — the static `public/og-fallback.png` returned when dynamic rendering fails. Distinct from "dynamic fallback poster," which is the scene-projected path itself.
 
 ## Backend (common nouns — lowercase in prose)
 
