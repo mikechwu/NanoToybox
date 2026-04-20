@@ -34,15 +34,17 @@
 
 ```bash
 npm install              # first time only
-npm run dev              # Vite dev server with HMR
-# → Lab:   http://localhost:5173/lab/
-# → Watch: http://localhost:5173/watch/
+npm run app:serve        # full local pipeline: build → D1 migrate → wrangler pages dev
+# → Lab:   http://localhost:8788/lab/
+# → Watch: http://localhost:8788/watch/
 
 npm run typecheck
 npm run test:unit
 npm run test:e2e
 npm run build
 ```
+
+`npm run app:serve` is the canonical local command — Lab depends on Pages Functions under `/api/*` and `/auth/*`, so the vite-only `npm run dev` server does not serve a working Lab. Use `npm run dev` only when iterating on static assets that don't touch the backend.
 
 Optional — Python physics tests (requires `numpy`, `numba`):
 

@@ -185,3 +185,53 @@ export function deriveBondPairs(
   out.sort((p, q) => p.d - q.d);
   return out.map(({ a, b }) => ({ a, b }));
 }
+
+/**
+ * Translate raw bond pairs (indexed into `scene3D.atoms`) into
+ * projected-atom-index space, with each kept bond annotated by its
+ * midpoint depth.
+ *
+ * **Why this helper exists.** `projectPreviewScene` sorts its output
+ * atoms by depth (near last). `deriveBondPairs` returns `{a, b}`
+ * indices into the PRE-SORT `scene3D.atoms` array. Callers that pass
+ * those indices straight into the projected scene draw ghost edges
+ * between atoms whose depth sort reshuffled them. The consistent
+ * reconciliation is an `atomId → projectedIndex` map — implemented
+ * here once so the audit + production render paths don't each
+ * re-invent it (or skip it). Depth policy: midpoint of the two
+ * endpoints' post-projection `depth`; documented so downstream back-
+ * to-front draw order is stable.
+ *
+ * Endpoints that didn't survive sampling (e.g. `publish-core`'s
+ * silhouette pre-sample) are silently dropped — not an error.
+ *
+ * Pure; no side effects.
+ */
+export function deriveBondPairsForProjectedScene(
+  scene3D: CapsulePreviewScene3D,
+  projected: CapsulePreviewRenderScene,
+  cutoff: number,
+  minDist: number,
+): Array<{ a: number; b: number; depth: number }> {
+  const rawPairs = deriveBondPairs(scene3D, cutoff, minDist);
+  if (rawPairs.length === 0) return [];
+  // scene3D.atoms indices are the basis of rawPairs; map each pre-sort
+  // atomId to its post-sort index in `projected.atoms`.
+  const atomIdToProjectedIndex = new Map<number, number>();
+  for (let i = 0; i < projected.atoms.length; i++) {
+    atomIdToProjectedIndex.set(projected.atoms[i].atomId, i);
+  }
+  const out: Array<{ a: number; b: number; depth: number }> = [];
+  for (const pair of rawPairs) {
+    const srcA = scene3D.atoms[pair.a];
+    const srcB = scene3D.atoms[pair.b];
+    if (!srcA || !srcB) continue;
+    const ia = atomIdToProjectedIndex.get(srcA.atomId);
+    const ib = atomIdToProjectedIndex.get(srcB.atomId);
+    if (ia == null || ib == null) continue;
+    if (ia === ib) continue;
+    const depth = (projected.atoms[ia].depth + projected.atoms[ib].depth) / 2;
+    out.push({ a: ia, b: ib, depth });
+  }
+  return out;
+}

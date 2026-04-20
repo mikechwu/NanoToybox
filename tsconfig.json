@@ -19,6 +19,8 @@
     "watch/js/**/*.tsx",
     "account/**/*.ts",
     "account/**/*.tsx",
+    "preview-audit/**/*.ts",
+    "preview-audit/**/*.tsx",
     "src/**/*.ts",
     "tests/unit/**/*.ts",
     "tests/unit/**/*.tsx",

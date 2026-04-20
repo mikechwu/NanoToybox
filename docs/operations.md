@@ -1063,6 +1063,18 @@ Apply to local dev (uses `--local` wrangler state):
 npm run cf:d1:migrate
 ```
 
+For a full local rehearsal that mirrors the production deploy pipeline
+(`npm run build` → `npm run cf:d1:migrate` → `npx wrangler pages dev dist --port 8788`),
+use the bundled launcher:
+
+```bash
+npm run app:serve             # full pipeline on :8788
+npm run app:serve -- --skip-build --skip-migrate   # fastest inner-loop re-run
+```
+
+The script is a thin wrapper around the three commands above; see
+`scripts/serve-app.sh --help` for port overrides and auto-open.
+
 Check what's been applied on remote:
 
 ```bash
@@ -1288,3 +1300,10 @@ Treated as a deployment-confidence layer — not wired to CI by default
 (it would require wrangler in every CI runner). Run it locally before
 tagging a release that touches account/, functions/api/account/*, or
 functions/api/privacy-request.ts.
+
+Separately, internal build-gate unit tests (run as part of
+`npm run test:unit` on every CI job) prevent dev-only surfaces from
+shipping in the production bundle. A regression there surfaces as a
+failing unit test before deploy — no operator action is required
+unless the test starts failing, in which case the diff that introduced
+the dev-only surface needs to be reverted or gated before re-deploy.

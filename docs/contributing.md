@@ -662,16 +662,44 @@ The following items are intentionally deferred — do not start them without an 
 
 ## Development Workflow
 
-### TypeScript / React (interactive page)
+### TypeScript / React (Lab + Watch)
 
 ```
-1. npm run dev                    # Vite dev server with HMR
-2. Make changes to lab/js/ code
-3. npm run typecheck              # TypeScript type-checking
+1. npm run app:serve              # Canonical full-stack local server (wraps build + D1 migrate + `wrangler pages dev`)
+2. Make changes to lab/js/ or watch/js/ code
+3. npm run typecheck              # TypeScript type-checking (frontend + functions + cron)
 4. npm run test:unit              # Vitest unit suite
-5. npm run test:e2e               # Playwright E2E suite
-6. npm run build                  # Production build → dist/
+5. npm run test:e2e               # Playwright E2E suite (default lane)
+6. npm run build                  # Production build → dist/ (also invoked by app:serve)
 ```
+
+`npm run app:serve` (alias for `bash scripts/serve-app.sh`) is the canonical
+local-dev entrypoint — it runs `npm run build`, then `npm run cf:d1:migrate`,
+then `npx wrangler pages dev dist --port 8788`. **Raw `npm run dev` (vite-only)
+is not sufficient for Lab** because Lab boots against Pages Functions at
+`/api/*` and `/auth/*`; those routes 404 under plain vite and the Lab shell
+silently fails to hydrate. Use `npm run dev` only for isolated frontend
+probing that does not touch Functions (rare).
+
+Useful flags during the inner loop:
+
+```
+npm run app:serve -- --skip-build      # reuse existing dist/
+npm run app:serve -- --skip-migrate    # local D1 is already at head
+npm run app:serve -- --skip-build --skip-migrate   # fastest re-run
+npm run app:serve -- --open            # auto-open browser once the port accepts
+npm run app:serve -- --port 8799       # override port on collision
+```
+
+Routes served on the default port:
+
+| URL | Surface |
+|---|---|
+| `http://localhost:8788/` | redirects to `/lab/` |
+| `http://localhost:8788/lab/` | Lab app |
+| `http://localhost:8788/watch/` | Watch app |
+| `http://localhost:8788/account/`, `/viewer/`, `/privacy/`, `/terms/`, `/privacy-request/` | static routes |
+| `/api/*`, `/c/*`, `/auth/*` | Pages Functions (emulated by wrangler) |
 
 #### Doc-drift release check
 
@@ -831,15 +859,16 @@ npm install
 
 | Command | Runs | When to use |
 |---|---|---|
-| `npm run dev` | Vite (port 5173) | Normal Lab/Watch UI work; fast HMR; **no backend — `/api/capsules/*`, `/api/auth/*`, and `/auth/*` will 404** |
-| `npm run build && npm run cf:dev` | Wrangler Pages dev (port 8788) | Share/publish **and auth** feature work; needs D1 + R2 bindings and Pages Functions; no HMR |
+| `npm run app:serve` | `build → cf:d1:migrate → wrangler pages dev dist` on port 8788 | **Canonical local-dev entrypoint for Lab + Watch.** Full Cloudflare emulation (Pages Functions + D1 + R2). Supports `--skip-build` / `--skip-migrate` for fast re-runs. Wraps the three-step pipeline behind one command. |
+| `npm run build && npm run cf:dev` | Wrangler Pages dev (port 8788) | Equivalent manual composition of the last step when you do not need the build + migrate preflight that `app:serve` adds. |
+| `npm run dev` | Vite (port 5173) | Frontend-only probing. **Not sufficient for Lab** — Lab boots against `/api/*` and `/auth/*` Pages Functions, which 404 under plain vite and cause the Lab shell to silently fail to hydrate. Use for isolated component tinkering that does not exercise Functions (rare). |
 | `npm run cron:dev` | Wrangler dev for the cron Worker | Tests the scheduled handler locally against `localhost:8788` |
 
-**Rule of thumb:** if you need to exercise sign-in, session, publish, or share-link flows locally, run `cf:dev`. Vite alone is fine for Lab/Watch UI iteration that does not touch those paths.
+**Rule of thumb:** use `npm run app:serve` by default. It is the only command that produces a working Lab end-to-end in the post-Functions era. Fall through to raw `cf:dev` / `dev` only when you have a specific reason to skip the orchestration.
 
 ##### Auth in Vite dev
 
-`lab/js/runtime/auth-runtime.ts` contains a Vite dev-host guard: when it detects the Vite dev server host (no Pages Functions available), it short-circuits the popup OAuth flow and logs a console message pointing at `wrangler pages dev`. This is intentional — do not try to make the popup flow work under Vite. Switch to `npm run build && npm run cf:dev` when touching auth.
+`lab/js/runtime/auth-runtime.ts` contains a Vite dev-host guard: when it detects the Vite dev server host (no Pages Functions available), it short-circuits the popup OAuth flow and logs a console message pointing at `wrangler pages dev`. This is intentional — do not try to make the popup flow work under Vite. Switch to `npm run app:serve` (or `npm run build && npm run cf:dev`) when touching auth.
 
 The OAuth flow is popup-primary (a `window.open()` against the provider's consent screen) with an explicit, user-opted-in same-tab fallback (never silent). The popup completes against `/auth/popup-complete`, which is served by the Pages Function at `functions/auth/popup-complete.ts` (static HTML response with a strict CSP). After completion it notifies the opener via `window.opener.postMessage` plus a same-origin `BroadcastChannel('atomdojo-auth')` fallback; the opener re-runs `hydrateAuthSession()` to refresh session state.
 
@@ -856,7 +885,7 @@ Local Wrangler state (local D1 + R2 + cache, potentially including seeded/test u
 
 ```
 # Terminal 1
-npm run build && npm run cf:dev
+npm run app:serve                              # or: npm run build && npm run cf:dev
 
 # Terminal 2 (requires DEV_ADMIN_ENABLED=true in .dev.vars,
 # or run cf:dev with `--binding DEV_ADMIN_ENABLED=true` as the

@@ -19,6 +19,11 @@ import type { ReactElement } from 'react';
 import type { PreviewSceneV1 } from '../../src/share/capsule-preview-scene-store';
 import type { PosterRenderMeta } from '../api/capsules/[code]/preview/poster';
 import { INTER_REGULAR_TTF } from './fonts/inter-regular';
+import {
+  CURRENT_POSTER_PANE_WIDTH,
+  CURRENT_POSTER_PANE_HEIGHT,
+  CurrentPosterSceneSvg,
+} from '../../src/share/capsule-preview-current-poster';
 
 const W = 1200;
 const H = 630;
@@ -27,72 +32,11 @@ export const POSTER_WIDTH = W;
 export const POSTER_HEIGHT = H;
 
 // Right-pane SVG dimensions. Tuned so the scene has clear margin inside the
-// poster's padded layout without ballooning the atom radii.
-const PANE_W = 600;
-const PANE_H = 500;
-
-function SceneSvg({ scene }: { scene: PreviewSceneV1 }): ReactElement {
-  // Scene atoms are stored in normalized 0..1 coordinates, so we multiply
-  // by the pane dimensions at render time.
-  const atoms = scene.atoms;
-  const bonds = scene.bonds ?? [];
-  const atomR = Math.max(8, Math.min(20, Math.min(PANE_W, PANE_H) * 0.04));
-  return (
-    <svg
-      width={PANE_W}
-      height={PANE_H}
-      viewBox={`0 0 ${PANE_W} ${PANE_H}`}
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <defs>
-        <radialGradient id="bg" cx="50%" cy="50%" r="60%">
-          <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.14" />
-          <stop offset="100%" stopColor="#f59e0b" stopOpacity="0" />
-        </radialGradient>
-      </defs>
-      <rect width={PANE_W} height={PANE_H} fill="url(#bg)" />
-      {bonds.map((b, i) => {
-        const a = atoms[b.a];
-        const c = atoms[b.b];
-        if (!a || !c) return null;
-        return (
-          <line
-            key={`b${i}`}
-            x1={a.x * PANE_W}
-            y1={a.y * PANE_H}
-            x2={c.x * PANE_W}
-            y2={c.y * PANE_H}
-            stroke="#9aa0a6"
-            strokeWidth={3}
-            strokeOpacity={0.55}
-          />
-        );
-      })}
-      {atoms.map((a, i) => {
-        // Guarded radius: atoms with stored r === 0 or NaN get the
-        // pane-derived default instead of collapsing to a 0-radius circle
-        // (which would render as nothing after the stroke clip). Avoids
-        // `||` short-circuiting because `0` is a valid falsy-but-meaningless
-        // case for radius.
-        const scaled = a.r * Math.min(PANE_W, PANE_H);
-        const r = Number.isFinite(scaled) && scaled > 0
-          ? Math.max(6, scaled)
-          : atomR;
-        return (
-          <circle
-            key={`a${i}`}
-            cx={a.x * PANE_W}
-            cy={a.y * PANE_H}
-            r={r}
-            fill={a.c}
-            stroke="#0f1115"
-            strokeWidth={1.5}
-          />
-        );
-      })}
-    </svg>
-  );
-}
+// poster's padded layout without ballooning the atom radii. Sourced from
+// the shared `capsule-preview-current-poster` module so the audit
+// workbench renders against the exact same baseline.
+const PANE_W = CURRENT_POSTER_PANE_WIDTH;
+const PANE_H = CURRENT_POSTER_PANE_HEIGHT;
 
 /**
  * Compose the dynamic poster as an {@link ImageResponse}.
@@ -197,7 +141,7 @@ export function renderCapsulePosterImage(
           justifyContent: 'center',
         }}
       >
-        <SceneSvg scene={scene} />
+        <CurrentPosterSceneSvg scene={scene} />
       </div>
     </div>
   );

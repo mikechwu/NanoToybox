@@ -1,6 +1,6 @@
 # Glossary
 
-Canonical terms used across `docs/README.md` and `docs/architecture.md`. Each entry below shows the **exact form** a term takes in prose. Proper nouns are capitalized (`Lab`, `Watch`, `Viewer`, `Atom Dojo`); common nouns are lowercase (`capsule`, `handoff`, `share link`). When any of these terms appears in either doc, it uses the form shown here.
+Canonical terms used across `docs/README.md`, `docs/architecture.md`, `docs/viewer.md`, `docs/operations.md`, and `docs/testing.md`. Each entry below shows the **exact form** a term takes in prose. Proper nouns are capitalized (`Lab`, `Watch`, `Viewer`, `Atom Dojo`); common nouns are lowercase (`capsule`, `handoff`, `share link`). When any of these terms appears in a sibling doc, it uses the form shown here.
 
 ## Product (proper nouns — always capitalized)
 
@@ -29,6 +29,12 @@ Path fragments such as `lab/`, `watch/`, and `viewer/` refer to directories, not
 
 - **bonded group** — a connected-component cluster of bonded atoms. First-class product concept with authored color assignments that persist across topology changes.
 
+## Playback and camera (common nouns — lowercase in prose)
+
+- **review mode** — display-only playback of recorded frames in Lab (entered by scrubbing the timeline or tapping Review). Live-edit actions are blocked at the runtime callback boundary; physics is not mutated.
+- **cinematic camera** — Watch's source-attributed auto-framing camera (`src/camera/`, `watch/js/view/` + settings surface). Phase-aware: gesture tracking suppresses auto-motion until the user lets go.
+- **Interact From Here** — the primary pill copy for the Watch→Lab entry control. Supersedes the legacy labels "Continue" and "Remix"; operator banner copy in `docs/operations.md` preserves the legacy forms for troubleshooting old share URLs.
+
 ## Capsule preview (common nouns — lowercase in prose)
 
 - **Capsule Preview** — the V2 frame-projected scene system that powers both the account-row thumbnail and the public OG poster. Proper noun for the subsystem; the rendered artifacts are "preview thumbnail" / "preview poster."
@@ -39,8 +45,16 @@ Path fragments such as `lab/`, `watch/`, and `viewer/` refer to directories, not
 - **lazy backfill** — on-read rebake performed by `/api/account/capsules` (and backfill scripts) when a row's stored thumb rev is behind `CURRENT_THUMB_REV`, so clients always receive a current-rev `previewThumb`.
 - **preview scene** — the V2 payload stored in the D1 column `preview_scene_v1` (added by `migrations/0009_capsule_preview_scene_v1.sql`). JSON shape `{ v:1, atoms[], bonds?, hash, thumb?: PreviewStoredThumbV1 }`, pre-baked at publish time from the full capsule atoms.
 - **preview_scene_v1** — the D1 TEXT NULLABLE column that holds the per-capsule preview scene JSON. Source of truth for poster + thumb rendering.
+- **PreviewSceneV1** — the TypeScript shape stored in the `preview_scene_v1` column: `{ v:1, atoms[], bonds?, hash, thumb? }`. Declared in `src/share/capsule-preview-scene-store.ts`.
 - **PreviewStoredThumbV1** — the pre-baked thumb payload embedded in `preview_scene_v1.thumb`, currently at `rev: 2`. Shape `{ rev, atoms, bonds? }` — the bytes the account-row thumbnail renders from without running the full pipeline.
 - **previewThumb** — the nullable field on `/api/account/capsules` rows (`PreviewThumbV1 | null`) that carries the current-rev stored thumb out to the account UI.
+- **canonical PCA camera** — the deterministic PCA basis + sign normalization + scene-shape classification (`spherical | planar | linear | general | degenerate`) + fixed 5°/10° tilt that makes a capsule project to the same 2D scene regardless of stored orientation. Lives in `src/share/capsule-preview-camera.ts`.
+- **scene.hash** — the 8-hex FNV-1a32 digest over the projected atom array (bond-independent) inside `PreviewSceneV1`. Binds the dynamic-poster ETag and invalidates caches when any observable render input changes.
+- **sampleForSilhouette** — extrema + FPS (farthest-point sampling) sampler used for the 32-atom poster subset. Lives in `src/share/capsule-preview-sampling.ts`.
+- **sampleForBondedThumb** — graph-aware BFS + connection-count + FPS-fill sampler that selects a connected subgraph for the thumb, preserving visual structure. Paired with tiered visibility (strict → relaxed → atoms-only fallback).
+- **CurrentPosterSceneSvg** — the shared Satori-compatible 600×500 poster-pane React body (`src/share/capsule-preview-current-poster.tsx`). Consumed by the dynamic poster Function and any downstream tooling that needs the byte-identical baseline.
+- **CurrentThumbSvg** — the shared 100×100 (viewBox) account-row thumb React body (`src/share/capsule-preview-current-thumb.tsx`). Consumed by `account/main.tsx` for the production thumb.
+- **CURRENT_THUMB_DEFAULT_INK** — TypeScript constant in `capsule-preview-current-thumb.tsx` that mirrors the light-scope `--color-text` token in `public/account-layout.css`. Enforced by `tests/unit/current-thumb-ink-sync.test.ts`; drift between the TS constant and the CSS token fails the test.
 - **TEMPLATE_VERSION** — manually-bumped integer in `src/share/capsule-preview.ts` (currently `2`) that busts the dynamic-poster edge cache when the scene-rendering template changes.
 - **stored poster** — pre-rendered PNG persisted in R2 under `preview_poster_key`, served when `preview_status === 'ready'`. Cache key `?v=p<8hex>`.
 - **dynamic fallback poster** — the PNG returned by `GET /api/capsules/:code/preview/poster` when no stored asset exists, rendered from `preview_scene_v1`. Cache key `?v=t<TEMPLATE_VERSION>`; ETag `"v<TEMPLATE_VERSION>-<8hex>"` bound to `[TEMPLATE_VERSION, scene.hash, sanitizedTitle, shareCode]`. Gated by `CAPSULE_PREVIEW_DYNAMIC_FALLBACK`.
@@ -50,6 +64,9 @@ Path fragments such as `lab/`, `watch/`, and `viewer/` refer to directories, not
 
 - **signed intent** — a short-lived signed payload `{ action, payload, exp }` minted by a Function and consumed by a follow-up Function. Replaces session tokens for authenticated mutations.
 - **admin gate** — the second check layered on top of `signed intent` for moderation and privacy-operator endpoints. Verifies a signed admin intent against an allowlist; failures are audit-logged.
+- **age gate** — the one-time minimum-age attestation required before a user can create an account. Stored as a boolean; distinct from `policy acceptance`.
+- **policy acceptance** — versioned terms acceptance tracked in D1 (policy version + timestamp). Re-acceptance is required when the version bumps; version is pinned at build time from `src/policy/policy-config.ts`.
+- **erasure** — user-initiated account-and-data deletion flow routed through `/privacy-request`. Backed by a tombstone on the `users` row (not hard-delete) plus an ordered capsule-delete cascade.
 - **primary-pill contract** — the UI contract enforced by `WatchLabEntryControl`: a single primary pill ("Interact From Here") with a caret-toggled disclosure popover revealing secondary actions; tooltip auto-cues at the 50% and 100% timeline milestones, once per file.
 
 ## File-extension brand

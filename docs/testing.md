@@ -165,12 +165,13 @@ The partitioning is enforced by `tsconfig.json`'s explicit `exclude` list — th
 | `npm run test:unit` | `vitest run` — all Vitest files under `tests/unit/`. |
 | `npm run test:e2e` | `playwright test` — all specs under `tests/e2e/` (default lane, `vite preview` webServer; Pages-dev-only specs self-skip here, see [Pages-dev E2E lane](#pages-dev-e2e-lane)). |
 | `npm run test:e2e:pages-dev` | Phase 7 lane: `playwright test` against `playwright.pages-dev.config.ts`, which boots `wrangler pages dev dist`. Runs specs that require real Pages Functions (static policy routes, age-gate UX, account delete-all). Requires `npm run build` first. |
-| `npm run build` | `vite build` — produces `dist/` consumed by `cf:dev` / pages-dev E2E lane. |
-| `npm run cf:dev` | `wrangler pages dev dist` — full local backend with Functions + D1 + R2 bindings. Use this when you need real `/api/capsules/*` responses. |
-| `npm run dev` | `vite` dev server — frontend only, no Functions. |
+| `npm run build` | `vite build` — produces `dist/` consumed by `app:serve` / `cf:dev` / pages-dev E2E lane. |
+| `npm run app:serve` | Canonical local-dev entrypoint: `npm run build → npm run cf:d1:migrate → npx wrangler pages dev dist --port 8788`. Use this when iterating on Lab or Watch — both depend on Pages Functions. Supports `--skip-build`, `--skip-migrate`, `--port`, `--open`. |
+| `npm run cf:dev` | `wrangler pages dev dist` — full local backend with Functions + D1 + R2 bindings. Equivalent to the last step of `app:serve` when you do not need the build + migrate preflight. |
+| `npm run dev` | `vite` dev server — frontend only, no Functions. Not sufficient for Lab (Lab shell boots against `/api/*` and `/auth/*`, which 404 under vite). |
 | `npm run cf:d1:migrate` | Applies migrations to the local D1 (`atomdojo-capsules`). |
 | `npm run cron:dev` / `cron:deploy` / `cron:tail` | Local/prod lifecycle for the cron-sweeper Worker. |
-| `npm run seed:capsule` | Seeds a sample capsule into local R2/D1 for manual testing. |
+| `npm run seed:capsule` | Seeds a sample capsule into local R2/D1 for manual testing (defaults to `tests/e2e/fixtures/poster-smoke-capsule.json`). |
 
 ### Mock Patterns for Pages Functions Handlers
 
@@ -372,6 +373,10 @@ Capsule Preview V2 replaced the V1 descriptor/figure builder with a scene-based 
 | `share-record.test.ts` | **Rewritten** — `preview_scene_v1` field added to `CapsuleShareRow` |
 | `publish-core.test.ts` | **Rewritten** — asserts `previewSceneV1Json` non-null on valid capsules, determinism |
 | `poster-smoke.spec.ts` (E2E) | **Updated** — ETag regex broadened to `^"v\d+-[0-9a-f]{8}"$` (matches V2's `v2-…`); seeds a dimer capsule |
+| `capsule-preview-sketch.test.ts` | **New** — unit coverage for the unified sketch renderer (`src/share/capsule-preview-sketch.ts`): three scene adapters, primitives builder in both `flat`/`cpk` modes and depth-aware / depth-free paths, `renderPreviewSketchSvgString` output, `renderPreviewSketchSvgNode` contract (React `isValidElement` + `renderToStaticMarkup` round-trip), stored-scene adapter round-trip, and an adversarial 3-atom case for `deriveBondPairsForProjectedScene` index-drift safety. |
+| `capsule-preview-audit-metrics.test.ts` | **New** — deterministic render-quality assertions turned into numerical CI gates: C60 cage coherence (convex-hull fill + centroid-distance stddev), graphene planar spread (covariance eigenvalue ratio + bond-length uniformity), CNT tube aspect ratio, thumb-preset scale-down retention, and dense-noisy fallback guard. |
+| `capsule-preview-poster-figure.test.ts` | **New** — poster-preset figure invariants across structural and mixed-element fixtures: bond presence, atom/bond layering order, pane-occupancy band (dominant-axis fill ≥ 60% + edge-clipping guard), CPK color preservation, and a "no ghost edges" endpoint check. |
+| `current-thumb-ink-sync.test.ts` | **New** — parses the light-scope `--color-text` token in `public/account-layout.css` and asserts it matches the `CURRENT_THUMB_DEFAULT_INK` constant in `src/share/capsule-preview-current-thumb.tsx` (with hex normalization). CI-enforced mirror contract: editing either side without updating the other fails this test. |
 
 Shared fixture: `src/share/__fixtures__/capsule-preview-frames.json` replaces the V1 `capsule-preview-inputs.json`. Consumed by the pure scene-extraction / pipeline tests.
 
@@ -633,7 +638,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **End-to-end pipeline:** load → import → playback → groups.
 
-*As of Capsule Preview V2, the unit suite (Vitest) + 12 E2E tests (Playwright, default lane) + the pages-dev-only `poster-smoke.spec.ts` pass across the lab + watch + share + auth + account-erasure + handoff + capsule-preview surfaces. Run `npx vitest run` for the authoritative live unit total, `npm run test:e2e` for the default E2E lane, and `npm run test:e2e:pages-dev` for the pages-dev lane.*
+*As of Capsule Preview V2, the unit suite (Vitest — ~175 test files / ~2,859 tests) plus the Playwright default lane (12 spec files under `tests/e2e/`, of which two — `poster-smoke.spec.ts` and `pages-dev-flows.spec.ts` — self-skip outside the pages-dev lane) pass across the lab + watch + share + auth + account-erasure + handoff + capsule-preview surfaces. Run `npx vitest run` for the authoritative live unit total, `npm run test:e2e` for the default E2E lane, and `npm run test:e2e:pages-dev` for the pages-dev lane.*
 
 ### Bond Topology Parity (23 tests)
 
@@ -1173,9 +1178,15 @@ Manual verification checklist for the interactive page (`lab/index.html`). Run a
 
 ### Setup
 ```bash
-npm run dev
-# Open http://localhost:5173/lab/
+npm run app:serve
+# Open http://localhost:8788/lab/
 ```
+
+`npm run app:serve` is the canonical local-dev entrypoint: it runs
+`npm run build → npm run cf:d1:migrate → npx wrangler pages dev dist --port 8788`
+in sequence, which is required because Lab boots against Pages Functions
+at `/api/*` and `/auth/*` (a bare `npm run dev` / vite-only server 404s on
+those routes and Lab silently fails to hydrate).
 
 ### Checklist
 

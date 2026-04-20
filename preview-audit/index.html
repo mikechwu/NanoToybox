@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>Capsule Preview Audit — dev workbench</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..800;1,9..144,400&family=Public+Sans:ital,wght@0,300..700;1,400..600&family=JetBrains+Mono:wght@400;600&display=swap"
+    />
+
+    <style>
+      /* ────────────────────────────────────────────────────────────────
+       *  Design system
+       *  ---------------------------------------------------------------
+       *  Editorial / reference aesthetic. Warm paper background, serif
+       *  display (Fraunces), humanist sans body (Public Sans), mono for
+       *  identifiers (JetBrains Mono). Single-column below 960px, two-
+       *  column with sticky TOC above.
+       * ──────────────────────────────────────────────────────────────── */
+      :root {
+        color-scheme: light;
+
+        /* Palette */
+        --paper: #fbfaf5;
+        --paper-raised: #ffffff;
+        --ink: #1c1917;
+        --ink-muted: #57534e;
+        --ink-faint: #a8a29e;
+        --rule: #e7e5e4;
+        --rule-strong: #d6d3d1;
+        --accent: #7c2d12;
+        --accent-soft: rgba(124, 45, 18, 0.08);
+        --mark-current: #475569;
+        --mark-current-soft: rgba(71, 85, 105, 0.08);
+        --mark-experimental: #0e7490;
+        --mark-experimental-soft: rgba(14, 116, 144, 0.08);
+        --notice-bg: #fef3c7;
+        --notice-ink: #713f12;
+        --notice-rule: #fde68a;
+        --err-bg: #fef2f2;
+        --err-ink: #991b1b;
+
+        /* Type system — Fraunces: display/headings, Public Sans: body,
+           JetBrains Mono: values. */
+        --ff-display: 'Fraunces', 'Iowan Old Style', Georgia, serif;
+        --ff-body: 'Public Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+        --ff-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+        /* Rhythm */
+        --s-1: 4px;
+        --s-2: 8px;
+        --s-3: 12px;
+        --s-4: 16px;
+        --s-5: 24px;
+        --s-6: 32px;
+        --s-7: 48px;
+        --s-8: 64px;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+
+      body {
+        background: var(--paper);
+        color: var(--ink);
+        font-family: var(--ff-body);
+        font-size: 15px;
+        line-height: 1.6;
+        font-feature-settings: 'ss01', 'cv11';
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+        min-height: 100vh;
+      }
+
+      /* Focus ring — single consistent style for every interactive
+         element. 2px offset accent outline. */
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+        border-radius: 2px;
+      }
+
+      a {
+        color: var(--accent);
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 3px;
+      }
+      a:hover { text-decoration-thickness: 2px; }
+
+      /* ── Root layout ─────────────────────────────────────────────── */
+      .pa-shell {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: var(--s-7) var(--s-5);
+      }
+      @media (min-width: 720px) {
+        .pa-shell { padding: var(--s-8) var(--s-6); }
+      }
+
+      /* ── Masthead ────────────────────────────────────────────────── */
+      .pa-masthead {
+        border-bottom: 1px solid var(--rule);
+        padding-bottom: var(--s-6);
+        margin-bottom: var(--s-7);
+      }
+      .pa-eyebrow {
+        font-family: var(--ff-body);
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        color: var(--ink-muted);
+        margin: 0 0 var(--s-3);
+      }
+      .pa-title {
+        font-family: var(--ff-display);
+        font-optical-sizing: auto;
+        font-size: clamp(32px, 5vw, 44px);
+        line-height: 1.05;
+        font-weight: 420;
+        letter-spacing: -0.015em;
+        margin: 0 0 var(--s-4);
+        color: var(--ink);
+      }
+      .pa-lede {
+        font-family: var(--ff-display);
+        font-style: italic;
+        font-weight: 350;
+        font-size: 18px;
+        line-height: 1.55;
+        color: var(--ink-muted);
+        max-width: 60ch;
+        margin: 0 0 var(--s-5);
+      }
+      .pa-notice {
+        display: inline-flex;
+        align-items: baseline;
+        gap: var(--s-2);
+        padding: var(--s-2) var(--s-3);
+        background: var(--notice-bg);
+        border: 1px solid var(--notice-rule);
+        color: var(--notice-ink);
+        border-radius: 3px;
+        font-size: 13px;
+      }
+      .pa-notice strong {
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        font-size: 11px;
+      }
+      .pa-notice code {
+        font-family: var(--ff-mono);
+        font-size: 11.5px;
+      }
+
+      /* ── Two-column frame ────────────────────────────────────────── */
+      .pa-frame {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: var(--s-6);
+      }
+      @media (min-width: 960px) {
+        .pa-frame {
+          grid-template-columns: 220px 1fr;
+          gap: var(--s-8);
+        }
+      }
+
+      /* ── TOC ─────────────────────────────────────────────────────── */
+      .pa-toc {
+        font-size: 13px;
+      }
+      @media (min-width: 960px) {
+        .pa-toc {
+          position: sticky;
+          top: var(--s-6);
+          align-self: start;
+        }
+      }
+      .pa-toc-title {
+        font-family: var(--ff-body);
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--ink-faint);
+        margin: 0 0 var(--s-3);
+      }
+      .pa-toc ol {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        border-left: 1px solid var(--rule);
+      }
+      .pa-toc li { margin: 0; }
+      .pa-toc a {
+        display: block;
+        padding: var(--s-2) var(--s-3);
+        color: var(--ink-muted);
+        text-decoration: none;
+        font-variant-numeric: tabular-nums;
+      }
+      .pa-toc a:hover {
+        color: var(--ink);
+        background: var(--accent-soft);
+      }
+      .pa-toc .num {
+        display: inline-block;
+        min-width: 1.6em;
+        color: var(--ink-faint);
+        font-family: var(--ff-mono);
+        font-size: 11px;
+      }
+
+      /* ── Main column ─────────────────────────────────────────────── */
+      .pa-main { min-width: 0; }
+
+      .pa-section {
+        margin-bottom: var(--s-8);
+      }
+      .pa-section:last-child { margin-bottom: 0; }
+
+      .pa-section-head {
+        display: flex;
+        align-items: baseline;
+        gap: var(--s-3);
+        margin-bottom: var(--s-3);
+        border-bottom: 1px solid var(--rule);
+        padding-bottom: var(--s-2);
+      }
+      .pa-section-num {
+        font-family: var(--ff-mono);
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--ink-faint);
+        padding-top: 0.35em;
+      }
+      .pa-section-title {
+        font-family: var(--ff-display);
+        font-optical-sizing: auto;
+        font-size: 22px;
+        line-height: 1.25;
+        font-weight: 460;
+        letter-spacing: -0.01em;
+        color: var(--ink);
+        margin: 0;
+      }
+      .pa-section-prose {
+        color: var(--ink-muted);
+        max-width: 62ch;
+        margin: 0 0 var(--s-5);
+        font-size: 15px;
+      }
+      .pa-section-prose em {
+        font-family: var(--ff-display);
+        font-style: italic;
+        color: var(--ink);
+      }
+      .pa-section-prose code {
+        font-family: var(--ff-mono);
+        font-size: 0.88em;
+        color: var(--ink);
+      }
+
+      /* ── Source / Display-option controls ────────────────────────── */
+      .pa-controls {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: var(--s-4) var(--s-5);
+      }
+      @media (min-width: 720px) {
+        .pa-controls { grid-template-columns: 1fr 1fr; }
+      }
+      .pa-field label {
+        display: block;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--ink-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: var(--s-2);
+      }
+      .pa-field select,
+      .pa-field input[type='file'] {
+        width: 100%;
+        padding: var(--s-2) var(--s-3);
+        background: var(--paper-raised);
+        border: 1px solid var(--rule-strong);
+        border-radius: 2px;
+        font-family: var(--ff-body);
+        font-size: 14px;
+        color: var(--ink);
+      }
+      .pa-field select:hover:not(:disabled),
+      .pa-field input[type='file']:hover { border-color: var(--ink-muted); }
+      .pa-field select:disabled {
+        color: var(--ink-faint);
+        background: var(--paper);
+        cursor: not-allowed;
+      }
+      .pa-field-help {
+        margin: var(--s-2) 0 0;
+        font-size: 12.5px;
+        color: var(--ink-muted);
+      }
+      .pa-field-help em {
+        font-family: var(--ff-display);
+        font-style: italic;
+        color: var(--ink);
+      }
+
+      /* Drop zone is a <label> bound to the file input — clicking or
+         keyboard-activating (Enter/Space via the underlying input's
+         label association) opens the same picker. Drag events still
+         work for pointer users. */
+      .pa-drop {
+        display: block;
+        margin-top: var(--s-3);
+        padding: var(--s-4);
+        background: var(--paper-raised);
+        border: 1.5px dashed var(--rule-strong);
+        border-radius: 2px;
+        color: var(--ink-muted);
+        font-size: 13px;
+        text-align: center;
+        cursor: pointer;
+        transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+        /* Drop label gets its own focus styling via the associated
+           input — which is focusable. Hover/focus visually reinforces
+           the affordance. */
+      }
+      .pa-drop:hover {
+        border-color: var(--ink-muted);
+        color: var(--ink);
+      }
+      .pa-drop.active {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+      .pa-drop code {
+        font-family: var(--ff-mono);
+        font-size: 12.5px;
+      }
+
+      .pa-loaded {
+        margin-top: var(--s-3);
+        display: flex;
+        align-items: baseline;
+        gap: var(--s-3);
+        font-size: 13px;
+      }
+      .pa-loaded-label {
+        font-family: var(--ff-body);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--ink-faint);
+      }
+      .pa-loaded-name { font-family: var(--ff-mono); font-size: 13px; color: var(--ink); }
+      .pa-loaded-meta { color: var(--ink-muted); }
+      .pa-reset {
+        background: transparent;
+        border: 0;
+        padding: 0;
+        font: inherit;
+        color: var(--accent);
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+
+      /* ── Radio group (segmented) ─────────────────────────────────── */
+      /* Inputs are visually hidden via the standard sr-only pattern —
+         they stay focusable (no pointer-events:none, no display:none)
+         so arrow-key navigation between radios works. Focus ring is
+         proxied onto the label via :has(input:focus-visible). */
+      .pa-radios {
+        display: inline-flex;
+        border: 1px solid var(--rule-strong);
+        border-radius: 3px;
+        overflow: hidden;
+        background: var(--paper-raised);
+      }
+      .pa-radios__opt {
+        position: relative;
+        padding: 6px var(--s-4);
+        font-size: 14px;
+        color: var(--ink-muted);
+        cursor: pointer;
+        margin: 0;
+        text-transform: none;
+        letter-spacing: 0;
+      }
+      .pa-radios__opt + .pa-radios__opt { border-left: 1px solid var(--rule-strong); }
+      .pa-radios__opt:has(input:checked) {
+        background: var(--ink);
+        color: var(--paper);
+      }
+      .pa-radios__opt:has(input:focus-visible) {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .pa-radios input[type='radio'] {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      .pa-def {
+        margin-top: var(--s-4);
+        font-size: 14px;
+        color: var(--ink-muted);
+      }
+      .pa-def dt {
+        font-family: var(--ff-mono);
+        font-size: 12px;
+        color: var(--ink);
+        margin-top: var(--s-2);
+      }
+      .pa-def dd {
+        margin: 2px 0 var(--s-2) 0;
+        max-width: 56ch;
+      }
+
+      /* ── Metadata dl ─────────────────────────────────────────────── */
+      .pa-meta {
+        display: grid;
+        grid-template-columns: 1fr;
+        border-top: 1px solid var(--rule);
+        margin: 0;
+      }
+      @media (min-width: 720px) {
+        .pa-meta { grid-template-columns: repeat(2, 1fr); }
+      }
+      .pa-meta-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: baseline;
+        gap: var(--s-4);
+        padding: var(--s-3) 0;
+        border-bottom: 1px solid var(--rule);
+      }
+      /* Two-column desktop layout: left column (nth-of-type odd) gets
+         right-padding, right column gets left-padding + a hairline
+         divider. `nth-of-type` survives future non-row siblings if
+         they're ever added — `nth-child` did not. */
+      @media (min-width: 720px) {
+        .pa-meta-row:nth-of-type(odd) { padding-right: var(--s-5); }
+        .pa-meta-row:nth-of-type(even) {
+          padding-left: var(--s-5);
+          border-left: 1px solid var(--rule);
+        }
+      }
+      .pa-meta-term {
+        font-family: var(--ff-body);
+        font-size: 13px;
+        color: var(--ink-muted);
+      }
+      .pa-meta-term .hint {
+        display: block;
+        color: var(--ink-faint);
+        font-size: 11.5px;
+        margin-top: 2px;
+      }
+      .pa-meta-val {
+        font-family: var(--ff-mono);
+        font-size: 13px;
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* ── Figure grid + panels ────────────────────────────────────── */
+      .pa-figures {
+        display: grid;
+        gap: var(--s-5);
+      }
+      .pa-figures.cols-2 {
+        grid-template-columns: 1fr;
+      }
+      @media (min-width: 720px) {
+        .pa-figures.cols-2 { grid-template-columns: repeat(2, 1fr); }
+      }
+      .pa-figures.cols-3 {
+        grid-template-columns: 1fr;
+      }
+      @media (min-width: 720px) {
+        .pa-figures.cols-3 { grid-template-columns: repeat(3, 1fr); }
+      }
+
+      .pa-figure {
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+      }
+      /* Full-row figure breaks out of the cols-2 / cols-3 parent grid.
+         Non-full figures inherit their width from the parent grid's
+         template — no per-figure sizing class needed. */
+      .pa-figure.span-row { grid-column: 1 / -1; }
+
+      .pa-figure-head {
+        display: flex;
+        align-items: baseline;
+        gap: var(--s-2);
+        margin-bottom: var(--s-2);
+      }
+      .pa-figure-title {
+        font-family: var(--ff-display);
+        font-weight: 460;
+        font-size: 16px;
+        color: var(--ink);
+        margin: 0;
+      }
+      .pa-tag {
+        font-family: var(--ff-mono);
+        font-size: 10.5px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        padding: 2px 6px;
+        border-radius: 2px;
+      }
+      .pa-tag--current {
+        color: var(--mark-current);
+        background: var(--mark-current-soft);
+      }
+      .pa-tag--experimental {
+        color: var(--mark-experimental);
+        background: var(--mark-experimental-soft);
+      }
+
+      .pa-surface {
+        background: var(--paper-raised);
+        border: 1px solid var(--rule);
+        border-radius: 2px;
+        padding: var(--s-4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 220px;
+      }
+      .pa-surface svg { display: block; max-width: 100%; height: auto; }
+      .pa-figure.span-row .pa-surface { min-height: 460px; }
+
+      .pa-caption {
+        margin-top: var(--s-3);
+        font-size: 13px;
+        color: var(--ink-muted);
+        font-family: var(--ff-display);
+        font-style: italic;
+        font-weight: 400;
+        line-height: 1.55;
+        max-width: 50ch;
+      }
+      .pa-caption .tech {
+        display: block;
+        margin-top: var(--s-1);
+        font-family: var(--ff-mono);
+        font-style: normal;
+        font-size: 11.5px;
+        color: var(--ink-faint);
+      }
+
+      .pa-empty {
+        color: var(--ink-faint);
+        font-family: var(--ff-display);
+        font-style: italic;
+        text-align: center;
+        padding: var(--s-6);
+        width: 100%;
+      }
+      /* Inline variant — used when an absent section still has its
+         header rendered (so TOC anchors resolve) but content is
+         gated on views being available. */
+      .pa-empty--inline {
+        text-align: left;
+        padding: var(--s-4) 0;
+        border-top: 1px solid var(--rule);
+      }
+
+      .pa-error {
+        background: var(--err-bg);
+        border: 1px solid #fecaca;
+        border-radius: 2px;
+        padding: var(--s-3) var(--s-4);
+        color: var(--err-ink);
+        font-size: 13.5px;
+        margin-bottom: var(--s-5);
+      }
+      .pa-error strong { font-weight: 700; }
+
+      /* ── Footer ──────────────────────────────────────────────────── */
+      .pa-colophon {
+        margin-top: var(--s-8);
+        padding-top: var(--s-5);
+        border-top: 1px solid var(--rule);
+        font-size: 12px;
+        color: var(--ink-faint);
+      }
+      .pa-colophon code {
+        font-family: var(--ff-mono);
+        font-size: 11.5px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="audit-root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

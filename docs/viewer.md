@@ -1,25 +1,31 @@
-# Viewer & Interactive Page
+# Browser Interfaces: Lab, Watch, and Viewer
 
 ## Overview
 
-NanoToybox has three browser interfaces:
+Atom Dojo ships three browser interfaces:
 
 | Interface | Path | Purpose |
 |-----------|------|---------|
-| **Interactive Page** | `lab/index.html` | Real-time Tersoff simulation with drag/rotate interaction |
-| **Trajectory Viewer** | `viewer/index.html` | Pre-computed trajectory playback with stride control |
+| **Lab** | `lab/index.html` | Real-time Tersoff simulation with drag/rotate interaction |
 | **Watch** | `watch/index.html` | Import and play back `.atomdojo` history files — from local files or from shared cloud capsules via share code |
+| **Viewer** | `viewer/index.html` | Pre-computed XYZ trajectory playback with stride control |
 
-## Interactive Page (`lab/`)
+## Lab (`lab/`)
 
-The interactive page is the primary user-facing application. It runs a full Tersoff potential in JavaScript, allowing users to drag, rotate, and interact with carbon nanostructures in real-time.
+The Lab is the primary user-facing application. It runs a full Tersoff potential in JavaScript, allowing users to drag, rotate, and interact with carbon nanostructures in real-time.
 
 ### Usage
 
 ```bash
-npm run dev
-# Open http://localhost:5173/lab/
+npm run app:serve
+# Open http://localhost:8788/lab/
 ```
+
+Raw `npm run dev` (vite-only on :5173) does not serve a working Lab — Lab
+boots against `/api/*` and `/auth/*` Pages Functions which 404 under
+vite. `npm run app:serve` runs the full local pipeline
+(`build → cf:d1:migrate → wrangler pages dev`). See
+`docs/contributing.md` for the full ergonomics.
 
 ### Features
 
@@ -437,7 +443,7 @@ The interactive page uses a composition root pattern with React-authoritative UI
 
 ### Technology
 
-- Vite (v8) build pipeline: TypeScript + React (JSX) compiled and bundled. Dev server via `npm run dev`
+- Vite (v8) build pipeline: TypeScript + React (JSX) compiled and bundled. Local full-stack server via `npm run app:serve` (wraps vite build + wrangler pages dev); raw `npm run dev` is vite-only and 404s on `/api/*` + `/auth/*`, so Lab does not hydrate under it
 - React 19 (`createRoot`) — primary UI surfaces: DockLayout, DockBar, TimelineBar, SettingsSheet, StructureChooser, SheetOverlay, StatusBar, TopRightControls (AccountControl + FPSDisplay), CameraControls, OnboardingOverlay, BondedGroupsPanel, TimelineTransferDialog. Supporting: Segmented, Icons, ActionHint
 - Zustand (`app-store.ts`) — reactive UI state store; imperative callbacks from `main.ts` registered via store slots
 - Web Worker (`simulation-worker.ts`) + bridge (`worker-bridge.ts`) — physics runs off the main thread
@@ -457,9 +463,9 @@ The interactive page uses a composition root pattern with React-authoritative UI
 
 ---
 
-## Trajectory Viewer (`viewer/`)
+## Viewer (`viewer/`)
 
-The trajectory viewer plays back pre-computed XYZ trajectory files. It does not run physics.
+The Viewer plays back pre-computed XYZ trajectory files. It does not run physics.
 
 ### Usage
 
@@ -506,9 +512,13 @@ The watch app imports and plays back `.atomdojo` history files exported from the
 # Open directly, then drag-drop or browse for an .atomdojo file
 open watch/index.html
 
-# Or serve via Vite
-npm run dev
-# Open http://localhost:5173/watch/
+# Or serve with the full local stack (needed for share-code / cloud
+# capsule flows, which resolve via /api/capsules/:code Functions)
+npm run app:serve
+# Open http://localhost:8788/watch/
+
+# Raw `npm run dev` (vite-only on :5173) works for local-file playback
+# but 404s on share-code lookups.
 ```
 
 ### Landing State

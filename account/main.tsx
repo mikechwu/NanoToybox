@@ -23,12 +23,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { PreviewThumbV1 } from '../src/share/capsule-preview-scene-store';
-import {
-  ATOM_HALO_WIDTH,
-  resolveAtomsOnlyRadius,
-  resolveBondStrokeWidth,
-  resolveBondedAtomRadius,
-} from '../src/share/capsule-preview-thumb-render';
+import { CurrentThumbSvg } from '../src/share/capsule-preview-current-thumb';
 
 interface AccountMe {
   userId: string;
@@ -126,84 +121,20 @@ export function CapsulePreviewThumb({
 }: {
   thumb: PreviewThumbV1;
 }): React.ReactElement {
-  // Radius + connectivity strategy at 40×40 (viewBox 100). Constants
-  // come from `capsule-preview-thumb-render` so the derivation's
-  // visibility filter stays in lockstep with the actual rendered
-  // geometry; adjusting either side without the other silently drops
-  // visible bonds or clips glyphs against the cell edge.
+  // Thin shim over the shared `CurrentThumbSvg`. The SVG body lives in
+  // `src/share/capsule-preview-current-thumb` so the audit workbench
+  // renders against byte-identical production output. Radius and stroke
+  // constants still come from `capsule-preview-thumb-render` (inside
+  // the shared module) so the server-side visibility filter stays in
+  // lockstep with the rendered geometry.
   //
   // DOM budget: svg(1) + rect(1) + up to 12 circles + up to 6 lines = 20.
-  const n = thumb.atoms.length;
-  const hasBonds = !!(thumb.bonds && thumb.bonds.length > 0);
-  const densityRadius = hasBonds
-    ? resolveBondedAtomRadius(n)
-    : resolveAtomsOnlyRadius(n);
-  const bondWidth = resolveBondStrokeWidth(n);
   return (
-    <svg
+    <CurrentThumbSvg
+      thumb={thumb}
+      size={THUMB_SIZE}
       className="acct__upload-thumb"
-      width={THUMB_SIZE}
-      height={THUMB_SIZE}
-      viewBox="0 0 100 100"
-      role="presentation"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <rect
-        x={0} y={0} width={100} height={100} rx={12}
-        fill="currentColor" fillOpacity={0.06}
-      />
-      {hasBonds && thumb.bonds!.map((b, i) => {
-        const a = thumb.atoms[b.a];
-        const c = thumb.atoms[b.b];
-        if (!a || !c) return null;
-        return (
-          <line
-            key={`l${i}`}
-            x1={a.x * 100}
-            y1={a.y * 100}
-            x2={c.x * 100}
-            y2={c.y * 100}
-            // Darker neutral so the 2.5-viewBox stroke reads as a line,
-            // not a ghost. Using `currentColor` or a lighter grey makes
-            // the stroke disappear at 1-physical-pixel on the light page.
-            stroke="rgba(55,65,80,0.90)"
-            strokeWidth={bondWidth}
-            strokeLinecap="round"
-          />
-        );
-      })}
-      {thumb.atoms.map((a, i) => {
-        // In bonded mode the density radius is deliberately tight so
-        // the atom glyphs don't swallow the bond strokes between them —
-        // we pin atoms to that tighter value regardless of the stored
-        // scaling. In atoms-only mode, the stored radius may exceed the
-        // floor (sparse scenes get chunkier dots), so we take the
-        // larger. `Number.isFinite` guards a crafted-NaN payload.
-        const scaled = Number.isFinite(a.r) ? a.r * 100 : 0;
-        const r = hasBonds ? densityRadius : Math.max(densityRadius, scaled);
-        return (
-          <circle
-            key={`c${i}`}
-            cx={a.x * 100}
-            cy={a.y * 100}
-            r={r}
-            fill={a.c}
-            fillOpacity={0.95}
-            // Explicit light halo (not `currentColor`) — currentColor
-            // on a light theme resolves to the dark body text, which
-            // has almost no contrast against the #222222 carbon fill
-            // and failed to separate adjacent atoms. A soft white
-            // stroke reliably reads as a halo on both themes without
-            // eating the bond stroke. Width sourced from the shared
-            // render-constants module so the derivation's fit-glyph
-            // margin accounts for it.
-            stroke="rgba(255,255,255,0.85)"
-            strokeWidth={ATOM_HALO_WIDTH}
-          />
-        );
-      })}
-    </svg>
+    />
   );
 }
 

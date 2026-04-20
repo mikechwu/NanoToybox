@@ -1171,3 +1171,48 @@ The Pages Function route handler MUST ignore `?v=` entirely — it is a cache-ke
 **Related ADRs:** D130 (V1 OG render stack — still in force; V2 uses the same Vercel OG plugin / bundled-font pipeline, only the scene source changed). D132 (`posterUrl` semantics — unchanged; "endpoint exists" still applies, and V2 narrows the "dynamic vs. stored" discriminator because every accessible capsule now has a pre-baked scene). D133 (two-axis `?v=` cache key — `?v=t2` now reflects `TEMPLATE_VERSION = 2`; the scheme is unchanged). D134 (`CAPSULE_PREVIEW_DYNAMIC_FALLBACK` allowlist flag — still the rollback lever for the dynamic poster path; V2 did not retire it).
 
 **Evidence:** `src/share/capsule-preview.ts` (`TEMPLATE_VERSION = 2`); `src/share/capsule-preview-scene-store.ts` (`CURRENT_THUMB_REV = 2`, `PreviewStoredThumbV1`, `rev >= CURRENT_THUMB_REV` fast-path gate); `migrations/0009_capsule_preview_scene_v1.sql`; `functions/api/capsules/[code]/preview/poster.ts::dynamicPosterETag` (`"v${TEMPLATE_VERSION}-${fnv1a32Hex(...)}"`).
+
+## D136: Shared Current-Poster and Current-Thumb Modules — Single Baseline, CI-Enforced Ink Mirror
+
+**Status:** Accepted, 2026-04-20.
+
+**Context:** With the V2 preview pipeline (D135) the poster pane shipped in `functions/_lib/capsule-preview-image.tsx` and the account thumb shipped in `account/main.tsx` diverged from the audit workbench's hand-copied reimplementations. A "figure renderer" that compares experimental variants against the production baseline cannot do its job if the baseline itself is duplicated — the comparison silently re-asserts drift as signal.
+
+**Decision:**
+
+1. **Extract the production baselines.** The 600×500 poster pane body moves to `src/share/capsule-preview-current-poster.tsx` (`CurrentPosterSceneSvg`); the 100×100 account thumb body moves to `src/share/capsule-preview-current-thumb.tsx` (`CurrentThumbSvg`). Both are pure, Satori-compatible React subtrees with no hooks, no side effects, and no DOM assumptions. The poster Function and the account route import these modules — they do not reimplement the SVG.
+2. **TypeScript ink constant mirrors the CSS token, not the other way around.** The thumb uses `fill="currentColor"` so the account DOM picks up the `--color-text` token naturally. Callers that mount the SVG outside the account DOM (e.g. the audit workbench) apply the TS constant `CURRENT_THUMB_DEFAULT_INK` as their ambient `color`. The constant is declared as a MIRROR of the light-scope `--color-text` value in `public/account-layout.css` — not as a single source of truth.
+3. **Drift is a test failure, not a convention.** `tests/unit/current-thumb-ink-sync.test.ts` parses the light-scope of `account-layout.css` and asserts the TS constant matches the CSS token (with hex normalization). Editing either side without updating the other fails CI.
+
+**Rationale:** The alternative paths each lose something load-bearing. Centralizing the value into a shared design-token module would be cleaner but drags in a build-time token-generation surface that Lab/Watch do not currently need — the cost/benefit flips against extraction at today's scale. Keeping the baseline duplicated with a code-review convention is exactly what already produced the drift the extraction is fixing. A mirror with a CI assertion is the minimum hardening that turns "someone has to remember" into "CI tells you." When the design-system surface grows a reason to generalize (dark-theme thumb, shared CSS-custom-property pipeline), the test file names the deletion path: delete the mirror together with the duplication it policed.
+
+**Consequences:**
+
+- Any future figure-review or renderer tooling imports the same `src/share/capsule-preview-current-*` modules and automatically tracks production. No more hand-copied reimplementations.
+- The `CurrentPosterSceneSvg` export surface (pane dimensions, gradient id) is parametric so downstream tooling can namespace or resize without reflowing the baseline.
+- The ink contract is scoped to the light theme. A dark-theme variant is additive — extend the TS constant set and the test, do not branch the rendering module.
+
+**Alternatives rejected:** Shared design-token module (adds a build-time token-generation surface, not warranted at current scale); code-review convention ("don't drift the audit copy") — already failed once, which is the trigger for this ADR; inlining the CSS token via `getComputedStyle()` at runtime (works only when the audit mounts inside the account DOM, and the whole point of the extraction is to be DOM-agnostic).
+
+**Evidence:** `src/share/capsule-preview-current-poster.tsx` (`CurrentPosterSceneSvg`, pane constants); `src/share/capsule-preview-current-thumb.tsx` (`CurrentThumbSvg`, `CURRENT_THUMB_DEFAULT_INK`); `tests/unit/current-thumb-ink-sync.test.ts` (drift assertion with hex normalization); `account/main.tsx` and `functions/_lib/capsule-preview-image.tsx` as the production consumers.
+
+## D137: `scripts/serve-app.sh` Is the Canonical Local Lab Launcher
+
+**Status:** Accepted, 2026-04-20.
+
+**Context:** The raw Vite dev server (`npm run dev`) serves Lab and Watch static assets on port 5173 but does not execute `functions/**`. Lab bootstraps against `/api/*` and `/auth/*`; under Vite those routes 404 and the Lab page silently fails to hydrate once it reaches any auth-gated or share-gated path. Every Lab contributor who has touched a publish, share, auth, or capsule-preview path has re-discovered this the hard way.
+
+**Decision:** `scripts/serve-app.sh` (aliased `npm run app:serve`) is the canonical local launcher for full-stack Lab work. It wraps the three-step pipeline `npm run build → npm run cf:d1:migrate → npx wrangler pages dev dist --port <port>` behind one command, with:
+
+- a pre-run banner listing the exact URLs (`/`, `/lab/`, `/watch/`) and which pipeline steps will run;
+- a port-collision preflight that names the process holder and suggests the next free port;
+- `--skip-build` and `--skip-migrate` fast-paths for the inner loop once `dist/` and the local D1 are warm;
+- browser auto-open (`--open`) that waits for the port to accept connections before opening.
+
+`npm run dev` (pure Vite, no Functions) remains available and is the right tool for Lab/Watch UI iteration that does not touch `/api/*` or `/auth/*`. The contributor rule of thumb is documented in `docs/contributing.md` (Local dev modes) and `docs/operations.md`: touching auth, publish, share-link, or capsule-preview — use `app:serve`; otherwise Vite is fine.
+
+**Rationale:** Three chained npm scripts across three terminals is not ergonomic enough for a daily inner-loop command, and the failure modes of skipping the middle step (stale D1, missing migrations) are silent until the first publish attempt. One script lets the common errors fail loud with actionable recovery text. Keeping `npm run dev` and `npm run cf:dev` in place means this decision is additive — it does not change the underlying toolchain, only the on-ramp.
+
+**Alternatives rejected:** Document the three-step pipeline in the README and expect contributors to memorize it (already tried; the issue keeps coming back in PR review); fold the Functions emulator into `npm run dev` directly (vite-plugin options for Cloudflare Pages Functions exist but conflate HMR with the backend emulator, making dev-server startup slower for the common UI-only case); retire `npm run dev` (hostile to Lab/Watch UI contributors who do not touch the backend).
+
+**Evidence:** `scripts/serve-app.sh` (pipeline + preflight + fast-path flags); `package.json` scripts `app:serve`, `cf:d1:migrate`, `cf:dev`; `docs/contributing.md` (Local dev modes rule-of-thumb).

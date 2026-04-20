@@ -2,7 +2,7 @@
 
 ## Motivation
 
-NanoToybox aims to deliver real-time molecular dynamics in a web browser. This research quantifies the practical limits — at what atom count does real-time (30 FPS) visualization become infeasible — by measuring three independent bottlenecks: Tersoff force computation, Three.js rendering, and XYZ data transfer.
+Atom Dojo aims to deliver real-time molecular dynamics in a web browser. This research quantifies the practical limits — at what atom count does real-time (30 FPS) visualization become infeasible — by measuring three independent bottlenecks: Tersoff force computation, Three.js rendering, and XYZ data transfer.
 
 The research also validates collision dynamics between library structures, establishing correct protocols for multi-structure simulation.
 
@@ -185,5 +185,6 @@ open viewer/index.html
 # Use Stride=20 at 30 fps for long trajectories
 
 # Or interact with structures in real-time
-# Open http://localhost:5173/lab/ (requires npm run dev)
+# Open http://localhost:8788/lab/ (requires npm run app:serve — Lab
+# needs Pages Functions; raw npm run dev 404s on /api/*)
 ```
