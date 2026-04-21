@@ -245,7 +245,14 @@ canaries.
 | `[capsule-poster]` | `functions/api/capsules/[code]/preview/poster.ts` | One structured-JSON line per poster-route response: `{"code":"...","mode":"stored\|generated\|error\|flag-off\|inaccessible","durationMs":N,"status":N,"cause":"..."}`. `mode` discriminates the served path; `cause` carries a stable prefix on the non-happy modes (and, on `mode:'generated'`, optionally carries `bondless-heal-failed:<reason>` when the read-time heal of a legacy bondless row fell through and a bondless scene was served — query this in one stream to find successful renders still serving without bonds). V2 taxonomy (full list — all non-success causes funnel through `serveTerminalFallback` so the response stays a valid 200 PNG with `Cache-Control: public, max-age=60`, EXCEPT `module-import-failed:*` which emits `Cache-Control: no-cache, no-store, must-revalidate` so a bad deploy doesn't lock edge caches onto the fallback PNG for 60 s): `satori-threw:<msg>`, `module-import-failed:<msg>`, `r2-miss`, `dynamic-not-png:Nb`, `stored-not-png:Nb`, `fallback-fetch-failed:<msg>` (combined with original cause via `;`), `scene-missing` (lazy-backfill hit but R2 blob absent), `capsule-parse-failed:<msg>` (R2 blob present but rejected by `validateCapsuleFile`), `no-dense-frames` (capsule's `timeline.denseFrames[]` empty). Aggregate by `mode` to track stored-hit vs dynamic-render vs error rates; alert on a sustained `error` rate or any `module-import-failed:` (indicates a `@cloudflare/pages-plugin-vercel-og` regression). |
 | `[capsule-poster] bondless-heal-failed: <reason> share=<code>` | `functions/api/capsules/[code]/preview/poster.ts` | Synchronous read-time heal of a bondless legacy row (`scene.thumb.atoms` populated, no bonds anywhere) failed; the route falls through and serves whatever bondless scene it has (a bondless poster is strictly better than the terminal fallback). Reasons mirror `rebakeSceneFromR2`: `blob-missing`, `blob-read-failed:<msg>`, `capsule-parse-failed:<msg>`, `no-dense-frames`, `scene-empty`. The structured `[capsule-poster]` success log emitted for the same request carries `cause: bondless-heal-failed:<reason>` on `mode:'generated'` so both signals can be correlated in one stream. One-offs are expected for rows whose R2 blob is missing (orphan-sweeper pending); a sustained rate means the heal is failing for rows with live blobs and publish-pipeline regression is likely. |
 | `[capsule-poster] scene-parse-failed for share=<code>` | `functions/api/capsules/[code]/preview/poster.ts` | `preview_scene_v1` was non-NULL but `parsePreviewSceneV1` returned null (malformed JSON, wrong `v`, non-finite coords, etc.). Route falls through to `rebakeSceneFromR2`. One-offs are single bad historical rows; sustained volume suggests the writer is emitting bad scenes. |
-| `[account.capsules] bondless-heal-failed: <reason> share=<code>` | `functions/api/account/capsules/index.ts` | Background (`ctx.waitUntil`) heal for a bondless row queued by the account-list endpoint failed. The response is already sent — same bondless data the user saw now; the next page load reflects the healed row once a later heal succeeds. Capped at **3 background heals per account-list request** to bound R2 traffic when a user's feed contains many legacy rows from the same launch period. |
+| `[account.capsules] heal-scheduled user=<u> started=<N> claim-attempts=<A> claim-errors=<E> eligible=<M> first-page=<bool> cap=<C> attempt-cap=<AC> missing=<a> parse-failed=<b> stale-rev=<c> bondless=<d>` | `functions/api/account/capsules/index.ts` | Per-request nomination summary for the account-page lazy rebake. `started` is the number of rows whose D1 lease claim succeeded and were handed to the background batch. `claim-attempts` is the number of `UPDATE … preview_rebake_claimed_at` writes issued on this request; bounded by `attempt-cap` (= 2× `cap`) so a page full of already-held leases cannot balloon D1 write volume. `claim-errors` is the count of attempts where the UPDATE threw — the nomination path is fail-open, so errored rows are skipped and the endpoint still returns the capsule list. `eligible` is the total set of candidates classified from the page. `cap` is `HEAL_START_CAP_FIRST_PAGE` (8) on page 1 and `HEAL_START_CAP_CURSORED` (5) on cursor-paged requests. `attempt-cap` is `HEAL_CLAIM_ATTEMPT_CAP_FIRST_PAGE` (16) or `HEAL_CLAIM_ATTEMPT_CAP_CURSORED` (10). If `started < eligible` consistently, the gap is explained by one of: (a) held leases (concurrent tabs), (b) start-cap reached, (c) attempt-cap reached (claim-attempts === attempt-cap with low started), or (d) claim-errors > 0 (D1 write path degraded). |
+| `[account.capsules] heal-batch-done user=<u> rebaked=<N> persisted=<N> failed=<N> deadlined=<N> elapsed=<ms>` | `functions/api/account/capsules/index.ts` | Terminal summary from the background batch driver. `rebaked` = in-memory projection successes; `persisted` = D1 UPDATE committed; `failed` = `rebakeSceneFromR2` returned `ok:false`; `deadlined` = candidates the worker pool didn't reach before `HEAL_BUDGET_MS = 25 000`. `rebaked > persisted` indicates D1 write pressure (paired with `[preview-heal] write-failed` lines); `deadlined > 0` consistently indicates the per-request budget is too tight OR R2 read latency spiked. |
+| `[account.capsules] heal-claim-failed share=<code> error=<msg>` | `functions/api/account/capsules/index.ts` | Lease-claim `UPDATE` threw on this row. The nomination path is fail-open: the row is skipped, the loop continues with the next candidate, and the endpoint's response still carries the capsule list (and possibly a partial `previewPending`). Sustained volume → D1 write pressure on `capsule_share` (paired with `claim-errors=N` on the same request's `heal-scheduled` line). One-offs are benign; the row will be re-nominated on the next page load. |
+| `[account.capsules] classify-failed share=<code> error=<msg>` | `functions/api/account/capsules/index.ts` | The classifier (`classifyRow`) threw while inspecting a row's `preview_scene_v1` — e.g., `parsePreviewSceneV1` encountered an unexpected shape, or `sceneIsBondless` tripped on a malformed `scene.thumb`. The row is skipped from nomination and the endpoint still returns the list. Sustained volume indicates a new poison-shape has slipped past publish-time validation; investigate by pulling the offending row's `preview_scene_v1` JSON and running it through `parsePreviewSceneV1` locally. |
+| `[account.capsules] heal-worker-exception share=<code> error=<msg>` | `functions/api/account/capsules/index.ts` | A rebake worker caught a throw that escaped `rebakeSceneFromR2`'s own `{ok:false}` contract. **Distinct from `heal-failed`** — `heal-failed` means the helper returned a structured failure reason; `heal-worker-exception` means something threw outside the contract (e.g., an R2 binding runtime error that wasn't wrapped, or a future code path that forgot its own try/catch). The row is counted in `failed=N` in the matching `heal-batch-done` summary. Sustained volume indicates a failure mode not yet modeled — treat every occurrence as a signal to extend the `rebakeSceneFromR2` failure taxonomy. |
+| `[preview-heal] d1-shape-unknown — result missing .meta; persisted counter will report false` | `src/share/capsule-preview-heal.ts` | The D1 binding returned a `run()` result with no `.meta` property. The `rebaked > persisted` divergence alert depends on `meta.changes`, so the helper now reports `persisted: false` for the affected row. **Rate-limited**: emits at most once per worker isolate — enough to trigger an investigation without flooding under sustained degradation. One-offs suggest a mocked binding leaked into a branch (test infrastructure bug). Sustained single-occurrence logs across many isolates suggest a platform/binding regression (older Workers runtime) — file a platform ticket. |
+| `[account.capsules] heal-failed: <reason> share=<code>` | `functions/api/account/capsules/index.ts` | Individual row rebake failed. Reasons mirror `rebakeSceneFromR2`: retryable (`blob-read-failed:<msg>`) or terminal (`blob-missing`, `capsule-parse-failed:<msg>`, `no-dense-frames`, `scene-empty`). Retryables clear on their own after the 90 s lease TTL; terminals log repeatedly at ~90 s cadence for the same row — that's the runbook signal to republish or delete the broken blob. **Do NOT clear the lease** for a terminal-reason row; it will re-fail on the next load and the 90 s quiet period is the designed throttle. |
+| `[account.capsules] heal-not-persisted share=<code>` | `functions/api/account/capsules/index.ts` | In-memory rebake succeeded but the D1 UPDATE did not commit (paired with a `[preview-heal] write-failed` line on the same row). The user will see the healed row on a subsequent request only after the write succeeds. One-off is benign; sustained volume = D1 write pressure. |
 | `[preview-heal] write-failed: <msg>` | `src/share/capsule-preview-heal.ts` | D1 UPDATE after a successful in-memory rebake failed. The render/return is already computed from the freshly projected scene, so the current request succeeds; the next request retries the write. Persistent volume = D1 write pressure on `capsule_share.preview_scene_v1`. |
 | `[<tag>] background-rejected: <msg>` | `functions/_lib/wait-until.ts` | Detached promise scheduled via `scheduleBackground` rejected. Current `<tag>` values: `publish` (publish-audit and success-counter writes from `functions/api/capsules/publish.ts`), `account.capsules` (background bondless heals from `functions/api/account/capsules/index.ts`). Systematic volume for one tag = the corresponding background path (audit write / heal / counter) is failing at the edge. Without this wrapper the rejection would vanish into a silent `.catch` — presence of the log is a reliability floor, not itself an incident unless sustained. |
 | `[scene-store] thumb-malformed: <reason>` | `src/share/capsule-preview-scene-store.ts` | Parsed `preview_scene_v1` storage carried an invalid `thumb` field; scene is still returned, thumb is dropped (read path falls back to live sampling). Reasons: `invalid-rev`, `no-atoms`, `atom-not-an-object`, `atom-nonfinite-or-malformed`, `bond-not-an-object`, `bond-nonint-indices`. One-offs are a single bad historical row; a sustained rate means the writer is emitting malformed thumbs and needs investigation. |
@@ -277,6 +284,17 @@ operator is pairing with a reporting user during an incident.
 | `[auth] popup-complete handler failed` | The opener-side `handleAuthComplete` (postMessage / BroadcastChannel listener) threw. Auth state may not be hydrated. The opener does NOT auto-poll; the next user-driven action (opening Transfer dialog → opportunistic `hydrateAuthSession`, or a manual page reload) refreshes the session state. The popup-complete landing page itself surfaces a "Close this tab and refresh the Lab tab" hint when neither channel delivers. |
 | `[auth] dropping auth-complete message from unexpected origin` | A `message` event with the auth-complete shape arrived from an origin that did not match the Lab tab's `window.location.origin`. The handler dropped it (security-correct). On a Vite dev host (port 5173) this commonly indicates a popup that landed on `:8788` — run the Lab under `npm run cf:dev` or use the same host for both. |
 | `[auth] OAuth popup skipped — running on Vite dev host` | Dev-only signal: `tryBeginOAuthPopup` short-circuited because the Lab is on Vite (port != 8788), where `/auth/{provider}/start` 404s. The popup-blocked UX surfaces (Retry / Continue-in-tab / Back). Production traffic never emits this. |
+
+### Client-side (`/account/` page, browser console)
+
+Emitted by the account-self-service surface (`account/main.tsx`). User-visible only via browser devtools; pair with a reporting user during an incident.
+
+| Prefix | Meaning |
+|---|---|
+| `[account] refresh-failed: <msg>` | A background capsule-list refresh (post-response timer or `visibilitychange` nudge) threw at the fetch layer. Current render is preserved; the next user action will retry. Sustained volume → `/api/account/capsules` availability issue. |
+| `[account] delete-request-threw: <msg>` | A single-row capsule-delete `fetch` rejected (transport error). The row stays in the list; the user sees the inline error state. One-offs are transient network blips; sustained volume → delete-endpoint or session availability issue. |
+| `[account] clipboard-unavailable: writeText did not return a Promise` | `navigator.clipboard.writeText(...)` returned a non-thenable (extension-patched clipboard, ancient browser, or a polyfill shim). UI falls back to the manual-copy path. One-offs are benign; repeated reports from the same user → extension interference. |
+| `[account] clipboard-write-failed: <msg>` | Clipboard `writeText` rejected (permission denied, focus lost, insecure context). UI falls back to the manual-copy path. Common under strict browser settings; only investigate if a user reports both this *and* that the fallback UI is also failing. |
 
 ### Client-side (Watch→Lab handoff, browser console)
 
@@ -436,12 +454,68 @@ read paths repair these rows transparently:
   overwrite is the point). On heal failure the route serves whatever
   bondless scene was already in D1 and emits `cause:
   bondless-heal-failed:<reason>` on the `mode:'generated'` success log.
-- **Account API (background heal).** The account-list handler returns
-  the current (possibly bondless) page data immediately, then queues up
-  to **3 heals per request** via `ctx.waitUntil` through the shared
-  `scheduleBackground` wrapper. The next page load reflects the healed
-  row. The cap bounds R2 traffic when a feed has many legacy rows from
-  the same launch period.
+- **Account API (background heal, ADR D135 follow-up 2026-04-21).**
+  The account-list handler returns the current page data immediately,
+  then queues up to **8 heals per first-page request** (5 on
+  cursor-paged requests) via `ctx.waitUntil` through the shared
+  `scheduleBackground` wrapper. Staleness now covers four priority
+  classes: `missing` (1), `parse-failed` (2), `stale-rev` (3),
+  `bondless` (4); the classifier runs over the paged SELECT and the
+  claim order is priority-sorted. A 90 s TTL lease on the
+  `capsule_share.preview_rebake_claimed_at` column (migration `0010`)
+  dedups work across concurrent tabs and rapid reloads — only rows
+  whose atomic `UPDATE … WHERE claim IS NULL OR claim < ?` resolved
+  with `changes === 1` are handed to the batch. The batch runs with
+  `HEAL_CONCURRENCY = 2` and a `HEAL_BUDGET_MS = 25 000` wall-clock
+  budget; unstarted rows become `deadlined` in the summary log.
+  Response carries `previewPending: string[]` (the started share
+  codes) so the client renders a shimmer overlay and schedules an 8 s
+  follow-up fetch; on page 1 only. Once the user invokes "Load more"
+  in the current session, auto-refresh is suppressed until the next
+  full `reload()` so a timer-driven page-1 refetch can't collapse the
+  user's loaded pages.
+
+#### Happy-path monitoring (routine)
+
+- Log lines to watch: `[account.capsules] heal-scheduled …`,
+  `heal-batch-done …`, `heal-not-persisted …`, `heal-failed …`,
+  `[preview-heal] write-failed …`.
+- D1 write regression signal: `rebaked > persisted` divergence in
+  `heal-batch-done`.
+- Terminal-failure signature: repeating
+  `heal-failed: <blob-missing|capsule-parse-failed|no-dense-frames|scene-empty>`
+  for the same share code at ~90 s cadence = permanently broken row;
+  fix is republish or delete. **Do NOT manually clear the lease** —
+  the row will re-fail on the next load anyway and the 90 s quiet
+  period is the designed throttle.
+
+#### Emergency operator intervention (rare)
+
+**Preconditions — ALL must hold before manual SQL is run:**
+
+- `preview_rebake_claimed_at` for the row is **older than 10 minutes**
+  (`now - claim > 600_000`), i.e. > 6× the TTL.
+- There is **no matching recent `heal-batch-done` or `heal-failed`**
+  log entry for the row's share code in the last 10 minutes.
+- Evidence of worker crash (Cloudflare dashboard incident, or
+  `waitUntil` cutoff in error logs) during the window the claim was
+  acquired.
+
+**Hard rule:** do NOT clear the lease for any row whose most recent
+`heal-failed` log line matches a terminal reason (`blob-missing`,
+`capsule-parse-failed`, `no-dense-frames`, `scene-empty`). Those rows
+are broken at the source; clearing the lease creates a retry-loop
+without fixing anything. Republish or delete the row instead.
+
+**Manual SQL (emergency only):**
+
+```sql
+UPDATE capsule_share SET preview_rebake_claimed_at = NULL WHERE id = ?;
+```
+
+Canonical local-dev smoke command for this feature:
+`npm run app:serve` (Vite `npm run dev` does not run Pages Functions
+and therefore does not exercise the server-side lazy rebake path).
 
 Both paths share `rebakeSceneFromR2` in
 `src/share/capsule-preview-heal.ts`. D1 write failures inside the heal
@@ -1181,6 +1255,13 @@ Current migrations (in `migrations/`, applied in order by wrangler):
   populated by `scripts/backfill-preview-scenes.ts` or lazy-backfilled by
   the poster route on first miss. See *Capsule preview poster endpoint (V2)*
   above.
+- `0010_capsule_share_preview_rebake_claim.sql` — adds nullable
+  `capsule_share.preview_rebake_claimed_at INTEGER` column (Unix-ms
+  claim timestamp) plus a partial index
+  `idx_capsule_share_rebake_claimed` on non-NULL values. Backs the
+  account-page lazy-rebake lease; TTL (90 s) lives in application code
+  as `HEAL_LEASE_TTL_MS`. See *Read-time auto-heal for bondless legacy
+  rows* above.
 
 Remote application is automatic on deploy: `.github/workflows/deploy.yml`
 runs `wrangler d1 migrations apply atomdojo-capsules --remote` right

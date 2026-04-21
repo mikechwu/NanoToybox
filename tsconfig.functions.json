@@ -46,6 +46,7 @@
     "tests/unit/auth-error-route.test.ts",
     "tests/unit/auth-callback-acceptance.test.ts",
     "tests/unit/account-api-preview-thumb.test.ts",
+    "tests/unit/account-capsules-backfill.test.ts",
     "workers/cron-sweeper/src/**/*.ts"
   ]
 }

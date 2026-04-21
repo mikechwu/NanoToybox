@@ -170,7 +170,7 @@ The partitioning is enforced by `tsconfig.json`'s explicit `exclude` list — th
 | `npm run build` | `vite build` — produces `dist/` consumed by `app:serve` / `cf:dev` / pages-dev E2E lane. |
 | `npm run app:serve` | Canonical local-dev entrypoint: `npm run build → npm run cf:d1:migrate → npx wrangler pages dev dist --port 8788`. Use this when iterating on Lab or Watch — both depend on Pages Functions. Supports `--skip-build`, `--skip-migrate`, `--port`, `--open`. |
 | `npm run cf:dev` | `wrangler pages dev dist` — full local backend with Functions + D1 + R2 bindings. Equivalent to the last step of `app:serve` when you do not need the build + migrate preflight. |
-| `npm run dev` | `vite` dev server — frontend only, no Functions. Not sufficient for Lab (Lab shell boots against `/api/*` and `/auth/*`, which 404 under vite). |
+| `npm run dev` | `vite` dev server — frontend only, no Functions. Not sufficient for Lab (Lab shell boots against `/api/*` and `/auth/*`, which 404 under vite). Also not sufficient for any manual smoke of the account-page lazy rebake path (ADR D135 follow-up): the rebake nomination runs inside the Pages Function, so `app:serve` / `cf:dev` is the only local surface that exercises it. |
 | `npm run cf:d1:migrate` | Applies migrations to the local D1 (`atomdojo-capsules`). |
 | `npm run cron:dev` / `cron:deploy` / `cron:tail` | Local/prod lifecycle for the cron-sweeper Worker. |
 | `npm run seed:capsule` | Seeds a sample capsule into local R2/D1 for manual testing (defaults to `tests/e2e/fixtures/poster-smoke-capsule.json`). |
@@ -208,6 +208,22 @@ Two helpers in `tests/unit/publish-endpoint.test.ts` are the canonical templates
 - **`makePermissiveEnv()`** — returns `{ env, r2Puts, r2Deletes }`. The returned `env.DB` answers every prepared statement with `{ success: true }` / `null` / empty results, and `env.R2_BUCKET` captures `put`/`delete` calls into the returned arrays so tests can assert on the key names that were written. Use this when you want to focus on handler behavior (auth, quota, audit, response shape) rather than on D1 / R2 wire semantics.
 
 New endpoint tests should prefer these helpers over ad-hoc fixtures so the expected-valid-shape invariant has a single owner.
+
+### AccountApp-Level Test Harness (`tests/unit/account-page-preview-heal-flow.test.tsx`)
+
+The account-page preview-heal flow is exercised through a full-AccountApp mount rather than a shallow component render, because the lazy-rebake nomination path spans the preview scheduler, the account API fetch, and the row-level derive. The canonical harness pattern lives at the top of `tests/unit/account-page-preview-heal-flow.test.tsx` and is built from two seams exported by `account/main.tsx`:
+
+- **`mountAccountApp(rootEl)`** — the same real mount used by production. The test harness boots it under jsdom, which means every assertion runs against the actual React tree + Zustand store + fetch-stub chain.
+- **`setAccountSchedulerOverride(...)`** — a test-only seam that swaps the scheduler under test. When `controlScheduler: true` is passed to `bootAccountApp`, the harness installs an override that captures pending refreshes into a queue instead of running them on the wall clock. This makes the otherwise-time-coupled rebake path deterministic.
+
+The four harness helpers local to the spec file are:
+
+- **`bootAccountApp({ controlScheduler? })`** — dynamic-import + `mountAccountApp`, optionally installing the scheduler override.
+- **`teardownAccountApp()`** — unmounts the tree and restores the scheduler (called from `afterEach`).
+- **`fireScheduledRefresh()`** — pops one pending refresh off the queue and awaits it, so the test can drive one rebake cycle at a time.
+- **`pendingScheduledCount()`** — returns the queue depth, used to assert that a rebake was (or was not) scheduled.
+
+New tests that need to exercise any account-page path that crosses the scheduler boundary (preview heal, lazy rebake, nomination coalescing) should reuse this harness rather than re-mocking the scheduler ad hoc — the `setAccountSchedulerOverride` seam is the single source of truth for "the scheduler under test" and skipping it risks real timers leaking into the test run.
 
 ### E2E Strategy: Share Stack {#e2e-strategy-share-stack}
 
@@ -653,7 +669,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **End-to-end pipeline:** load → import → playback → groups.
 
-*As of Capsule Preview V2, the unit suite (Vitest — ~180+ test files under `tests/unit/`) plus the Playwright default lane (13 spec files under `tests/e2e/`, of which two — `poster-smoke.spec.ts` and `pages-dev-flows.spec.ts` — self-skip outside the pages-dev lane) pass across the lab + watch + share + auth + account-erasure + handoff + capsule-preview surfaces. Run `npx vitest run` for the authoritative live unit total, `npm run test:e2e` for the default E2E lane, and `npm run test:e2e:pages-dev` for the pages-dev lane.*
+*As of Capsule Preview V2, the unit suite (Vitest — ~2960 tests across 187 files under `tests/unit/`) plus the Playwright default lane (13 spec files under `tests/e2e/`, of which two — `poster-smoke.spec.ts` and `pages-dev-flows.spec.ts` — self-skip outside the pages-dev lane; 79 E2E currently passing across both lanes) pass across the lab + watch + share + auth + account-erasure + handoff + capsule-preview surfaces. Run `npx vitest run` for the authoritative live unit total, `npm run test:e2e` for the default E2E lane, and `npm run test:e2e:pages-dev` for the pages-dev lane.*
 
 ### Bond Topology Parity (23 tests)
 

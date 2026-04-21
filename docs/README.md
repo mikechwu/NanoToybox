@@ -25,7 +25,9 @@
 | `sim/`, `ml/` | Python research and ML surrogate tooling |
 | `migrations/` | D1 schema migrations |
 | `structures/` | Bundled sample structures |
-| `public/`, `account/`, `privacy/`, `privacy-request/`, `terms/` | Static assets and policy/account surfaces |
+| `account/` | Account self-service React entrypoint |
+| `privacy-request/` | GDPR/CCPA contact-form entrypoint |
+| `public/`, `privacy/`, `terms/` | Static assets and policy surfaces |
 | `scripts/` | Build and maintenance scripts |
 | `tests/` | Unit (Vitest) and end-to-end (Playwright) tests |
 | `docs/` | This directory |
@@ -57,7 +59,7 @@ python -m pytest tests/test_*.py -v
 | Doc | When to read |
 |---|---|
 | [architecture.md](architecture.md) | New engineers and maintainers — system mental model, Lab/Watch/shared/backend boundaries, key runtime flows |
-| [viewer.md](viewer.md) | UI/UX contributors — Lab and Watch viewer behavior, Watch→Lab entry control, tooltip contract |
+| [viewer.md](viewer.md) | UI/UX contributors — Lab, Watch, and static Viewer behavior, Watch→Lab entry control, tooltip contract |
 | [physics.md](physics.md) | Anyone touching force calculation — Tersoff potential, integrator, units, validation |
 | [testing.md](testing.md) | Before every merge — test ladder, pass criteria, manual WebGL checks, Pages-dev E2E lane |
 | [operations.md](operations.md) | Deploying or on-call — backend runbook, endpoints, cron, privacy-request operator flow |

@@ -34,6 +34,7 @@ import {
   validateCapsuleFile,
   type AtomDojoPlaybackCapsuleFileV1,
 } from '../history/history-file-v1';
+import { errorMessage } from './error-message';
 
 /** Minimal binding surface shared by the poster + account API
  *  function contexts. Keeping this narrow avoids a hard dep on the
@@ -50,8 +51,27 @@ export interface HealEnv {
   };
 }
 
+/** Module-scope latch: the `d1-shape-unknown` warning fires at most
+ *  once per worker isolate. Without this, a sustained binding-shape
+ *  regression (older Workers runtime, a misbehaving mock binding)
+ *  would spam the warn log once per rebake call — up to 8 times per
+ *  account-list response — drowning out real incidents. One log per
+ *  isolate is the right cardinality: operators need the signal
+ *  exactly once to trigger an investigation. */
+let d1ShapeUnknownWarned = false;
+
 export type HealResult =
-  | { ok: true; scene: PreviewSceneV1; sceneJson: string }
+  | {
+      ok: true;
+      scene: PreviewSceneV1;
+      sceneJson: string;
+      /** `true` when the D1 UPDATE resolved without throwing, `false`
+       *  when the in-memory rebake succeeded but the persistence write
+       *  failed (logged as `[preview-heal] write-failed`). Callers that
+       *  batch rebakes use this to distinguish `rebaked` (in-memory
+       *  success count) from `persisted` (committed-to-D1 count). */
+      persisted: boolean;
+    }
   | { ok: false; reason: string };
 
 /** Returns true when neither the stored scene bonds nor the thumb
@@ -90,19 +110,29 @@ export async function rebakeSceneFromR2(
   opts: RebakeOptions = {},
 ): Promise<HealResult> {
   if (!row.object_key) return { ok: false, reason: 'blob-missing' };
-  const obj = await env.R2_BUCKET.get(row.object_key);
+  let obj: Awaited<ReturnType<HealEnv['R2_BUCKET']['get']>> = null;
+  try {
+    obj = await env.R2_BUCKET.get(row.object_key);
+  } catch (err) {
+    // The R2 binding is contracted to return `null` on miss, but the
+    // runtime can still throw on network / permission faults. Keep
+    // the documented `ok:false` shape so callers (poster route,
+    // account-list background batch) never see a thrown R2 error
+    // escape from this helper.
+    return { ok: false, reason: `blob-fetch-failed:${errorMessage(err)}` };
+  }
   if (!obj) return { ok: false, reason: 'blob-missing' };
   let text: string;
   try {
     text = await obj.text();
   } catch (err) {
-    return { ok: false, reason: `blob-read-failed:${err instanceof Error ? err.message : String(err)}` };
+    return { ok: false, reason: `blob-read-failed:${errorMessage(err)}` };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch (err) {
-    return { ok: false, reason: `capsule-parse-failed:${err instanceof Error ? err.message : String(err)}` };
+    return { ok: false, reason: `capsule-parse-failed:${errorMessage(err)}` };
   }
   const errors = validateCapsuleFile(parsed);
   if (errors.length > 0) {
@@ -113,15 +143,37 @@ export async function rebakeSceneFromR2(
   if (!sceneJson) return { ok: false, reason: 'no-dense-frames' };
   const scene = parsePreviewSceneV1(sceneJson);
   if (!scene || scene.atoms.length === 0) return { ok: false, reason: 'scene-empty' };
+  let persisted = false;
   try {
     const sql = opts.overwrite
       ? 'UPDATE capsule_share SET preview_scene_v1 = ? WHERE id = ?'
       : 'UPDATE capsule_share SET preview_scene_v1 = ? WHERE id = ? AND preview_scene_v1 IS NULL';
-    await env.DB.prepare(sql).bind(sceneJson, row.id).run();
+    const result = await env.DB.prepare(sql).bind(sceneJson, row.id).run();
+    // `persisted` must reflect a real D1 mutation, not just a
+    // non-throwing call. A zero-row match (row deleted mid-heal, or
+    // the `preview_scene_v1 IS NULL` guard failing against a
+    // concurrent publish) returns `meta.changes === 0` without
+    // throwing. Upstream operators rely on the `rebaked > persisted`
+    // divergence for D1-write-pressure alerting; we must not report
+    // success when the row wasn't actually written.
+    //
+    // When the binding returns a shape with no `meta.changes` at all
+    // (older Workers runtimes, a mocked binding in tests), log once
+    // per isolate — enough to trigger an investigation without
+    // spamming the warn stream under sustained degradation.
+    const rawMeta = (result as { meta?: { changes?: number } })?.meta;
+    if (rawMeta === undefined && !d1ShapeUnknownWarned) {
+      d1ShapeUnknownWarned = true;
+      console.warn(
+        `[preview-heal] d1-shape-unknown — result missing .meta; persisted counter will report false`,
+      );
+    }
+    const changes = rawMeta?.changes ?? 0;
+    persisted = changes >= 1;
   } catch (err) {
-    console.warn(`[preview-heal] write-failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[preview-heal] write-failed: ${errorMessage(err)}`);
   }
-  return { ok: true, scene, sceneJson };
+  return { ok: true, scene, sceneJson, persisted };
 }
 
 /** Heal a bondless legacy row by rebaking from R2 with an

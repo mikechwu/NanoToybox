@@ -55,6 +55,14 @@ interface CapsulesPage {
   capsules: CapsuleSummary[];
   hasMore: boolean;
   nextCursor: string | null;
+  /** Share codes the server has nominated for background preview rebake
+   *  this request. Optional so older clients reading newer responses
+   *  (or vice versa) degrade cleanly. The account page renders a
+   *  shimmer overlay on these rows and, on page 1 only, schedules an
+   *  8 s follow-up refresh so the shimmer clears once the rebake lands.
+   *
+   *  See ADR D135 follow-up (2026-04-21) in `docs/decisions.md`. */
+  previewPending?: string[];
 }
 
 type LoadState =
@@ -68,6 +76,41 @@ type LoadState =
       hasMore: boolean;
       nextCursor: string | null;
     };
+
+// ── Scheduler seam (injectable for tests) ──────────────────────────
+//
+// `scheduleRefreshIn` delegates here instead of calling `setTimeout`
+// directly so AccountApp-level tests can swap in a deterministic
+// scheduler (e.g., trigger-on-demand) without monkey-patching
+// `window.setTimeout` per test. Production inlines `setTimeout`.
+//
+// The override shape returns a cancel function so the caller can
+// tear down pending callbacks. Tests using
+// {@link setAccountSchedulerOverride} must restore the default
+// (pass `null`) in an `afterEach` — otherwise the override leaks
+// into later tests' boots.
+
+type AccountScheduler = (fn: () => void, ms: number) => () => void;
+
+const defaultScheduler: AccountScheduler = (fn, ms) => {
+  const handle = window.setTimeout(fn, ms);
+  return () => window.clearTimeout(handle);
+};
+
+let accountScheduler: AccountScheduler = defaultScheduler;
+
+/** Test-only hook. Replace the scheduler used by
+ *  {@link AccountApp}'s 8 s follow-up path (via `scheduleRefreshIn`).
+ *  Pass `null` to restore the default `setTimeout`-based scheduler.
+ *
+ *  Callers MUST restore in an `afterEach` — the override is module
+ *  state and leaks into subsequent tests in the same run if left
+ *  installed. Production code never calls this. */
+export function setAccountSchedulerOverride(
+  override: AccountScheduler | null,
+): void {
+  accountScheduler = override ?? defaultScheduler;
+}
 
 // ── Formatting helpers ──────────────────────────────────────────────
 
@@ -152,6 +195,30 @@ export function CapsulePreviewThumb({
   );
 }
 
+/** Row-thumb shell. Owns the wrapper `<div>` that carries the grid
+ *  slot, the shimmer overlay (when the server is rebaking this row's
+ *  preview scene), and the inner thumb/placeholder. The inner SVG keeps
+ *  its own `.acct__upload-thumb` class — the shell is purely a layout
+ *  and animation host. See ADR D135 follow-up (`docs/decisions.md`). */
+export function UploadThumbShell({
+  thumb,
+  shareCode,
+  pending,
+}: {
+  thumb: PreviewThumbV1 | null;
+  shareCode: string;
+  pending: boolean;
+}): React.ReactElement {
+  const className = pending
+    ? 'acct__upload-thumb-shell acct__upload-thumb-shell--pending'
+    : 'acct__upload-thumb-shell';
+  return (
+    <div className={className} data-share-code={shareCode} aria-hidden="true">
+      {thumb ? <CapsulePreviewThumb thumb={thumb} /> : <PlaceholderThumb />}
+    </div>
+  );
+}
+
 /** Neutral placeholder thumb for rows without a usable preview scene
  *  (pre-V2 rows not yet backfilled, kind ≠ 'capsule', etc.). 3
  *  elements total; visually quiet so the CSS grid track does not
@@ -183,35 +250,58 @@ function monogramOf(me: AccountMe): string {
 
 // ── Data ────────────────────────────────────────────────────────────
 
-async function loadAll(): Promise<LoadState> {
+/** Shared capsule-list fetcher — used by `loadAll`, `refreshCapsules`,
+ *  `doRefresh`, and `loadMoreCapsules`. Throws on non-ok responses so
+ *  each caller decides how to reconcile (the error surface varies:
+ *  `loadAll` maps 401 → signed-out; `doRefresh` silently retries;
+ *  `refreshCapsules` returns null on failure). */
+async function fetchCapsulesPageShared(
+  cursor: string | null,
+  signal: AbortSignal | undefined,
+): Promise<CapsulesPage> {
+  const url = new URL('/api/account/capsules', window.location.origin);
+  if (cursor) url.searchParams.set('cursor', cursor);
+  const res = await fetch(url.toString(), { credentials: 'include', signal });
+  if (!res.ok) throw new Error(`capsules: ${res.status}`);
+  return (await res.json()) as CapsulesPage;
+}
+
+interface LoadAllResult {
+  state: LoadState;
+  capsulesPage: CapsulesPage | null;
+}
+
+async function loadAll(signal: AbortSignal | undefined): Promise<LoadAllResult> {
   try {
     const [meRes, capRes] = await Promise.all([
-      fetch('/api/account/me', { credentials: 'include' }),
-      fetch('/api/account/capsules', { credentials: 'include' }),
+      fetch('/api/account/me', { credentials: 'include', signal }),
+      fetch('/api/account/capsules', { credentials: 'include', signal }),
     ]);
-    if (meRes.status === 401) return { status: 'signed-out' };
-    if (!meRes.ok) return { status: 'error', message: `me: ${meRes.status}` };
-    if (!capRes.ok) return { status: 'error', message: `capsules: ${capRes.status}` };
+    if (meRes.status === 401) return { state: { status: 'signed-out' }, capsulesPage: null };
+    if (!meRes.ok) return { state: { status: 'error', message: `me: ${meRes.status}` }, capsulesPage: null };
+    if (!capRes.ok) return { state: { status: 'error', message: `capsules: ${capRes.status}` }, capsulesPage: null };
     const me = (await meRes.json()) as AccountMe;
     const capsData = (await capRes.json()) as CapsulesPage;
     return {
-      status: 'ready',
-      me,
-      capsules: capsData.capsules,
-      hasMore: capsData.hasMore ?? false,
-      nextCursor: capsData.nextCursor ?? null,
+      state: {
+        status: 'ready',
+        me,
+        capsules: capsData.capsules,
+        hasMore: capsData.hasMore ?? false,
+        nextCursor: capsData.nextCursor ?? null,
+      },
+      capsulesPage: capsData,
     };
   } catch (err) {
-    return { status: 'error', message: err instanceof Error ? err.message : String(err) };
+    return {
+      state: { status: 'error', message: err instanceof Error ? err.message : String(err) },
+      capsulesPage: null,
+    };
   }
 }
 
 async function loadMoreCapsules(cursor: string): Promise<CapsulesPage> {
-  const url = new URL('/api/account/capsules', window.location.origin);
-  url.searchParams.set('cursor', cursor);
-  const res = await fetch(url.toString(), { credentials: 'include' });
-  if (!res.ok) throw new Error(`capsules: ${res.status}`);
-  return (await res.json()) as CapsulesPage;
+  return fetchCapsulesPageShared(cursor, undefined);
 }
 
 // ── Shared chrome ───────────────────────────────────────────────────
@@ -337,10 +427,103 @@ function AccountApp() {
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<string>('profile');
 
-  const reload = useCallback(() => {
-    setState({ status: 'loading' });
-    loadAll().then(setState);
+  // ── Lazy-rebake feedback loop refs (ADR D135 follow-up) ─────────────
+  //
+  // `pendingShareCodes` drives the shimmer overlay on rows whose
+  // preview scene the server is rebaking in the background. Populated
+  // from `CapsulesPage.previewPending`, cleared either by a follow-up
+  // refresh that returns an empty `previewPending`, by `onLoadMore`
+  // (pagination supersedes the page-1 convergence loop), or by
+  // `reload()` (new session of work).
+  //
+  // The refs model invariants the `LoadState` discriminated union can't
+  // express: reload sequence guard (latest reload wins), in-flight
+  // refresh controller (new refresh aborts the prior), visibility
+  // hidden-since timestamp (30 s threshold), pagination-mode latch
+  // (`hasLoadedMoreRef` — once true, auto-refresh is suppressed so a
+  // timer-driven page-1 fetch can't collapse the user's loaded page 2),
+  // and `doRefreshRef` (breaks the scheduleRefreshIn → doRefresh hook
+  // cycle; see D6 in `.reports/…__plan.md`).
+  const [pendingShareCodes, setPendingShareCodes] = useState<Set<string>>(new Set());
+  const refreshInFlightRef = useRef<AbortController | null>(null);
+  const visibilityHiddenSinceRef = useRef<number | null>(null);
+  const hasLoadedMoreRef = useRef(false);
+  const reloadSeqRef = useRef(0);
+  const reloadAbortRef = useRef<AbortController | null>(null);
+  const doRefreshRef = useRef<() => void>(() => {});
+
+  const refreshTimerCancelRef = useRef<(() => void) | null>(null);
+
+  const clearRefreshTimer = useCallback(() => {
+    if (refreshTimerCancelRef.current !== null) {
+      refreshTimerCancelRef.current();
+      refreshTimerCancelRef.current = null;
+    }
   }, []);
+
+  // scheduleRefreshIn reads through `doRefreshRef` instead of closing
+  // over `doRefresh` directly — that's what breaks the hook cycle
+  // (scheduleRefreshIn → doRefresh → applyCapsulesPage → scheduleRefreshIn).
+  // Routes through the injectable `accountScheduler` module seam so
+  // tests can drive the follow-up path deterministically via
+  // `setAccountSchedulerOverride` instead of monkey-patching
+  // `window.setTimeout` in each test.
+  const scheduleRefreshIn = useCallback((ms: number) => {
+    clearRefreshTimer();
+    refreshTimerCancelRef.current = accountScheduler(() => {
+      refreshTimerCancelRef.current = null;
+      doRefreshRef.current();
+    }, ms);
+  }, [clearRefreshTimer]);
+
+  /** Pure state update — commits a fresh `CapsulesPage` into `ready`
+   *  state and syncs `pendingShareCodes` from `previewPending`. Returns
+   *  the pending count so callers decide whether to reschedule the 8 s
+   *  follow-up loop. No refresh scheduling happens here — keeping this
+   *  pure is what lets the hook dependency graph stay acyclic. */
+  const applyCapsulesPage = useCallback((data: CapsulesPage): number => {
+    setState(prev =>
+      prev.status === 'ready'
+        ? {
+            ...prev,
+            capsules: data.capsules,
+            hasMore: data.hasMore ?? false,
+            nextCursor: data.nextCursor ?? null,
+          }
+        : prev,
+    );
+    const pending = new Set(data.previewPending ?? []);
+    setPendingShareCodes(pending);
+    return pending.size;
+  }, []);
+
+  /** The ONLY transition in/out of `'loading'`. Sequence-guarded via
+   *  `reloadSeqRef` so a slow prior load cannot overwrite a newer
+   *  reload with stale data. Also resets the pagination latch — a
+   *  reload is a fresh session in every respect. */
+  const reload = useCallback(() => {
+    const seq = ++reloadSeqRef.current;
+    clearRefreshTimer();
+    refreshInFlightRef.current?.abort();
+    reloadAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    reloadAbortRef.current = ctrl;
+    hasLoadedMoreRef.current = false;
+    setPendingShareCodes(new Set());
+    setState({ status: 'loading' });
+    void loadAll(ctrl.signal).then(({ state: next, capsulesPage }) => {
+      // Stale-response guard: only the LATEST reload commits. Without
+      // this, two fast Retry clicks could land in reversed order and
+      // show the older error state.
+      if (reloadSeqRef.current !== seq) return;
+      setState(next);
+      if (next.status === 'ready' && capsulesPage) {
+        const pending = new Set(capsulesPage.previewPending ?? []);
+        setPendingShareCodes(pending);
+        if (pending.size > 0) scheduleRefreshIn(8_000);
+      }
+    });
+  }, [clearRefreshTimer, scheduleRefreshIn]);
 
   /** Capsules-only refresh — awaitable, stays in the `ready` state.
    *  Returns the refreshed capsule list, or null on failure.
@@ -350,30 +533,92 @@ function AccountApp() {
    *  Pagination: intentionally resets to page 1 (no cursor). After a
    *  destructive operation the server-side ordering may have shifted,
    *  and stale cursors can produce gaps or duplicates. Accepting the
-   *  reset-to-page-1 tradeoff is the simplest correct behavior. */
+   *  reset-to-page-1 tradeoff is the simplest correct behavior. We
+   *  also clear `hasLoadedMoreRef` here — post-delete the user is back
+   *  on page 1, so auto-refresh convergence is valid again. */
   const refreshCapsules = useCallback(async (): Promise<CapsuleSummary[] | null> => {
     try {
-      const res = await fetch('/api/account/capsules', { credentials: 'include' });
-      if (!res.ok) return null;
-      const data = (await res.json()) as CapsulesPage;
-      setState(prev =>
-        prev.status === 'ready'
-          ? { ...prev, capsules: data.capsules, hasMore: data.hasMore ?? false, nextCursor: data.nextCursor ?? null }
-          : prev,
-      );
+      const data = await fetchCapsulesPageShared(null, undefined);
+      hasLoadedMoreRef.current = false;
+      const pendingCount = applyCapsulesPage(data);
+      // Restart the 8 s follow-up loop when the refreshed page carries
+      // pending rebakes. Without this, post-delete convergence silently
+      // drops: the response knows about a pending rebake but nothing
+      // arms the timer to chase it.
+      if (pendingCount > 0) scheduleRefreshIn(8_000);
       return data.capsules;
     } catch (err) {
       console.error('[account] capsule refresh failed:', err);
       return null;
     }
-  }, []);
+  }, [applyCapsulesPage, scheduleRefreshIn]);
+
+  /** Background page-1 refresh — the 8 s timer and the visibility
+   *  listener both route through here. Ready-only AND first-page-only:
+   *  once `onLoadMore()` has fired, `hasLoadedMoreRef` is true and any
+   *  further auto-refresh is suppressed, since a timer-driven page-1
+   *  refetch would wipe the user's loaded page 2/3. */
+  const doRefresh = useCallback(async () => {
+    if (state.status !== 'ready') return;
+    if (hasLoadedMoreRef.current) return;
+    refreshInFlightRef.current?.abort();
+    const ctrl = new AbortController();
+    refreshInFlightRef.current = ctrl;
+    try {
+      const data = await fetchCapsulesPageShared(null, ctrl.signal);
+      if (ctrl.signal.aborted) return;
+      const pendingCount = applyCapsulesPage(data);
+      if (pendingCount > 0) scheduleRefreshIn(8_000);
+    } catch (err) {
+      if (!ctrl.signal.aborted) {
+        console.warn(
+          `[account] refresh-failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    } finally {
+      if (refreshInFlightRef.current === ctrl) refreshInFlightRef.current = null;
+    }
+  }, [state.status, applyCapsulesPage, scheduleRefreshIn]);
+
+  // Keep `doRefreshRef` synced so `scheduleRefreshIn` can call the
+  // latest `doRefresh` without closing over it directly. This is the
+  // load-bearing effect that severs the hook dependency cycle.
+  useEffect(() => {
+    doRefreshRef.current = doRefresh;
+  }, [doRefresh]);
 
   useEffect(() => {
     reload();
   }, [reload]);
 
-  // Auto-dismiss the toast banner after 5s — keeps confirmations from
-  // lingering while still surfacing them long enough to read.
+  // Visibility trigger — same first-page + ready gate as `doRefresh`
+  // (enforced inside `doRefresh`, so we just call through). Fires when
+  // the tab has been hidden for ≥ 30 s and becomes visible again, so a
+  // user returning to a long-lived tab sees freshly-rebaked rows.
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') {
+        visibilityHiddenSinceRef.current = Date.now();
+        return;
+      }
+      const hiddenSince = visibilityHiddenSinceRef.current;
+      visibilityHiddenSinceRef.current = null;
+      if (hiddenSince !== null && Date.now() - hiddenSince >= 30_000) {
+        doRefreshRef.current();
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+
+  // Unmount cleanup — cancel timers and outstanding fetches so tests
+  // (and any future SPA navigation) don't leak requests past unmount.
+  useEffect(() => () => {
+    clearRefreshTimer();
+    refreshInFlightRef.current?.abort();
+    reloadAbortRef.current?.abort();
+  }, [clearRefreshTimer]);
+
   useEffect(() => {
     if (!banner) return;
     const handle = window.setTimeout(() => setBanner(null), 5000);
@@ -417,8 +662,14 @@ function AccountApp() {
           });
           httpOk = res.ok;
           httpStatus = res.status;
-        } catch {
-          // Network error — httpOk stays false.
+        } catch (err) {
+          // Network error (offline, CORS, DNS). httpOk stays false
+          // and the downstream reconciliation branch drives the
+          // user-visible banner. Log so ops can distinguish
+          // "browser couldn't reach the endpoint" from "endpoint
+          // returned a server error" — both land in the same UX
+          // fork but have very different root causes.
+          console.warn(`[account] delete-request-threw: ${err instanceof Error ? err.message : String(err)}`);
         }
         // Reconcile: refresh capsules list (stays in ready state).
         const refreshed = await refreshCapsules();
@@ -555,6 +806,24 @@ function AccountApp() {
   const onLoadMore = useCallback(async () => {
     if (state.status !== 'ready' || !state.nextCursor) return;
     const cursor = state.nextCursor;
+    // Latch auto-refresh OFF at click time, not after the page-2
+    // response lands. The user has expressed pagination intent — any
+    // subsequent timer or visibility refresh must be suppressed
+    // starting NOW, because `doRefresh` only consults
+    // `hasLoadedMoreRef` at the START of the function. Without this,
+    // a 8 s timer that fires during the page-2 request window still
+    // sees the latch as `false`, kicks off a page-1 refetch, and its
+    // `applyCapsulesPage` later collapses the paginated list.
+    //
+    // If the page-2 fetch ultimately fails, we restore the latch so
+    // the user is back in the page-1 regime with auto-refresh
+    // re-armed (otherwise a failed Load more would silently disable
+    // convergence for the rest of the session).
+    hasLoadedMoreRef.current = true;
+    clearRefreshTimer();
+    refreshInFlightRef.current?.abort();
+    const previousPending = pendingShareCodes;
+    setPendingShareCodes(new Set());
     setLoadingMore(true);
     try {
       const next = await loadMoreCapsules(cursor);
@@ -568,11 +837,17 @@ function AccountApp() {
         };
       });
     } catch (err) {
+      // Pagination failed — user is still on page 1. Restore the
+      // first-page regime so auto-refresh and the shimmer overlay
+      // resume their normal behavior.
+      hasLoadedMoreRef.current = false;
+      setPendingShareCodes(previousPending);
+      if (previousPending.size > 0) scheduleRefreshIn(8_000);
       setBanner(err instanceof Error ? err.message : String(err));
     } finally {
       setLoadingMore(false);
     }
-  }, [state]);
+  }, [state, clearRefreshTimer, pendingShareCodes, scheduleRefreshIn]);
 
   const onSignOut = useCallback(async () => {
     try {
@@ -596,11 +871,34 @@ function AccountApp() {
   const copyTimerRef = useRef<number | null>(null);
   const onCopyLink = useCallback((shareCode: string) => {
     const url = `${window.location.origin}/c/${shareCode}`;
-    navigator.clipboard?.writeText(url);
-    setCopiedCode(shareCode);
-    setBanner('Link copied to clipboard.');
-    if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
-    copyTimerRef.current = window.setTimeout(() => setCopiedCode(null), 1500);
+    const writer = navigator.clipboard?.writeText(url);
+    if (!writer) {
+      // Either `navigator.clipboard` is absent (`?.` short-circuited
+      // to `undefined`) or a polyfill returned a non-Promise value.
+      // The Clipboard API spec mandates a Promise return, so this
+      // branch is only reachable in unusual environments — log so
+      // ops can correlate if a new browser variant ships a broken
+      // polyfill.
+      console.warn('[account] clipboard-unavailable: writeText did not return a Promise');
+      setBanner('Could not copy link — clipboard API unavailable.');
+      return;
+    }
+    writer.then(
+      () => {
+        setCopiedCode(shareCode);
+        setBanner('Link copied to clipboard.');
+        if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = window.setTimeout(() => setCopiedCode(null), 1500);
+      },
+      (err: unknown) => {
+        // Permission denied, insecure context, or user gesture
+        // required — surface so the user doesn't see a false
+        // "copied" confirmation. The console.warn gives ops an
+        // actionable signal (browser variant, not a server bug).
+        console.warn(`[account] clipboard-write-failed: ${err instanceof Error ? err.message : String(err)}`);
+        setBanner('Could not copy link — your browser blocked clipboard access.');
+      },
+    );
   }, []);
 
   const ageStatus = useMemo(() => {
@@ -708,7 +1006,7 @@ function AccountApp() {
                 <ul
                   className="acct__uploads-list"
                   style={{
-                    ['--account-thumb-size' as string]: `${ACCOUNT_THUMB_SIZE}px`,
+                    '--account-thumb-size': `${ACCOUNT_THUMB_SIZE}px`,
                   } as React.CSSProperties}
                 >
                   {capsules.map((c, i) => {
@@ -722,13 +1020,14 @@ function AccountApp() {
                     // consume the server-derived `previewThumb` verbatim.
                     // Null rows render a neutral placeholder instead of
                     // synthesizing a fake figure.
+                    const isPending = pendingShareCodes.has(c.shareCode);
                     return (
                     <li key={c.shareCode} className="acct__upload">
-                      {c.previewThumb ? (
-                        <CapsulePreviewThumb thumb={c.previewThumb} />
-                      ) : (
-                        <PlaceholderThumb />
-                      )}
+                      <UploadThumbShell
+                        thumb={c.previewThumb}
+                        shareCode={c.shareCode}
+                        pending={isPending}
+                      />
                       <div className="acct__upload-meta">
                         {title ? (
                           <>
@@ -929,7 +1228,20 @@ function AccountApp() {
   );
 }
 
+/** Mount `AccountApp` onto an existing root element and return the
+ *  React root handle. Production code calls it at the module tail
+ *  with `document.getElementById('account-root')`. AccountApp-level
+ *  tests import this helper directly and keep the returned root in
+ *  test scope so they can unmount between runs — cross-test timer
+ *  and event-listener leaks are reclaimed without shipping any
+ *  window-mutation hooks in the production bundle. */
+export function mountAccountApp(rootEl: HTMLElement): ReturnType<typeof createRoot> {
+  const root = createRoot(rootEl);
+  root.render(<AccountApp />);
+  return root;
+}
+
 const rootEl = document.getElementById('account-root');
 if (rootEl) {
-  createRoot(rootEl).render(<AccountApp />);
+  mountAccountApp(rootEl);
 }

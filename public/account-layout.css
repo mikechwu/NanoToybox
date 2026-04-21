@@ -450,6 +450,51 @@ button {
   justify-self: start;
 }
 
+/* Wrapper around `.acct__upload-thumb` that (a) owns the grid slot
+   positioning so the thumb SVG can stay presentational, and (b) hosts
+   the `::after` shimmer overlay emitted while the server rebakes the
+   stored preview scene for this row. See ADR D135 follow-up
+   (`docs/decisions.md`). The SVG still carries its own width/height
+   from the `--account-thumb-size` variable — we don't double-apply
+   sizing on the shell. */
+.acct__upload-thumb-shell {
+  position: relative;
+  display: block;
+  line-height: 0;
+  isolation: isolate;
+  justify-self: start;
+  width: var(--account-thumb-size);
+  height: var(--account-thumb-size);
+  border-radius: inherit;
+}
+.acct__upload-thumb-shell--pending::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    115deg,
+    rgba(255, 255, 255, 0) 25%,
+    rgba(255, 255, 255, 0.55) 50%,
+    rgba(255, 255, 255, 0) 75%
+  );
+  background-size: 250% 100%;
+  animation: acct-shimmer 1400ms linear infinite;
+  mix-blend-mode: soft-light;
+  pointer-events: none;
+  z-index: 1;
+}
+@keyframes acct-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .acct__upload-thumb-shell--pending::after {
+    animation: none;
+    background: rgba(255, 255, 255, 0.12);
+  }
+}
+
 .acct__upload-meta {
   min-width: 0;
   padding-left: 0;
@@ -542,6 +587,7 @@ button {
     align-items: start;
   }
   .acct__upload-thumb { grid-area: thumb; align-self: start; }
+  .acct__upload-thumb-shell { grid-area: thumb; align-self: start; }
   .acct__upload-meta { grid-area: meta; }
   .acct__upload-stats { grid-area: stats; text-align: left; }
   .acct__upload-actions { grid-area: actions; justify-content: flex-start; padding-right: 0; }

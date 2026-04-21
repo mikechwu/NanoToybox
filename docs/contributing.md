@@ -623,16 +623,18 @@ New `AuditEventType` values introduced in Phase 7: `'owner_delete'`, `'account_d
 
 Per-row PII fields (`ip_hash`, `user_agent`, `reason`) are scrubbed at 180 days by the cron sweeper. When adding a new audit field, classify it explicitly: **skeleton** (retained indefinitely) or **PII** (scrubbed at the 180-day window). Document the classification in the same PR.
 
-#### Migrations 0004–0007
+#### Migrations 0004–0010
 
 Additive only; applied automatically by `deploy.yml`. New tables/columns contributors should know about:
 
-- `user_policy_acceptance`
-- `privacy_requests`
-- `privacy_request_quota_window`
-- `users.deleted_at` column
+- `user_policy_acceptance` (0006)
+- `privacy_requests`, `privacy_request_quota_window` (0007)
+- `users.deleted_at` column (0005)
+- `capsule_share.object_key` nullability relaxation for tombstone DELETE (0008)
+- `capsule_preview_scene_v1` row columns (0009) — backs the V2 preview pipeline
+- `capsule_share.preview_rebake_claimed_at` lease column (0010) — dedups account-page lazy-heal rebake claims across concurrent tabs; TTL lives in application code (`HEAL_LEASE_TTL_MS`)
 
-Convention is unchanged from prior migrations — name files `NNNN_<slug>.sql`, additive only, no destructive operations.
+Latest applied migration is `0010`. Convention is unchanged from prior migrations — name files `NNNN_<slug>.sql`, additive only, no destructive operations.
 
 #### E2E lanes
 
@@ -956,12 +958,12 @@ npm run test:e2e -- tests/e2e/topbar-right-layout.spec.ts
 | `tests/unit/session-endpoint.test.ts` | Backend — 200 contract for signed-in **and** signed-out, dev-cookie handling, user-missing recovery (Workers tsconfig) |
 | `tests/e2e/topbar-right-layout.spec.ts` | AccountControl + FPSDisplay flex-container geometry regression |
 
-The backend auth tests (`auth-middleware.test.ts`, `session-endpoint.test.ts`) compile under `tsconfig.functions.json` so they see the Workers runtime globals. They are listed in `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — same pattern as the capsule endpoint tests. Follow the same dual-listing rule when adding new backend-handler tests. The full `tsconfig.json` `exclude` list (18 entries as of Phase 7) is the authoritative source for what lives under the Workers config.
+The backend auth tests (`auth-middleware.test.ts`, `session-endpoint.test.ts`) compile under `tsconfig.functions.json` so they see the Workers runtime globals. They are listed in `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — same pattern as the capsule endpoint tests. Follow the same dual-listing rule when adding new backend-handler tests. The full `tsconfig.json` `exclude` list (28 entries as of this writing, and still growing — `tests/unit/account-capsules-backfill.test.ts` is the most recent addition) is the authoritative source for what lives under the Workers config.
 
 #### Adding a new endpoint test
 
 - Place the test at `tests/unit/<name>-endpoint.test.ts` (or `<name>-middleware.test.ts` for middleware)
-- Add the filename to **both** `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — this prevents Workers globals from leaking into frontend compilation. There is a precedent block of 18 dual-listed files as of Phase 7 (authoritative count: the exclude list in `tsconfig.json`); follow the existing ordering
+- Add the filename to **both** `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — this prevents Workers globals from leaking into frontend compilation. There is a precedent block of 28 dual-listed files as of this writing (authoritative count: the exclude list in `tsconfig.json`, with `tests/unit/account-capsules-backfill.test.ts` as the most recent dual-listing); follow the existing ordering
 - Adding a new `.tsx` under `functions/` (e.g. another Satori OG renderer) does **not** require a config change: `tsconfig.functions.json` already includes `functions/**/*.tsx` with `jsx: "react-jsx"`, and `functions/**` is excluded from the frontend config by virtue of not appearing in its `include` globs
 - Use hoisted `vi.fn<(...args: unknown[]) => ...>()` for module mocks
 - See `tests/unit/publish-endpoint.test.ts`, `tests/unit/session-endpoint.test.ts`, and `tests/unit/owner-delete-endpoint.test.ts` for the canonical patterns (`minimalValidCapsule()`, `makePermissiveEnv()` helpers; owner-vs-other 404 contract)

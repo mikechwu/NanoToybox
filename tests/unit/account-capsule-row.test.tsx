@@ -22,7 +22,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
-import { CapsulePreviewThumb, PlaceholderThumb } from '../../account/main';
+import { CapsulePreviewThumb, PlaceholderThumb, UploadThumbShell } from '../../account/main';
 import type {
   PreviewThumbV1,
   PreviewSceneAtomV1,
@@ -388,5 +388,38 @@ describe('PlaceholderThumb', () => {
     expect(svg).not.toBeNull();
     expect(svg?.getAttribute('aria-hidden')).toBe('true');
     expect(svg?.getAttribute('role')).toBe('presentation');
+  });
+});
+
+describe('UploadThumbShell — shimmer class wiring (ADR D135 follow-up)', () => {
+  it('pending share code → shell has --pending, inner SVG keeps .acct__upload-thumb', () => {
+    const { container } = render(
+      <UploadThumbShell
+        thumb={thumbFixture(6)}
+        shareCode="ABCDEF1234"
+        pending={true}
+      />,
+    );
+    const shell = container.querySelector('.acct__upload-thumb-shell');
+    expect(shell).not.toBeNull();
+    expect(shell!.classList.contains('acct__upload-thumb-shell--pending')).toBe(true);
+    expect(shell!.getAttribute('data-share-code')).toBe('ABCDEF1234');
+    // Inner SVG still carries the old thumb class (grid-trackless
+    // presentation path unchanged).
+    const svg = shell!.querySelector('svg.acct__upload-thumb');
+    expect(svg).not.toBeNull();
+  });
+
+  it('non-pending → shell base class only; no shimmer modifier', () => {
+    const { container } = render(
+      <UploadThumbShell
+        thumb={thumbFixture(6)}
+        shareCode="ABCDEF1234"
+        pending={false}
+      />,
+    );
+    const shell = container.querySelector('.acct__upload-thumb-shell');
+    expect(shell).not.toBeNull();
+    expect(shell!.classList.contains('acct__upload-thumb-shell--pending')).toBe(false);
   });
 });

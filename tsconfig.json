@@ -57,7 +57,8 @@
     "tests/unit/auth-callback-acceptance.test.ts",
     "tests/unit/poster-endpoint.test.ts",
     "tests/unit/share-page-og.test.ts",
-    "tests/unit/account-api-preview-thumb.test.ts"
+    "tests/unit/account-api-preview-thumb.test.ts",
+    "tests/unit/account-capsules-backfill.test.ts"
   ]
   // Coverage: all extracted app/bench source modules are .ts/.tsx and type-checked.
   // Inline <script type="module"> in HTML entrypoints are sanctioned exceptions.
