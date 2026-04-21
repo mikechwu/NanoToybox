@@ -33,6 +33,9 @@ import {
 } from '../../../../../src/share/capsule-preview';
 import {
   parsePreviewSceneV1,
+  isStaleScene,
+  CURRENT_SCENE_REV,
+  CURRENT_THUMB_REV,
   type PreviewSceneV1,
 } from '../../../../../src/share/capsule-preview-scene-store';
 import {
@@ -57,9 +60,70 @@ interface PosterLogEntry {
   cause?: string;
 }
 
-function logPoster(entry: PosterLogEntry): void {
+/** Shared low-level emitter for both the terminal `logPoster` and
+ *  the heal-event `logPosterEvent`. Keeping the `[capsule-poster] `
+ *  prefix + `JSON.stringify` serialization in one place means ops
+ *  dashboards parse both log shapes with a single regex; the typed
+ *  wrapper functions below keep call sites type-safe. */
+function emitPoster(entry: PosterLogEntry | PosterEventEntry): void {
   // Structured stdout — visible via `wrangler pages deployment tail`.
   console.log(`[capsule-poster] ${JSON.stringify(entry)}`);
+}
+
+function logPoster(entry: PosterLogEntry): void {
+  emitPoster(entry);
+}
+
+/** Non-terminal heal-event log. Shares the `[capsule-poster]`
+ *  prefix + structured-JSON shape with {@link logPoster} so ops
+ *  dashboards can parse both with one regex, but the `event`
+ *  discriminator makes it cheap to filter out intermediate signals
+ *  when aggregating response-mode distributions. */
+interface PosterEventEntry {
+  code: string;
+  event: 'scene-stale-rebaked' | 'scene-stale-not-persisted';
+  fromSceneRev?: number;
+  fromThumbRev?: number;
+  toSceneRev?: number;
+  toThumbRev?: number;
+}
+
+function logPosterEvent(entry: PosterEventEntry): void {
+  emitPoster(entry);
+}
+
+/** Pick the priority cause-tag surfaced on the `mode:'generated'`
+ *  terminal log when a poster renders despite heal-path friction.
+ *
+ *  Priority: stale-heal failure > not-persisted > bondless-heal
+ *  failure. Rationale:
+ *
+ *   - stale-heal failure on a row that's ALSO bondless is a joint
+ *     signal; the tag is extended with `+bondless` so ops don't
+ *     lose the second classification.
+ *   - "not persisted" is a concurrent-delete race signal — rarer
+ *     than heal failures, but the response is cache-shortened so
+ *     the caller's `cause` alert is actionable.
+ *   - Bondless-only failures are legacy-row residue; they keep the
+ *     established tag. */
+function generatedLogCause(args: {
+  staleHealFailure: string | null;
+  bondlessHealFailure: string | null;
+  healNotPersisted: boolean;
+  wasBondlessAtEntry: boolean;
+}): string | null {
+  if (args.staleHealFailure !== null) {
+    return args.wasBondlessAtEntry
+      ? `scene-stale-heal-failed+bondless:${args.staleHealFailure}`
+      : `scene-stale-heal-failed:${args.staleHealFailure}`;
+  }
+  if (args.healNotPersisted) {
+    return 'scene-rebaked-not-persisted';
+  }
+  if (args.bondlessHealFailure !== null) {
+    return `bondless-heal-failed:${args.bondlessHealFailure}`;
+  }
+  return null;
 }
 
 /** PNG signature (8-byte magic). A buffer that doesn't start with this is
@@ -282,21 +346,45 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     return new Response('Not found', { status: 404, headers: { 'Cache-Control': 'public, max-age=60' } });
   }
 
-  // V2 dynamic branch: read pre-baked scene; fall back to lazy backfill.
+  // V2 dynamic branch: read pre-baked scene; heal if stale/missing.
+  //
+  // Three rebake triggers, in priority order:
+  //
+  //  1. **missing** — `preview_scene_v1` is NULL / empty / parse-failed
+  //     / has zero atoms. Can't render anything without a scene; fetch
+  //     from R2, project, persist. On blob-missing → terminal fallback.
+  //
+  //  2. **stale-rev** — scene parses, but carries
+  //     `rev < CURRENT_SCENE_REV` (or no `rev` at all, meaning it was
+  //     baked before rev-tracking). That means the stored geometry
+  //     shape is behind the current contract (e.g., pre-2026-04-21
+  //     rows with anisotropic `x/600, y/500` normalization). Rebake
+  //     synchronously before rendering so public share posters self-
+  //     heal without requiring an account-page visit or admin
+  //     backfill. On rebake failure, fall through and serve the
+  //     stale scene — an aspect-warped poster is better than a
+  //     terminal fallback, and the failure log signals ops.
+  //
+  //  3. **bondless** — legacy pre-D138 bake shape: scene has atoms
+  //     but `scene.bonds` is empty everywhere. Same rebake mechanism
+  //     as stale-rev; same fallthrough on failure.
   let scene: PreviewSceneV1 | null = parsePreviewSceneV1(row.preview_scene_v1);
   const sceneMissing = !scene || scene.atoms.length === 0;
-  // Also heal scenes whose atoms are intact but whose bonds are
-  // empty everywhere — those are pre-fix legacy rows that baked
-  // atoms-only under the old publish-time bond filters. A fresh
-  // rebake via the current path (3D topology + relaxed thresholds)
-  // produces a scene with bonds; the `overwriteExisting = true`
-  // write replaces the stale row in-place so future reads fast-
-  // path to the healed data.
-  const sceneBondless = scene != null && !sceneMissing && sceneIsBondless(scene);
-  // Track whether a bondless fallback is being served so the
-  // structured poster log carries the cause — otherwise ops can't
-  // distinguish "fresh render with full bonds" from "served stale
-  // bondless scene because heal kept failing".
+  // Pre-compute both downstream conditions against the ORIGINAL
+  // parsed scene so observability on the fall-through paths below
+  // can still surface co-occurring signals (e.g., a row that is
+  // both stale AND bondless — if stale-heal fails we still want
+  // ops to know the served scene is bondless).
+  const wasBondlessAtEntry = scene != null && !sceneMissing
+    && sceneIsBondless(scene);
+  const sceneStaleRev = scene != null && !sceneMissing
+    && isStaleScene(scene);
+  // Track which heal path tried and failed, if any. The structured
+  // `[capsule-poster]` success log below threads these into `cause`
+  // so operators querying the one log stream see why a 200 carries
+  // visibly-stale geometry.
+  let staleHealFailure: string | null = null;
+  let healNotPersisted = false;
   let bondlessHealFailure: string | null = null;
   if (sceneMissing) {
     if (row.preview_scene_v1 != null && scene == null) {
@@ -310,7 +398,47 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
       return serveTerminalFallback(context.request, code, startedAt, cause);
     }
     scene = backfill.scene;
-  } else if (sceneBondless) {
+    if (backfill.persisted === false) {
+      // Concurrent-delete race: the in-memory rebake succeeded but
+      // the D1 UPDATE matched zero rows (likely because the row was
+      // deleted between SELECT and UPDATE). Render + serve the
+      // freshly-projected scene with a short cache so the stale
+      // poster doesn't live on CDN for an hour after deletion.
+      healNotPersisted = true;
+    }
+  } else if (sceneStaleRev) {
+    // Rebake synchronously and overwrite the row. Same write shape
+    // as the bondless-heal path below. On failure, fall through and
+    // serve the pre-rebake scene — the warn log lets ops spot rows
+    // that stay stale indefinitely.
+    const healed = await rebakeSceneFromR2(
+      context.env,
+      row,
+      { overwrite: true },
+    );
+    if (healed.ok) {
+      logPosterEvent({
+        code,
+        event: 'scene-stale-rebaked',
+        fromSceneRev: scene?.rev ?? 0,
+        fromThumbRev: scene?.thumb?.rev ?? 0,
+        toSceneRev: CURRENT_SCENE_REV,
+        toThumbRev: CURRENT_THUMB_REV,
+      });
+      scene = healed.scene;
+      if (healed.persisted === false) {
+        // Same concurrent-delete race as the `sceneMissing` branch.
+        // The render proceeds — we already have the fresh scene in
+        // memory — but the `Cache-Control` is shortened below so a
+        // deleted capsule's rebaked poster doesn't sit on CDN.
+        healNotPersisted = true;
+        logPosterEvent({ code, event: 'scene-stale-not-persisted' });
+      }
+    } else {
+      staleHealFailure = healed.reason;
+      console.warn(`[capsule-poster] scene-stale-heal-failed: ${healed.reason} share=${code}`);
+    }
+  } else if (wasBondlessAtEntry) {
     // Heal the bondless legacy row by rebaking from R2 and overwriting
     // `preview_scene_v1` in place. Serve the healed scene. On rebake
     // failure, fall through and serve whatever bondless scene we have;
@@ -318,6 +446,15 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     const healed = await healBondlessRow(context.env, row);
     if (healed.ok) {
       scene = healed.scene;
+      if (healed.persisted === false) {
+        // Same concurrent-delete race the sceneMissing + sceneStaleRev
+        // branches guard against: the in-memory rebake succeeded but
+        // the D1 UPDATE matched zero rows (row deleted mid-heal).
+        // Serve the freshly-projected scene but with short cache so
+        // a deleted capsule's rebaked poster doesn't live on CDN.
+        healNotPersisted = true;
+        logPosterEvent({ code, event: 'scene-stale-not-persisted' });
+      }
     } else {
       bondlessHealFailure = healed.reason;
       console.warn(`[capsule-poster] bondless-heal-failed: ${healed.reason} share=${code}`);
@@ -357,24 +494,36 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     }
     const headers = new Headers(response.headers);
     headers.set('Content-Type', 'image/png');
+    // Shorten the CDN cache when the row could not be persisted
+    // (concurrent-delete race): a deleted capsule should not be
+    // resurfaced on social unfurls for an hour. All other rendered
+    // responses keep the long-lived public cache.
     headers.set(
       'Cache-Control',
-      'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400',
+      healNotPersisted
+        ? 'public, max-age=60'
+        : 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400',
     );
     headers.set('ETag', dynamicPosterETag(scene, sanitizedTitle, row.share_code));
     headers.set('Access-Control-Allow-Origin', '*');
     headers.set('X-Content-Type-Options', 'nosniff');
+    const cause = generatedLogCause({
+      staleHealFailure,
+      bondlessHealFailure,
+      healNotPersisted,
+      wasBondlessAtEntry,
+    });
     logPoster({
       code,
       mode: 'generated',
       status: 200,
       durationMs: Date.now() - startedAt,
-      // Surface bondless-heal failures on the structured success
-      // log so ops can query "successful render but bondless" in
-      // one stream without grepping two log shapes.
-      ...(bondlessHealFailure !== null
-        ? { cause: `bondless-heal-failed:${bondlessHealFailure}` }
-        : {}),
+      // Surface heal-path signals on the structured success log so
+      // ops can query "rendered from stale geometry", "rendered but
+      // D1 write did not persist" (concurrent-delete), and "served
+      // bondless fallback" in one stream without grepping two log
+      // shapes. See {@link generatedLogCause} for the priority rules.
+      ...(cause !== null ? { cause } : {}),
     });
     return new Response(bytes, { status: 200, headers });
   } catch (err) {

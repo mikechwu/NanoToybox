@@ -35,7 +35,11 @@
  *
  *   1. `missing`       — preview_scene_v1 IS NULL (cold row)
  *   2. `parse-failed`  — non-null but parsePreviewSceneV1 → null
- *   3. `stale-rev`     — thumb.rev < CURRENT_THUMB_REV
+ *   3. `stale-rev`     — scene.rev < CURRENT_SCENE_REV (poster-scene
+ *                         bake is behind the current shape contract)
+ *                         OR thumb.rev < CURRENT_THUMB_REV (thumb
+ *                         payload is behind the current algorithm).
+ *                         A single rebake refreshes both surfaces.
  *   4. `bondless`      — legacy scene with atoms but no bonds anywhere
  *
  * Start cap per request: HEAL_START_CAP_FIRST_PAGE (8) on page 1,
@@ -61,7 +65,7 @@ import { b64urlEncode, b64urlDecode } from '../../../../src/share/b64url';
 import { errorMessage } from '../../../../src/share/error-message';
 import {
   parsePreviewSceneV1,
-  CURRENT_THUMB_REV,
+  isStaleScene,
   type PreviewThumbV1,
 } from '../../../../src/share/capsule-preview-scene-store';
 import { deriveAccountThumb } from '../../../../src/share/capsule-preview-account-derive';
@@ -173,8 +177,7 @@ function classifyRow(row: CapsuleRow): HealCandidate | null {
     if (!scene) {
       return { id: row.id, shareCode: row.share_code, objectKey: row.object_key, reason: 'parse-failed', priority: 2 };
     }
-    const storedRev = scene.thumb?.rev ?? 0;
-    if (storedRev < CURRENT_THUMB_REV) {
+    if (isStaleScene(scene)) {
       return { id: row.id, shareCode: row.share_code, objectKey: row.object_key, reason: 'stale-rev', priority: 3 };
     }
     if (sceneIsBondless(scene)) {

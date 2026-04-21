@@ -30,7 +30,6 @@ import {
   PreviewSceneBuildException,
 } from './capsule-preview-frame';
 import {
-  projectPreviewScene,
   projectPreviewScenePerspective,
   deriveBondPairsForProjectedScene,
 } from './capsule-preview-project';
@@ -259,9 +258,40 @@ export function projectCapsuleToSceneJson(
       );
     }
 
-    const projected = projectPreviewScene(posterScene3d, {
+    // PERSPECTIVE projection target, SQUARE 600×600.
+    //
+    // The poster-scene bake used to be orthographic (`projectPreviewScene`)
+    // so every atom rendered at one uniform radius — the "structural
+    // diagram" framing at V2 launch. That framing is deprecated:
+    // under D135 follow-up 4 (2026-04-21) the poster scene moves to
+    // pinhole perspective so both the OG poster AND the account-row
+    // thumb carry the same depth cues. Two reasons:
+    //
+    //   1. Product consistency. The thumb bake has always been
+    //      perspective (`projectPreviewScenePerspective`, square 500×500);
+    //      having the poster be orthographic meant a front-page share
+    //      image looked structurally different from the profile thumb
+    //      of the same capsule. The user-facing product voice is "3D
+    //      molecular figure with depth", not "diagram for one surface
+    //      and 3D figure for the other".
+    //
+    //   2. The downstream renderer (`CurrentPosterSceneSvg`) already
+    //      applies `perspectiveMultiplier(a.r, rMedian)` to stored
+    //      per-atom radii. Under an orthographic bake every atom had
+    //      identical `r`, so the multiplier collapsed to ≈ 1 and the
+    //      code was dead. Swapping to the perspective bake lets the
+    //      stored `a.r` carry real depth scaling and the renderer's
+    //      existing ±15% clamp is what it was built for.
+    //
+    // Square target + isotropic normalization in `buildPreviewSceneV1`
+    // (uniform `/600` on both axes) keeps the aspect-ratio fix from
+    // follow-up 3 intact — the perspective projector also does its
+    // own aspect-preserving fit into the padded target box, so
+    // spherical subjects stay round and anisotropic subjects stay
+    // correctly proportioned.
+    const projected = projectPreviewScenePerspective(posterScene3d, {
       targetWidth: 600,
-      targetHeight: 500,
+      targetHeight: 600,
       padding: 0.1,
     });
 
@@ -290,14 +320,20 @@ export function projectCapsuleToSceneJson(
     // recognizable topology for dense structures like C60 cages.
     //
     // **Perspective bake (Path A).** The thumb path uses the pinhole
-    // perspective projection (K = 1.5) so per-atom radii carry depth
-    // cues — nearest atoms render larger, farthest render at ~60%.
-    // The POSTER scene above stays orthographic because the 1200×630
-    // OG card reads as a uniform structural diagram; perspective
-    // shrinkage on a large canvas looks weirder than it helps. The
-    // stored `thumb.atoms[*].r` carries the per-atom scaled radius;
-    // the renderer honors stored r in bonded mode so the paint
-    // reflects the bake.
+    // perspective projection (K per `PERSPECTIVE_K_DEFAULT`, currently
+    // 3.17) so per-atom radii carry depth cues — nearest atoms
+    // render larger, farthest render smaller. As of D135 follow-up 4
+    // (2026-04-21) the POSTER scene above ALSO uses perspective
+    // (`projectPreviewScenePerspective` at the 600×600 target), so
+    // both surfaces share the same depth-cue contract. The two
+    // payloads remain distinct because their downstream surfaces
+    // are different: the poster targets a 1200×630 OG card at
+    // 600×600 bake resolution, while the thumb targets a 96×96
+    // account-row cell at 500×500 bake resolution with a chunkier
+    // base atom radius (22 vs. the poster's density-aware default).
+    // Stored `thumb.atoms[*].r` (like `scene.atoms[*].r`) carries
+    // the per-atom scaled radius; the renderer honors stored r in
+    // bonded mode so the paint reflects the bake.
     const fullProjected = projectPreviewScenePerspective(
       preSampleScene,
       {

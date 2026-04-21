@@ -130,10 +130,14 @@ describe('POST /api/admin/backfill-preview-scenes', () => {
     expect(libOpts.force).toBe(true);
     expect(libOpts.pageSize).toBe(50);
     expect(libOpts.verbose).toBe(true);
-    // currentThumbRev is always CURRENT_THUMB_REV at the time of
-    // this test. Bump the literal below when the constant moves;
-    // the scene-store's CURRENT_THUMB_REV JSDoc carries history.
+    // Both rev constants must be forwarded so the backfill
+    // predicate can classify stale rows by EITHER shape. The
+    // literal floors below match `CURRENT_THUMB_REV` /
+    // `CURRENT_SCENE_REV` at the time of this test — bump both in
+    // lockstep when the constants move; the JSDoc above each
+    // constant carries the history.
     expect(libOpts.currentThumbRev).toBe(15);
+    expect(libOpts.currentSceneRev).toBe(2);
     // `db` and `r2` MUST also be forwarded — the library cannot run
     // without them. A regression that drops them from the options
     // bundle would still pass the other assertions; lock them down.
@@ -215,6 +219,7 @@ describe('POST /api/admin/backfill-preview-scenes', () => {
       force: true,
       pageSize: 50,
       currentThumbRev: 15,
+      currentSceneRev: 2,
       scanned: 5,
       updated: 4,
       skipped: 1,

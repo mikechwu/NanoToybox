@@ -85,14 +85,21 @@ describe('perspective-bake invariants', () => {
     }
   });
 
-  it('orthographic poster path remains uniform-radius (no perspective bleed)', () => {
-    // The 1200×630 OG poster should stay a structural-diagram
-    // surface. `projectPreviewScene` (ortho) must not pick up
-    // perspective scaling by accident.
+  it('projectPreviewScene (orthographic function) emits uniform-radius atoms', () => {
+    // Function-level contract: the orthographic projector itself
+    // must keep producing uniform radii when called directly. It is
+    // no longer the production poster path (as of 2026-04-21 D135
+    // follow-up 4 the poster bake uses `projectPreviewScenePerspective`
+    // instead), but the helper stays available for any future
+    // surface that genuinely wants a structural-diagram shape. If
+    // this test ever flips to non-uniform, the function accidentally
+    // picked up perspective scaling — investigate before consumers
+    // that still rely on "one radius per bake" (none today, but the
+    // contract is still worth guarding).
     const scene = buildPreviewSceneFromCapsule(makeC60Capsule());
     const ortho = projectPreviewScene(scene);
     const rs = new Set(ortho.atoms.map((a) => a.r));
-    expect(rs.size).toBe(1); // all atoms share one radius
+    expect(rs.size).toBe(1);
   });
 
   it('perspective path sorts atoms back-to-front (near painted last)', () => {

@@ -13,11 +13,31 @@
  *   account-row thumb so the poster and the list preview read as
  *   the same "brand object".
  *
- * - **Reads `preview_scene_v1.thumb`** — the perspective bake
- *   (uncapped, publish-time pinhole at K=1.5). The poster pane is
- *   600 × 600 so all bonds visible at the hero scale survive from
- *   the bake (the bake no longer drops short bonds for thumb
- *   legibility; see `publish-core.ts` rev 14).
+ * - **Reads `preview_scene_v1.atoms` / `preview_scene_v1.bonds`** —
+ *   the poster scene baked at 600×600 under pinhole perspective as
+ *   of 2026-04-21 (D135 follow-up 4, `CURRENT_SCENE_REV = 2`). The
+ *   bake is square + isotropically normalized so stored coords
+ *   preserve aspect across any consumer, and the `scene.atoms[*].r`
+ *   field carries real per-atom `s(z)` depth scaling from the
+ *   perspective projector. The renderer consumes stored `r` through
+ *   `perspectiveMultiplier` below, applying a ±15% clamp around the
+ *   median stored radius — near atoms render larger, far atoms
+ *   smaller, on the same contract the account-row thumb has always
+ *   used. No thumb-scale visibility filter runs on this bake, so
+ *   dense cages and multi-component scenes keep every bond.
+ *
+ *   History: earlier revs consumed `scene.thumb` (D135 follow-up 2,
+ *   a source-drift bug that lost bonds for dense cages) and later
+ *   the orthographic scene bake (D135 follow-up 3, which fixed the
+ *   bond-loss but emitted uniform per-atom `r` — a renderer that
+ *   was perspective-aware by design became a no-op). Follow-up 4
+ *   closes that gap.
+ *
+ *   `scene.thumb` is consulted ONLY as an emergency fallback when
+ *   the poster scene has no bonds — that shape is the legacy pre-
+ *   D138 bondless row. For those, the thumb's own perspective bake
+ *   is still preferable to atoms-only. Account-page lazy heal
+ *   rebakes those rows into the new shape on first visit.
  *
  * - **Dynamic viewBox** — the SVG's viewBox is computed from the
  *   actual atom bounding box (with padding), NOT hard-coded to
@@ -43,7 +63,6 @@
 
 import type { ReactElement } from 'react';
 import {
-  CURRENT_THUMB_REV,
   type PreviewSceneV1,
   type PreviewSceneAtomV1,
   type PreviewSceneBondV1,
@@ -141,32 +160,40 @@ export function CurrentPosterSceneSvg({
     ? rawMaxH
     : CURRENT_POSTER_PANE_HEIGHT;
   // Single-sourced atoms + bonds pick. Bond endpoints (a, b) are
-  // INDICES into the accompanying atoms array; if atoms come from
-  // thumb but bonds come from scene, those indices reference the
-  // 32-atom downsampled poster scene while atomsSource is the full
-  // thumb — nonsense bonds get drawn (or silently dropped when the
-  // poster index happens to exceed the thumb atom length). Lock
-  // both to the same source. (Audit finding #1, rev 16.)
-  // Trust the stored thumb only when it's AT the current rev AND
-  // carries bonds. A stale or bondless thumb would otherwise
-  // produce a blank poster in bonds-only render mode (a legacy row
-  // might have atoms but no bond list because the old bake's
-  // visibility filter dropped everything for dense 3D clusters).
-  // In those cases fall through to the 32-atom `scene.atoms` +
-  // `scene.bonds` poster scene — same fallback the profile thumb's
-  // `derivePreviewThumbV1` uses on stale rows, so the two surfaces
-  // stay in sync until the backfill catches up.
-  const thumbIsFresh = !!(
-    scene.thumb
-    && scene.thumb.rev >= CURRENT_THUMB_REV
+  // INDICES into the accompanying atoms array — atoms and bonds
+  // MUST come from the same source or indices become garbage.
+  //
+  // Primary: `scene.atoms` + `scene.bonds`. This is the
+  // perspective-baked poster scene at `SCENE_ATOM_CAP = 5000`
+  // (`CURRENT_SCENE_REV = 2`, bake via `projectPreviewScenePerspective`
+  // in `publish-core.ts`). Square-normalized in 0..1 storage space,
+  // per-atom `r` carries pinhole `s(z)` depth scaling. No thumb-
+  // scale visibility filter runs on this path — every bond from
+  // the publish-time 3D topology survives.
+  //
+  // Fallback: `scene.thumb` (perspective bake). Used ONLY when the
+  // poster scene has no bonds — the "legacy bondless" shape from
+  // pre-D138 bakes. An atoms-only poster is worse UX than a slightly
+  // off-style thumb bake, and the account-page lazy heal is
+  // progressively rebaking these rows into the new shape anyway
+  // (see `functions/api/account/capsules/index.ts`). New publishes
+  // always populate `scene.bonds`, so this branch is transitional.
+  const posterHasBonds = !!(scene.bonds && scene.bonds.length > 0);
+  // Bind `fallbackThumb` to the validated thumb (or null) once, so
+  // downstream reads carry TS narrowing without `!` assertions. The
+  // guard conjunction narrows both `scene.thumb` and `thumb.bonds`
+  // to non-null within the `?` branch.
+  const fallbackThumb = !posterHasBonds
+    && scene.thumb != null
     && scene.thumb.atoms.length > 0
-    && scene.thumb.bonds
+    && scene.thumb.bonds != null
     && scene.thumb.bonds.length > 0
-  );
+    ? scene.thumb
+    : null;
   const atomsSource: ReadonlyArray<PreviewSceneAtomV1> =
-    thumbIsFresh ? scene.thumb!.atoms : scene.atoms;
+    fallbackThumb ? fallbackThumb.atoms : scene.atoms;
   const bondsSource: ReadonlyArray<PreviewSceneBondV1> =
-    thumbIsFresh ? scene.thumb!.bonds! : (scene.bonds ?? []);
+    fallbackThumb ? (fallbackThumb.bonds ?? []) : (scene.bonds ?? []);
 
   // ── Phase 1: atom-position bounds (no radius yet) ──
   let minAx = Infinity, maxAx = -Infinity, minAy = Infinity, maxAy = -Infinity;

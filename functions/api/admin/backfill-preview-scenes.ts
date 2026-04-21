@@ -17,7 +17,7 @@ import type { Env } from '../../env';
 import { requireAdminOr404 } from '../../admin-gate';
 import { recordAuditEvent, type AuditSeverity } from '../../../src/share/audit';
 import { backfillPreviewScenes } from '../../../scripts/backfill-preview-scenes';
-import { CURRENT_THUMB_REV } from '../../../src/share/capsule-preview-scene-store';
+import { CURRENT_SCENE_REV, CURRENT_THUMB_REV } from '../../../src/share/capsule-preview-scene-store';
 
 interface BackfillBody {
   force?: boolean;
@@ -94,6 +94,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     verbose,
     force,
     currentThumbRev: CURRENT_THUMB_REV,
+    currentSceneRev: CURRENT_SCENE_REV,
   });
 
   const failedCount = summary.failed.length;
@@ -113,6 +114,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       force,
       pageSize,
       currentThumbRev: CURRENT_THUMB_REV,
+      currentSceneRev: CURRENT_SCENE_REV,
       scanned: summary.scanned,
       updated: summary.updated,
       skipped: summary.skipped,

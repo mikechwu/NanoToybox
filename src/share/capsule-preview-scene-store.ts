@@ -143,13 +143,26 @@ export interface PreviewStoredThumbV1 {
  *    point. For carbon-only single-cutoff scenes the outputs are
  *    byte-identical, so NO rev bump — existing rev-15 thumbs stay
  *    valid. The 2D-only read-path bond fallback was also removed,
- *    and the poster gained a `thumbIsFresh` check that falls back
- *    to the 32-atom `scene.bonds` when a thumb lacks bonds —
- *    behavior changes observable only for legacy rows where the
- *    old bake had already emitted atoms-only thumbs.)
- *
+ *    and the poster source split was reworked over 2026-04-21 under
+ *    the D135 follow-up chain — superseded by the current contract:
+ *    `CurrentPosterSceneSvg` consumes `scene.atoms` / `scene.bonds`
+ *    primarily, and `scene.thumb` only as an emergency fallback for
+ *    legacy bondless rows. See bullets 8–10 of the D135 ADR in
+ *    `docs/decisions.md` for the full arc.)
  *  Rows with `rev < CURRENT_THUMB_REV` are re-baked by the backfill
- *  scripts. */
+ *  scripts.
+ *
+ *  Note (2026-04-21 follow-up 3): poster-scene cap/normalization
+ *  changes now bump the independent {@link CURRENT_SCENE_REV}
+ *  instead of this constant. Bumping `CURRENT_THUMB_REV` for
+ *  scene-only changes was a previous iteration's shortcut — it
+ *  forced thumb rebakes whose output was byte-identical, which
+ *  wasted backfill cost and muddied the rev-history audit trail.
+ *  The two constants are now strictly scoped: thumb-algorithm
+ *  changes → bump this; poster-scene-bake changes → bump
+ *  `CURRENT_SCENE_REV`. Both surfaces share `rebakeSceneFromR2`, so
+ *  any scene rebake also refreshes the thumb payload (they are
+ *  always written as a single D1 UPDATE). */
 export const CURRENT_THUMB_REV = 15;
 
 /**
@@ -162,6 +175,21 @@ export const CURRENT_THUMB_REV = 15;
  */
 export interface PreviewSceneV1 {
   v: typeof PREVIEW_SCENE_SCHEMA_VERSION;
+  /** Poster-scene revision stamp. Independent from
+   *  {@link CURRENT_THUMB_REV}: this number bumps when the
+   *  poster-scene bake's shape changes in a way that affects
+   *  rendered geometry (projection target, atom/bond caps,
+   *  normalization contract, projection kind — orthographic vs.
+   *  perspective). Rows with `rev < CURRENT_SCENE_REV` or missing
+   *  `rev` are treated as stale by the poster route's synchronous
+   *  heal and by the account-page lazy heal, which both re-derive
+   *  the scene from the R2 capsule blob.
+   *
+   *  Optional for backward-compat: legacy rows published before
+   *  rev-tracking existed parse without this field, and the stale-
+   *  detection logic treats `undefined` as rev 0 — always stale.
+   *  New publishes always emit the current rev. */
+  rev?: number;
   atoms: PreviewSceneAtomV1[];
   bonds?: PreviewSceneBondV1[];
   /** 8-hex-char FNV-1a32 of the canonical atom serialization. */
@@ -172,6 +200,61 @@ export interface PreviewSceneV1 {
    *  published before the thumb-pipeline rollout; `derivePreviewThumbV1`
    *  falls back to live sampling from `atoms` in that case. */
   thumb?: PreviewStoredThumbV1;
+}
+
+/** Current revision of the POSTER scene bake (projection into
+ *  `scene.atoms` / `scene.bonds`). Bumped independently from
+ *  {@link CURRENT_THUMB_REV} so a poster-geometry fix does not
+ *  force an unrelated thumb rebake and vice versa.
+ *
+ *  History:
+ *    1 — D135 follow-up 3 (2026-04-21). Introduced after a live-URL
+ *        audit revealed rows baked with `targetWidth: 600,
+ *        targetHeight: 500` carried anisotropic stored coords
+ *        (`x/600, y/500`), making every subject 1.2× taller than
+ *        wide on any renderer that treated stored coords as
+ *        isotropic. The publish path switched to `600 × 600` (square,
+ *        isotropic) at the same time; `rev: 1` marks the first baked-
+ *        scene shape under the corrected square target. The bake
+ *        was still orthographic (uniform per-atom `r`) at this rev.
+ *    2 — D135 follow-up 4 (2026-04-21). Poster scene bake switched
+ *        from orthographic (`projectPreviewScene`) to pinhole
+ *        perspective (`projectPreviewScenePerspective`, same
+ *        `PERSPECTIVE_K_DEFAULT = 3.17` as the thumb bake) so the
+ *        OG poster carries depth cues matching the profile thumb.
+ *        Stored per-atom `r` now varies across depth (far atoms
+ *        smaller, near atoms larger), which `CurrentPosterSceneSvg`
+ *        feeds into its ±15% `perspectiveMultiplier` clamp — the
+ *        renderer path was always perspective-aware but had been
+ *        reading uniform orthographic data at rev 1, so the clamp
+ *        collapsed to ≈ 1 for every atom. Square 600×600 target
+ *        kept; aspect invariant preserved; bond-completeness
+ *        guarantee preserved (projection has no visibility filter).
+ *
+ *  Every scene without a `rev` field is pre-introduction (legacy)
+ *  and classified as stale (rev 0 < any current rev). */
+export const CURRENT_SCENE_REV = 2 as const;
+
+/** Whether the parsed scene is "stale" under the current rev
+ *  contracts — either the poster-scene bake rev OR the thumb-payload
+ *  rev is behind its current constant. Both account-page lazy heal
+ *  and the share-page poster route consult this; a single
+ *  `rebakeSceneFromR2` refreshes both surfaces because they live in
+ *  one D1 column, so there is no case where a "mixed" row (one
+ *  surface stale, one fresh) wants different treatment.
+ *
+ *  Missing `rev` fields (legacy rows published before the respective
+ *  rev was introduced) fall through to rev 0 which is always stale
+ *  against any current ≥ 1.
+ *
+ *  Forward-compat: revs ABOVE current are accepted as fresh, so a
+ *  staggered deploy where newer isolates publish rev-N+1 rows and
+ *  older isolates read them doesn't trigger a redundant rebake. */
+export function isStaleScene(scene: PreviewSceneV1): boolean {
+  const storedSceneRev = scene.rev ?? 0;
+  const storedThumbRev = scene.thumb?.rev ?? 0;
+  return storedSceneRev < CURRENT_SCENE_REV
+    || storedThumbRev < CURRENT_THUMB_REV;
 }
 
 /** Public account-API row payload. Carries a small bond subset for dense
@@ -186,10 +269,36 @@ export interface PreviewThumbV1 {
   bonds?: PreviewSceneBondV1[];
 }
 
-/** Hard cap on atoms in the stored scene cell (spec §S1 constraints). */
-export const SCENE_ATOM_CAP = 32;
-/** Hard cap on stored bonds (spec §S1 constraints). */
-export const SCENE_BOND_CAP = 64;
+/** Hard cap on atoms in the stored scene cell.
+ *
+ *  History:
+ *    32 (V2 launch) — poster scene sized for a 1200 × 630 OG card
+ *      under the `≤ 32 atoms + 64 bonds` silhouette-sampled
+ *      orthographic render (the bake projection was orthographic at
+ *      V2 launch; changed to perspective in D135 follow-up 4 on
+ *      2026-04-21). Chosen when the poster consumed the stored
+ *      scene directly and a compact D1 row was the priority.
+ *    → 5000 (D135 follow-up 2, 2026-04-21) — the poster renderer
+ *      was retargeted back to `scene.atoms` / `scene.bonds` (see
+ *      `CurrentPosterSceneSvg`). Dense multi-component capsules at
+ *      600 × 600 have room for the full structural diagram, and the
+ *      account-row thumb ALREADY ran uncapped
+ *      (`ROW_ATOM_CAP_WITH_BONDS = 5000`) — unifying the two caps
+ *      prevents the "poster looks coarser than the thumb" inversion
+ *      that made dense cages lose bond legibility on social cards.
+ *      Stored-JSON cost at 5000 is ~150 KB per row in the extreme;
+ *      real capsules land far below. D1 TEXT limit (2 MB) is not a
+ *      concern; account-list N=50 reads stay O(ms).
+ *
+ *  At 5000 the cap is defense-in-depth, not a product contract —
+ *  `sampleForSilhouette` upstream still downsamples pathological
+ *  inputs so no single row can pin the worst case. */
+export const SCENE_ATOM_CAP = 5000;
+/** Hard cap on stored bonds. Scaled proportionally with
+ *  {@link SCENE_ATOM_CAP}. At 10000 the cap covers every realistic
+ *  3-bonds-per-atom topology (graphene, CNT cages, diamond lattices)
+ *  with generous headroom. */
+export const SCENE_BOND_CAP = 10000;
 /** Atom cap on the thumb payload. History:
  *   12 (D138) — legacy ≤20 DOM budget under per-<circle> rendering
  *   → 24 (D138 follow-up, path-batched renderer)
@@ -204,13 +313,16 @@ export const SCENE_BOND_CAP = 64;
  *  and (b) visual density on the 96 × 96 cell; both scale with the
  *  capsule's actual atom count, not this ceiling.
  *
- *  **Note on upstream `SCENE_ATOM_CAP` (32):** the read-path thumb
- *  fallback samples from the stored scene, which is still 32-capped.
- *  For newly-published rows the thumb is baked at publish time from
- *  the FULL selected-subject atoms (pre-scene-cap), so this 5000
- *  ceiling is effective on the write path even when the stored
- *  scene stays at 32. A separately-scoped "full-fidelity preview
- *  source" that also raises the stored-scene cap is deferred. */
+ *  As of 2026-04-21, `SCENE_ATOM_CAP` was lifted from 32 → 5000 so
+ *  the stored scene and the thumb both operate at the same (essentially
+ *  unbounded) ceiling — this removed the "poster looks coarser than
+ *  the thumb" inversion, since both surfaces now read from full-
+ *  fidelity projected geometry. Since follow-up 4 (same day) both
+ *  bakes also use pinhole perspective — the remaining differences
+ *  are the target size (600×600 poster, 500×500 thumb) and the base
+ *  atom radius (density-default vs. chunkier 22 px for the 96×96
+ *  account cell), so the thumb payload still lives in a separate
+ *  `scene.thumb` field rather than being reused at the poster cell. */
 export const ROW_ATOM_CAP_WITH_BONDS = 5000;
 /** Atom cap when the thumb payload is atoms-only (sparse scenes that
  *  don't benefit from bonds, or capsules whose stored scene omits bonds). */
@@ -300,6 +412,7 @@ export function buildPreviewSceneV1(
   const hash = sceneHash(atoms);
   const scene_out: PreviewSceneV1 = {
     v: PREVIEW_SCENE_SCHEMA_VERSION,
+    rev: CURRENT_SCENE_REV,
     atoms,
     hash,
   };
@@ -394,6 +507,20 @@ export function parsePreviewSceneV1(raw: string | null | undefined): PreviewScen
   }
   const hash = typeof obj.hash === 'string' ? obj.hash : sceneHash(atoms);
   const out: PreviewSceneV1 = { v: PREVIEW_SCENE_SCHEMA_VERSION, atoms, hash };
+  // `rev` is optional for backward-compat: rows published before the
+  // field existed parse without it. The poster route and account-page
+  // lazy heal treat `undefined` as rev 0 (always stale) so legacy rows
+  // drain through the same stale-rebake path as any other pre-current
+  // scene. Non-integer / non-finite values are dropped with a one-
+  // shot-per-isolate warn — a writer regression that ships garbage
+  // revs would otherwise silently classify every row as stale forever.
+  if (obj.rev !== undefined) {
+    if (typeof obj.rev === 'number' && Number.isInteger(obj.rev) && obj.rev >= 0) {
+      out.rev = obj.rev;
+    } else {
+      warnSceneRevMalformedOnce(obj.rev);
+    }
+  }
   if (bonds && bonds.length > 0) out.bonds = bonds;
   // Optional pre-baked thumb payload (publish-time, from full atoms).
   // A malformed thumb is dropped (scene still returns) — a visible warn
@@ -610,6 +737,40 @@ function warnStaleRevOnce(storedRev: number): void {
     `[scene-store] thumb-rev-stale count=${next} stored=${storedRev} `
       + `current=${CURRENT_THUMB_REV} — re-bake via backfill to restore full-fidelity bonds`,
   );
+}
+
+/** One-shot-per-isolate warn for rows that carry a `rev` field
+ *  whose value fails the integer/finite guard — e.g. `"abc"` or
+ *  `NaN` somehow serialized into JSON. Parallels
+ *  {@link warnStaleRevOnce} but for scene-level rev rather than
+ *  thumb-level rev, and fires once per isolate lifetime rather
+ *  than at powers-of-10 milestones (malformed revs should be zero
+ *  in production; a single instance is worth investigating).
+ *  Absent `rev` is handled silently — that's the legacy-row case
+ *  and is expected until backfill drains. */
+let sceneRevMalformedWarned = false;
+function warnSceneRevMalformedOnce(raw: unknown): void {
+  if (sceneRevMalformedWarned) return;
+  sceneRevMalformedWarned = true;
+  console.warn(
+    `[scene-store] scene-rev-malformed value=${JSON.stringify(raw)} — `
+      + `writer regression? stale rebake will run but investigate publish path`,
+  );
+}
+
+/** Test-only hook: clear the one-shot latch that suppresses repeat
+ *  `scene-rev-malformed` warnings within a worker isolate. Vitest's
+ *  default pool shares module state across tests in the same worker,
+ *  so a test asserting the warn must reset the latch in `beforeEach`
+ *  or every test-after-the-first observes zero warns regardless of
+ *  input. Production code never calls this.
+ *
+ *  Also clears the stale-thumb-rev milestone counter for symmetric
+ *  test-hook coverage — the two are the only module-scoped warn
+ *  latches in this file. */
+export function __resetSceneStoreWarnLatchesForTesting(): void {
+  sceneRevMalformedWarned = false;
+  staleRevCounts.clear();
 }
 
 function deriveThumbImpl(

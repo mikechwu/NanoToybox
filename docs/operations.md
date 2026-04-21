@@ -244,6 +244,9 @@ canaries.
 | `PUBLISH_RECONCILE_LOST` | `functions/api/capsules/publish.ts` | See alerting table. |
 | `[capsule-poster]` | `functions/api/capsules/[code]/preview/poster.ts` | One structured-JSON line per poster-route response: `{"code":"...","mode":"stored\|generated\|error\|flag-off\|inaccessible","durationMs":N,"status":N,"cause":"..."}`. `mode` discriminates the served path; `cause` carries a stable prefix on the non-happy modes (and, on `mode:'generated'`, optionally carries `bondless-heal-failed:<reason>` when the read-time heal of a legacy bondless row fell through and a bondless scene was served — query this in one stream to find successful renders still serving without bonds). V2 taxonomy (full list — all non-success causes funnel through `serveTerminalFallback` so the response stays a valid 200 PNG with `Cache-Control: public, max-age=60`, EXCEPT `module-import-failed:*` which emits `Cache-Control: no-cache, no-store, must-revalidate` so a bad deploy doesn't lock edge caches onto the fallback PNG for 60 s): `satori-threw:<msg>`, `module-import-failed:<msg>`, `r2-miss`, `dynamic-not-png:Nb`, `stored-not-png:Nb`, `fallback-fetch-failed:<msg>` (combined with original cause via `;`), `scene-missing` (lazy-backfill hit but R2 blob absent), `capsule-parse-failed:<msg>` (R2 blob present but rejected by `validateCapsuleFile`), `no-dense-frames` (capsule's `timeline.denseFrames[]` empty). Aggregate by `mode` to track stored-hit vs dynamic-render vs error rates; alert on a sustained `error` rate or any `module-import-failed:` (indicates a `@cloudflare/pages-plugin-vercel-og` regression). |
 | `[capsule-poster] bondless-heal-failed: <reason> share=<code>` | `functions/api/capsules/[code]/preview/poster.ts` | Synchronous read-time heal of a bondless legacy row (`scene.thumb.atoms` populated, no bonds anywhere) failed; the route falls through and serves whatever bondless scene it has (a bondless poster is strictly better than the terminal fallback). Reasons mirror `rebakeSceneFromR2`: `blob-missing`, `blob-read-failed:<msg>`, `capsule-parse-failed:<msg>`, `no-dense-frames`, `scene-empty`. The structured `[capsule-poster]` success log emitted for the same request carries `cause: bondless-heal-failed:<reason>` on `mode:'generated'` so both signals can be correlated in one stream. One-offs are expected for rows whose R2 blob is missing (orphan-sweeper pending); a sustained rate means the heal is failing for rows with live blobs and publish-pipeline regression is likely. |
+| `[capsule-poster] {"code":"…","event":"scene-stale-rebaked","fromSceneRev":N,"fromThumbRev":M,"toSceneRev":X,"toThumbRev":Y}` | `functions/api/capsules/[code]/preview/poster.ts` | **Info, not an incident.** Synchronous stale-rev rebake of a poster scene succeeded — the row's `preview_scene_v1.rev` was below `CURRENT_SCENE_REV` OR `scene.thumb.rev` was below `CURRENT_THUMB_REV` (or either field was absent), so the route rebaked from R2 and overwrote the cell before rendering. `fromSceneRev` / `fromThumbRev` are the prior stamps (0 for rows predating rev-tracking); `toSceneRev` / `toThumbRev` match the current constants. Structured JSON shape matches every other `[capsule-poster]` line — one parser handles both event and response logs. Expect a burst after any rev bump as organic public traffic drains stale rows; rate should fall to ~0 once the admin backfill + organic traffic converge. |
+| `[capsule-poster] {"code":"…","event":"scene-stale-not-persisted"}` | `functions/api/capsules/[code]/preview/poster.ts` | Stale-rev rebake ran and the render completed, but the D1 UPDATE that was supposed to persist the fresh scene matched zero rows (concurrent-delete race — the row was deleted between the SELECT and the UPDATE). The response still goes out with the freshly-projected scene AND the terminal `cause: scene-rebaked-not-persisted` tag, but `Cache-Control` drops to `max-age=60` so the resulting poster does not sit on CDN for an hour after deletion. One-offs are benign (expected for owners mid-bulk-delete); sustained volume suggests a reconciliation gap. |
+| `[capsule-poster] scene-stale-heal-failed: <reason> share=<code>` | `functions/api/capsules/[code]/preview/poster.ts` | Stale-rev rebake attempt failed (same reason set as bondless-heal-failed). The route falls through and serves the stale scene unchanged (visually outdated but non-terminal) — a 1.2× warped poster is strictly better than the generic `/og-fallback.png`. The matching `[capsule-poster]` success log carries `cause: scene-stale-heal-failed:<reason>` on `mode:'generated'`, or `cause: scene-stale-heal-failed+bondless:<reason>` if the row was ALSO bondless at entry (the stale branch subsumes the bondless branch, and the joint tag preserves the second signal). Sustained volume for the same share code indicates a persistently-unreachable R2 blob (orphan) OR a publish-pipeline regression that broke future rebakes. |
 | `[capsule-poster] scene-parse-failed for share=<code>` | `functions/api/capsules/[code]/preview/poster.ts` | `preview_scene_v1` was non-NULL but `parsePreviewSceneV1` returned null (malformed JSON, wrong `v`, non-finite coords, etc.). Route falls through to `rebakeSceneFromR2`. One-offs are single bad historical rows; sustained volume suggests the writer is emitting bad scenes. |
 | `[account.capsules] heal-scheduled user=<u> started=<N> claim-attempts=<A> claim-errors=<E> eligible=<M> first-page=<bool> cap=<C> attempt-cap=<AC> missing=<a> parse-failed=<b> stale-rev=<c> bondless=<d>` | `functions/api/account/capsules/index.ts` | Per-request nomination summary for the account-page lazy rebake. `started` is the number of rows whose D1 lease claim succeeded and were handed to the background batch. `claim-attempts` is the number of `UPDATE … preview_rebake_claimed_at` writes issued on this request; bounded by `attempt-cap` (= 2× `cap`) so a page full of already-held leases cannot balloon D1 write volume. `claim-errors` is the count of attempts where the UPDATE threw — the nomination path is fail-open, so errored rows are skipped and the endpoint still returns the capsule list. `eligible` is the total set of candidates classified from the page. `cap` is `HEAL_START_CAP_FIRST_PAGE` (8) on page 1 and `HEAL_START_CAP_CURSORED` (5) on cursor-paged requests. `attempt-cap` is `HEAL_CLAIM_ATTEMPT_CAP_FIRST_PAGE` (16) or `HEAL_CLAIM_ATTEMPT_CAP_CURSORED` (10). If `started < eligible` consistently, the gap is explained by one of: (a) held leases (concurrent tabs), (b) start-cap reached, (c) attempt-cap reached (claim-attempts === attempt-cap with low started), or (d) claim-errors > 0 (D1 write path degraded). |
 | `[account.capsules] heal-batch-done user=<u> rebaked=<N> persisted=<N> failed=<N> deadlined=<N> elapsed=<ms>` | `functions/api/account/capsules/index.ts` | Terminal summary from the background batch driver. `rebaked` = in-memory projection successes; `persisted` = D1 UPDATE committed; `failed` = `rebakeSceneFromR2` returned `ok:false`; `deadlined` = candidates the worker pool didn't reach before `HEAL_BUDGET_MS = 25 000`. `rebaked > persisted` indicates D1 write pressure (paired with `[preview-heal] write-failed` lines); `deadlined > 0` consistently indicates the per-request budget is too tight OR R2 read latency spiked. |
@@ -746,12 +749,18 @@ completes — existing rows just fall back to live sampling with a
      "SELECT COUNT(*) AS stale FROM capsule_share \
        WHERE kind = 'capsule' AND status = 'ready' AND \
          (preview_scene_v1 IS NULL \
-          OR IFNULL(json_extract(preview_scene_v1, '\$.thumb.rev'), 0) < 15)"
+          OR IFNULL(json_extract(preview_scene_v1, '\$.thumb.rev'), 0) < 15 \
+          OR IFNULL(json_extract(preview_scene_v1, '\$.rev'), 0) < 2)"
    ```
 
    The `< 15` predicate must match the current `CURRENT_THUMB_REV`
-   in `src/share/capsule-preview-scene-store.ts`; bump both in lockstep
-   when the rev advances.
+   and the `< 2` predicate must match `CURRENT_SCENE_REV`, both in
+   `src/share/capsule-preview-scene-store.ts`. Bump each predicate
+   in lockstep with its constant when a rev advances. A row is
+   stale if EITHER the scene rev or the thumb rev is behind current
+   — both are repaired atomically by a single `rebakeSceneFromR2`
+   call since the poster scene and the thumb payload live under
+   one D1 column.
 
    Expected: `stale = 0`. Any non-zero residual is either (a) rows
    whose R2 blob is missing (orphan-sweeper pending), or (b) rows
@@ -773,6 +782,54 @@ completes — existing rows just fall back to live sampling with a
 `force: true` is only required when an algorithm change needs to
 propagate to rows that already carry the new rev (e.g. an internal
 bug in the v2 pipeline that shipped for some rows before being caught).
+
+### Rollout procedure for a poster-scene bake change
+
+When the stored-scene shape changes (cap bump, projection target,
+normalization contract, renderer source swap — anything that makes
+current-deploy poster pixels stop matching fresh publishes'
+pixels), treat it as a poster-scene rev bump with cache invalidation
+and share-page self-heal. The 2026-04-21 D135 follow-up 3 is the
+reference precedent (poster source swap `scene.thumb` → `scene.atoms`,
+`SCENE_ATOM_CAP` 32→5000, projection target 600×500 → 600×600).
+
+1. Bump `CURRENT_SCENE_REV` in `src/share/capsule-preview-scene-store.ts`.
+   New publishes stamp the new rev automatically via
+   `buildPreviewSceneV1`. All existing rows become `stale-rev` on
+   the next read.
+2. Bump `TEMPLATE_VERSION` in `src/share/capsule-preview.ts`. This
+   invalidates edge caches on `?v=t<N>` and rebinds every dynamic-
+   poster ETag to `"v<N>-<8hex>"`. Social unfurlers re-fetch on the
+   next cache-TTL boundary.
+3. Deploy. Three convergence paths run in parallel:
+   - **Share-page poster route** (`functions/api/capsules/[code]/preview/poster.ts`)
+     now rebakes stale rows synchronously on first hit. **This is
+     the load-bearing path for public OG posters** — without it,
+     public links would stay warped until an account-page visit or
+     admin backfill touched the row. Watch `[capsule-poster]
+     scene-stale-rebaked` in the log stream; rate should spike on
+     deploy then drain as each popular capsule is visited once.
+   - **Account-page lazy heal** (`functions/api/account/capsules/index.ts`)
+     opportunistically rebakes ≤ 8 rows per account-page visit for
+     the signed-in owner. Covers the profile thumb AND the scene
+     simultaneously since both live in the same D1 column.
+   - **Admin backfill** (`npm run capsule-preview:backfill:prod`)
+     handles dormant capsules whose public URL is never visited
+     AND whose owner never visits their account page. Required for
+     full convergence; run after deploy.
+4. Verify the post-backfill SQL query (see earlier block), matching
+   the new `CURRENT_SCENE_REV` / `CURRENT_THUMB_REV` literals.
+5. Spot-check a known capsule URL after the dynamic path returns
+   `ETag: "v<new-N>-…"`:
+
+   ```bash
+   # A known C60-bearing capsule. Expect the new ETag, cache-control
+   # max-age=300 (dynamic, not stored), and a fresh scene-stale-rebaked
+   # log entry in the Cloudflare dashboard for the first hit after
+   # deploy.
+   curl -sI 'https://atomdojo.pages.dev/api/capsules/<KNOWN_CODE>/preview/poster?v=t<NEW>' | \
+     grep -iE '(etag|cache-control)'
+   ```
 
 ### Brand-string note
 

@@ -24,6 +24,7 @@ import {
   buildPreviewSceneV1,
   serializePreviewSceneV1,
 } from '../../src/share/capsule-preview-scene-store';
+import { TEMPLATE_VERSION } from '../../src/share/capsule-preview';
 import type { CapsulePreviewRenderScene } from '../../src/share/capsule-preview-project';
 
 function makeRenderScene(n: number, seed = 0): CapsulePreviewRenderScene {
@@ -90,6 +91,11 @@ function makeContext(opts: {
   r2Impl?: { get: (key: string) => Promise<any> };
   updateFn?: (sceneJson: string, id: string) => Promise<void>;
   fetchImpl?: typeof fetch;
+  /** When true, the stub DB's `preview_scene_v1` UPDATE returns
+   *  `meta: { changes: 0 }` — simulating the concurrent-delete race
+   *  where the row was deleted between the SELECT and the UPDATE.
+   *  Default false (UPDATE matches 1 row, normal heal persisted). */
+  simulatePersistFailure?: boolean;
 }) {
   const updateFn = opts.updateFn ?? (async () => {});
   const env = {
@@ -104,6 +110,15 @@ function makeContext(opts: {
         async run() {
           if (sql.includes('UPDATE capsule_share SET preview_scene_v1')) {
             await updateFn(String(this._binds[0]), String(this._binds[1]));
+            // Mirror the real D1 binding's `{ success, meta: { changes } }`
+            // shape so `rebakeSceneFromR2` can distinguish persisted
+            // UPDATEs (changes=1) from the concurrent-delete race
+            // (changes=0). Most tests use the default "changes=1"
+            // success path; the race-simulation flag is opt-in.
+            return {
+              success: true,
+              meta: { changes: opts.simulatePersistFailure ? 0 : 1 },
+            };
           }
           return { success: true };
         },
@@ -141,12 +156,33 @@ afterEach(() => {
   globalThis.fetch = origFetch;
 });
 
+/** Walks the log buffer backward for the most recent TERMINAL
+ *  `[capsule-poster]` entry (one that carries a `mode` field). The
+ *  filter is load-bearing: `logPosterEvent` emits intermediate
+ *  heal-event entries under the same prefix (e.g.,
+ *  `scene-stale-rebaked`) that have no `mode`. Without the filter,
+ *  a test calling `lastLogEntry().mode` on a response that emitted
+ *  an event AFTER the terminal log would see `undefined` — or, if
+ *  emission order ever reverses, the wrong shape entirely. */
 function lastLogEntry(): any | null {
   for (let i = logSpy.mock.calls.length - 1; i >= 0; i--) {
     const msg = String(logSpy.mock.calls[i][0] ?? '');
-    if (msg.startsWith('[capsule-poster] ')) {
-      return JSON.parse(msg.slice('[capsule-poster] '.length));
-    }
+    if (!msg.startsWith('[capsule-poster] ')) continue;
+    const parsed = JSON.parse(msg.slice('[capsule-poster] '.length));
+    if (parsed && typeof parsed.mode === 'string') return parsed;
+  }
+  return null;
+}
+
+/** Walks the log buffer backward for the most recent non-terminal
+ *  heal EVENT `[capsule-poster]` entry (one that carries an `event`
+ *  field). Use for assertions on stale-rebake / not-persisted. */
+function lastPosterEventEntry(): any | null {
+  for (let i = logSpy.mock.calls.length - 1; i >= 0; i--) {
+    const msg = String(logSpy.mock.calls[i][0] ?? '');
+    if (!msg.startsWith('[capsule-poster] ')) continue;
+    const parsed = JSON.parse(msg.slice('[capsule-poster] '.length));
+    if (parsed && typeof parsed.event === 'string') return parsed;
   }
   return null;
 }
@@ -221,7 +257,7 @@ describe('poster route — stored asset', () => {
 // ── Dynamic generation branch ─────────────────────────────────────────────
 
 describe('poster route — dynamic generation (flag on, scene pre-baked)', () => {
-  it('emits 200 PNG with V2 cache header', async () => {
+  it('emits 200 PNG with V4 cache header', async () => {
     __setRendererForTesting(() =>
       new Response(VALID_PNG_BYTES, {
         status: 200,
@@ -238,7 +274,11 @@ describe('poster route — dynamic generation (flag on, scene pre-baked)', () =>
     expect(res.headers.get('Cache-Control')).toMatch(/max-age=300/);
     expect(res.headers.get('Cache-Control')).toMatch(/stale-while-revalidate=86400/);
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*');
-    expect(res.headers.get('ETag')).toMatch(/^"v2-[0-9a-f]{8}"$/);
+    // Bind to the exported TEMPLATE_VERSION so a legitimate cache-
+    // key bump doesn't require hunting a literal in this file.
+    expect(res.headers.get('ETag')).toMatch(
+      new RegExp(`^"v${TEMPLATE_VERSION}-[0-9a-f]{8}"$`),
+    );
     expect(lastLogEntry()).toMatchObject({ mode: 'generated', status: 200 });
   });
 
@@ -424,6 +464,207 @@ describe('poster route — lazy backfill on preview_scene_v1=null', () => {
     const res = await onRequestGet(ctx);
     expect(res.status).toBe(200);
     expect(backfillJson).not.toBeNull();
+  });
+});
+
+// ── Stale-rev rebake (D135 follow-up 3) ──────────────────────────────────
+
+describe('poster route — stale-rev self-heal', () => {
+  const validCapsule = JSON.stringify({
+    format: 'atomdojo-history',
+    version: 1,
+    kind: 'capsule',
+    producer: { app: 'lab', appVersion: '0.1.0', exportedAt: '2026-04-19T00:00:00Z' },
+    simulation: {
+      units: { time: 'ps', length: 'angstrom' },
+      maxAtomCount: 2,
+      durationPs: 1.0,
+      frameCount: 1,
+      indexingModel: 'dense-prefix',
+    },
+    atoms: { atoms: [{ id: 0, element: 'C' }, { id: 1, element: 'C' }] },
+    bondPolicy: { policyId: 'default-carbon-v1', cutoff: 1.85, minDist: 0.5 },
+    timeline: { denseFrames: [{ frameId: 0, timePs: 0, n: 2, atomIds: [0, 1], positions: [0, 0, 0, 1.42, 0, 0] }] },
+  });
+
+  function staleSceneWithoutRev(): string {
+    // Build a fresh scene then strip the `rev` field to simulate a
+    // row published before rev-tracking existed. The atoms remain
+    // parseable and non-empty (so the `sceneMissing` heal path
+    // cannot fire) — only the stale-rev classifier should trigger.
+    const fresh = JSON.parse(makeSceneJson());
+    delete fresh.rev;
+    return JSON.stringify(fresh);
+  }
+
+  function staleSceneAtRev(rev: number): string {
+    // Scene that parses cleanly but carries a deliberately-old rev
+    // below the current constant.
+    const fresh = JSON.parse(makeSceneJson());
+    fresh.rev = rev;
+    return JSON.stringify(fresh);
+  }
+
+  it('row without scene.rev triggers synchronous rebake before render', async () => {
+    let writtenSceneJson: string | null = null;
+    __setRendererForTesting(() =>
+      new Response(VALID_PNG_BYTES, { status: 200, headers: { 'Content-Type': 'image/png' } }),
+    );
+    const ctx = makeContext({
+      row: makeRow({ preview_scene_v1: staleSceneWithoutRev() }),
+      flag: 'on',
+      r2Impl: {
+        get: async () => ({ text: async () => validCapsule }),
+      },
+      updateFn: async (json) => { writtenSceneJson = json; },
+    });
+    const res = await onRequestGet(ctx);
+    expect(res.status).toBe(200);
+    // Critical: the UPDATE fired with a fresh scene (not skipped).
+    expect(writtenSceneJson).not.toBeNull();
+    // Fresh scene must carry the current `rev` stamp so the same row
+    // doesn't re-trigger the rebake on the next request.
+    const rewritten = JSON.parse(writtenSceneJson!);
+    expect(rewritten.rev).toBeGreaterThan(0);
+  });
+
+  it('row with scene.rev below the current constant triggers rebake', async () => {
+    let writtenSceneJson: string | null = null;
+    __setRendererForTesting(() =>
+      new Response(VALID_PNG_BYTES, { status: 200, headers: { 'Content-Type': 'image/png' } }),
+    );
+    const ctx = makeContext({
+      row: makeRow({ preview_scene_v1: staleSceneAtRev(0) }),
+      flag: 'on',
+      r2Impl: {
+        get: async () => ({ text: async () => validCapsule }),
+      },
+      updateFn: async (json) => { writtenSceneJson = json; },
+    });
+    const res = await onRequestGet(ctx);
+    expect(res.status).toBe(200);
+    expect(writtenSceneJson).not.toBeNull();
+  });
+
+  it('fresh-rev row does NOT rebake — current stored scene served verbatim', async () => {
+    let updateCalled = false;
+    __setRendererForTesting(() =>
+      new Response(VALID_PNG_BYTES, { status: 200, headers: { 'Content-Type': 'image/png' } }),
+    );
+    const ctx = makeContext({
+      // makeSceneJson() produces a fresh scene stamped at the
+      // current rev, so the stale-rev predicate must be false.
+      row: makeRow({ preview_scene_v1: makeSceneJson() }),
+      flag: 'on',
+      r2Impl: {
+        get: async () => { throw new Error('R2 should not be touched on a fresh row'); },
+      },
+      updateFn: async () => { updateCalled = true; },
+    });
+    const res = await onRequestGet(ctx);
+    expect(res.status).toBe(200);
+    expect(updateCalled).toBe(false);
+  });
+
+  it('bondless-heal that returns persisted=false shortens cache + tags cause', async () => {
+    // Parity with the sceneMissing + sceneStaleRev branches — a
+    // concurrent-delete race during bondless-heal must NOT leave a
+    // deleted capsule's poster on CDN for an hour. Craft a
+    // fresh-rev bondless row so the sceneBondless branch is the one
+    // that runs, then set `simulatePersistFailure` so the D1 UPDATE
+    // reports `meta.changes=0` (the real concurrent-delete race).
+    __setRendererForTesting(() =>
+      new Response(VALID_PNG_BYTES, { status: 200, headers: { 'Content-Type': 'image/png' } }),
+    );
+    const freshBondless = JSON.parse(makeSceneJson());
+    delete freshBondless.bonds;
+    if (freshBondless.thumb) delete freshBondless.thumb.bonds;
+    const validCapsule = JSON.stringify({
+      format: 'atomdojo-history',
+      version: 1,
+      kind: 'capsule',
+      producer: { app: 'lab', appVersion: '0.1.0', exportedAt: '2026-04-19T00:00:00Z' },
+      simulation: {
+        units: { time: 'ps', length: 'angstrom' },
+        maxAtomCount: 2,
+        durationPs: 1.0,
+        frameCount: 1,
+        indexingModel: 'dense-prefix',
+      },
+      atoms: { atoms: [{ id: 0, element: 'C' }, { id: 1, element: 'C' }] },
+      bondPolicy: { policyId: 'default-carbon-v1', cutoff: 1.85, minDist: 0.5 },
+      timeline: { denseFrames: [{ frameId: 0, timePs: 0, n: 2, atomIds: [0, 1], positions: [0, 0, 0, 1.42, 0, 0] }] },
+    });
+    const ctx = makeContext({
+      row: makeRow({ preview_scene_v1: JSON.stringify(freshBondless) }),
+      flag: 'on',
+      r2Impl: { get: async () => ({ text: async () => validCapsule }) },
+      simulatePersistFailure: true,
+    });
+    const res = await onRequestGet(ctx);
+    expect(res.status).toBe(200);
+    // Short cache — NOT the default max-age=300,s-maxage=3600 long
+    // cache. Deleted-capsule posters must not stick on CDN.
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=60');
+    expect(lastLogEntry().mode).toBe('generated');
+    expect(lastLogEntry().cause).toBe('scene-rebaked-not-persisted');
+    // The scene-stale-not-persisted event also fires (structured log).
+    const evt = lastPosterEventEntry();
+    expect(evt?.event).toBe('scene-stale-not-persisted');
+  });
+
+  it('stale-heal on a row that is ALSO bondless surfaces both signals in cause', async () => {
+    // A row whose scene is stale-rev AND bondless is almost always
+    // a legacy pre-D138 row (bondless bakes predate rev-tracking).
+    // Under the stale-rev-first branch ordering, the bondless
+    // heal never runs directly — the stale-rebake attempts a full
+    // refresh. If that refresh fails, the served scene is still
+    // bondless, and ops need both signals in the log.
+    __setRendererForTesting(() =>
+      new Response(VALID_PNG_BYTES, { status: 200, headers: { 'Content-Type': 'image/png' } }),
+    );
+    // Craft a scene with no bonds AND no rev stamp — triggers both
+    // sceneStaleRev AND wasBondlessAtEntry.
+    const bondlessNoRev = JSON.parse(staleSceneWithoutRev());
+    delete bondlessNoRev.bonds;
+    if (bondlessNoRev.thumb) delete bondlessNoRev.thumb.bonds;
+    const ctx = makeContext({
+      row: makeRow({ preview_scene_v1: JSON.stringify(bondlessNoRev) }),
+      flag: 'on',
+      r2Impl: { get: async () => null },  // heal fails
+    });
+    const res = await onRequestGet(ctx);
+    expect(res.status).toBe(200);
+    expect(lastLogEntry().mode).toBe('generated');
+    // Joint tag: stale wins the cause priority AND preserves the
+    // bondless signal via the `+bondless` suffix.
+    expect(String(lastLogEntry().cause ?? '')).toMatch(
+      /scene-stale-heal-failed\+bondless/,
+    );
+  });
+
+  it('stale-heal failure falls through and serves the stale scene (no terminal fallback)', async () => {
+    // The poster-route contract is that a failed stale-heal must
+    // NOT degrade the response to the terminal /og-fallback.png
+    // path — a visibly-outdated poster is strictly better than a
+    // generic fallback tile, and the failure log lets ops spot
+    // chronically-stuck rows.
+    __setRendererForTesting(() =>
+      new Response(VALID_PNG_BYTES, { status: 200, headers: { 'Content-Type': 'image/png' } }),
+    );
+    const ctx = makeContext({
+      row: makeRow({ preview_scene_v1: staleSceneWithoutRev() }),
+      flag: 'on',
+      r2Impl: { get: async () => null },  // blob-missing → heal fails
+    });
+    const res = await onRequestGet(ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('image/png');
+    // Mode is still `generated` (served the stale scene) — not the
+    // terminal-fallback `error` mode — with a cause tag surfacing
+    // the heal-failure reason.
+    expect(lastLogEntry().mode).toBe('generated');
+    expect(String(lastLogEntry().cause ?? '')).toMatch(/scene-stale-heal-failed/);
   });
 });
 

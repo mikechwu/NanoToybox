@@ -176,11 +176,11 @@ Three domains in this list carry more weight than the others:
 - `src/watch-lab-handoff/` is the contract between the two apps. Both Watch (seed build) and Lab (hydrate) import from it. It is the only place either app should look up the handoff shape.
 - `src/ui/` is the design system. Tokens, dock and sheet shells, segmented controls, timeline track, bonded-group chip styling, and lifecycle hooks all live here. Changes ripple into both Lab and Watch; visual regressions in either app often trace back to a change here.
 - `src/share/capsule-preview*` is the V2 preview pipeline — projection, canonical camera, scene-store serializer, shared poster/thumb renderers, and the render constants that bind the account thumb and the OG poster to the same geometry. Two callers consume it: the account-row thumbnail (`account/main.tsx`, decorative SVG from the stored `PreviewThumbV1` payload via `CurrentThumbSvg`) and the dynamic poster Function (`functions/api/capsules/[code]/preview/poster.ts`, Satori `ImageResponse` from the stored `PreviewSceneV1` via `functions/_lib/capsule-preview-image.tsx` + `CurrentPosterSceneSvg`). Both render from bytes that were projected once at publish time from the FIRST dense frame of the capsule, so a given capsule looks identical in the account list and as an OG poster. Module roles:
-  - `capsule-preview.ts` — `sanitizeCapsuleTitle`, `TEMPLATE_VERSION = 2`, FNV-1a32 helpers (the title sanitizer here is the sole non-Latin fallback boundary, and `TEMPLATE_VERSION` is the dynamic-poster cache-key constant).
+  - `capsule-preview.ts` — `sanitizeCapsuleTitle`, `TEMPLATE_VERSION = 4`, FNV-1a32 helpers (the title sanitizer here is the sole non-Latin fallback boundary, and `TEMPLATE_VERSION` is the dynamic-poster cache-key constant). `TEMPLATE_VERSION = 4` tracks `CURRENT_SCENE_REV = 2` (the perspective-baked poster scene).
   - `capsule-preview-frame.ts` — `buildPreviewSceneFromCapsule` picks `timeline.denseFrames[0]`.
   - `capsule-preview-colors.ts` — CPK element table + per-bonded-group appearance fan-out.
   - `capsule-preview-sampling.ts` — `sampleEvenly`, `sampleForSilhouette` (extrema + FPS), `sampleForBondedThumb` (graph-aware BFS + connection-count scoring + FPS fill).
-  - `capsule-preview-scene-store.ts` — types (`PreviewSceneV1`, `PreviewStoredThumbV1` with `CURRENT_THUMB_REV = 15`, `PreviewThumbV1`), scene/thumb caps (`SCENE_ATOM_CAP = 32`, `SCENE_BOND_CAP = 64`, `ROW_ATOM_CAP_WITH_BONDS = 5000`, `ROW_BOND_CAP = 5000`, `ROW_ATOM_CAP_ATOMS_ONLY = 18`), `buildPreviewSceneV1`, `buildStoredThumbFromFullScene`, `parsePreviewSceneV1` (malformed-thumb and non-finite guards), `derivePreviewThumbV1` (stored-thumb fast path + tiered-visibility live-sampling fallback).
+  - `capsule-preview-scene-store.ts` — types (`PreviewSceneV1` with `CURRENT_SCENE_REV = 2`, `PreviewStoredThumbV1` with `CURRENT_THUMB_REV = 15`, `PreviewThumbV1`), scene/thumb caps (`SCENE_ATOM_CAP = 5000`, `SCENE_BOND_CAP = 10000`, `ROW_ATOM_CAP_WITH_BONDS = 5000`, `ROW_BOND_CAP = 5000`, `ROW_ATOM_CAP_ATOMS_ONLY = 18`), `buildPreviewSceneV1`, `buildStoredThumbFromFullScene`, `parsePreviewSceneV1` (malformed-thumb and non-finite guards), `derivePreviewThumbV1` (stored-thumb fast path + tiered-visibility live-sampling fallback).
   - `capsule-preview-cluster-select.ts` — `selectPreviewSubjectCluster` picks the largest bonded cluster as the preview subject when the dominance guard passes (D138); otherwise returns the full frame. Shared by the publish pipeline and the audit page so both represent the same subject. "Bonded cluster" here means a proximity-graph connected component — not authoritative molecular connectivity (see D138 scope caveat).
   - `capsule-preview-project.ts` — pinhole perspective 3D → 2D projector (`PERSPECTIVE_K_DEFAULT = 3.17`); `deriveBondPairs` / `deriveBondPairsForProjectedScene` run the distance-cutoff rule from `bondPolicy`.
   - `capsule-preview-camera.ts` — PCA (Jacobi) + `{spherical, planar, linear, general, degenerate}` classification + deterministic sign normalization + fixed 5°/10° tilt; also exposes `deriveMinorAxisCamera` (shared by the baked thumb and the audit page so the published thumb matches the live preview).
@@ -331,8 +331,8 @@ A single JSON cell per row carries two artifacts inside one `PreviewSceneV1` sha
 
 ```
 { v: 1,
-  atoms: [{x,y,r,c}],           // up to SCENE_ATOM_CAP=32 — feeds the 1200×630 poster
-  bonds?: [{a,b}],              // up to SCENE_BOND_CAP=64 — indices into atoms[]
+  atoms: [{x,y,r,c}],           // up to SCENE_ATOM_CAP=5000 — feeds the 1200×630 poster
+  bonds?: [{a,b}],              // up to SCENE_BOND_CAP=10000 — indices into atoms[]
   hash: "<8hex FNV-1a32>",      // over the atom array; bond-independent
   thumb?: {                     // pre-baked at publish time from the selected-subject atoms
     rev: 15,                    //   (CURRENT_THUMB_REV, bumps when algorithm changes)
@@ -367,7 +367,7 @@ GET /api/capsules/:CODE/preview/poster          (functions/api/capsules/[code]/p
         parsePreviewSceneV1(row.preview_scene_v1)
         if null → lazy-backfill: R2 blob → project → UPDATE … WHERE preview_scene_v1 IS NULL
         compose ImageResponse via functions/_lib/capsule-preview-image.tsx (Satori, bundled Latin font)
-        ETag `"v2-<8hex>"` bound to [TEMPLATE_VERSION, scene.hash, sanitizedTitle, shareCode]
+        ETag `"v4-<8hex>"` bound to [TEMPLATE_VERSION, scene.hash, sanitizedTitle, shareCode]
   else            → 404
   any render/import error → terminal /og-fallback.png
   fallthrough             → 1×1 transparent PNG safety net
@@ -405,8 +405,9 @@ Rapid iteration made the preview pipeline easy to describe inconsistently; this 
 
 - **Account-row thumb surface** — 96 × 96 px; constant in `src/share/capsule-preview-thumb-size.ts`, mirrored by the CSS rule.
 - **Account thumb payload caps** — `ROW_ATOM_CAP_WITH_BONDS = 5000`, `ROW_BOND_CAP = 5000`, `ROW_ATOM_CAP_ATOMS_ONLY = 18`. Baked at publish time from the full selected-subject atoms, NOT from the 32-capped stored scene. At 5000 no realistic capsule hits the ceiling — real-world pressure is stored-JSON size and visual density on the 96 × 96 cell, both of which scale with actual atom count.
-- **Stored scene (`preview_scene_v1`) caps** — `SCENE_ATOM_CAP = 32`, `SCENE_BOND_CAP = 64`. Unchanged; the stored scene drives the 1200 × 630 OG poster (where 32 atoms is sufficient) and acts as the read-path thumb fallback for pre-bake rows. New publishes bake a richer thumb directly from the selected subject, independent of these caps.
-- **`CURRENT_THUMB_REV`** — `15`. The full per-rev history lives in the JSDoc above the constant in `src/share/capsule-preview-scene-store.ts`; recent milestones: cluster-selection (3), path-batched renderer (4), 96 px pivot (5), shared minor-axis camera (10), `<circle>` + shaded-sphere atoms (11), square perspective target (12), single-pass depth-sorted paint (13), uncapped bond retention (14), `PERSPECTIVE_K_DEFAULT = 3.17` (15).
+- **Stored scene (`preview_scene_v1`) caps** — `SCENE_ATOM_CAP = 5000`, `SCENE_BOND_CAP = 10000`. Lifted from 32/64 on 2026-04-21 (D135 follow-up 2) so the stored poster scene reaches the same fidelity as the thumb bake. Paired with the poster renderer retargeting from `scene.thumb` back to `scene.atoms`/`scene.bonds` (`CurrentPosterSceneSvg`); dense cages and multi-component scenes that had bonds visibility-filtered at thumb scale now render their full structural wiring on the 1200×630 OG card.
+- **`CURRENT_THUMB_REV`** — `15`. The full per-rev history lives in the JSDoc above the constant in `src/share/capsule-preview-scene-store.ts`; recent milestones: cluster-selection (3), path-batched renderer (4), 96 px pivot (5), shared minor-axis camera (10), `<circle>` + shaded-sphere atoms (11), square perspective target (12), single-pass depth-sorted paint (13), uncapped bond retention (14), `PERSPECTIVE_K_DEFAULT = 3.17` (15). **This constant only versions the thumb payload shape** — poster-scene bake changes now bump `CURRENT_SCENE_REV` instead.
+- **`CURRENT_SCENE_REV`** — `2`. Independent revision stamp on the poster scene (`preview_scene_v1.rev`). Introduced 2026-04-21 (D135 follow-up 3) so scene-bake changes (projection target, caps, normalization contract) no longer piggy-back on the thumb rev. Advanced to `2` later the same day (D135 follow-up 4) when the poster bake switched from orthographic to pinhole perspective — stored per-atom `r` now carries real depth scaling, matching the thumb bake's long-standing contract, and the OG poster reads the same depth cues the profile thumb has always had. Rows with `scene.rev < CURRENT_SCENE_REV` (or missing `rev`) are classified `stale-rev` by both the account-page lazy heal and the poster route's synchronous heal — a single `rebakeSceneFromR2` call refreshes both the scene AND the thumb since they're written as one D1 UPDATE.
 - **Visual grammar** — `THUMB_STYLE_MINIMAL` (the shipped preset: flat ink atoms over the shared radial-gradient sphere shader; bonds interleaved in the depth-sorted paint list). `THUMB_STYLE_HALOED` exists for audit A/B only; not shipped.
 - **Cluster selection** — `selectPreviewSubjectCluster` (ADR D138) runs before sampling. Fallback reasons visible on the `preview-audit/` workbench metadata. Balanced / multi-fragment scenes intentionally preserve the full frame (dominance guard).
 - **Dev workbench** — `preview-audit/` (standalone Vite entry; served via `scripts/serve-preview-audit.sh`) exercises `capsule-preview-sketch-perspective.ts` against the fixtures in `src/share/__fixtures__/` so visual regressions in the poster/thumb pipeline are caught before publish.
@@ -414,7 +415,7 @@ Rapid iteration made the preview pipeline easy to describe inconsistently; this 
 
 #### Cache-key axes
 
-- **Dynamic posters** bust on `TEMPLATE_VERSION` bump (`?v=t<N>`, currently `t2`). The ETag `"v2-<8hex>"` additionally binds to `scene.hash`, the sanitized title, and the share code.
+- **Dynamic posters** bust on `TEMPLATE_VERSION` bump (`?v=t<N>`, currently `t4`). The ETag `"v4-<8hex>"` additionally binds to `scene.hash`, the sanitized title, and the share code.
 - **Stored posters** bust on FNV-1a hash of `preview_poster_key` (`?v=p<8hex>`). Re-uploading R2 bytes for a capsule changes the key hash and forces a fresh fetch independent of the template axis.
 - `/c/:code` share pages emit the poster URL with `?v=t2` in the OG tag.
 

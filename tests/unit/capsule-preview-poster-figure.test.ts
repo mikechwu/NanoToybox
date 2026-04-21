@@ -199,8 +199,9 @@ describe('poster-figure: cluster-selection pre-sampling', () => {
     const expectedFullAtomCount = capsule.atoms.atoms.length;
     const sceneJson = projectCapsuleToSceneJson(capsule)!;
     const scene = JSON.parse(sceneJson);
-    // 24 atoms ≤ SCENE_ATOM_CAP=32, so no downsampling — the stored
-    // scene should represent every atom.
+    // 24 atoms is well below SCENE_ATOM_CAP (currently 5000), so
+    // no downsampling — the stored scene should represent every
+    // atom.
     expect(scene.atoms.length).toBe(expectedFullAtomCount);
   });
 

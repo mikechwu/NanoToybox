@@ -56,6 +56,15 @@ interface BackfillOptions {
    *  `capsule-preview-scene-store.ts`; exposed as a parameter so this
    *  script stays decoupled from that module's internals. */
   currentThumbRev: number;
+  /** Current poster-scene bake revision. Pass `CURRENT_SCENE_REV`
+   *  from `capsule-preview-scene-store.ts`. Introduced 2026-04-21
+   *  (D135 follow-up 3) so scene-bake and thumb-algorithm versioning
+   *  decouple — a row is selected for rebake when EITHER rev is
+   *  behind current. Required: if the caller only passes
+   *  `currentThumbRev`, the predicate would miss rows whose scene
+   *  shape is stale but whose thumb shape is current (e.g., after
+   *  a scene-only bump), leaving them permanently stuck. */
+  currentSceneRev: number;
 }
 
 interface BackfillSummary {
@@ -80,10 +89,20 @@ export async function backfillPreviewScenes(opts: BackfillOptions): Promise<Back
     failed: [],
   };
 
+  // A row is "stale" (selectable for rebake without --force) when
+  // EITHER its thumb-payload rev OR its poster-scene rev is behind
+  // the current constants. `rebakeSceneFromR2` refreshes both
+  // surfaces in one UPDATE, so the union-on-stale shape is safe.
+  // Historical note: before 2026-04-21 this predicate was a single
+  // check against `thumb.rev` — that worked until `CURRENT_SCENE_REV`
+  // was introduced, at which point a scene-only bump would have
+  // silently left dormant rows stuck unless the operator passed
+  // `--force`. The split check closes that gap.
   const selectionPredicate = opts.force
     ? ''
     : `AND (preview_scene_v1 IS NULL
-           OR IFNULL(json_extract(preview_scene_v1, '$.thumb.rev'), 0) < ${opts.currentThumbRev})`;
+           OR IFNULL(json_extract(preview_scene_v1, '$.thumb.rev'), 0) < ${opts.currentThumbRev}
+           OR IFNULL(json_extract(preview_scene_v1, '$.rev'), 0) < ${opts.currentSceneRev})`;
 
   while (true) {
     const page = await db.prepare(

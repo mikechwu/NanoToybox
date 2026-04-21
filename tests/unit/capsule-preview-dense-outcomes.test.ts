@@ -171,8 +171,12 @@ function fixtureToSceneJson(fx: Fixture): string {
     bounds: { width: 600, height: 500 },
     classification: 'general',
   };
-  // Cap atoms at 32 (matches SCENE_ATOM_CAP) so we hit the same storage
-  // shape the publish path produces for dense structures.
+  // Downsample to 32 atoms for this fixture's assertion shape.
+  // Historically this matched the old SCENE_ATOM_CAP (32); as of
+  // 2026-04-21 that cap is 5000 so real publishes no longer hit a
+  // hard truncation at 32, but the test still uses a 32-atom
+  // silhouette here because the derived-outcome tables below were
+  // calibrated against that sample size.
   while (projected.atoms.length > 32) {
     projected.atoms.pop();
   }

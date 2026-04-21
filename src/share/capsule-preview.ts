@@ -18,8 +18,24 @@
 import { titleHitsDenylist } from './capsule-preview-denylist';
 
 /** Cache-key + ETag version; bumps every time the rendered poster output
- *  meaningfully changes. V2 (frame-projected scenes) → `2`. */
-export const TEMPLATE_VERSION = 2 as const;
+ *  meaningfully changes.
+ *
+ *  History:
+ *    2 — V2 launch (frame-projected scenes, D135).
+ *    3 — 2026-04-21 (follow-up 3). Poster renderer retargeted from
+ *        the perspective thumb bake back to the `scene.atoms` /
+ *        `scene.bonds` path (see `CurrentPosterSceneSvg` and
+ *        `SCENE_ATOM_CAP = 5000`). Dense cages and multi-component
+ *        scenes that had bonds visibility-filtered at thumb scale
+ *        now render with full structural wiring. Square projection
+ *        target fixed the "1.2× taller than wide" aspect warp.
+ *    4 — 2026-04-21 (follow-up 4). Poster scene bake switches from
+ *        orthographic to pinhole perspective (`CURRENT_SCENE_REV = 2`).
+ *        The OG poster now carries the same depth cues as the
+ *        account-row thumb; `perspectiveMultiplier` in
+ *        `CurrentPosterSceneSvg` stops being a no-op. Forces every
+ *        cached social unfurl to refresh. */
+export const TEMPLATE_VERSION = 4 as const;
 
 /** Title fallback used everywhere — must match brand canonical name. */
 export const CAPSULE_TITLE_FALLBACK = 'Atom Dojo Capsule';
