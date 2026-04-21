@@ -242,9 +242,14 @@ canaries.
 | `REPORT_DEDUP_DISABLED` | `functions/api/capsules/[code]/report.ts` | See alerting table — repeated here because it's grep-shaped the same way. |
 | `R2_UPLOADED_MISSING` | `functions/api/admin/sweep/orphans.ts` | See alerting table. |
 | `PUBLISH_RECONCILE_LOST` | `functions/api/capsules/publish.ts` | See alerting table. |
-| `[capsule-poster]` | `functions/api/capsules/[code]/preview/poster.ts` | One structured-JSON line per poster-route response: `{"code":"...","mode":"stored\|generated\|error\|flag-off\|inaccessible","durationMs":N,"status":N,"cause":"..."}`. `mode` discriminates the served path; `cause` carries a stable prefix on the non-happy modes. V2 taxonomy (full list — all non-success causes funnel through `serveTerminalFallback` so the response stays a valid 200 PNG with `Cache-Control: public, max-age=60`): `satori-threw:<msg>`, `module-import-failed:<msg>`, `r2-miss`, `dynamic-not-png:Nb`, `stored-not-png:Nb`, `fallback-fetch-failed:<msg>` (combined with original cause via `;`), `scene-missing` (lazy-backfill hit but R2 blob absent), `capsule-parse-failed:<msg>` (R2 blob present but rejected by `validateCapsuleFile`), `no-dense-frames` (capsule's `timeline.denseFrames[]` empty). Aggregate by `mode` to track stored-hit vs dynamic-render vs error rates; alert on a sustained `error` rate or any `module-import-failed:` (indicates a `@cloudflare/pages-plugin-vercel-og` regression). |
+| `[capsule-poster]` | `functions/api/capsules/[code]/preview/poster.ts` | One structured-JSON line per poster-route response: `{"code":"...","mode":"stored\|generated\|error\|flag-off\|inaccessible","durationMs":N,"status":N,"cause":"..."}`. `mode` discriminates the served path; `cause` carries a stable prefix on the non-happy modes (and, on `mode:'generated'`, optionally carries `bondless-heal-failed:<reason>` when the read-time heal of a legacy bondless row fell through and a bondless scene was served — query this in one stream to find successful renders still serving without bonds). V2 taxonomy (full list — all non-success causes funnel through `serveTerminalFallback` so the response stays a valid 200 PNG with `Cache-Control: public, max-age=60`, EXCEPT `module-import-failed:*` which emits `Cache-Control: no-cache, no-store, must-revalidate` so a bad deploy doesn't lock edge caches onto the fallback PNG for 60 s): `satori-threw:<msg>`, `module-import-failed:<msg>`, `r2-miss`, `dynamic-not-png:Nb`, `stored-not-png:Nb`, `fallback-fetch-failed:<msg>` (combined with original cause via `;`), `scene-missing` (lazy-backfill hit but R2 blob absent), `capsule-parse-failed:<msg>` (R2 blob present but rejected by `validateCapsuleFile`), `no-dense-frames` (capsule's `timeline.denseFrames[]` empty). Aggregate by `mode` to track stored-hit vs dynamic-render vs error rates; alert on a sustained `error` rate or any `module-import-failed:` (indicates a `@cloudflare/pages-plugin-vercel-og` regression). |
+| `[capsule-poster] bondless-heal-failed: <reason> share=<code>` | `functions/api/capsules/[code]/preview/poster.ts` | Synchronous read-time heal of a bondless legacy row (`scene.thumb.atoms` populated, no bonds anywhere) failed; the route falls through and serves whatever bondless scene it has (a bondless poster is strictly better than the terminal fallback). Reasons mirror `rebakeSceneFromR2`: `blob-missing`, `blob-read-failed:<msg>`, `capsule-parse-failed:<msg>`, `no-dense-frames`, `scene-empty`. The structured `[capsule-poster]` success log emitted for the same request carries `cause: bondless-heal-failed:<reason>` on `mode:'generated'` so both signals can be correlated in one stream. One-offs are expected for rows whose R2 blob is missing (orphan-sweeper pending); a sustained rate means the heal is failing for rows with live blobs and publish-pipeline regression is likely. |
+| `[capsule-poster] scene-parse-failed for share=<code>` | `functions/api/capsules/[code]/preview/poster.ts` | `preview_scene_v1` was non-NULL but `parsePreviewSceneV1` returned null (malformed JSON, wrong `v`, non-finite coords, etc.). Route falls through to `rebakeSceneFromR2`. One-offs are single bad historical rows; sustained volume suggests the writer is emitting bad scenes. |
+| `[account.capsules] bondless-heal-failed: <reason> share=<code>` | `functions/api/account/capsules/index.ts` | Background (`ctx.waitUntil`) heal for a bondless row queued by the account-list endpoint failed. The response is already sent — same bondless data the user saw now; the next page load reflects the healed row once a later heal succeeds. Capped at **3 background heals per account-list request** to bound R2 traffic when a user's feed contains many legacy rows from the same launch period. |
+| `[preview-heal] write-failed: <msg>` | `src/share/capsule-preview-heal.ts` | D1 UPDATE after a successful in-memory rebake failed. The render/return is already computed from the freshly projected scene, so the current request succeeds; the next request retries the write. Persistent volume = D1 write pressure on `capsule_share.preview_scene_v1`. |
+| `[<tag>] background-rejected: <msg>` | `functions/_lib/wait-until.ts` | Detached promise scheduled via `scheduleBackground` rejected. Current `<tag>` values: `publish` (publish-audit and success-counter writes from `functions/api/capsules/publish.ts`), `account.capsules` (background bondless heals from `functions/api/account/capsules/index.ts`). Systematic volume for one tag = the corresponding background path (audit write / heal / counter) is failing at the edge. Without this wrapper the rejection would vanish into a silent `.catch` — presence of the log is a reliability floor, not itself an incident unless sustained. |
 | `[scene-store] thumb-malformed: <reason>` | `src/share/capsule-preview-scene-store.ts` | Parsed `preview_scene_v1` storage carried an invalid `thumb` field; scene is still returned, thumb is dropped (read path falls back to live sampling). Reasons: `invalid-rev`, `no-atoms`, `atom-not-an-object`, `atom-nonfinite-or-malformed`, `bond-not-an-object`, `bond-nonint-indices`. One-offs are a single bad historical row; a sustained rate means the writer is emitting malformed thumbs and needs investigation. |
-| `[scene-store] thumb-rev-stale: stored=N current=M` | `src/share/capsule-preview-scene-store.ts` | Stored thumb is at an older revision than `CURRENT_THUMB_REV`; read path falls back to live sampling. Size this signal to know whether backfill is lagging — rate should drop to zero after the post-rev-bump backfill completes (see *Rollout procedure for a thumb-algorithm change* below). |
+| `[scene-store] thumb-rev-stale count=<N> stored=<X> current=<Y> — re-bake via backfill to restore full-fidelity bonds` | `src/share/capsule-preview-scene-store.ts` | Stored thumb is at an older revision than `CURRENT_THUMB_REV`; read path falls back to live sampling. **Rate-limited**: `warnStaleRevOnce` emits at milestones (1, 10, 100, 1000, …) per distinct stored rev per worker isolate — one stray row logs once, a stuck backfill over 100k rows also stays readable. `count=N` reads as "Nth time this isolate has seen rev=X"; comparing counts across isolates after a deploy gives the lag shape. Rate should drop to zero once the post-rev-bump backfill completes (see *Rollout procedure for a thumb-algorithm change* below). |
 | `[scene-store] derive-threw: <msg>` | `src/share/capsule-preview-scene-store.ts` | Entry-level catch in `derivePreviewThumbV1`. The account list endpoint no longer 500s on one bad row — it returns `null` and the client renders a placeholder. Persistent volume indicates a projection bug, not a data issue. |
 | `[publish] preview-scene-skipped: <msg>` | `src/share/publish-core.ts` | Publish succeeded but the preview-scene projection failed; row stored with `preview_scene_v1 = NULL`, later backfillable by `scripts/backfill-preview-scenes.ts` or by the poster route's lazy-backfill path. |
 | `[publish] stored-thumb-skipped: <errName>:<msg> atoms=N bonds=M` | `src/share/publish-core.ts` | Narrow catch around the full-atoms thumb builder only. Poster scene still valid, thumb absent — read path falls back to live sampling. Distinct from `preview-scene-skipped` (which indicates the whole scene failed). |
@@ -413,6 +418,45 @@ stored projection; on a cache miss (row has `preview_scene_v1 IS NULL`)
 the route lazy-backfills by fetching the R2 blob, projecting the scene,
 and writing it back to D1.
 
+### Read-time auto-heal for bondless legacy rows
+
+Early publish-time bakes ran a projection-visibility filter and a
+small-cluster bond-skip gate that produced rows with
+`scene.thumb.atoms` populated but both `scene.bonds` and
+`scene.thumb.bonds` empty ("bondless"). Detection is
+`sceneIsBondless(scene)` in `src/share/capsule-preview-heal.ts`. The two
+read paths repair these rows transparently:
+
+- **Poster route (synchronous heal).** On a bondless detection, the
+  poster handler calls `healBondlessRow(env, row)` BEFORE rendering so
+  the served PNG carries bonds. The heal fetches the R2 blob,
+  re-projects via `projectCapsuleToSceneJson`, and
+  `UPDATE capsule_share SET preview_scene_v1 = ? WHERE id = ?` is
+  issued **unconditionally** (not `WHERE preview_scene_v1 IS NULL` — the
+  overwrite is the point). On heal failure the route serves whatever
+  bondless scene was already in D1 and emits `cause:
+  bondless-heal-failed:<reason>` on the `mode:'generated'` success log.
+- **Account API (background heal).** The account-list handler returns
+  the current (possibly bondless) page data immediately, then queues up
+  to **3 heals per request** via `ctx.waitUntil` through the shared
+  `scheduleBackground` wrapper. The next page load reflects the healed
+  row. The cap bounds R2 traffic when a feed has many legacy rows from
+  the same launch period.
+
+Both paths share `rebakeSceneFromR2` in
+`src/share/capsule-preview-heal.ts`. D1 write failures inside the heal
+log as `[preview-heal] write-failed: <msg>` and do NOT flip the heal's
+success flag — the fresh scene is already in memory for the current
+render/return, and the next request retries the write. Failure reason
+values are `blob-missing`, `blob-read-failed:<msg>`,
+`capsule-parse-failed:<msg>`, `no-dense-frames`, `scene-empty`.
+
+The explicit read-time heal is **independent of the backfill
+scripts**. It repairs rows as users encounter them; the admin backfill
+(below) repairs rows proactively. Both converge on the same
+projection, so the order doesn't matter and neither is required to
+run for the system to keep healing itself.
+
 ### Response contract & cache tiers
 
 | `mode` | Status | Body | `Cache-Control` | Notes |
@@ -500,6 +544,18 @@ warm-up.
   `dist/` by Vite). If this asset is missing from `dist/`, the
   terminal-error path emits `fallback-fetch-failed:` and serves the
   1×1 safety net.
+- **Bond rule source.** Publish-time bond derivation uses
+  `buildBondTopologyFromAtoms` from `src/topology/` — the same rule
+  Lab and Watch use for the live scene. For carbon-only single-cutoff
+  scenes the output is byte-identical to the previous
+  `deriveBondPairs`, so `CURRENT_THUMB_REV` did NOT bump on the
+  switch. At read time the bonded thumb path is configured with
+  `minVisibleBondViewbox: Number.NEGATIVE_INFINITY`,
+  `relaxedVisibleBondViewbox: Number.NEGATIVE_INFINITY`, and
+  `bondsAwareThreshold: 0` so every bond produced by the topology
+  builder reaches the renderer — the projection-occlusion filter and
+  the `n >= 14` atom-count gate are both bypassed now that the heal +
+  backfill paths reliably produce full bond sets.
 - **D1 migration `0009_capsule_preview_scene_v1.sql`** — adds a nullable
   `capsule_share.preview_scene_v1 TEXT` column. Additive; NULL for pre-V2
   rows (which the poster route lazy-backfills on first miss). Stored
@@ -1388,6 +1444,13 @@ Treated as a deployment-confidence layer — not wired to CI by default
 (it would require wrangler in every CI runner). Run it locally before
 tagging a release that touches account/, functions/api/account/*, or
 functions/api/privacy-request.ts.
+
+`playwright.config.ts` sets `retries: 1`, so a flake-retry is tried
+once before a spec is marked failing. An operator investigating a
+"transient but reproducible" Playwright failure from CI logs should
+confirm the run exhausted the retry before treating it as flake —
+the second attempt's output is what carries the actionable failure
+trace.
 
 Separately, internal build-gate unit tests (run as part of
 `npm run test:unit` on every CI job) prevent dev-only surfaces from

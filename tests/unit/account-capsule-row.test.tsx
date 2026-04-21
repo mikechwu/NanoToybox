@@ -109,43 +109,63 @@ describe('CapsulePreviewThumb — atoms-only payload', () => {
     }
   });
 
-  it('quantizes radius consistently — same-bucket pairs render at the same r, cross-bucket pairs render at different r', () => {
-    // Radius quantization stays at 1/100 viewBox. Under rev 11's
-    // per-circle rendering we assert at the circle level: two
-    // atoms with stored r values that round to the SAME bucket
-    // must produce <circle r="…"> with identical values; pairs
-    // across a bucket boundary must differ.
-    // Use 9 atoms so atoms-only density floor (5.0 at n=9) is
-    // below the fixture r values (7.3 viewBox) — the floor otherwise
-    // clamps both atoms to the same rendered size and the bucket
-    // distinction is lost at the contract boundary we're testing.
-    const sameBucket: PreviewThumbV1 = {
+  it('renders perspective cue as a clamped ±15% multiplier around the bond-length-derived base', () => {
+    // Stored `a.r` is used only as a RELATIVE perspective-cue
+    // multiplier (poster + thumb unified). Two atoms with stored
+    // values close to the median round to the same rendered
+    // radius; atoms at opposite ends of the clamp (0.85×, 1.15×)
+    // render at measurably different sizes.
+    //
+    // Uniform-r set: all atoms at the same `r` → identical
+    // rendered radii (sNorm = 1 for every atom).
+    const uniform: PreviewThumbV1 = {
       v: 1,
       atoms: Array.from({ length: 9 }, (_, i) => ({
         x: 0.1 + (i / 8) * 0.8,
         y: 0.5,
-        r: i % 2 === 0 ? 0.07320 : 0.07323,
+        r: 0.04,
         c: '#222',
       })),
     };
-    const { container: cSame } = render(<CapsulePreviewThumb thumb={sameBucket} />);
-    const rsSame = Array.from(cSame.querySelectorAll('circle[data-role="atom"]'))
+    const { container: cUni } = render(<CapsulePreviewThumb thumb={uniform} />);
+    const rsUni = Array.from(cUni.querySelectorAll('circle[data-role="atom"]'))
       .map((c) => c.getAttribute('r'));
-    expect(new Set(rsSame).size).toBe(1);
+    expect(new Set(rsUni).size).toBe(1);
 
-    const crossBucket: PreviewThumbV1 = {
+    // Spread-r set: stored `r` straddles the median at both ends
+    // of the clamp. 5 atoms at 0.03 (below median → clamp 0.85×),
+    // one at 0.06 (at median → 1×), 5 at 0.10 (above → 1.15×).
+    const spread: PreviewThumbV1 = {
       v: 1,
-      atoms: Array.from({ length: 9 }, (_, i) => ({
-        x: 0.1 + (i / 8) * 0.8,
-        y: 0.5,
-        r: i % 2 === 0 ? 0.07320 : 0.07330,
-        c: '#222',
-      })),
+      atoms: [
+        ...Array.from({ length: 5 }, (_, i) => ({
+          x: 0.1 + (i / 10) * 0.8,
+          y: 0.4,
+          r: 0.03,
+          c: '#222',
+        })),
+        { x: 0.5, y: 0.5, r: 0.06, c: '#222' },
+        ...Array.from({ length: 5 }, (_, i) => ({
+          x: 0.1 + (i / 10) * 0.8,
+          y: 0.6,
+          r: 0.10,
+          c: '#222',
+        })),
+      ],
     };
-    const { container: cCross } = render(<CapsulePreviewThumb thumb={crossBucket} />);
-    const rsCross = Array.from(cCross.querySelectorAll('circle[data-role="atom"]'))
-      .map((c) => c.getAttribute('r'));
-    expect(new Set(rsCross).size).toBe(2);
+    const { container: cSpread } = render(<CapsulePreviewThumb thumb={spread} />);
+    const rsSpread = Array.from(cSpread.querySelectorAll('circle[data-role="atom"]'))
+      .map((c) => c.getAttribute('r'))
+      .filter((r): r is string => r != null);
+    // Three distinct rendered radii — both clamp extremes plus the
+    // 1× unclamped mid value.
+    expect(new Set(rsSpread).size).toBe(3);
+    // Ratio between the clamp extremes should match ±15% range:
+    // max/min = 1.15/0.85 ≈ 1.35.
+    const nums = [...new Set(rsSpread)].map(Number).sort((a, b) => a - b);
+    const ratio = nums[nums.length - 1] / nums[0];
+    expect(ratio).toBeGreaterThan(1.25);
+    expect(ratio).toBeLessThan(1.45);
   });
 
   it('renders atoms at each atom\'s stored per-atom radius (perspective bake)', () => {
@@ -177,41 +197,51 @@ describe('CapsulePreviewThumb — atoms-only payload', () => {
 });
 
 describe('CapsulePreviewThumb — bonds-aware payload', () => {
-  it('renders each bond as a <g data-role="bond-pair"> wrapping border+fill <line> stack', () => {
+  it('renders each bond as a <g data-role="bond-pair"> wrapping edge+body+highlight cylinder layers', () => {
     const thumb = thumbWithBonds(6, 4);
     const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
-    const borderLines = container.querySelectorAll('line[data-role="bond-border"]');
-    const fillLines = container.querySelectorAll('line[data-role="bond-fill"]');
-    expect(borderLines.length).toBe(4);
-    expect(fillLines.length).toBe(4);
+    const edgeLines = container.querySelectorAll('line[data-role="bond-edge"]');
+    const bodyLines = container.querySelectorAll('line[data-role="bond-body"]');
+    const highlightLines = container.querySelectorAll('line[data-role="bond-highlight"]');
+    expect(edgeLines.length).toBe(4);
+    expect(bodyLines.length).toBe(4);
+    expect(highlightLines.length).toBe(4);
     expect(readBondCount(container)).toBe(4);
-    // Each bond emits a <g> wrapper with border first, fill second.
+    // Each bond emits a <g> wrapper with edge, body, highlight in
+    // that paint order (widest darkest at the bottom of the stack
+    // so the highlight reads as a spec on top of a lit cylinder).
     const bondPairs = container.querySelectorAll('g[data-role="bond-pair"]');
     expect(bondPairs.length).toBe(4);
     for (const g of Array.from(bondPairs)) {
       const lines = g.querySelectorAll('line');
-      expect(lines.length).toBe(2);
-      expect(lines[0].getAttribute('data-role')).toBe('bond-border');
-      expect(lines[1].getAttribute('data-role')).toBe('bond-fill');
+      expect(lines.length).toBe(3);
+      expect(lines[0].getAttribute('data-role')).toBe('bond-edge');
+      expect(lines[1].getAttribute('data-role')).toBe('bond-body');
+      expect(lines[2].getAttribute('data-role')).toBe('bond-highlight');
     }
-    const [firstBorder] = Array.from(borderLines);
-    const [firstFill] = Array.from(fillLines);
-    expect(firstFill.getAttribute('stroke')).toMatch(/^#ffffff$/i);
-    expect(firstBorder.getAttribute('stroke')).toMatch(/^#000000$/i);
-    const borderW = Number(firstBorder.getAttribute('stroke-width'));
-    const fillW = Number(firstFill.getAttribute('stroke-width'));
-    expect(borderW).toBeGreaterThan(fillW);
+    // Widths decrease edge → body → highlight (widest cylinder
+    // silhouette at the bottom of the stack, thin spec on top).
+    const [e0] = Array.from(edgeLines);
+    const [b0] = Array.from(bodyLines);
+    const [h0] = Array.from(highlightLines);
+    const edgeW = Number(e0.getAttribute('stroke-width'));
+    const bodyW = Number(b0.getAttribute('stroke-width'));
+    const highlightW = Number(h0.getAttribute('stroke-width'));
+    expect(edgeW).toBeGreaterThan(bodyW);
+    expect(bodyW).toBeGreaterThan(highlightW);
   });
 
   it('DOM cost scales O(atoms + bonds) under depth-sorted paint order', () => {
-    // Rev 13: atoms and bonds interleave in a single depth-sorted
-    // paint list. Each bond emits <g> + 2 <line>. For 24 atoms +
-    // 24 bonds that's ~103 elements total; bound at 120 for
-    // headroom and at ≥24 to assert at least one per atom.
+    // Atoms and bonds interleave in a single depth-sorted paint
+    // list. Each bond emits <g> + 3 <line> (cylinder edge/body/
+    // highlight stack). For 24 atoms + 24 bonds that's ~128
+    // elements including svg/defs/gradient/rect wrappers; bound
+    // at 150 for headroom and at ≥24 to assert at least one per
+    // atom.
     const thumb = thumbWithBonds(24, 24);
     const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
     const total = container.querySelectorAll('*').length;
-    expect(total).toBeLessThanOrEqual(120);
+    expect(total).toBeLessThanOrEqual(150);
     expect(total).toBeGreaterThanOrEqual(24);
   });
 

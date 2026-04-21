@@ -45,12 +45,21 @@ import { authenticateRequest } from '../../../auth-middleware';
 import { noCacheHeaders, noCacheJson } from '../../../http-cache';
 import { b64urlEncode, b64urlDecode } from '../../../../src/share/b64url';
 import { errorMessage } from '../../../../src/share/error-message';
-import type { PreviewThumbV1 } from '../../../../src/share/capsule-preview-scene-store';
+import {
+  parsePreviewSceneV1,
+  type PreviewThumbV1,
+} from '../../../../src/share/capsule-preview-scene-store';
 import { deriveAccountThumb } from '../../../../src/share/capsule-preview-account-derive';
+import {
+  healBondlessRow,
+  sceneIsBondless,
+} from '../../../../src/share/capsule-preview-heal';
+import { scheduleBackground } from '../../../_lib/wait-until';
 
 const PAGE_SIZE = 50;
 
 interface CapsuleRow {
+  id: number;
   share_code: string;
   created_at: string;
   size_bytes: number;
@@ -61,6 +70,7 @@ interface CapsuleRow {
   status: string;
   preview_status: string;
   preview_scene_v1: string | null;
+  object_key: string | null;
 }
 
 export interface AccountCapsuleSummary {
@@ -117,8 +127,9 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   // Keyset seek: `(created_at, share_code) < (?, ?)` for DESC ordering.
   const stmt = cursor
     ? context.env.DB.prepare(
-        `SELECT share_code, created_at, size_bytes, frame_count,
-                atom_count, title, kind, status, preview_status, preview_scene_v1
+        `SELECT id, share_code, created_at, size_bytes, frame_count,
+                atom_count, title, kind, status, preview_status,
+                preview_scene_v1, object_key
            FROM capsule_share
           WHERE owner_user_id = ?
             AND status != 'deleted'
@@ -127,8 +138,9 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
           LIMIT ?`,
       ).bind(userId, cursor.createdAt, cursor.createdAt, cursor.shareCode, PAGE_SIZE + 1)
     : context.env.DB.prepare(
-        `SELECT share_code, created_at, size_bytes, frame_count,
-                atom_count, title, kind, status, preview_status, preview_scene_v1
+        `SELECT id, share_code, created_at, size_bytes, frame_count,
+                atom_count, title, kind, status, preview_status,
+                preview_scene_v1, object_key
            FROM capsule_share
           WHERE owner_user_id = ?
             AND status != 'deleted'
@@ -156,6 +168,34 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     // audit and production cannot drift on the stale-row fallback path.
     previewThumb: deriveAccountThumb(r.preview_scene_v1),
   }));
+
+  // Background heal for legacy rows with atoms-only stored scenes.
+  // `waitUntil` runs after the response is sent — the user sees the
+  // (possibly bondless) current data now, and the row is repaired
+  // before the next page load. Capped at 3 rebakes per request to
+  // keep R2 traffic bounded when a user's feed contains many
+  // broken rows from the same launch period.
+  const HEAL_CAP_PER_REQUEST = 3;
+  let healStarted = 0;
+  for (const r of page) {
+    if (healStarted >= HEAL_CAP_PER_REQUEST) break;
+    if (!r.object_key || !r.preview_scene_v1) continue;
+    const scene = parsePreviewSceneV1(r.preview_scene_v1);
+    if (!scene || !sceneIsBondless(scene)) continue;
+    healStarted++;
+    scheduleBackground(
+      context,
+      healBondlessRow(context.env, { id: r.id, object_key: r.object_key })
+        .then((result) => {
+          if (!result.ok) {
+            console.warn(
+              `[account.capsules] bondless-heal-failed: ${result.reason} share=${r.share_code}`,
+            );
+          }
+        }),
+      'account.capsules',
+    );
+  }
 
   return noCacheJson({
     capsules,

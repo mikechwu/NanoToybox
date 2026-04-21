@@ -18,6 +18,7 @@
 
 import type { Env } from '../../env';
 import { authenticateRequest } from '../../auth-middleware';
+import { scheduleBackground } from '../../_lib/wait-until';
 import {
   preparePublishRecord,
   persistRecord,
@@ -327,16 +328,18 @@ function audit(
   );
 }
 
-/** Safe wrapper: some minimal test contexts omit waitUntil. Fall back to
- *  a detached catch so fire-and-forget still works. */
+/** Thin rename over the shared {@link scheduleBackground} helper so
+ *  the `publish.ts` call sites keep their existing name. The helper
+ *  handles the `waitUntil`-absent fallback + attaches a logging
+ *  `.catch` so systematic audit-write failures are visible in the
+ *  worker log. */
 function waitUntil(
   context: Parameters<typeof onRequestPost>[0],
   promise: Promise<unknown>,
 ): void {
-  const ctx = context as unknown as { waitUntil?: (p: Promise<unknown>) => void };
-  if (typeof ctx.waitUntil === 'function') {
-    ctx.waitUntil(promise);
-  } else {
-    promise.catch(() => {});
-  }
+  scheduleBackground(
+    context as unknown as { waitUntil?: (p: Promise<unknown>) => void },
+    promise,
+    'publish',
+  );
 }

@@ -138,6 +138,15 @@ export interface PreviewStoredThumbV1 {
  *        ignore `preserveAspectRatio` on outer SVG and stretch
  *        content to the element box — previously a square C60 got
  *        rasterized as a fat 1200×630 ellipse.
+ *   (Note: publish-time `deriveBondPairs` was replaced by the
+ *    shared lab/watch `buildBondTopologyFromAtoms` builder at this
+ *    point. For carbon-only single-cutoff scenes the outputs are
+ *    byte-identical, so NO rev bump — existing rev-15 thumbs stay
+ *    valid. The 2D-only read-path bond fallback was also removed,
+ *    and the poster gained a `thumbIsFresh` check that falls back
+ *    to the 32-atom `scene.bonds` when a thumb lacks bonds —
+ *    behavior changes observable only for legacy rows where the
+ *    old bake had already emitted atoms-only thumbs.)
  *
  *  Rows with `rev < CURRENT_THUMB_REV` are re-baked by the backfill
  *  scripts. */
@@ -582,6 +591,27 @@ export function derivePreviewThumbV1(
   }
 }
 
+/** Stale-rev warning with rate-limited escalation. One log line
+ *  per distinct stored rev per worker isolate, plus order-of-
+ *  magnitude follow-ups (at counts 10, 100, 1000, ...) so ops
+ *  can tell "one unlucky row" from "backfill is stuck on 100k
+ *  rows" without the log flooding every read. */
+const staleRevCounts = new Map<number, number>();
+function warnStaleRevOnce(storedRev: number): void {
+  const prior = staleRevCounts.get(storedRev) ?? 0;
+  const next = prior + 1;
+  staleRevCounts.set(storedRev, next);
+  // Log at 1, 10, 100, 1000, ... to keep observability proportional
+  // to scale without flooding. Powers of 10 keep the signal readable.
+  const isMilestone = next === 1
+    || (next >= 10 && Math.log10(next) % 1 === 0);
+  if (!isMilestone) return;
+  console.warn(
+    `[scene-store] thumb-rev-stale count=${next} stored=${storedRev} `
+      + `current=${CURRENT_THUMB_REV} — re-bake via backfill to restore full-fidelity bonds`,
+  );
+}
+
 function deriveThumbImpl(
   raw: string | null | undefined,
   options: Parameters<typeof derivePreviewThumbV1>[1] = {},
@@ -616,14 +646,22 @@ function deriveThumbImpl(
         v: PREVIEW_SCENE_SCHEMA_VERSION,
         atoms: scene.thumb.atoms.slice(),
       };
+      // Bonds are only kept when they were physically derived in
+      // 3D at publish time (`buildBondTopologyFromAtoms` on the
+      // unprojected scene). Legacy rows where the old bake dropped
+      // bonds render bondless until re-baked — the backfill
+      // endpoint (`/api/admin/backfill-preview-scenes`) or the
+      // matching npm scripts promote them onto the current rev.
+      // 2D-only bond inference was tried and produced artifact-
+      // heavy wireframes (line-of-sight overlap pairs misread as
+      // bonds); dropped in favor of the "no bonds unless verified"
+      // rule.
       if (scene.thumb.bonds && scene.thumb.bonds.length > 0) {
         out.bonds = scene.thumb.bonds.slice();
       }
       return out;
     }
-    console.warn(
-      `[scene-store] thumb-rev-stale: stored=${scene.thumb.rev} current=${CURRENT_THUMB_REV}`,
-    );
+    warnStaleRevOnce(scene.thumb.rev);
   }
 
   const storageHasBonds = !!(scene.bonds && scene.bonds.length > 0);
@@ -834,6 +872,13 @@ export function buildStoredThumbFromFullScene(
     minVisibleBondViewbox?: number;
     relaxedVisibleBondViewbox?: number;
     minAcceptableBonds?: number;
+    /** Minimum atom count at which bonded-mode baking is attempted.
+     *  Defaults to {@link BONDS_AWARE_SOURCE_THRESHOLD} (14) — a
+     *  legacy floor from the 40 px thumb era where 3–5 atoms +
+     *  sub-pixel bonds rendered as dots. Pass `0` when the caller
+     *  knows the downstream render surface can benefit from bonds
+     *  on small clusters too (96 px thumb, 600 px hero poster). */
+    bondsAwareThreshold?: number;
   } = {},
 ): PreviewStoredThumbV1 | null {
   if (fullProjectedAtoms.length === 0) return null;
@@ -844,9 +889,10 @@ export function buildStoredThumbFromFullScene(
   const strictThreshold = options.minVisibleBondViewbox ?? MIN_VISIBLE_BOND_VIEWBOX;
   const relaxedThreshold = options.relaxedVisibleBondViewbox ?? RELAXED_VISIBLE_BOND_VIEWBOX;
   const minAcceptable = options.minAcceptableBonds ?? MIN_ACCEPTABLE_BONDS;
+  const bondsThreshold = options.bondsAwareThreshold ?? BONDS_AWARE_SOURCE_THRESHOLD;
 
   const wantBonds = fullBonds.length > 0
-    && fullProjectedAtoms.length >= BONDS_AWARE_SOURCE_THRESHOLD;
+    && fullProjectedAtoms.length >= bondsThreshold;
 
   if (!wantBonds) {
     return {

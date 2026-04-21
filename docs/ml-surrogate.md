@@ -64,11 +64,15 @@ Total: ~800 frames across equilibrium, perturbation (0.02–0.10 Å), thermal (5
 
 ```
 ml/
-├── descriptors.py      # v1 (12D) — historical
-├── descriptors_v2.py   # v2 (36D) — current
+├── descriptors.py      # v1 (12D; 8 radial + 4 angular) — historical
+├── descriptors_v2.py   # v2 (36D; 12 radial + 24 angular) — current
 ├── train_pilot.py      # v1 training
 ├── train_v2.py         # v2 training
 ├── rollout_test.py     # MD rollout with ML forces
 ├── diagnose_c60.py     # C60 failure analysis
-└── models/             # Saved sklearn models (.pkl)
+└── models/
+    ├── pilot_mlp.pkl   # v1 MLP(64,64) + 12D desc
+    └── v2_mlp.pkl      # v2 MLP(128,128,64) + 36D desc
 ```
+
+Per-dataset files under `data/<case>/`: `positions.npy`, `forces_total.npy`, `forces_2body.npy`, `forces_residual.npy`, `energies.npy`, `energies_2body.npy`, `trajectory.xyz`, `metadata.json`.

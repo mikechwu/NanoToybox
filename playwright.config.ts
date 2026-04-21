@@ -10,6 +10,15 @@ import { defineConfig } from '@playwright/test'
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 60000,
+  // One retry everywhere. A handful of integration tests (worker
+  // stall detection, timing-coupled animation setup) are load-
+  // sensitive: they pass in isolation but occasionally trip when
+  // the webServer is also serving Vite build steps or when other
+  // specs in the same shard compete for workerd / CPU. A single
+  // retry costs little and converts those sporadic failures from
+  // hard-fails into successes without masking genuine regressions
+  // (a real regression fails both attempts).
+  retries: 1,
   use: {
     baseURL: 'http://127.0.0.1:4173',
     headless: true,

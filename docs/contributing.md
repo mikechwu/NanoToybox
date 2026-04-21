@@ -108,7 +108,7 @@ Shared TypeScript and CSS modules live in `src/` and are imported by both `lab/`
 | `src/topology/` | Bond rules (`bond-rules.ts`), topology builders (`build-bond-topology.ts`: naive + accelerated), policy resolution (`bond-policy-resolver.ts`) |
 | `src/config/` | Playback speed constants, viewer defaults (base sim rate, etc.), bond-policy defaults (`bond-defaults.ts`) |
 | `src/history/` | History file v1 types/validation (including capsule types), connected components, bonded-group projection/utils, physical unit constants (`units.ts`: `FS_PER_PS`, `IMPLAUSIBLE_VELOCITY_A_PER_FS`), bond-policy wire types (`bond-policy-v1.ts`) |
-| `src/share/` | Publish/share backend primitives (`publish-core.ts`, `share-code.ts`, `share-record.ts`, `rate-limit.ts`, `audit.ts`, `capsule-delete.ts`, `d1-types.ts`, `constants.ts`, `b64url.ts`, `error-message.ts`), and the V2 capsule-preview pipeline split across `capsule-preview.ts` (slim: sanitizer + `TEMPLATE_VERSION = 2` + FNV helpers) plus per-concern modules `capsule-preview-{frame,colors,camera,project,sampling,scene-store,thumb-render,denylist}.ts`. `capsule-preview-thumb-render.ts` is the single source of truth for thumb render constants (`BONDED_ATOM_RADIUS`, `BOND_STROKE_WIDTH`, `MIN_VISIBLE_BOND_VIEWBOX`, …) — both `account/main.tsx` (the DOM/SVG renderer) and `capsule-preview-scene-store.ts` (the derivation path) import from here; do not duplicate these numbers anywhere else |
+| `src/share/` | Publish/share backend primitives (`publish-core.ts`, `share-code.ts`, `share-record.ts`, `rate-limit.ts`, `audit.ts`, `capsule-delete.ts`, `d1-types.ts`, `constants.ts`, `b64url.ts`, `error-message.ts`), and the V2 capsule-preview pipeline split across `capsule-preview.ts` (slim: sanitizer + `TEMPLATE_VERSION = 2` + FNV helpers) plus per-concern modules `capsule-preview-{frame,colors,camera,project,sampling,scene-store,thumb-render,thumb-size,denylist,bond-scale,heal,cluster-select,account-derive,sketch,sketch-perspective}.ts` and the current-baseline renderers `capsule-preview-current-{poster,thumb}.tsx`. `capsule-preview-thumb-render.ts` is the single source of truth for thumb render constants (`BONDED_ATOM_RADIUS`, `BOND_STROKE_WIDTH`, `MIN_VISIBLE_BOND_VIEWBOX`, …) — both `account/main.tsx` (the DOM/SVG renderer) and `capsule-preview-scene-store.ts` (the derivation path) import from here; do not duplicate these numbers anywhere else. `capsule-preview-bond-scale.ts` and `capsule-preview-heal.ts` are pure, hooks-free utility modules — treat them as shared building blocks, not app-scoped helpers |
 | `src/types/` | Worker protocol types |
 
 ### CSS Architecture
@@ -602,6 +602,7 @@ Use these modules directly; do not inline equivalent logic:
 | `src/share/error-message.ts` | `errorMessage(unknown): string` | Replaces inline `err instanceof Error ? err.message : String(err)` patterns. Use in catch blocks that render a user-visible message |
 | `functions/http-cache.ts` | `NO_CACHE_HEADERS`, `noCacheHeaders()`, `noCacheJson(body, init?)` | **Every** account/privacy endpoint response. Sets `Cache-Control: no-store, private`, `Pragma: no-cache`, `Vary: Cookie` in one place |
 | `functions/signed-intents.ts` | `createSignedIntent`, `verifySignedIntent` | Any new HMAC-signed CSRF/intent flow (account-delete confirmation, privacy request submission, etc.). Do not hand-roll HMAC with `SESSION_SECRET` |
+| `functions/_lib/wait-until.ts` | `waitUntil()` helper | Pure, hooks-free utility for deferring work past the Pages Function response (via the runtime `ExecutionContext.waitUntil` when available, with a no-throw fallback). Use whenever a Function wants to schedule post-response side effects without hand-rolling the runtime detection |
 
 #### Policy text source-of-truth
 
@@ -764,9 +765,22 @@ collapse them back into a monolith, and do not reintroduce a
 - `src/share/capsule-preview-camera.ts` — camera framing math
 - `src/share/capsule-preview-project.ts` — 3D → 2D projection
 - `src/share/capsule-preview-sampling.ts` — atom sampling (preserves storage-array references and order)
-- `src/share/capsule-preview-scene-store.ts` — scene derivation, `CURRENT_THUMB_REV`, `ThumbAtomSampler`
+- `src/share/capsule-preview-cluster-select.ts` — largest-bonded-cluster subject selection (D138)
+- `src/share/capsule-preview-bond-scale.ts` — pure 3D-bond-locked sizing math (hooks-free)
+- `src/share/capsule-preview-heal.ts` — pure geometry-heal helpers (hooks-free)
+- `src/share/capsule-preview-scene-store.ts` — scene derivation, `CURRENT_THUMB_REV` (currently `15`), `ThumbAtomSampler`
 - `src/share/capsule-preview-thumb-render.ts` — thumb render constants (single source of truth)
+- `src/share/capsule-preview-thumb-size.ts` — thumb canvas/viewport sizing
+- `src/share/capsule-preview-sketch.ts` / `capsule-preview-sketch-perspective.ts` — pinhole-camera sketch renderers
+- `src/share/capsule-preview-account-derive.ts` — account-page derivation entrypoint
 - `src/share/capsule-preview-denylist.ts` — denylist / sanitization gate
+- `src/share/capsule-preview-current-poster.tsx` / `capsule-preview-current-thumb.tsx` — shared current-baseline renderers (D136)
+
+Publish-time bond topology uses the **same** rule as lab/watch physics
+and the history loader: `publish-core.ts` delegates to
+`buildBondTopologyFromAtoms` from `src/topology/`. Do not re-implement
+bond detection inside the capsule-preview pipeline — preview, physics,
+and loader all share one rule.
 
 Load-bearing contracts when touching this pipeline:
 
@@ -780,11 +794,15 @@ Load-bearing contracts when touching this pipeline:
    references and return items in storage-array order.** Any
    clone/normalize/filter that changes identity or ordering breaks
    bond-index translation and will silently corrupt thumbs.
-3. **Bump `CURRENT_THUMB_REV` on any thumb-pipeline change.** It lives
-   in `src/share/capsule-preview-scene-store.ts` and gates the backfill
-   scripts: rows with `rev < CURRENT_THUMB_REV` get re-baked. If the
-   algorithm changes and you forget to bump, every stored thumb in the
-   wild becomes stale without any rebake trigger.
+3. **Bump `CURRENT_THUMB_REV` on any thumb-pipeline change that alters
+   output.** It lives in `src/share/capsule-preview-scene-store.ts`
+   (currently `15`) and gates the backfill scripts: rows with
+   `rev < CURRENT_THUMB_REV` get re-baked. If the algorithm changes and
+   you forget to bump, every stored thumb in the wild becomes stale
+   without any rebake trigger. **Same-output refactors** (e.g., a
+   renderer/sizing split that produces byte-identical thumbs) do NOT
+   require a bump — only changes that would differ from a fresh
+   re-bake of existing rows.
 4. **Rebake after a bump:**
    - Local dev: `npm run capsule-preview:backfill:local` (driven by
      `scripts/backfill-local.mjs`).
@@ -916,7 +934,7 @@ For the full test-suite runbook (lane semantics, per-section test catalog, flake
 
 - `npm run typecheck` — runs frontend + functions + cron tsconfigs in one command. Prefer this over the granular `typecheck:frontend` / `typecheck:functions` / `typecheck:cron` variants for CI. The frontend config (`tsconfig.json`) covers `lab/js/**`, `watch/js/**`, `account/**`, and `src/**` (including `.tsx`); the functions config (`tsconfig.functions.json`) covers `functions/**/*.{ts,tsx}`, `src/share/**`, and the listed backend-handler tests, with `jsx: "react-jsx"` and `resolveJsonModule: true` so capsule-preview `.tsx` renderers and `__fixtures__/*.json` typecheck without per-file changes.
 - `npm run test:unit` (vitest) — includes new endpoint handler tests and auth UX tests, plus the capsule-preview unit suite (`tests/unit/capsule-preview*.test.ts`, `poster-endpoint.test.ts`, `share-page-og.test.ts`, `account-capsule-row.test.tsx`).
-- `npm run test:e2e` (playwright) — the share-link flow uses `page.route()` mocking, since Vite preview does not run Pages Functions
+- `npm run test:e2e` (playwright) — the share-link flow uses `page.route()` mocking, since Vite preview does not run Pages Functions. `playwright.config.ts` sets `retries: 1` in both local and CI runs: a handful of timing-coupled specs (worker stall detection, animation setup) occasionally trip under load, and a single retry converts those flakes into passes without masking genuine regressions (a real bug fails both attempts). If you see a single retry in the CI log, that is expected — investigate only if the second attempt also fails.
 - `npm run test:e2e:pages-dev` — required for the capsule-preview poster smoke (`tests/e2e/poster-smoke.spec.ts`), which deterministically seeds a fixture via `/api/admin/seed` and asserts a real Satori-rendered 1200×630 PNG comes back from `/api/capsules/:code/preview/poster`.
 - `npm run lint:dock-contract` — unchanged from prior phases
 

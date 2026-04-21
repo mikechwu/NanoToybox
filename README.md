@@ -54,7 +54,7 @@ Atom Dojo's share-link layer runs entirely on the **Cloudflare serverless stack*
 
 - **Pages Functions + D1** — Cloudflare's serverless SQL database (SQLite-compatible) handles OAuth (Google, GitHub), hardened `__Host-` session cookies, CSRF nonces, cursor-paginated account APIs, audit logs, and per-user + per-IP rate limits.
 - **R2 object storage** — stores capsule bodies, addressed by 12-character Crockford Base32 share codes (e.g. `7M4K-2D8Q-9T1V`). R2's zero-egress pricing means bandwidth costs don't scale with traffic — only per-operation and storage fees apply.
-- **Pre-baked OG posters** — `GET /api/capsules/:code/preview/poster` returns a 1200×630 PNG for any accessible capsule, rendered through `@cloudflare/pages-plugin-vercel-og` from the frame-projected scene stored in `preview_scene_v1`. The dynamic branch lazy-backfills any null scene on first request and serves with an ETag bound to the scene hash; `public/og-fallback.png` is the last-resort image. Production rebakes run through `scripts/backfill-preview-scenes.ts` (local dev uses `scripts/backfill-local.mjs`).
+- **Pre-baked OG posters** — `GET /api/capsules/:code/preview/poster` returns a 1200×630 PNG for any accessible capsule, rendered through `@cloudflare/pages-plugin-vercel-og` from the frame-projected scene stored in `preview_scene_v1`. The dynamic branch lazy-backfills any null scene on first request and serves with an ETag bound to the scene hash; `public/og-fallback.png` is the last-resort image. Bulk production rebakes run via `npm run capsule-preview:backfill:prod` (a thin wrapper that POSTs to the admin-gated `/api/admin/backfill-preview-scenes` endpoint, where the `scripts/backfill-preview-scenes.ts` library executes inside the Pages-Functions runtime with live D1 + R2 bindings); local dev uses `npm run capsule-preview:backfill:local`.
 - **Transactional hydration** — the Watch→Lab handoff coordinates the physics engine, worker, renderer, scene/store state, and the metadata/identity/appearance layers, with rollback to the pre-hydrate scene on any failure.
 - **Privacy and safety** — server-enforced 13+ age gate on sign-in and publish, CSRF-protected privacy-request form with deduplication and 180-day retention, and a companion cron Worker that expires sessions, sweeps orphaned R2 objects, and runs audit-retention passes.
 
@@ -114,7 +114,7 @@ The full-stack flow needs OAuth credentials and a `SESSION_SECRET` in `.dev.vars
 ```bash
 npm run typecheck             # TypeScript across frontend, functions, cron worker
 npm run test:unit             # Vitest unit tests
-npm run test:e2e              # Playwright against the Vite dev server
+npm run test:e2e              # Playwright against `vite preview` (static build)
 npm run test:e2e:pages-dev    # Playwright against `wrangler pages dev` (covers Functions)
 ```
 

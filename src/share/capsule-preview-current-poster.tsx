@@ -42,7 +42,27 @@
  */
 
 import type { ReactElement } from 'react';
-import type { PreviewSceneV1, PreviewSceneAtomV1, PreviewSceneBondV1 } from './capsule-preview-scene-store';
+import {
+  CURRENT_THUMB_REV,
+  type PreviewSceneV1,
+  type PreviewSceneAtomV1,
+  type PreviewSceneBondV1,
+} from './capsule-preview-scene-store';
+import {
+  K_ATOM,
+  K_BOND_FILL,
+  K_BOND_BORDER_DELTA,
+  BOND_CYL_EDGE,
+  BOND_CYL_BODY,
+  BOND_CYL_HIGHLIGHT,
+  BOND_CYL_EDGE_MULT,
+  BOND_CYL_BODY_MULT,
+  BOND_CYL_HIGHLIGHT_MULT,
+  medianBondLengthVb,
+  medianNearestNeighborVb,
+  medianStoredR,
+  perspectiveMultiplier,
+} from './capsule-preview-bond-scale';
 
 /** Default output dimensions. The SVG element itself takes these
  *  unless a caller overrides `width` / `height` to fit a larger
@@ -57,21 +77,16 @@ const ATOM_HIGHLIGHT = '#b0b0b0';
 const ATOM_FILL_MID = '#4a4a4a';
 const ATOM_SHADOW = '#1c1c1c';
 const ATOM_STROKE = '#000000';
-const BOND_FILL = '#ffffff';
-const BOND_BORDER = '#000000';
 
-/** Atom base radius (viewBox units) at `s=1` depth before the 0.8×
- *  hero scaling. Defined in viewBox space so the atom size is
- *  independent of the outer SVG element dimensions. */
-const HERO_BASE_ATOM_RADIUS = 3.8;
-const HERO_ATOM_SCALE = 0.8;
-
-/** Bond widths at hero scale, in viewBox units. The outer SVG
- *  scales these proportionally via the viewBox → device
- *  transform, so they stay visually chunky at 1200×630 render
- *  size. */
-const HERO_BOND_FILL_WIDTH = 1.5;
-const HERO_BOND_BORDER_WIDTH = HERO_BOND_FILL_WIDTH + 0.6;
+/** Safety bounds — kept tiny/huge per user spec ("min 1e-5, max
+ *  very large"). They exist only to neutralize pathological inputs
+ *  (NaN positions, zero-extent content) that would otherwise
+ *  produce NaN or Infinity attribute values on the rendered SVG.
+ *  Sizing math + palette + helpers come from
+ *  `./capsule-preview-bond-scale` — single source of truth shared
+ *  with `./capsule-preview-current-thumb`. */
+const MIN_ATOM_RADIUS_VB = 1e-5;
+const MAX_ATOM_RADIUS_VB = 1e6;
 
 export interface CurrentPosterSceneSvgProps {
   scene: PreviewSceneV1;
@@ -131,23 +146,103 @@ export function CurrentPosterSceneSvg({
   // thumb — nonsense bonds get drawn (or silently dropped when the
   // poster index happens to exceed the thumb atom length). Lock
   // both to the same source. (Audit finding #1, rev 16.)
-  const useThumb = !!(scene.thumb?.atoms && scene.thumb.atoms.length > 0);
+  // Trust the stored thumb only when it's AT the current rev AND
+  // carries bonds. A stale or bondless thumb would otherwise
+  // produce a blank poster in bonds-only render mode (a legacy row
+  // might have atoms but no bond list because the old bake's
+  // visibility filter dropped everything for dense 3D clusters).
+  // In those cases fall through to the 32-atom `scene.atoms` +
+  // `scene.bonds` poster scene — same fallback the profile thumb's
+  // `derivePreviewThumbV1` uses on stale rows, so the two surfaces
+  // stay in sync until the backfill catches up.
+  const thumbIsFresh = !!(
+    scene.thumb
+    && scene.thumb.rev >= CURRENT_THUMB_REV
+    && scene.thumb.atoms.length > 0
+    && scene.thumb.bonds
+    && scene.thumb.bonds.length > 0
+  );
   const atomsSource: ReadonlyArray<PreviewSceneAtomV1> =
-    useThumb ? scene.thumb!.atoms : scene.atoms;
+    thumbIsFresh ? scene.thumb!.atoms : scene.atoms;
   const bondsSource: ReadonlyArray<PreviewSceneBondV1> =
-    useThumb ? (scene.thumb!.bonds ?? []) : (scene.bonds ?? []);
+    thumbIsFresh ? scene.thumb!.bonds! : (scene.bonds ?? []);
 
-  // Per-atom radius in VIEWBOX units. Storage `r` is a dimensionless
-  // scale factor (already encodes perspective `s(z)`) — multiply by
-  // the hero base radius + 0.8× scale. Floor at 0.6 viewBox so the
-  // farthest atom never falls below ~1 device pixel when the outer
-  // SVG is rendered at 600-1200 px.
-  const atomRadius = (a: PreviewSceneAtomV1): number => {
-    const scale = Number.isFinite(a.r) && a.r > 0 ? a.r * 100 : HERO_BASE_ATOM_RADIUS;
-    return Math.max(0.6, scale * HERO_ATOM_SCALE);
-  };
+  // ── Phase 1: atom-position bounds (no radius yet) ──
+  let minAx = Infinity, maxAx = -Infinity, minAy = Infinity, maxAy = -Infinity;
+  for (const a of atomsSource) {
+    const cx = a.x * 100;
+    const cy = a.y * 100;
+    if (cx < minAx) minAx = cx;
+    if (cy < minAy) minAy = cy;
+    if (cx > maxAx) maxAx = cx;
+    if (cy > maxAy) maxAy = cy;
+  }
+  if (!Number.isFinite(minAx)) {
+    // Empty scene — fall back to a sane default viewBox.
+    minAx = 0; minAy = 0; maxAx = 100; maxAy = 100;
+  }
+  const contentW = Math.max(1, maxAx - minAx);
+  const contentH = Math.max(1, maxAy - minAy);
 
-  // Build depth-sorted paint list.
+  // ── Phase 2: base atom radius from projected bond length ──
+  // The projected bond length in viewBox units is the inferred
+  // "physical scale" of the scene — short for dense clusters (more
+  // atoms in same viewBox), long for sparse. Atoms and bond widths
+  // both scale proportionally: `k · bondVb`.
+  const bondVb = medianBondLengthVb(atomsSource, bondsSource)
+    || medianNearestNeighborVb(atomsSource);
+  const candidateAtomBase = K_ATOM * bondVb;
+
+  // ── Phase 3: viewBox bounds (content + radius + pad) ──
+  // Pad the content box by the atom radius so circles aren't
+  // clipped at the viewBox edge, plus a 6% visual breathing room.
+  const radiusPad = candidateAtomBase * 1.1;
+  const visualPad = Math.max(contentW, contentH) * 0.06;
+  const pad = Math.max(radiusPad, visualPad);
+  const viewMinX = minAx - pad;
+  const viewMinY = minAy - pad;
+  const viewW = contentW + 2 * pad;
+  const viewH = contentH + 2 * pad;
+
+  // ── Phase 4: SVG physical dims (guards Satori stretching) ──
+  const viewAspect = viewW / viewH;
+  const maxAspect = outerMaxW / outerMaxH;
+  let svgW: number;
+  let svgH: number;
+  if (viewAspect > maxAspect) {
+    svgW = outerMaxW;
+    svgH = outerMaxW / viewAspect;
+  } else {
+    svgH = outerMaxH;
+    svgW = outerMaxH * viewAspect;
+  }
+
+  // ── Phase 5: safety-clamped atom base ──
+  // Only tiny/huge guards against pathological inputs (NaN
+  // positions, zero-extent content). No density-aware floor, no
+  // pixel-aware floor — per the spec, only cluster height drives
+  // size, and the math already yields well-scaled glyphs.
+  const atomBase = Math.min(
+    MAX_ATOM_RADIUS_VB,
+    Math.max(MIN_ATOM_RADIUS_VB, candidateAtomBase),
+  );
+
+  // ── Phase 6: per-atom perspective cue (relative only) ──
+  // Stored `a.r` carries the publish-time `s(z)` perspective
+  // scaling. `perspectiveMultiplier` turns it into a ±15% relative
+  // multiplier around the median — depth cue preserved, absolute
+  // size still controlled by `atomBase`.
+  const rMedian = medianStoredR(atomsSource);
+  const atomRadius = (a: PreviewSceneAtomV1): number =>
+    atomBase * perspectiveMultiplier(a.r, rMedian);
+
+  // Bond cylinder width — the widest stroke (edge layer) uses this
+  // directly; the body + highlight layers are fixed fractions of
+  // it. Proportional to projected bond length so the atom:bond
+  // visual weight stays constant across subjects.
+  const bondBorderWidth = (K_BOND_FILL + K_BOND_BORDER_DELTA) * bondVb;
+
+  // Build depth-sorted paint list. (Rank formula unchanged.)
   const items: PaintItem[] = [];
   atomsSource.forEach((atom, i) => {
     items.push({ kind: 'atom', rank: i, atom, i, r: atomRadius(atom) });
@@ -163,57 +258,6 @@ export function CurrentPosterSceneSvg({
   // Secondary tie-break on insertion index (snapshot determinism
   // across JS engines even though ES2019+ mandates stable sort).
   items.sort((p, q) => (p.rank - q.rank) || (p.i - q.i));
-
-  // Compute atom bounding box (+ atom-radius extent) and pad. The
-  // viewBox MUST cover every painted circle so the outer SVG's
-  // aspect-preserving fit shows the whole molecule — no off-canvas
-  // cropping regardless of the subject's aspect ratio.
-  let minAx = Infinity, maxAx = -Infinity, minAy = Infinity, maxAy = -Infinity;
-  for (const a of atomsSource) {
-    const r = atomRadius(a);
-    const cx = a.x * 100;
-    const cy = a.y * 100;
-    if (cx - r < minAx) minAx = cx - r;
-    if (cy - r < minAy) minAy = cy - r;
-    if (cx + r > maxAx) maxAx = cx + r;
-    if (cy + r > maxAy) maxAy = cy + r;
-  }
-  if (!Number.isFinite(minAx)) {
-    // Empty scene — fall back to a sane default viewBox.
-    minAx = 0; minAy = 0; maxAx = 100; maxAy = 100;
-  }
-  const contentW = Math.max(1, maxAx - minAx);
-  const contentH = Math.max(1, maxAy - minAy);
-  // 6% padding on the larger axis so glyphs don't kiss the edges.
-  const pad = Math.max(contentW, contentH) * 0.06;
-  const viewMinX = minAx - pad;
-  const viewMinY = minAy - pad;
-  const viewW = contentW + 2 * pad;
-  const viewH = contentH + 2 * pad;
-
-  // Compute the SVG's physical dimensions so its aspect ratio
-  // matches the viewBox exactly — no stretching. This is the guard
-  // against renderers (Satori, older browsers) that ignore
-  // `preserveAspectRatio` on outer SVG and raster to the element
-  // bounds verbatim. Fit the content aspect inside
-  // `outerMaxW × outerMaxH` by the same "meet" algorithm the SVG
-  // spec defines, but executed up-front in TS so the element
-  // attributes are authoritative.
-  const viewAspect = viewW / viewH;
-  const maxAspect = outerMaxW / outerMaxH;
-  let svgW: number;
-  let svgH: number;
-  if (viewAspect > maxAspect) {
-    // Content wider than the bound — fit width, shrink height.
-    svgW = outerMaxW;
-    svgH = outerMaxW / viewAspect;
-  } else {
-    // Content taller/squarer than the bound — fit height, shrink
-    // width. A square C60 in a 1200×630 bound lands here: svgH=630,
-    // svgW=630 → rendered as a square, NOT stretched to 1200×630.
-    svgH = outerMaxH;
-    svgW = outerMaxH * viewAspect;
-  }
 
   return (
     <svg
@@ -275,18 +319,31 @@ export function CurrentPosterSceneSvg({
             const y1 = a.y * 100;
             const x2 = b.x * 100;
             const y2 = b.y * 100;
+            // Three-stroke cylinder illusion: edge (shadow) →
+            // body (ambient) → highlight (specular), all in light
+            // gray. The widest stroke defines the cylinder
+            // silhouette; the narrow highlight suggests the lit
+            // strip across its top. Mirrors the atom's radial-
+            // gradient shading approach — atom = sphere gradient,
+            // bond = cylinder stroke stack.
             return (
               <g key={`b${item.i}`}>
                 <line
                   x1={x1} y1={y1} x2={x2} y2={y2}
-                  stroke={BOND_BORDER}
-                  strokeWidth={HERO_BOND_BORDER_WIDTH}
+                  stroke={BOND_CYL_EDGE}
+                  strokeWidth={bondBorderWidth * BOND_CYL_EDGE_MULT}
                   strokeLinecap="round"
                 />
                 <line
                   x1={x1} y1={y1} x2={x2} y2={y2}
-                  stroke={BOND_FILL}
-                  strokeWidth={HERO_BOND_FILL_WIDTH}
+                  stroke={BOND_CYL_BODY}
+                  strokeWidth={bondBorderWidth * BOND_CYL_BODY_MULT}
+                  strokeLinecap="round"
+                />
+                <line
+                  x1={x1} y1={y1} x2={x2} y2={y2}
+                  stroke={BOND_CYL_HIGHLIGHT}
+                  strokeWidth={bondBorderWidth * BOND_CYL_HIGHLIGHT_MULT}
                   strokeLinecap="round"
                 />
               </g>

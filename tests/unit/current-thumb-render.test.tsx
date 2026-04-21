@@ -67,27 +67,26 @@ describe('CurrentThumbSvg — shipped-size render gate', () => {
     expect(svg).toContain(`width="${ACCOUNT_THUMB_SIZE}"`);
     expect(svg).toContain(`height="${ACCOUNT_THUMB_SIZE}"`);
     expect(svg).toContain('viewBox="0 0 100 100"');
-    expect(svg).toContain('data-role="bond-border"');
-    expect(svg).toContain('data-role="bond-fill"');
-    expect(svg).toContain(`stroke="${CURRENT_THUMB_STYLE.bondFillStroke}"`);
-    expect(svg).toContain(`stroke="${CURRENT_THUMB_STYLE.bondBorderStroke}"`);
-    // Under the EXPERIMENTAL-grammar preset atoms fill via
-    // `url(#gradient)`, not a flat hex. Assert each gradient stop
-    // reaches the rendered SVG (React SSR kebab-cases the
-    // `stopColor` prop → `stop-color` attribute).
-    expect(svg).toContain(`stop-color="${CURRENT_THUMB_STYLE.atomFillMid}"`);
-    expect(svg).toContain(`stop-color="${CURRENT_THUMB_STYLE.atomHighlight}"`);
-    expect(svg).toContain(`stop-color="${CURRENT_THUMB_STYLE.atomShadow}"`);
+    // Three-stroke cylinder-bond rendering — edge (widest shadow)
+    // → body (ambient light-gray fill) → highlight (thin spec).
+    expect(svg).toContain('data-role="bond-edge"');
+    expect(svg).toContain('data-role="bond-body"');
+    expect(svg).toContain('data-role="bond-highlight"');
+    // Atom glyphs are currently disabled (RENDER_ATOMS = false).
+    // The radial-gradient defs still emit so the file regains atom
+    // rendering via a one-line flip; assert the defs survive.
     expect(svg).toContain('<defs>');
     expect(svg).toContain('<radialGradient');
   });
 
-  it('renders bonds border-below-fill in DOM paint order', () => {
+  it('renders bond layers edge→body→highlight in DOM paint order', () => {
     const svg = renderFixtureThumbSvg('c60');
-    const borderIdx = svg.indexOf('data-role="bond-border"');
-    const fillIdx = svg.indexOf('data-role="bond-fill"');
-    expect(borderIdx).toBeGreaterThan(0);
-    expect(fillIdx).toBeGreaterThan(borderIdx);
+    const edgeIdx = svg.indexOf('data-role="bond-edge"');
+    const bodyIdx = svg.indexOf('data-role="bond-body"');
+    const highlightIdx = svg.indexOf('data-role="bond-highlight"');
+    expect(edgeIdx).toBeGreaterThan(0);
+    expect(bodyIdx).toBeGreaterThan(edgeIdx);
+    expect(highlightIdx).toBeGreaterThan(bodyIdx);
   });
 
   for (const name of NAMED_FIXTURE_KEYS) {

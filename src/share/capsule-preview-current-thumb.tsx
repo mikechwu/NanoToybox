@@ -63,11 +63,25 @@ import type { ReactElement } from 'react';
 import type { PreviewThumbV1, PreviewSceneAtomV1, PreviewSceneBondV1 } from './capsule-preview-scene-store';
 import {
   resolveAtomsOnlyRadius,
-  resolveBondStrokeWidth,
   resolveBondedAtomRadius,
   PERSPECTIVE_RADIUS_FLOOR_FACTOR,
 } from './capsule-preview-thumb-render';
 import { ACCOUNT_THUMB_SIZE } from './capsule-preview-thumb-size';
+import {
+  K_ATOM,
+  K_BOND_FILL,
+  K_BOND_BORDER_DELTA,
+  BOND_CYL_EDGE,
+  BOND_CYL_BODY,
+  BOND_CYL_HIGHLIGHT,
+  BOND_CYL_EDGE_MULT,
+  BOND_CYL_BODY_MULT,
+  BOND_CYL_HIGHLIGHT_MULT,
+  medianBondLengthVb,
+  medianNearestNeighborVb,
+  medianStoredR,
+  perspectiveMultiplier,
+} from './capsule-preview-bond-scale';
 
 /** Default rendered size for the account row. */
 export const CURRENT_THUMB_DEFAULT_SIZE = ACCOUNT_THUMB_SIZE;
@@ -127,17 +141,33 @@ export interface CurrentThumbSvgProps {
   gradientId?: string;
 }
 
+/** Resolve the per-atom rendered radius under the shared
+ *  bond-length-proportional rule.
+ *
+ *  Absolute size is `atomBaseVb = K_ATOM · bondLengthVb`. Stored
+ *  `a.r` is used ONLY as a ±15% relative multiplier (perspective
+ *  cue: near atoms slightly larger, far atoms slightly smaller).
+ *  It is NOT treated as an absolute radius — doing so used to
+ *  render large clusters like C720 with 4× oversized atoms on
+ *  the thumb, because publish-time `a.r` comes from a fixed
+ *  `baseRadius = 22 / 500 · s(z)` that doesn't shrink as the
+ *  cluster's real extent grows.
+ *
+ *  `atomBaseVb === 0` only when the scene has no bond signal AND
+ *  fewer than 2 atoms — in that degenerate case we fall back to
+ *  the density-aware `densityRadius` so atoms-only thumbs still
+ *  render something visible and the derivation visibility-filter
+ *  math stays pinned to a concrete radius. */
 function effectiveAtomRadius(
   atom: PreviewSceneAtomV1,
-  hasBonds: boolean,
+  atomBaseVb: number,
+  rMedian: number,
   densityRadius: number,
 ): number {
-  const scaled = Number.isFinite(atom.r) ? atom.r * 100 : 0;
-  if (hasBonds) {
-    const floor = densityRadius * PERSPECTIVE_RADIUS_FLOOR_FACTOR;
-    return quantizeRadius(scaled > 0 ? Math.max(floor, scaled) : densityRadius);
+  if (atomBaseVb > 0) {
+    return quantizeRadius(atomBaseVb * perspectiveMultiplier(atom.r, rMedian));
   }
-  return quantizeRadius(Math.max(densityRadius, scaled));
+  return quantizeRadius(densityRadius);
 }
 
 /** Build a collision-safe gradient ID. A module-level counter
@@ -173,11 +203,24 @@ export function CurrentThumbSvg({
   const n = thumb.atoms.length;
   const bondsArr = thumb.bonds ?? [];
   const hasBonds = bondsArr.length > 0;
+  // Shared physical-scale sizing rule — every absolute width/radius
+  // is a fixed fraction of the projected bond length (the scene's
+  // physical-scale proxy). Constants + helpers come from
+  // `capsule-preview-bond-scale` so thumb and poster render at
+  // identical scale without drift.
+  const bondLengthVb = hasBonds
+    ? medianBondLengthVb(thumb.atoms, bondsArr)
+    : medianNearestNeighborVb(thumb.atoms);
+  // Density radius retained only for the atoms-only degenerate
+  // fallback (`effectiveAtomRadius` when bondLengthVb = 0 and the
+  // derivation-filter coupling via `PERSPECTIVE_RADIUS_FLOOR_FACTOR`
+  // elsewhere in the module). Primary signal is `K_ATOM · bondVb`.
   const densityRadius = hasBonds
     ? resolveBondedAtomRadius(n)
     : resolveAtomsOnlyRadius(n);
-  const bondFillWidth = resolveBondStrokeWidth(n);
-  const bondBorderWidth = bondFillWidth + 2 * style.bondBorderDelta;
+  const atomBaseVb = K_ATOM * bondLengthVb;
+  const rMedian = medianStoredR(thumb.atoms);
+  const bondBorderWidth = (K_BOND_FILL + K_BOND_BORDER_DELTA) * bondLengthVb;
   const validBondCount = bondsArr.filter((b) => thumb.atoms[b.a] && thumb.atoms[b.b]).length;
   const gradId = gradientId ?? nextGradientId();
 
@@ -206,7 +249,7 @@ export function CurrentThumbSvg({
       kind: 'atom',
       rank: i,
       atom,
-      r: effectiveAtomRadius(atom, hasBonds, densityRadius),
+      r: effectiveAtomRadius(atom, atomBaseVb, rMedian, densityRadius),
       i,
     });
   });
@@ -287,20 +330,32 @@ export function CurrentThumbSvg({
             const b = thumb.atoms[item.bond.b];
             const x1 = a.x * 100, y1 = a.y * 100;
             const x2 = b.x * 100, y2 = b.y * 100;
+            // Three-stroke cylinder — edge (shadow) → body
+            // (ambient) → highlight (spec). Mirrors poster's
+            // bond rendering exactly so the two surfaces stay
+            // visually consistent. Style preset's bond colors are
+            // overridden here with the cylinder palette.
             return (
               <g key={`b-${item.i}`} data-role="bond-pair">
                 <line
-                  data-role="bond-border"
+                  data-role="bond-edge"
                   x1={x1} y1={y1} x2={x2} y2={y2}
-                  stroke={style.bondBorderStroke}
-                  strokeWidth={bondBorderWidth}
+                  stroke={BOND_CYL_EDGE}
+                  strokeWidth={bondBorderWidth * BOND_CYL_EDGE_MULT}
                   strokeLinecap="round"
                 />
                 <line
-                  data-role="bond-fill"
+                  data-role="bond-body"
                   x1={x1} y1={y1} x2={x2} y2={y2}
-                  stroke={style.bondFillStroke}
-                  strokeWidth={bondFillWidth}
+                  stroke={BOND_CYL_BODY}
+                  strokeWidth={bondBorderWidth * BOND_CYL_BODY_MULT}
+                  strokeLinecap="round"
+                />
+                <line
+                  data-role="bond-highlight"
+                  x1={x1} y1={y1} x2={x2} y2={y2}
+                  stroke={BOND_CYL_HIGHLIGHT}
+                  strokeWidth={bondBorderWidth * BOND_CYL_HIGHLIGHT_MULT}
                   strokeLinecap="round"
                 />
               </g>

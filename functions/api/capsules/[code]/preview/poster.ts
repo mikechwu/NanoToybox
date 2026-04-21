@@ -35,11 +35,11 @@ import {
   parsePreviewSceneV1,
   type PreviewSceneV1,
 } from '../../../../../src/share/capsule-preview-scene-store';
-import { projectCapsuleToSceneJson } from '../../../../../src/share/publish-core';
 import {
-  validateCapsuleFile,
-  type AtomDojoPlaybackCapsuleFileV1,
-} from '../../../../../src/history/history-file-v1';
+  healBondlessRow,
+  rebakeSceneFromR2,
+  sceneIsBondless,
+} from '../../../../../src/share/capsule-preview-heal';
 
 type PosterMode = 'stored' | 'generated' | 'error' | 'flag-off' | 'inaccessible';
 
@@ -219,60 +219,7 @@ function dynamicPosterETag(
   return `"v${TEMPLATE_VERSION}-${fnv1a32Hex(canonical)}"`;
 }
 
-/**
- * Lazy-backfill path: fetch the capsule blob from R2, project the scene,
- * write the serialized JSON back to D1. Writes are awaited but failures
- * do NOT prevent serving the poster (the scene is already computed in
- * memory). Subsequent requests for this row will hit the fast path.
- */
-async function lazyBackfillScene(
-  env: Env,
-  row: CapsuleShareRow,
-): Promise<{ scene: PreviewSceneV1; sceneJson: string } | { error: string }> {
-  if (!row.object_key) return { error: 'blob-missing' };
-  const obj = await env.R2_BUCKET.get(row.object_key);
-  if (!obj) return { error: 'blob-missing' };
-  let text: string;
-  try {
-    text = await obj.text();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { error: `blob-read-failed:${msg}` };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { error: `capsule-parse-failed:${msg}` };
-  }
-  const errors = validateCapsuleFile(parsed);
-  if (errors.length > 0) {
-    return { error: `capsule-parse-failed:${errors[0]}` };
-  }
-  const capsule = parsed as AtomDojoPlaybackCapsuleFileV1;
-  const sceneJson = projectCapsuleToSceneJson(capsule);
-  if (!sceneJson) return { error: 'no-dense-frames' };
-  const scene = parsePreviewSceneV1(sceneJson);
-  if (!scene || scene.atoms.length === 0) return { error: 'scene-empty' };
-  // Fire-and-observe: write back to D1 so the next request hits the fast
-  // path. Await it so errors surface — but a failed write does NOT block
-  // serving the poster we already have in memory.
-  try {
-    // Include the IS NULL gate so a concurrent writer (or a post-V2
-    // publish on the same row) cannot be overwritten by a stale lazy
-    // backfill. deriveScene is deterministic, so losing the race is a
-    // benign no-op rather than a consistency hazard.
-    await env.DB.prepare(
-      `UPDATE capsule_share SET preview_scene_v1 = ?
-         WHERE id = ? AND preview_scene_v1 IS NULL`,
-    ).bind(sceneJson, row.id).run();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[capsule-poster] lazy-backfill write failed: ${msg}`);
-  }
-  return { scene, sceneJson };
-}
+
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const startedAt = Date.now();
@@ -337,22 +284,44 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 
   // V2 dynamic branch: read pre-baked scene; fall back to lazy backfill.
   let scene: PreviewSceneV1 | null = parsePreviewSceneV1(row.preview_scene_v1);
-  if (!scene || scene.atoms.length === 0) {
-    // preview_scene_v1 is absent OR malformed — treat malformed as null so
-    // the lazy-backfill rewrites the cell with a fresh render on next call.
+  const sceneMissing = !scene || scene.atoms.length === 0;
+  // Also heal scenes whose atoms are intact but whose bonds are
+  // empty everywhere — those are pre-fix legacy rows that baked
+  // atoms-only under the old publish-time bond filters. A fresh
+  // rebake via the current path (3D topology + relaxed thresholds)
+  // produces a scene with bonds; the `overwriteExisting = true`
+  // write replaces the stale row in-place so future reads fast-
+  // path to the healed data.
+  const sceneBondless = scene != null && !sceneMissing && sceneIsBondless(scene);
+  // Track whether a bondless fallback is being served so the
+  // structured poster log carries the cause — otherwise ops can't
+  // distinguish "fresh render with full bonds" from "served stale
+  // bondless scene because heal kept failing".
+  let bondlessHealFailure: string | null = null;
+  if (sceneMissing) {
     if (row.preview_scene_v1 != null && scene == null) {
-      // Diagnostic breadcrumb for ops — malformed JSON in a TEXT column is
-      // rare enough that we want a signal when it happens.
       console.warn(`[capsule-poster] scene-parse-failed for share=${code}`);
     }
-    const backfill = await lazyBackfillScene(context.env, row);
-    if ('error' in backfill) {
-      const cause = backfill.error === 'blob-missing'
+    const backfill = await rebakeSceneFromR2(context.env, row);
+    if (!backfill.ok) {
+      const cause = backfill.reason === 'blob-missing'
         ? 'scene-missing'
-        : backfill.error;
+        : backfill.reason;
       return serveTerminalFallback(context.request, code, startedAt, cause);
     }
     scene = backfill.scene;
+  } else if (sceneBondless) {
+    // Heal the bondless legacy row by rebaking from R2 and overwriting
+    // `preview_scene_v1` in place. Serve the healed scene. On rebake
+    // failure, fall through and serve whatever bondless scene we have;
+    // a bondless poster is still preferable to the terminal fallback.
+    const healed = await healBondlessRow(context.env, row);
+    if (healed.ok) {
+      scene = healed.scene;
+    } else {
+      bondlessHealFailure = healed.reason;
+      console.warn(`[capsule-poster] bondless-heal-failed: ${healed.reason} share=${code}`);
+    }
   }
 
   try {
@@ -385,7 +354,18 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     headers.set('ETag', dynamicPosterETag(scene, sanitizedTitle, row.share_code));
     headers.set('Access-Control-Allow-Origin', '*');
     headers.set('X-Content-Type-Options', 'nosniff');
-    logPoster({ code, mode: 'generated', status: 200, durationMs: Date.now() - startedAt });
+    logPoster({
+      code,
+      mode: 'generated',
+      status: 200,
+      durationMs: Date.now() - startedAt,
+      // Surface bondless-heal failures on the structured success
+      // log so ops can query "successful render but bondless" in
+      // one stream without grepping two log shapes.
+      ...(bondlessHealFailure !== null
+        ? { cause: `bondless-heal-failed:${bondlessHealFailure}` }
+        : {}),
+    });
     return new Response(bytes, { status: 200, headers });
   } catch (err) {
     // Pre-tagged module-import-failed errors come from generateDynamicPoster's

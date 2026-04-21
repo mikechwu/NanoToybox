@@ -32,9 +32,10 @@ import {
 import {
   projectPreviewScene,
   projectPreviewScenePerspective,
-  deriveBondPairs,
   deriveBondPairsForProjectedScene,
 } from './capsule-preview-project';
+import { buildBondTopologyFromAtoms } from '../topology/build-bond-topology';
+import { createBondRules } from '../topology/bond-rules';
 import { selectPreviewSubjectCluster } from './capsule-preview-cluster-select';
 import {
   attachStoredThumb,
@@ -191,19 +192,23 @@ export function projectCapsuleToSceneJson(
   try {
     const fullScene3d = buildPreviewSceneFromCapsule(capsule);
 
-    // Derive bonds on the FULL atom set, BEFORE downsampling. Bond pairs
-    // reflect real nearest-neighbor connectivity in the source structure;
-    // if we sampled first and then computed bonds, the silhouette
-    // sampler's "spread atoms apart" objective would leave almost no
-    // pairs under the cutoff, and the poster + thumb would both lose
-    // the bonds that define the structure.
+    // Derive bonds on the FULL atom set, BEFORE downsampling, using
+    // the SAME rule as lab/watch (`buildBondTopologyFromAtoms` with
+    // a single-cutoff `BondRuleSet`). This guarantees the preview's
+    // bond list is physically realistic — determined in 3D before
+    // projection, not inferred from 2D positions after the z axis
+    // has been discarded. Cutoff + minDist honor any `bondPolicy`
+    // carried by the capsule file.
     let fullBondPairs: Array<{ a: number; b: number }> = [];
     try {
-      fullBondPairs = deriveBondPairs(
-        fullScene3d,
-        capsule.bondPolicy?.cutoff ?? 1.85,
-        capsule.bondPolicy?.minDist ?? 0.5,
-      );
+      const rules = createBondRules({
+        cutoff: capsule.bondPolicy?.cutoff ?? 1.85,
+        minDist: capsule.bondPolicy?.minDist ?? 0.5,
+      });
+      const tuples = buildBondTopologyFromAtoms(fullScene3d.atoms, rules);
+      // `tuples[i]` = [a, b, distance]; preview keeps only the index
+      // pair (a, b) — the renderer computes its own projected length.
+      fullBondPairs = tuples.map((t) => ({ a: t[0], b: t[1] }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[publish] bonds-skipped: ${msg}`);
@@ -339,22 +344,30 @@ export function projectCapsuleToSceneJson(
     // sampling will kick in as the fallback.
     try {
       // Effectively-uncapped bake: keep every bond whose endpoints
-      // both survived sampling, with no degree cap and no
-      // visibility filter. Under the 40 px thumb renderer the
-      // visibility filter dropped short bonds to de-clutter;
-      // under the 96 px thumb + 600 px hero poster every bond is
-      // now long enough to contribute meaningful structure, and
-      // dropping them at bake time prevents the poster from ever
-      // seeing them (it reads the thumb payload). A downstream
-      // renderer can still pick a subset if it wants; the bake is
-      // the authoritative source of structure.
+      // both survived sampling, with no degree cap and NO
+      // projection-occlusion gating. `NEGATIVE_INFINITY` on the
+      // visibility thresholds sidesteps the filter at line 748–749
+      // of `buildBondedLayoutCore` — for a dense 3D cluster the
+      // back-hemisphere atoms project onto the front-hemisphere
+      // atoms, so `projected_bond_length < (r_a + r_b)` for most
+      // bonds and a threshold of `0` silently drops them all. The
+      // renderer handles occlusion correctly via the depth-sorted
+      // paint list; there is no reason to pre-filter at the bake.
+      //
+      // `bondsAwareThreshold: 0` bypasses the `n >= 14` atom-count
+      // guard inside `buildStoredThumbFromFullScene` — that guard
+      // was tuned for the old 40 px thumb where 3–5 atoms +
+      // sub-pixel bonds read as dots anyway. At 96 px thumb and
+      // 600 px poster, small-cluster capsules (glycine-class)
+      // absolutely benefit from their bonds being drawn.
       const thumb = buildStoredThumbFromFullScene(
         fullNormAtoms, fullBondsProjectedSpace,
         {
-          minVisibleBondViewbox: 0,
-          relaxedVisibleBondViewbox: 0,
+          minVisibleBondViewbox: Number.NEGATIVE_INFINITY,
+          relaxedVisibleBondViewbox: Number.NEGATIVE_INFINITY,
           minAcceptableBonds: 0,
           bondMaxDegree: Number.POSITIVE_INFINITY,
+          bondsAwareThreshold: 0,
         },
       );
       if (thumb) stored = attachStoredThumb(stored, thumb);
