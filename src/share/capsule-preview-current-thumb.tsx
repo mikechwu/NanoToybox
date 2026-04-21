@@ -82,6 +82,12 @@ import {
   medianStoredR,
   perspectiveMultiplier,
 } from './capsule-preview-bond-scale';
+import {
+  deriveAtomShadingPalette,
+  gradientIdForHex,
+  FALLBACK_GRADIENT_SUFFIX,
+  type AtomShadingPalette,
+} from './capsule-preview-atom-shading';
 
 /** Default rendered size for the account row. */
 export const CURRENT_THUMB_DEFAULT_SIZE = ACCOUNT_THUMB_SIZE;
@@ -224,6 +230,56 @@ export function CurrentThumbSvg({
   const validBondCount = bondsArr.filter((b) => thumb.atoms[b.a] && thumb.atoms[b.b]).length;
   const gradId = gradientId ?? nextGradientId();
 
+  // Per-atom color groupings — one `<radialGradient>` per unique
+  // stored `a.c`, shared by every atom of that color. Mirrors
+  // `CurrentPosterSceneSvg` so thumb + poster produce identical
+  // per-color palettes.
+  //
+  // Invariant: `paletteByHex` contains ONLY real-color entries.
+  // Atoms whose stored color is missing/malformed route to the
+  // static `-fallback` gradient emitted separately in <defs>, and
+  // are NOT stored in the map — prevents the fallback id from
+  // appearing twice in rendered SVG (SVG id-uniqueness audit).
+  const fallbackGradientId = `${gradId}-${FALLBACK_GRADIENT_SUFFIX}`;
+  const paletteByHex = new Map<string, AtomShadingPalette>();
+  for (const a of thumb.atoms) {
+    const id = gradientIdForHex(gradId, a.c);
+    if (id === fallbackGradientId) continue;
+    if (!paletteByHex.has(id)) {
+      paletteByHex.set(id, deriveAtomShadingPalette(a.c));
+    }
+  }
+  const gradientDefs = [...paletteByHex.entries()].sort(
+    ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0),
+  );
+  // Fallback palette comes from the style preset so callers can
+  // customize the grey-atom look per surface (ship, haloed, ...).
+  const fallbackPalette: AtomShadingPalette = {
+    mid: style.atomFillMid,
+    highlight: style.atomHighlight,
+    shadow: style.atomShadow,
+    stroke: style.atomStroke,
+  };
+  const paletteFor = (a: PreviewSceneAtomV1): {
+    gradientId: string;
+    palette: AtomShadingPalette;
+  } => {
+    const id = gradientIdForHex(gradId, a.c);
+    if (id === fallbackGradientId) {
+      return { gradientId: fallbackGradientId, palette: fallbackPalette };
+    }
+    const palette = paletteByHex.get(id);
+    if (!palette) {
+      // Invariant-violation escape — the registration loop above
+      // should have put this id in the map. Log so a future
+      // refactor that breaks the loop doesn't silently render
+      // everything on the fallback.
+      console.warn(`[current-thumb] palette-miss id=${id}`);
+      return { gradientId: fallbackGradientId, palette: fallbackPalette };
+    }
+    return { gradientId: id, palette };
+  };
+
   // Build the depth-sorted paint list. Mirrors the audit-page
   // `renderPerspectiveSketch` rank scheme verbatim so the two
   // surfaces produce identical paint order:
@@ -285,8 +341,12 @@ export function CurrentThumbSvg({
       data-atom-radius={quantizeRadius(densityRadius)}
     >
       <defs>
+        {/* Fallback grey gradient — emitted once, targets atoms
+            whose stored color is missing/malformed. Style preset
+            drives the fallback palette so callers can override the
+            grey tone per surface. */}
         <radialGradient
-          id={gradId}
+          id={fallbackGradientId}
           cx="50%"
           cy="50%"
           r="50%"
@@ -297,6 +357,21 @@ export function CurrentThumbSvg({
           <stop offset="55%" stopColor={style.atomFillMid} />
           <stop offset="100%" stopColor={style.atomShadow} />
         </radialGradient>
+        {gradientDefs.map(([id, palette]) => (
+          <radialGradient
+            key={id}
+            id={id}
+            cx="50%"
+            cy="50%"
+            r="50%"
+            fx="30%"
+            fy="30%"
+          >
+            <stop offset="0%" stopColor={palette.highlight} />
+            <stop offset="55%" stopColor={palette.mid} />
+            <stop offset="100%" stopColor={palette.shadow} />
+          </radialGradient>
+        ))}
       </defs>
       <rect
         x={0}
@@ -311,6 +386,7 @@ export function CurrentThumbSvg({
         switch (item.kind) {
           case 'atom': {
             const strokeW = Math.max(0.25, item.r * style.atomStrokeRatio);
+            const { gradientId: gid, palette } = paletteFor(item.atom);
             return (
               <circle
                 key={`a-${item.i}`}
@@ -319,8 +395,8 @@ export function CurrentThumbSvg({
                 cx={item.atom.x * 100}
                 cy={item.atom.y * 100}
                 r={item.r}
-                fill={`url(#${gradId})`}
-                stroke={style.atomStroke}
+                fill={`url(#${gid})`}
+                stroke={palette.stroke}
                 strokeWidth={strokeW}
               />
             );

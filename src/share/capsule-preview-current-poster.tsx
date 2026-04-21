@@ -63,6 +63,13 @@ import {
   medianStoredR,
   perspectiveMultiplier,
 } from './capsule-preview-bond-scale';
+import {
+  deriveAtomShadingPalette,
+  gradientIdForHex,
+  GREY_FALLBACK_PALETTE,
+  FALLBACK_GRADIENT_SUFFIX,
+  type AtomShadingPalette,
+} from './capsule-preview-atom-shading';
 
 /** Default output dimensions. The SVG element itself takes these
  *  unless a caller overrides `width` / `height` to fit a larger
@@ -71,12 +78,6 @@ export const CURRENT_POSTER_PANE_WIDTH = 600;
 export const CURRENT_POSTER_PANE_HEIGHT = 600;
 export const CURRENT_POSTER_GRADIENT_ID = 'cur-poster-bg';
 export const CURRENT_POSTER_ATOM_GRADIENT_ID = 'cur-poster-atom';
-
-/** EXPERIMENTAL shaded-sphere palette — matches the account thumb. */
-const ATOM_HIGHLIGHT = '#b0b0b0';
-const ATOM_FILL_MID = '#4a4a4a';
-const ATOM_SHADOW = '#1c1c1c';
-const ATOM_STROKE = '#000000';
 
 /** Safety bounds — kept tiny/huge per user spec ("min 1e-5, max
  *  very large"). They exist only to neutralize pathological inputs
@@ -236,6 +237,56 @@ export function CurrentPosterSceneSvg({
   const atomRadius = (a: PreviewSceneAtomV1): number =>
     atomBase * perspectiveMultiplier(a.r, rMedian);
 
+  // ── Per-atom color groupings ──
+  // The user's bonded-group color assignment is stored per atom in
+  // `a.c` (see `src/appearance/bonded-group-color-assignments.ts` +
+  // `publish-core.ts#normalizeHex`). Honor it by emitting one
+  // `<radialGradient>` per UNIQUE color — atoms sharing a color share
+  // one def, so DOM cost is O(unique colors), not O(atoms).
+  //
+  // Invariant: `paletteByHex` contains ONLY real-color entries.
+  // Atoms whose stored color is missing/malformed route to the
+  // static `-fallback` gradient emitted separately in <defs>, and
+  // are NOT stored in the map. That prevents the fallback id from
+  // appearing twice in the rendered SVG (a duplicate-id bug caught
+  // by the audit — SVG requires id uniqueness, Satori's behavior
+  // on duplicates is undefined).
+  const fallbackGradientId = `${atomGradientId}-${FALLBACK_GRADIENT_SUFFIX}`;
+  const paletteByHex = new Map<string, AtomShadingPalette>();
+  for (const a of atomsSource) {
+    const id = gradientIdForHex(atomGradientId, a.c);
+    if (id === fallbackGradientId) continue;
+    if (!paletteByHex.has(id)) {
+      paletteByHex.set(id, deriveAtomShadingPalette(a.c));
+    }
+  }
+  // Stable defs order — iteration over a Map honors insertion order,
+  // but sorting by id pins the SVG markup so snapshot diffs stay
+  // legible across minor atom-reordering upstream.
+  const gradientDefs = [...paletteByHex.entries()].sort(
+    ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0),
+  );
+  const paletteFor = (a: PreviewSceneAtomV1): {
+    gradientId: string;
+    palette: AtomShadingPalette;
+  } => {
+    const id = gradientIdForHex(atomGradientId, a.c);
+    if (id === fallbackGradientId) {
+      return { gradientId: fallbackGradientId, palette: GREY_FALLBACK_PALETTE };
+    }
+    const palette = paletteByHex.get(id);
+    if (!palette) {
+      // Reaching this branch means an atom's id wasn't registered
+      // during the initial pass — a real invariant violation (the
+      // loop above should have registered every non-fallback id).
+      // Log so a future refactor that breaks the loop is visible
+      // instead of silently rendering everything grey.
+      console.warn(`[current-poster] palette-miss id=${id}`);
+      return { gradientId: fallbackGradientId, palette: GREY_FALLBACK_PALETTE };
+    }
+    return { gradientId: id, palette };
+  };
+
   // Bond cylinder width — the widest stroke (edge layer) uses this
   // directly; the body + highlight layers are fixed fractions of
   // it. Proportional to projected bond length so the atom:bond
@@ -274,18 +325,38 @@ export function CurrentPosterSceneSvg({
           <stop offset="0%" stopColor="#ffffff" stopOpacity="0" />
           <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
         </radialGradient>
+        {/* Fallback grey gradient — the target of any atom whose
+            stored `c` is missing or malformed. Always emitted so the
+            renderer has something to point at even when every atom
+            has a valid color (the static def is tiny and its presence
+            makes the fallback path debuggable in the rendered SVG). */}
         <radialGradient
-          id={atomGradientId}
+          id={fallbackGradientId}
           cx="50%"
           cy="50%"
           r="50%"
           fx="30%"
           fy="30%"
         >
-          <stop offset="0%" stopColor={ATOM_HIGHLIGHT} />
-          <stop offset="55%" stopColor={ATOM_FILL_MID} />
-          <stop offset="100%" stopColor={ATOM_SHADOW} />
+          <stop offset="0%" stopColor={GREY_FALLBACK_PALETTE.highlight} />
+          <stop offset="55%" stopColor={GREY_FALLBACK_PALETTE.mid} />
+          <stop offset="100%" stopColor={GREY_FALLBACK_PALETTE.shadow} />
         </radialGradient>
+        {gradientDefs.map(([id, palette]) => (
+          <radialGradient
+            key={id}
+            id={id}
+            cx="50%"
+            cy="50%"
+            r="50%"
+            fx="30%"
+            fy="30%"
+          >
+            <stop offset="0%" stopColor={palette.highlight} />
+            <stop offset="55%" stopColor={palette.mid} />
+            <stop offset="100%" stopColor={palette.shadow} />
+          </radialGradient>
+        ))}
       </defs>
       <rect
         x={viewMinX}
@@ -300,14 +371,15 @@ export function CurrentPosterSceneSvg({
             const cx = item.atom.x * 100;
             const cy = item.atom.y * 100;
             const strokeW = Math.max(0.15, item.r * 0.07);
+            const { gradientId: gid, palette } = paletteFor(item.atom);
             return (
               <circle
                 key={`a${item.i}`}
                 cx={cx}
                 cy={cy}
                 r={item.r}
-                fill={`url(#${atomGradientId})`}
-                stroke={ATOM_STROKE}
+                fill={`url(#${gid})`}
+                stroke={palette.stroke}
                 strokeWidth={strokeW}
               />
             );

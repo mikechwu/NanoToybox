@@ -78,34 +78,102 @@ describe('CapsulePreviewThumb — atoms-only payload', () => {
     expect(readAtomCount(container)).toBe(thumb.atoms.length);
   });
 
-  it('renders one <circle> per atom, fill references the shared radial gradient (ignores stored CPK)', () => {
-    // Rev 11 rendering: atoms go back to individual circles so the
-    // shaded-sphere radial gradient can tile per atom. The stored
-    // `c` field is no longer consulted for rendering — every atom
-    // fills via `url(#<gradient-id>)`.
-    const thumb = thumbFixture(4); // stored alternates #222222 / #3050f8
+  it('emits one <radialGradient> per unique stored color, plus a grey fallback', () => {
+    // Per-atom color rendering (bonded-group colors): each unique
+    // `a.c` gets its own `<radialGradient>` in `<defs>`, plus a
+    // shared grey fallback def for atoms whose stored color is
+    // missing or malformed. With the fixture's alternating
+    // `#222222` / `#3050f8` we expect exactly 2 named + 1 fallback.
+    const thumb = thumbFixture(4);
     const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
-    const circles = container.querySelectorAll('circle[data-role="atom"]');
-    expect(circles.length).toBe(thumb.atoms.length);
-    const fills = new Set(Array.from(circles).map((c) => c.getAttribute('fill')));
-    expect(fills.size).toBe(1);
-    const [fill] = Array.from(fills);
-    expect(fill).toMatch(/^url\(#[^)]+\)$/);
-    // The <defs><radialGradient /> is present exactly once.
-    expect(container.querySelectorAll('defs radialGradient').length).toBe(1);
+    const gradients = container.querySelectorAll('defs radialGradient');
+    expect(gradients.length).toBe(3);
+    const ids = new Set(Array.from(gradients).map((g) => g.getAttribute('id') ?? ''));
+    const fallback = [...ids].find((id) => id.endsWith('-fallback'));
+    expect(fallback).toBeDefined();
+    expect([...ids].some((id) => id.endsWith('-222222'))).toBe(true);
+    expect([...ids].some((id) => id.endsWith('-3050f8'))).toBe(true);
   });
 
-  it('ship preset emits a thin black atom outline (EXPERIMENTAL shaded-sphere style)', () => {
-    // Rev 11 aligns the thumb style with the audit-page
-    // EXPERIMENTAL preset: black outline on shaded-sphere atoms,
-    // not the flat no-halo look from rev 10. Locks the color.
-    const { container } = render(<CapsulePreviewThumb thumb={thumbFixture(5)} />);
-    const circles = container.querySelectorAll('circle[data-role="atom"]');
-    expect(circles.length).toBeGreaterThan(0);
-    for (const c of Array.from(circles)) {
-      expect(c.getAttribute('stroke')).toBe('#000000');
-      const w = Number(c.getAttribute('stroke-width'));
-      expect(w).toBeGreaterThan(0);
+  it('routes each atom circle to the gradient for its stored color', () => {
+    // Paired with the defs test: every circle's `fill` references
+    // a URL that ends in the atom's own `#rrggbb` (minus the `#`),
+    // so a red atom gets the red gradient, a blue atom the blue.
+    const thumb = thumbFixture(4); // alternates #222222 / #3050f8
+    const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
+    const circles = Array.from(
+      container.querySelectorAll<SVGCircleElement>('circle[data-role="atom"]'),
+    );
+    expect(circles.length).toBe(thumb.atoms.length);
+    circles.forEach((c, i) => {
+      const expectedHex = thumb.atoms[i].c.slice(1); // strip '#'
+      const fill = c.getAttribute('fill') ?? '';
+      expect(fill).toMatch(new RegExp(`url\\(#[^)]*-${expectedHex}\\)$`));
+    });
+  });
+
+  it('never emits duplicate gradient ids even when some atoms have malformed color', () => {
+    // Audit regression: before the fix, any atom with a
+    // missing/malformed `c` caused `paletteByHex` to store a
+    // duplicate entry under the `-fallback` id, which then rendered
+    // a SECOND `<radialGradient id="…-fallback">` alongside the
+    // static fallback def. SVG id-uniqueness made the second def
+    // silently shadow the first in some renderers. Now the map
+    // invariant excludes the fallback id, so this cannot recur.
+    const thumb: PreviewThumbV1 = {
+      v: 1,
+      atoms: [
+        { x: 0.2, y: 0.5, r: 0.04, c: '#ff5555' },
+        // Intentionally-malformed: empty + garbage strings both
+        // fold to the fallback gradient id.
+        { x: 0.4, y: 0.5, r: 0.04, c: '' },
+        { x: 0.6, y: 0.5, r: 0.04, c: 'not-a-hex' },
+        { x: 0.8, y: 0.5, r: 0.04, c: '#33dd66' },
+      ],
+    };
+    const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
+    const gradients = Array.from(
+      container.querySelectorAll<SVGRadialGradientElement>('defs radialGradient'),
+    );
+    const ids = gradients.map((g) => g.getAttribute('id') ?? '');
+    // Uniqueness: no id appears twice.
+    expect(new Set(ids).size).toBe(ids.length);
+    // Expected content: one fallback + one red + one green = 3.
+    const fallbackCount = ids.filter((id) => id.endsWith('-fallback')).length;
+    expect(fallbackCount).toBe(1);
+    expect(ids.some((id) => id.endsWith('-ff5555'))).toBe(true);
+    expect(ids.some((id) => id.endsWith('-33dd66'))).toBe(true);
+  });
+
+  it('derives atom outlines from the stored color (not pure black)', () => {
+    // Colored atoms keep the "lit sphere" rim look from lab —
+    // stroke is the palette's shadow tone, keyed off the atom's
+    // own color, so a green atom has a dark-green rim rather than
+    // a hard black outline. See `capsule-preview-atom-shading.ts`.
+    // The fixture seeds a bright blue (`#3050f8`) atom; its stroke
+    // must have non-zero blue chroma and cannot be pure black.
+    const thumb = thumbFixture(4);
+    const { container } = render(<CapsulePreviewThumb thumb={thumb} />);
+    const circles = Array.from(
+      container.querySelectorAll<SVGCircleElement>('circle[data-role="atom"]'),
+    );
+    const blueAtomIdx = thumb.atoms.findIndex((a) => a.c === '#3050f8');
+    expect(blueAtomIdx).toBeGreaterThanOrEqual(0);
+    const blueStroke = (circles[blueAtomIdx].getAttribute('stroke') ?? '').toLowerCase();
+    expect(blueStroke).not.toBe('#000000');
+    // Parse the stroke and assert blue dominates — guards against
+    // a regression that collapses the palette to greyscale.
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/.exec(blueStroke);
+    expect(m).not.toBeNull();
+    if (m) {
+      const [, r, g, b] = m;
+      expect(parseInt(b, 16)).toBeGreaterThan(parseInt(r, 16));
+      expect(parseInt(b, 16)).toBeGreaterThan(parseInt(g, 16));
+    }
+    // Every circle still carries a positive stroke width (silhouette
+    // stays intact for every atom regardless of its color).
+    for (const c of circles) {
+      expect(Number(c.getAttribute('stroke-width'))).toBeGreaterThan(0);
     }
   });
 
