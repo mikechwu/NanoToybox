@@ -19,17 +19,24 @@
  *
  * Committed baselines under
  * `tests/e2e/thumb-visual.spec.ts-snapshots/` are Chromium + Darwin
- * only. Running the spec on Linux (CI) will treat a missing
- * `*-chromium-linux.png` as "baseline missing" and write it on
- * `--update-snapshots`. The cross-platform strategy is deliberately
- * **local/manual**: this spec is a local review gate for operators
- * working on the preview pipeline on macOS; Linux CI baselines can
- * be added when the repo adds a pinned CI image, via
+ * only. Playwright's default behavior on a missing baseline is to
+ * **fail the test** (not "write the actual and pass"), so running
+ * unconditionally on Linux CI turns every clean run red. Each test
+ * therefore calls `test.skip(process.platform !== 'darwin', …)` —
+ * the vitest render gate (`current-thumb-render.test.tsx`) still
+ * runs cross-platform and locks the SVG source, so the no-op on
+ * Linux only drops the pixel-level compare, not the rendering
+ * gate.
+ *
+ * The cross-platform strategy is deliberately **local/manual**:
+ * this spec is a local review gate for operators working on the
+ * preview pipeline on macOS. Linux baselines can be added when the
+ * repo adds a pinned CI image by dropping the skip and running
  * `npm run test:e2e -- thumb-visual.spec.ts --update-snapshots`
  * from that environment.
  *
  * Running:
- *   npm run test:e2e -- thumb-visual.spec.ts
+ *   npm run test:e2e -- thumb-visual.spec.ts               # macOS: full gate
  *   npm run test:e2e -- thumb-visual.spec.ts --update-snapshots
  */
 
@@ -62,6 +69,13 @@ async function gotoHarness(
 test.describe('account-row thumb — browser-level visual regression', () => {
   for (const fixture of FIXTURES) {
     test(`${fixture} thumb renders consistently at the shipped size`, async ({ page }) => {
+      // Baselines are committed for Chromium + Darwin only (see file-
+      // level docstring). Skip on other platforms so CI stays green;
+      // the vitest render gate still locks the SVG source everywhere.
+      test.skip(
+        process.platform !== 'darwin',
+        `thumb-visual baselines are darwin-only; platform=${process.platform}`,
+      );
       await gotoHarness(page, fixture);
       await expect(page.locator('#thumb-host')).toHaveScreenshot(
         `${fixture}.png`,
