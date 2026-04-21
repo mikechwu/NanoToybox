@@ -25,6 +25,8 @@ import {
   makeC60Capsule,
   makeGrapheneCapsule,
   makeCntCapsule,
+  makeFragmentedCapsule,
+  makeTwoEqualFragmentsCapsule,
 } from '../../src/share/__fixtures__/capsule-preview-structures';
 
 describe('full publish → thumb derivation pipeline for dense structures', () => {
@@ -69,15 +71,49 @@ describe('full publish → thumb derivation pipeline for dense structures', () =
   it('stored thumb survives parse → derivePreviewThumbV1 round trip', () => {
     const sceneJson = projectCapsuleToSceneJson(makeC60Capsule())!;
     const thumb = derivePreviewThumbV1(sceneJson);
-    expect(thumb!.atoms.length).toBeLessThanOrEqual(12);
-    expect(thumb!.bonds!.length).toBeLessThanOrEqual(6);
-    // All atoms are inside the 0..1 refit box.
+    // Caps raised to 5000 in the D138 follow-up 4 (effectively
+    // unbounded for realistic capsules).
+    expect(thumb!.atoms.length).toBeLessThanOrEqual(5000);
+    expect(thumb!.bonds!.length).toBeLessThanOrEqual(5000);
+    // Atoms are finite. They MAY land slightly outside the 0..1
+    // cell under two policies that both entered the pipeline in the
+    // D138 follow-up series:
+    //   - fill-shorter refit with overflow-crop (banded subjects)
+    //   - pinhole perspective bake (even for spheres, the near-face
+    //     atoms can land a few % past the cell; the outer <svg>
+    //     crops at viewBox).
+    // Use a loose bound that catches "atoms flew to infinity"
+    // without falsely rejecting legitimate overflow.
     for (const a of thumb!.atoms) {
-      expect(a.x).toBeGreaterThanOrEqual(0);
-      expect(a.x).toBeLessThanOrEqual(1);
-      expect(a.y).toBeGreaterThanOrEqual(0);
-      expect(a.y).toBeLessThanOrEqual(1);
+      expect(Number.isFinite(a.x)).toBe(true);
+      expect(Number.isFinite(a.y)).toBe(true);
+      expect(a.x).toBeGreaterThan(-1);
+      expect(a.x).toBeLessThan(3);
+      expect(a.y).toBeGreaterThan(-1);
+      expect(a.y).toBeLessThan(3);
     }
+  });
+
+  it('guard passes → poster-scene atom count is strictly less than full-frame', () => {
+    // Fragmented fixture: 10-atom chain + 3 noise atoms. Cluster
+    // selection keeps only the chain, so the projected poster scene
+    // represents 10 atoms (minus any downsampling below the 32 cap).
+    const capsule = makeFragmentedCapsule();
+    const fullAtomCount = capsule.atoms.atoms.length;
+    const sceneJson = projectCapsuleToSceneJson(capsule)!;
+    const scene = JSON.parse(sceneJson);
+    expect(scene.atoms.length).toBeLessThan(fullAtomCount);
+    expect(scene.atoms.length).toBe(10);
+  });
+
+  it('guard fails → poster-scene atom count equals full-frame', () => {
+    // Balanced fixture: two 5-atom fragments. Guard rejects, full
+    // frame survives.
+    const capsule = makeTwoEqualFragmentsCapsule();
+    const fullAtomCount = capsule.atoms.atoms.length;
+    const sceneJson = projectCapsuleToSceneJson(capsule)!;
+    const scene = JSON.parse(sceneJson);
+    expect(scene.atoms.length).toBe(fullAtomCount);
   });
 
   it('different dense fixtures produce different thumb geometry', () => {

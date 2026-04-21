@@ -38,7 +38,7 @@
 
 import type { CapsulePreviewScene3D } from './capsule-preview-frame';
 import type { CapsulePreviewCamera2D } from './capsule-preview-camera';
-import { deriveCanonicalPreviewCamera } from './capsule-preview-camera';
+import { deriveMinorAxisCamera } from './capsule-preview-camera';
 import { deriveBondPairs } from './capsule-preview-project';
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -276,43 +276,10 @@ function applyRotation(
  *  already un-tilted; left-multiplying by `tilt⁻¹` would inject a
  *  spurious rotation. Short-circuit that case.
  */
-function untiltCamera(cam: CapsulePreviewCamera2D): CapsulePreviewCamera2D {
-  if (cam.classification === 'degenerate') return cam;
-
-  const TX = 0.087;
-  const TY = 0.175;
-  // Build tilt⁻¹ = rotY(-TY) · rotX(-TX).
-  const cx = Math.cos(-TX), sx = Math.sin(-TX);
-  const cy = Math.cos(-TY), sy = Math.sin(-TY);
-  const rotXinv = [1, 0, 0, 0, cx, -sx, 0, sx, cx];
-  const rotYinv = [cy, 0, sy, 0, 1, 0, -sy, 0, cy];
-  const mul = (A: readonly number[], B: readonly number[]): number[] => {
-    const o = new Array(9).fill(0);
-    for (let i = 0; i < 3; i++)
-      for (let j = 0; j < 3; j++)
-        for (let k = 0; k < 3; k++)
-          o[i * 3 + j] += A[i * 3 + k] * B[k * 3 + j];
-    return o;
-  };
-  const tiltInv = mul(rotYinv, rotXinv);
-  const untilted = mul(tiltInv, cam.rotation3x3);
-  return {
-    ...cam,
-    rotation3x3: untilted as CapsulePreviewCamera2D['rotation3x3'],
-  };
-}
-
-/**
- * Camera helper: canonical PCA basis with NO display tilt. The
- * canonical module already uses (e₁, e₂, e₃) = (X, Y, depth) for
- * general/planar cases — "smallest component for depth" is therefore
- * the PCA row 2. This wrapper removes the fixed cosmetic tilt.
- */
-export function deriveMinorAxisCamera(
-  scene: CapsulePreviewScene3D,
-): CapsulePreviewCamera2D {
-  return untiltCamera(deriveCanonicalPreviewCamera(scene));
-}
+// `untiltCamera` + `deriveMinorAxisCamera` live in
+// `capsule-preview-camera.ts`. This module imports the latter at
+// the top; no re-export needed (verified no consumer depends on
+// the sketch-perspective path).
 
 /**
  * Median 3D bond length from a pre-computed bond list. This is the

@@ -34,7 +34,7 @@ vite. `npm run app:serve` runs the full local pipeline
 | Multi-molecule | Add multiple structures to the scene via Add Molecule + placement mode |
 | Placement mode | Geometry-aware orientation + tangent placement near target molecule, translucent preview, drag to adjust, Place/Cancel. Preview and commit both use pre-transformed atoms from `solvePlacement()` for parity |
 | Interact modes | Atom (drag single atom), Move (translate connected component), Rotate (torque on component) |
-| Camera | Orbit mode (default). Object View panel: Center + Follow buttons. Free-Look available as advanced gated mode (`CONFIG.camera.freeLookEnabled`). See controls table below |
+| Camera | Orbit mode (default). Per-cluster Center + Follow action buttons live inside each BondedGroupsPanel row (phase-10 relocation — see Highlight Composition below). Free-Look available as advanced gated mode (`CONFIG.camera.freeLookEnabled`); when enabled, the `CameraControls` component overlays Free-Look-only actions (Freeze, Return to Object, mode toggle). See controls table below |
 | Physics | Full analytical Tersoff potential, Velocity Verlet, 4 substeps/frame, component-aware forces |
 | Rendering | InstancedMesh (2 draw calls for atoms+bonds), MeshStandardMaterial (PBR), camera-mounted 3-light rig (SpotLight headlight + DirectionalLight fill + ambient), axis triad |
 | Themes | Dark (default) / Light |
@@ -227,6 +227,8 @@ Allowed actions in review: **Simulation** (tap in mode switch — return to curr
 
 Restart uses dense restart frames recorded at 10 Hz containing pos + vel + bonds + config + boundary. Dense restart frames are preferred over sparse checkpoints because they are closer to the viewed time. The worker receives full dynamic state via a dedicated `restoreState` command. History is truncated after the restart point to maintain a monotonic timeline. Interaction state is NOT restored (prevents ghost spring forces).
 
+**Settings sliders on restart:** After a timeline or capsule restart, the Settings sheet sliders (drag strength, rotation strength, damping, speed) re-hydrate from the restored config so the controls reflect the active live-simulation values rather than sticking at the pre-restart positions.
+
 **Restart affordance (review mode):** A single pill `.timeline-restart-button` with a circular-arrow icon, the label **"Restart here"**, accent fill, and a downward pointer. There is no wrapping `ActionHint` tooltip — the earlier wrapping hint was a duplicate of the visible label and was removed.
 
 The DOM is deliberately **two elements**:
@@ -379,7 +381,7 @@ Placement commit does not change `lastFocusedMoleculeId` or retarget the camera.
 | 2-finger pinch | Zoom |
 | 2-finger drag | Pan camera |
 
-**Object View controls** (positioned below status block): Center (frame focused molecule) and Follow (continuous tracking) buttons with inline SVG icons. Help is available via Settings > Controls.
+**Cluster-scoped Center / Follow controls:** Each bonded-cluster row in the `BondedGroupsPanel` carries its own Center (one-shot camera frame on the cluster) and Follow (toggle orbit-follow of a frozen atom set) action buttons with inline SVG icons. Legacy "Object View" panel-level controls were removed; the `CameraControls` overlay now only renders Free-Look-mode actions when the Free-Look feature gate is enabled. Help is available via Settings > Controls.
 
 **Onboarding:** A welcome overlay ("Atom Simulation Studio" card) appears on each page load when the scene is ready. Dismisses on any tap with a sink animation toward the Settings button, teaching that guidance lives in Settings.
 
@@ -389,7 +391,7 @@ Placement commit does not change `lastFocusedMoleculeId` or retarget the camera.
 
 **Free-Look Mode** *(advanced, gated off by default — `CONFIG.camera.freeLookEnabled = false`)*
 
-When enabled, a mode toggle button appears in the Object View panel. Free-Look provides yaw+pitch camera rotation; atoms are focus-select only.
+When enabled, the `CameraControls` overlay renders a mode toggle button (plus Freeze / Return-to-Object actions). Free-Look provides yaw+pitch camera rotation; atoms are focus-select only.
 
 | Gesture / Control (Desktop) | Action |
 |-----------------------------|--------|
@@ -451,7 +453,7 @@ The interactive page uses a composition root pattern with React-authoritative UI
 - InstancedMesh for atoms and bonds (2 draw calls, geometric capacity growth)
 - OrbitControls for Orbit-mode camera (zoom, pan; rotation handled by custom quaternion orbit)
 - Interactive axis triad (ArrowHelper + sprites, scissor-test viewport, device-aware sizing 96–200px via `setOverlayLayout()`; drag=orbit/look, tap=snap, double-tap=reset on touch devices)
-- Object View controls: React CameraControls (Center + Follow action buttons) + OnboardingOverlay (page-load welcome card with sink animation)
+- Camera affordances: per-cluster Center + Follow action buttons inside `BondedGroupsPanel` rows; `CameraControls` component renders Free-Look-only actions when the Free-Look feature gate is enabled; `OnboardingOverlay` page-load welcome card with sink animation
 - MeshStandardMaterial with roughness 0.7, metalness 0 (PBR)
 - Camera-mounted 3-light rig (SpotLight headlight + DirectionalLight fill + AmbientLight)
 
@@ -525,7 +527,7 @@ npm run app:serve
 
 "Watch History" title, an "Open File" button, and a drag-and-drop zone. A support note describes accepted formats. File detection is automatic (format, version, and kind inspection) — there is no user type picker.
 
-The landing page also exposes a **share-code input** for opening capsules that live in the cloud (see Remote Open via Share Code below). The top bar in the workspace provides the same affordance so the user can switch to a shared capsule without returning to the landing state.
+The landing page also exposes a **share-code input** for opening capsules that live in the cloud (see Remote Open via Share Code below). The `WatchTopBar` file-identity chip (bottom-chrome toolbar, left cluster) carries the same affordance so the user can switch to a shared capsule without returning to the landing state.
 
 ### Supported Formats
 
@@ -564,14 +566,13 @@ Once a valid file loads, the app presents:
 | Element | Details |
 |---------|---------|
 | Canvas | Three.js scene (same renderer as lab, via thin adapter: `initForPlayback` + `updateReviewFrame`) |
-| Top bar | File-kind badge + file name + "Open File" action + share-code input (see Remote Open via Share Code above) |
-| Bonded-groups panel | Two-tier expand (large/small clusters) with hover preview, Center/Follow buttons, and authored color editing (see Color Editing below) |
-| Bottom-chrome toolbar | Left cluster hosts the top-bar identity; right cluster stacks the Lab entry capsule (primary **"Interact From Here"** pill + caret disclosure) above the Cinematic Camera pill. See Watch → Lab Entry Funnel below |
+| Bonded-groups panel | Right-rail overlay on the canvas: two-tier expand (large/small clusters) with hover preview, Center/Follow buttons, and authored color editing (see Color Editing below) |
+| Bottom-chrome toolbar | Left cluster hosts the `WatchTopBar` file-identity chip (file-kind badge + file name + "Open File" action + share-code input — see Remote Open via Share Code above); right cluster stacks the Lab entry capsule (primary **"Interact From Here"** pill + caret disclosure) above the Cinematic Camera pill. See Watch → Lab Entry Funnel below |
 | Timeline | Custom scrub track (thick variant from shared `timeline-track.css`) with pointer-event scrubbing and time readouts at both ends |
-| Playback dock | Transport cluster + utility cluster (repeat, smooth toggle, speed) + settings button (see Playback Dock below) |
+| Playback dock | Transport cluster (step back, play/pause, step forward, repeat) + utility cluster (speed slider) + settings button (see Playback Dock below) |
 | Settings sheet | Smooth Playback, Appearance, File Info, Help sections (see Settings below) |
 
-The workspace grid (`watch-workspace`) uses `grid-template-rows: auto 1fr auto` — top bar, canvas area (with overlaid bonded-groups panel), and bottom chrome region.
+The workspace grid (`watch-workspace`) uses `grid-template-rows: 1fr auto` — canvas area (with overlaid right-rail bonded-groups panel) on top and the bottom chrome region (toolbar + timeline + dock) below. The prior third row that hosted a dedicated top bar was removed when the file-identity chip moved into the bottom-chrome toolbar.
 
 ### Camera & Interaction
 
@@ -617,7 +618,7 @@ Cinematic camera is a default-on automatic framing system for Watch playback. It
 
 **Waiting for targets:** When no clusters exceed the minimum size threshold (e.g., early in a timeline before bonds form), cinematic is idle and reports "Waiting for major clusters" as its status.
 
-**UI toggle:** A "Cinematic Camera" pill is rendered between the info panel and the bonded-clusters panel. Clicking the pill toggles cinematic on or off. Status text beneath the pill reflects the current state:
+**UI toggle:** A "Cinematic Camera" pill (`WatchCinematicCameraToggle`) is rendered in the right cluster of the bottom-chrome toolbar, stacked directly below the Lab entry capsule. Clicking the pill toggles cinematic on or off. Status text beneath the pill reflects the current state:
 
 | Status text | Condition |
 |-------------|-----------|
@@ -642,9 +643,9 @@ The dock (`WatchDock`) is a 3-zone hierarchical toolbar using shared `dock-shell
 
 **Transport buttons (Step Back / Step Forward):** Dual-mode gesture — tap triggers a single dense-frame step; hold (past `HOLD_PLAY_THRESHOLD_MS` = 160 ms) initiates continuous directional playback with an immediate nudge frame. Release stops directional playback. The `useTransportButton` hook stores callbacks in refs so React re-renders do not kill active hold gestures. Pointer capture is attempted but optional; global fallback listeners (pointerup, pointercancel, blur, visibilitychange) ensure release is always detected.
 
-**Repeat:** Icon+label toggle button in the transport cluster — when active, playback wraps around (modulo) at file boundaries in both forward and backward directions. Stays enabled even when no file is loaded so users can pre-arm the loop.
+**Repeat:** Icon+label toggle button in the transport cluster — when active, playback wraps around (modulo) at file boundaries in both forward and backward directions. Stays enabled even when no file is loaded so users can pre-arm the loop. Default is ON.
 
-**Speed control:** `PlaybackSpeedControl` owns the full Zone 2 column: a continuous logarithmic slider (0.5x to 20x) on top, and a centered "Speed · 1.0x" meta row below. The slider maps `[0,1]` to `[SPEED_MIN, SPEED_MAX]` via `sliderToSpeed()`/`speedToSlider()` (shared from `src/config/playback-speed-constants.ts`). Logarithmic mapping gives ~37% of slider travel to the 0.5x-2x range where fine control matters most. The numeric readout (`.watch-dock__speed-value`) is a click-to-reset button (disabled at default to make the no-op visible). The slider sits inside a fixed-height row (`.watch-dock__speed-slider-row`, 18 px = `.dock-icon` baseline) so its thumb centerline aligns with the icon centerlines in neighboring columns across browsers (native range height varies 16–24 px).
+**Speed control:** `PlaybackSpeedControl` owns the full Zone 2 column: a continuous logarithmic slider (0.5x to 20x) on top, and a centered "Speed · Nx" meta row below (format string literal; the numeric value reflects the live speed). The slider maps `[0,1]` to `[SPEED_MIN, SPEED_MAX]` via `sliderToSpeed()`/`speedToSlider()` (shared from `src/config/playback-speed-constants.ts`). Logarithmic mapping gives ~37% of slider travel to the 0.5x-2x range where fine control matters most. The default speed is `SPEED_DEFAULT = 2.0x`. The numeric readout (`.watch-dock__speed-value`) is a click-to-reset button (disabled when already at the default to make the no-op visible). The slider sits inside a fixed-height row (`.watch-dock__speed-slider-row`, 18 px = `.dock-icon` baseline) so its thumb centerline aligns with the icon centerlines in neighboring columns across browsers (native range height varies 16–24 px).
 
 **Smooth playback** is configured in **Settings only** (default ON via `_smoothPlayback = true` in `watch/js/settings/watch-settings.ts`). It was previously a dock toggle but moved to Settings to give the speed slider room and to keep the dock format uniform (every column = icon+label).
 
@@ -874,7 +875,8 @@ This replaces the older pattern of clicking a visible left-half anchor directly.
 
 `WatchPlaybackModel` provides exact recorded-frame playback from `denseFrames` at canonical x1 rate from `VIEWER_DEFAULTS.baseSimRatePsPerSecond` (0.12 ps/s). Rate is file-length-independent — not normalized to file duration.
 
-- **Speed:** Continuous 0.5x to 20x multiplier applied to the advance delta
+- **Auto-play on open:** `watch-controller.ts` calls `playback.startPlayback()` as soon as a file successfully loads (guarded against single-frame files where start === end), so the workspace appears already in motion.
+- **Speed:** Continuous 0.5x to 20x multiplier applied to the advance delta, default `SPEED_DEFAULT = 2.0x`
 - **Direction:** Single `playDirection` field (1 = forward, -1 = backward, 0 = paused) — `isPlaying()` is derived, no separate boolean
 - **Repeat:** Modulo wrap at file boundaries in both directions
 - **Step:** Dense-frame-boundary stepping via binary search index

@@ -506,6 +506,15 @@
         display: flex;
         flex-direction: column;
         margin: 0;
+        /* Grid items default to `min-width: auto` (≈ min-content),
+           so a figure whose child SVG declares an intrinsic
+           `width` attribute (e.g. the 600-unit poster) refuses to
+           shrink below that width. When the viewport narrows, the
+           right grid column grows past its `1fr` allocation and
+           visually bleeds into the sticky TOC column. Forcing
+           min-width: 0 lets the cell shrink to its assigned track
+           so the SVG (sized via `width: 100%`) scales with it. */
+        min-width: 0;
       }
       /* Full-row figure breaks out of the cols-2 / cols-3 parent grid.
          Non-full figures inherit their width from the parent grid's

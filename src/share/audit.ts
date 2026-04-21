@@ -54,7 +54,18 @@ export type AuditEventType =
   // Class-based audit retention sweep. Emitted ONCE per sweep run
   // (mode=scrub or mode=delete-abuse-reports) with a summary of
   // affected rows. Per-row audit-on-audit would self-inflate.
-  | 'audit_swept';
+  | 'audit_swept'
+  // Preview scene-store backfill pass. Emitted ONCE per admin-endpoint
+  // invocation (POST /api/admin/backfill-preview-scenes) with a
+  // summary of the BackfillSummary shape. Severity mapping:
+  //   - 'info'     — summary.failed.length === 0
+  //   - 'warning'  — some rows failed but at least one updated
+  //   - 'critical' — pure failure (updated === 0, failed > 0)
+  // details_json shape (kept compact so audit rows don't blow up on
+  // pathological failures — per-row detail stays in [backfill] logs):
+  //   { dryRun, force, pageSize, currentThumbRev,
+  //     scanned, updated, skipped, failedCount }
+  | 'preview_backfill_run';
 
 export type AuditSeverity = 'info' | 'warning' | 'critical';
 

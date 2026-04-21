@@ -106,9 +106,9 @@ FCC lattice with 8-atom basis, lattice constant 3.567 Å.
 
 ```
 60
-C60 Buckminsterfullerene | 60 atoms | PE=-403.8149 eV | Fmax=6.91e-04 eV/A | method=steepest_descent
-C  0.00000000  0.70000000  3.39787138
-C  3.39787138  0.00000000  0.70000000
+frame=0  C60 Buckminsterfullerene | 60 atoms | PE=-403.814851 eV | Fmax=6.87e-04 eV/A | method=steepest_descent
+C 3.61194052 0.73024841 0.00000047
+C 3.39787138 0.00000000 0.70000000
 ...
 ```
 
@@ -121,8 +121,8 @@ Line 1: atom count. Line 2: comment with metadata. Lines 3+: element x y z.
   "c60": {
     "file": "c60.xyz",
     "n_atoms": 60,
-    "energy_eV": -403.8149,
-    "fmax_eV_A": 0.000691,
+    "energy_eV": -403.8148512,
+    "fmax_eV_A": 0.000687,
     "converged": true,
     "method": "steepest_descent",
     "description": "C60 Buckminsterfullerene"
@@ -138,6 +138,8 @@ Library structures are the **only validated starting point** for dynamics and co
 |--------|----------------:|----------------:|
 | `c60()` generator | 3.29 | -388.95 |
 | `structures/library/c60.xyz` | 0.0007 | -403.81 |
+
+(Values from `structures/library/manifest.json`.)
 
 For structures not in the library, relax with `simple_minimize()` or `minimize()` to Fmax < 10⁻³ eV/Å before use. See `scripts/scaling_research.py` for examples of loading library structures and relaxing larger ones on-the-fly.
 

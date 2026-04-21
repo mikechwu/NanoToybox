@@ -117,11 +117,23 @@ async function serveTerminalFallback(
         durationMs: Date.now() - startedAt,
         cause,
       });
+      // `module-import-failed` is a PLATFORM failure (missing asset
+      // in the build output) — every capsule is broken until a
+      // redeploy. Use `no-cache` so edge caches don't lock in the
+      // fallback PNG for 60 s after a bad deploy; ops pages faster
+      // and the retry loop is tight once the fix ships. Scene-
+      // specific Satori errors (`satori-threw:*`) remain cacheable
+      // at 60 s since they're per-capsule, not site-wide. Audit
+      // finding: SFH #6. */
+      const isPlatformFailure = cause.startsWith('module-import-failed:');
+      const cacheControl = isPlatformFailure
+        ? 'no-cache, no-store, must-revalidate'
+        : 'public, max-age=60';
       return new Response(fb.body, {
         status: 200,
         headers: {
           'Content-Type': 'image/png',
-          'Cache-Control': 'public, max-age=60',
+          'Cache-Control': cacheControl,
           'Access-Control-Allow-Origin': '*',
           'X-Content-Type-Options': 'nosniff',
         },

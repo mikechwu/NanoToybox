@@ -23,6 +23,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { PreviewThumbV1 } from '../src/share/capsule-preview-scene-store';
+import { ACCOUNT_THUMB_SIZE } from '../src/share/capsule-preview-thumb-size';
 import { CurrentThumbSvg } from '../src/share/capsule-preview-current-thumb';
 
 interface AccountMe {
@@ -90,31 +91,42 @@ function formatDate(iso: string): string {
 
 // ── Capsule preview thumbnail (V2 — frame-projected atoms) ─────────────────
 //
-// V2 contract (spec §Account Integration §5 + follow-up bonds-in-thumb):
-// the component consumes the `previewThumb: PreviewThumbV1` payload from
-// the account API verbatim — no client-side projection, no downsampling.
-// Server is the single point of downsampling on the read path (AC #26).
+// V2 contract (spec §Account Integration §5, D138 cluster-selection,
+// D138 follow-up path-batched renderer): the component consumes the
+// `previewThumb: PreviewThumbV1` payload from the account API verbatim
+// — no client-side projection, no downsampling. Server is the single
+// point of downsampling on the read path (AC #26).
 //
-// Two regimes, both capped at 20 DOM elements:
-//   - ATOMS-ONLY: up to 18 `<circle>` glyphs. Chosen when the source
-//     scene has no storage bonds, isn't dense enough, or when the
-//     derivation's visibility filter rejected too many bonds.
-//   - BONDS-AWARE: up to 12 `<circle>` glyphs + up to 6 `<line>`
-//     bonds, rendered bonds-under-atoms. Only chosen when the server
-//     confirms at least `MIN_ACCEPTABLE_BONDS` bonds survive
-//     visibility filtering.
+// Two regimes, now backed by the path-batched `CurrentThumbSvg`:
+//   - ATOMS-ONLY: up to ROW_ATOM_CAP_ATOMS_ONLY (18) atom glyphs,
+//     rendered as one or more batched `<path>` elements grouped by
+//     `(color, effectiveRadius)`. Chosen when the source scene has no
+//     storage bonds, isn't dense enough, or when the derivation's
+//     visibility filter rejected too many bonds.
+//   - BONDS-AWARE: up to ROW_ATOM_CAP_WITH_BONDS (24) atom glyphs +
+//     up to ROW_BOND_CAP (24) bonds, rendered as two stacked batched
+//     bond `<path>` elements (black border under, white fill on top)
+//     plus the atom paths. Paint order is bonds-border → bonds-fill
+//     → atoms. Only chosen when the server confirms at least
+//     MIN_ACCEPTABLE_BONDS bonds survive visibility filtering.
 //
-// Visual constants (atom radius, bond stroke width) come from
-// `src/share/capsule-preview-thumb-render.ts` — the same module the
-// server-side visibility filter reads from, so the "bond visible
-// after subtracting endpoint radii" calculation stays correct.
+// DOM cost is O(unique (color, radius) pairs + 2 bond passes), NOT
+// O(atoms + bonds), so raising the caps from 12/6 to 24/24 did NOT
+// cost a bigger DOM budget. The old ≤20 element budget is retired.
+//
+// Visual constants (atom radius, bond stroke widths, style preset)
+// live in `src/share/capsule-preview-thumb-render.ts` +
+// `capsule-preview-current-thumb.tsx` — the same modules the server-
+// side visibility filter reads from, so the "bond visible after
+// subtracting endpoint radii" calculation stays correct.
 //
 // Decorative: aria-hidden="true" — the row's code/title text is the
 // authoritative label.
 
-// Matches the `.acct__upload-thumb` track width in public/account-layout.css.
-// Keep these in sync so the SVG renders 1:1 (no DPR upscaling smear).
-const THUMB_SIZE = 40;
+// `.acct__upload-thumb` in public/account-layout.css mirrors
+// ACCOUNT_THUMB_SIZE (CSS can't import from TS). Update the TS
+// constant and the CSS rule together.
+const THUMB_SIZE = ACCOUNT_THUMB_SIZE;
 
 export function CapsulePreviewThumb({
   thumb,
@@ -128,7 +140,9 @@ export function CapsulePreviewThumb({
   // the shared module) so the server-side visibility filter stays in
   // lockstep with the rendered geometry.
   //
-  // DOM budget: svg(1) + rect(1) + up to 12 circles + up to 6 lines = 20.
+  // DOM cost under the path-batched renderer is O(1) in atom/bond
+  // count: svg + rect + 2 bond paths (border + fill) + K atom paths
+  // (K = unique (color, radius) groups, typically 1).
   return (
     <CurrentThumbSvg
       thumb={thumb}
@@ -139,9 +153,9 @@ export function CapsulePreviewThumb({
 }
 
 /** Neutral placeholder thumb for rows without a usable preview scene
- *  (pre-V2 rows not yet backfilled, kind ≠ 'capsule', etc.). 3 elements
- *  total — well under the 20-element budget and visually quiet so the
- *  CSS grid track does not collapse. */
+ *  (pre-V2 rows not yet backfilled, kind ≠ 'capsule', etc.). 3
+ *  elements total; visually quiet so the CSS grid track does not
+ *  collapse. */
 export function PlaceholderThumb(): React.ReactElement {
   return (
     <svg
@@ -685,7 +699,18 @@ function AccountApp() {
                   No capsules yet. Publish from <a href="/lab/">Lab</a> to create a share link.
                 </p>
               ) : (
-                <ul className="acct__uploads-list">
+                // The uploads list drives its grid track + thumb
+                // dimension from a single CSS custom property. We
+                // set the property here from ACCOUNT_THUMB_SIZE so
+                // the TS constant is the authoritative source — no
+                // CSS/TS mirror to keep in sync. CSS has a
+                // pre-hydration fallback for SSR.
+                <ul
+                  className="acct__uploads-list"
+                  style={{
+                    ['--account-thumb-size' as string]: `${ACCOUNT_THUMB_SIZE}px`,
+                  } as React.CSSProperties}
+                >
                   {capsules.map((c, i) => {
                     const title = c.title?.trim();
                     // Row identifier used by delete-confirm + action

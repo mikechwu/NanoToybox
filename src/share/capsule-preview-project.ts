@@ -16,6 +16,7 @@
 import type { CapsulePreviewScene3D } from './capsule-preview-frame';
 import {
   deriveCanonicalPreviewCamera,
+  deriveMinorAxisCamera,
   type CapsulePreviewCamera2D,
 } from './capsule-preview-camera';
 
@@ -148,6 +149,177 @@ export function projectPreviewScene(
   };
 }
 
+/** Default pinhole focal-length factor — camera placed `K·S` behind
+ *  the nearest atom where S is the depth span. K ≈ 3.17 places the
+ *  farthest atom at ~76% the size of the closest (0.6× the strength
+ *  of the previous K=1.5 which gave a 60% far/near ratio). Milder
+ *  depth cue than classical pinhole; chosen because the user
+ *  reported the stronger perspective made dense fixtures (CNT,
+ *  graphene) read as distorted.
+ *
+ *  Math: to halve the effect, K' solves
+ *  `(1 - K'/(K'+1)) = 0.6 · (1 - K/(K+1))` → K' = (K+1)/0.6 − 1.
+ *  For K=1.5, K' ≈ 3.166. */
+export const PERSPECTIVE_K_DEFAULT = 3.17;
+
+/**
+ * Project a 3D scene through pinhole perspective (classical
+ * `x_screen = x_cam · s(z)`, `r_screen = r_base · s(z)` with
+ * `s(z) = D / (D + z_max − z)`, `D = K·S`). Output shape matches
+ * {@link projectPreviewScene} so downstream helpers (bond-pair
+ * translation, thumb baker) can consume either projection style
+ * without branching.
+ *
+ * **Why separate from the orthographic `projectPreviewScene`:**
+ * the orthographic projection is load-bearing for the 1200×630 OG
+ * poster — every atom renders at one uniform radius there so the
+ * poster pane reads as a "structural diagram". The account-row
+ * thumb wants depth cues at 96 px where it helps the eye separate
+ * near/far atoms. This helper lets the two surfaces pick the math
+ * they want from the same 3D scene without the poster inheriting
+ * thumb-specific perspective.
+ *
+ * Math — mirrors `renderPerspectiveSketch` in
+ * `capsule-preview-sketch-perspective.ts`:
+ *
+ *   1. Rotate atoms into camera space with the canonical PCA basis.
+ *   2. Compute `z_max` (nearest), `z_min` (farthest), `S = z_max − z_min`.
+ *   3. `D = K · S`; for every atom `s(z) = D / (D + z_max − z)`.
+ *   4. Pre-fit screen coords `x′ = x · s(z)`, `y′ = y · s(z)`.
+ *   5. Compute 2D bounds of pre-fit coords and fit-to-bounds into
+ *      the padded target (same formula as `projectPreviewScene`).
+ *   6. Per-atom radius: `r = base_r · s(z)`. Near atoms larger, far
+ *      atoms smaller — depth cue is encoded in the stored r.
+ *
+ * Degenerate-depth handling: when the rotated z-span collapses to
+ * zero (planar subject viewed face-on), `s(z) ≡ 1` uniformly and
+ * the output is identical to the orthographic path. No divide-by-
+ * zero risk; no caller branching needed.
+ */
+export function projectPreviewScenePerspective(
+  scene: CapsulePreviewScene3D,
+  opts: ProjectSceneOptions & {
+    cameraDistanceFactor?: number;
+    /** Override the base atom radius (at `s=1`, the near-face
+     *  depth). Default is the same density-aware formula the
+     *  orthographic path uses (`availDim · 0.035`). Callers who
+     *  want chunkier atoms (e.g. the account thumb at 96 px)
+     *  double this; callers who want the poster-style thinness
+     *  leave it alone. Passed-in value is in PIXEL units,
+     *  measured before normalization to storage. */
+    baseAtomRadius?: number;
+  } = {},
+): CapsulePreviewRenderScene {
+  const {
+    targetWidth,
+    targetHeight,
+    padding,
+    minRadius,
+    maxRadius,
+  } = { ...DEFAULT_OPTIONS, ...opts };
+  const K = opts.cameraDistanceFactor ?? PERSPECTIVE_K_DEFAULT;
+  // MUST match the camera that `renderPerspectiveSketch` uses on
+  // the audit page — otherwise per-atom depths diverge, the
+  // baked-thumb perspective stops agreeing with the live
+  // experimental preview, and the "byte-equivalent to the audit-
+  // page math" contract is broken. Both surfaces now import
+  // `deriveMinorAxisCamera` from `capsule-preview-camera.ts`
+  // (canonical PCA basis WITHOUT the 5°/10° cosmetic tilt the
+  // orthographic path applies).
+  const camera = opts.camera ?? deriveMinorAxisCamera(scene);
+  const [cx, cy, cz] = scene.bounds.center;
+
+  // 1) Rotate into camera space.
+  const rotated: Array<{
+    atomId: number;
+    x: number;
+    y: number;
+    z: number;
+    colorHex: string;
+  }> = [];
+  for (const atom of scene.atoms) {
+    const p: [number, number, number] = [atom.x - cx, atom.y - cy, atom.z - cz];
+    const r = applyRotation(camera.rotation3x3, p);
+    rotated.push({ atomId: atom.atomId, x: r[0], y: r[1], z: r[2], colorHex: atom.colorHex });
+  }
+
+  // 2) Depth bounds + focal distance.
+  let zMin = Infinity, zMax = -Infinity;
+  for (const a of rotated) {
+    if (a.z < zMin) zMin = a.z;
+    if (a.z > zMax) zMax = a.z;
+  }
+  const zSpan = Math.max(1e-9, zMax - zMin);
+  const D = K * zSpan;
+  const perspScale = (z: number): number => D / (D + (zMax - z));
+
+  // 3) Apply perspective pre-fit.
+  interface Persp { atomId: number; x: number; y: number; z: number; colorHex: string; s: number }
+  const persp: Persp[] = rotated.map((a) => {
+    const s = perspScale(a.z);
+    return { ...a, x: a.x * s, y: a.y * s, s };
+  });
+
+  // 4) Fit post-perspective 2D bounds into the padded target.
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const a of persp) {
+    if (a.x < minX) minX = a.x;
+    if (a.y < minY) minY = a.y;
+    if (a.x > maxX) maxX = a.x;
+    if (a.y > maxY) maxY = a.y;
+  }
+  // Degenerate-span guard. The `Math.max(1e-9, ...)` floor that
+  // used to live here was a division-by-zero guard, not a
+  // degeneracy guard — at `spanX = 0, span=1e-9`, `fit = availW /
+  // 1e-9 ≈ 5e11`. Every atom then lands at ±Infinity, quietly
+  // propagating NaN into the stored thumb (audit finding: SFH #3).
+  // If either 2D span is below a real-world-meaningful threshold
+  // (atoms truly coincident in the projected plane), throw an
+  // explicit error so the publish-core catch can log and fall back.
+  const rawSpanX = maxX - minX;
+  const rawSpanY = maxY - minY;
+  const DEGENERATE_2D_SPAN_THRESHOLD = 1e-6;
+  if (rawSpanX < DEGENERATE_2D_SPAN_THRESHOLD && rawSpanY < DEGENERATE_2D_SPAN_THRESHOLD) {
+    throw new Error(
+      `projectPreviewScenePerspective: degenerate 2D projection — spanX=${rawSpanX}, spanY=${rawSpanY}`,
+    );
+  }
+  const spanX = Math.max(DEGENERATE_2D_SPAN_THRESHOLD, rawSpanX);
+  const spanY = Math.max(DEGENERATE_2D_SPAN_THRESHOLD, rawSpanY);
+  const availW = targetWidth * (1 - 2 * padding);
+  const availH = targetHeight * (1 - 2 * padding);
+  const fit = Math.min(availW / spanX, availH / spanY);
+  const midX = (minX + maxX) / 2;
+  const midY = (minY + maxY) / 2;
+
+  // 5) Base atom radius — same formula as projectPreviewScene,
+  // unless the caller override is set. The per-atom scale `s`
+  // then modulates it so near atoms render larger than far atoms.
+  const baseR = opts.baseAtomRadius ?? Math.min(
+    maxRadius,
+    Math.max(minRadius, Math.min(availW, availH) * 0.035),
+  );
+
+  const atoms: CapsulePreviewAtom2D[] = persp.map((a) => ({
+    atomId: a.atomId,
+    x: targetWidth / 2 + (a.x - midX) * fit,
+    y: targetHeight / 2 + (a.y - midY) * fit,
+    r: baseR * a.s,  // ← per-atom perspective-scaled radius
+    colorHex: a.colorHex,
+    depth: a.z,
+  }));
+
+  // Sort by depth so nearer atoms draw last (same convention as the
+  // orthographic path).
+  atoms.sort((p, q) => p.depth - q.depth);
+
+  return {
+    atoms,
+    bounds: { width: targetWidth, height: targetHeight },
+    classification: camera.classification,
+  };
+}
+
 /**
  * Derive bond-pair indices from a projected render scene using a simple
  * distance cutoff. Used at publish time so the poster pane can render
@@ -212,8 +384,11 @@ export function deriveBondPairsForProjectedScene(
   projected: CapsulePreviewRenderScene,
   cutoff: number,
   minDist: number,
+  opts?: { precomputedRawPairs?: ReadonlyArray<{ a: number; b: number }> },
 ): Array<{ a: number; b: number; depth: number }> {
-  const rawPairs = deriveBondPairs(scene3D, cutoff, minDist);
+  const rawPairs = opts?.precomputedRawPairs
+    ? opts.precomputedRawPairs.slice()
+    : deriveBondPairs(scene3D, cutoff, minDist);
   if (rawPairs.length === 0) return [];
   // scene3D.atoms indices are the basis of rawPairs; map each pre-sort
   // atomId to its post-sort index in `projected.atoms`.

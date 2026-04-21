@@ -249,6 +249,135 @@ export function makeOxidePatchCapsule(): AtomDojoPlaybackCapsuleFileV1 {
   return buildCapsule(atoms, positions);
 }
 
+// ── Cluster-selection fixtures (ADR D138) ─────────────────────────────
+
+/**
+ * One dominant cluster + small noise fragments. The dominance guard
+ * passes (ratio ≫ 2, fraction ≫ 0.6), so the cluster selector picks
+ * the big fragment and drops the noise.
+ *
+ * Shape: a 10-atom linear carbon chain (atoms 0–9, spaced 1.40 Å) plus
+ * three isolated carbon atoms far from the chain AND from each other
+ * (distances > the default 1.85 Å cutoff) so they form 3 singleton
+ * components. Total 13 atoms, components: 1×10 + 3×1.
+ *   ratio = 10/1 = 10.0 ≥ 2.0 ✓
+ *   fraction = 10/13 ≈ 0.77 ≥ 0.6 ✓
+ */
+export function makeFragmentedCapsule(): AtomDojoPlaybackCapsuleFileV1 {
+  const atoms: Array<{ id: number; element: string }> = [];
+  const positions: number[] = [];
+  const dx = 1.40;
+  for (let i = 0; i < 10; i++) {
+    atoms.push({ id: i, element: 'C' });
+    positions.push(i * dx, 0, 0);
+  }
+  // Noise atoms placed far from the chain and from each other so they
+  // don't bond to anything (> 1.85 Å default cutoff and beyond minDist).
+  const noise: Array<[number, number, number]> = [
+    [0, 10, 0],
+    [20, 10, 0],
+    [10, 20, 10],
+  ];
+  for (const [x, y, z] of noise) {
+    atoms.push({ id: atoms.length, element: 'C' });
+    positions.push(x, y, z);
+  }
+  return buildCapsule(atoms, positions);
+}
+
+/**
+ * Two balanced fragments (collision-setup / reactant-product pair).
+ * The dominance guard rejects (ratio = 1.0 < 2.0 AND fraction = 0.5 <
+ * 0.6), so selection falls back to the full frame.
+ *
+ * Shape: two 5-atom linear carbon chains separated by > 1.85 Å cutoff
+ * (center-to-center ~20 Å). Total 10 atoms, components: 2×5.
+ */
+export function makeTwoEqualFragmentsCapsule(): AtomDojoPlaybackCapsuleFileV1 {
+  const atoms: Array<{ id: number; element: string }> = [];
+  const positions: number[] = [];
+  const dx = 1.40;
+  for (let i = 0; i < 5; i++) {
+    atoms.push({ id: atoms.length, element: 'C' });
+    positions.push(i * dx, 0, 0);
+  }
+  for (let i = 0; i < 5; i++) {
+    atoms.push({ id: atoms.length, element: 'C' });
+    positions.push(20 + i * dx, 0, 0);
+  }
+  return buildCapsule(atoms, positions);
+}
+
+/**
+ * Close-approach proximity-fusion fixture — locks in the documented
+ * limitation that the preview selector operates on a proximity graph,
+ * NOT authoritative molecular connectivity (ADR D138).
+ *
+ * Two 3-atom C chains placed so the inter-fragment closest pair falls
+ * at exactly 1.80 Å — between the intra-fragment length (1.40 Å) and
+ * the default cutoff (1.85 Å). Atom IDs 10, 20, 30, 40, 50, 60 are
+ * spread so tie-break assertions can distinguish them.
+ *
+ *   Fragment A: (0, 0, 0), (1.40, 0, 0), (2.80, 0, 0)
+ *   Fragment B: (4.60, 0, 0), (6.00, 0, 0), (7.40, 0, 0)
+ *   Inter-fragment A2↔B0: |4.60 − 2.80| = 1.80 Å
+ *
+ * With the default 1.85 Å cutoff the two fragments fuse into ONE
+ * 6-atom "cluster" (proximity graph, not chemistry). With a tightened
+ * 1.60 Å cutoff the inter-fragment bond drops, revealing 2 balanced
+ * components that fail the dominance guard and fall back to full frame.
+ *
+ * The fixture does NOT bake the `bondPolicy` — tests pass `cutoff` and
+ * `minDist` explicitly to `deriveBondPairs` to exercise both outcomes.
+ */
+export function makeCloseApproachCapsule(): AtomDojoPlaybackCapsuleFileV1 {
+  const atoms: Array<{ id: number; element: string }> = [
+    { id: 10, element: 'C' },
+    { id: 20, element: 'C' },
+    { id: 30, element: 'C' },
+    { id: 40, element: 'C' },
+    { id: 50, element: 'C' },
+    { id: 60, element: 'C' },
+  ];
+  const positions: number[] = [
+    0.00, 0.00, 0.00,
+    1.40, 0.00, 0.00,
+    2.80, 0.00, 0.00,
+    4.60, 0.00, 0.00,
+    6.00, 0.00, 0.00,
+    7.40, 0.00, 0.00,
+  ];
+  // buildCapsule expects atomIds at index i to equal i, so bypass the
+  // helper and inline the shape to keep the distinctive atomIds.
+  const n = atoms.length;
+  return {
+    format: 'atomdojo-history',
+    version: 1,
+    kind: 'capsule',
+    producer: { ...PRODUCER },
+    simulation: {
+      units: { time: 'ps', length: 'angstrom' },
+      maxAtomCount: n,
+      durationPs: 0,
+      frameCount: 1,
+      indexingModel: 'dense-prefix',
+    },
+    atoms: { atoms: atoms.map((a) => ({ ...a })) },
+    bondPolicy: { ...BOND_POLICY },
+    timeline: {
+      denseFrames: [
+        {
+          frameId: 0,
+          timePs: 0,
+          n,
+          atomIds: atoms.map((a) => a.id),
+          positions: positions.slice(),
+        },
+      ],
+    },
+  };
+}
+
 /** Simple-organic (glycine-like, NH₂-CH₂-COOH). ~10 heavy atoms with
  *  C/H/N/O mix. Tests the common organic-chemistry case where CPK
  *  color dominates recognizability. Hydrogens attached so the

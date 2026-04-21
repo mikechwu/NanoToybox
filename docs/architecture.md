@@ -76,14 +76,15 @@ Everything beyond the browser is Cloudflare-native. Pages Functions serve the AP
 | `watch/` | product | Watch frontend: playback, review, handoff trigger |
 | `viewer/` | product | Static XYZ viewer (thin; not Watch) |
 | `src/` | shared | Pure TypeScript core used by both apps |
-| `functions/` | backend | Pages Functions (share links, auth, moderation) |
+| `functions/` | backend | Pages Functions (share links, auth, moderation, preview poster, admin) |
 | `workers/` | backend | Cron worker (cleanup, reconciliation) |
+| `preview-audit/` | dev | Dev-only Vite workbench for the capsule-preview render pipeline |
 | `sim/` | research | Python reference engine and validation |
 | `ml/` | research | Force-decomposition and surrogate experiments |
 | `migrations/` | data | D1 schema migrations |
 | `structures/` | data | Bundled sample structures |
 | `public/`, `account/`, `privacy/`, `privacy-request/`, `terms/` | static | Static assets, policy and account HTML surfaces |
-| `scripts/` | ops | Build and maintenance scripts |
+| `scripts/` | ops | Build and maintenance scripts (incl. preview-scene backfill) |
 | `tests/` | tests | Vitest unit + Playwright E2E |
 | `docs/` | docs | This directory |
 
@@ -162,7 +163,7 @@ Where to add code → see [contributing.md#extension-points](contributing.md#ext
 | `src/appearance/` | Bonded-group color assignments (authored overrides, persistence keys) |
 | `src/input/` | Camera gesture constants (shared by Lab + Watch camera input) |
 | `src/camera/` | Cinematic camera primitives |
-| `src/share/` | Share-code format, share-record shape, capsule-preview V2 pipeline (projection → PCA camera → scene + thumb store → shared render constants) |
+| `src/share/` | Share-code format, share-record shape, capsule-preview V2 pipeline (PCA camera → pinhole perspective projection → cluster-selected subject → scene + thumb store → shared render constants → publish-core single-parse boundary) |
 | `src/policy/` | Policy version + acceptance config (consumed by functions and frontend) |
 | `src/format/` | Byte formatting helpers |
 | `src/types/` | Shared interface declarations |
@@ -178,14 +179,19 @@ Three domains in this list carry more weight than the others:
   - `capsule-preview.ts` — `sanitizeCapsuleTitle`, `TEMPLATE_VERSION = 2`, FNV-1a32 helpers (the title sanitizer here is the sole non-Latin fallback boundary, and `TEMPLATE_VERSION` is the dynamic-poster cache-key constant).
   - `capsule-preview-frame.ts` — `buildPreviewSceneFromCapsule` picks `timeline.denseFrames[0]`.
   - `capsule-preview-colors.ts` — CPK element table + per-bonded-group appearance fan-out.
-  - `capsule-preview-camera.ts` — PCA (Jacobi) + `{spherical, planar, linear, general, degenerate}` classification + deterministic sign normalization + fixed 5°/10° tilt.
-  - `capsule-preview-project.ts` — 3D → 2D projection; `deriveBondPairs` runs the distance-cutoff rule from `bondPolicy`.
   - `capsule-preview-sampling.ts` — `sampleEvenly`, `sampleForSilhouette` (extrema + FPS), `sampleForBondedThumb` (graph-aware BFS + connection-count scoring + FPS fill).
-  - `capsule-preview-scene-store.ts` — types (`PreviewSceneV1`, `PreviewStoredThumbV1` with `CURRENT_THUMB_REV = 2`, `PreviewThumbV1`), `buildPreviewSceneV1`, `buildStoredThumbFromFullScene`, `parsePreviewSceneV1` (malformed-thumb and non-finite guards), `derivePreviewThumbV1` (stored-thumb fast path + tiered-visibility live-sampling fallback).
-  - `capsule-preview-sketch.ts` — standalone reference SVG sketch renderer with three presets (`AUDIT_LARGE_PRESET`, `POSTER_PRESET`, `THUMB_PRESET`). Not in the production render path — the poster Function and account row consume `CurrentPosterSceneSvg` and `CurrentThumbSvg` directly (below). The module is retained as a renderer reference whose output invariants are locked by `tests/unit/capsule-preview-sketch*.test.ts`, `capsule-preview-audit-metrics.test.ts`, and `capsule-preview-poster-figure.test.ts`.
+  - `capsule-preview-scene-store.ts` — types (`PreviewSceneV1`, `PreviewStoredThumbV1` with `CURRENT_THUMB_REV = 15`, `PreviewThumbV1`), scene/thumb caps (`SCENE_ATOM_CAP = 32`, `SCENE_BOND_CAP = 64`, `ROW_ATOM_CAP_WITH_BONDS = 5000`, `ROW_BOND_CAP = 5000`, `ROW_ATOM_CAP_ATOMS_ONLY = 18`), `buildPreviewSceneV1`, `buildStoredThumbFromFullScene`, `parsePreviewSceneV1` (malformed-thumb and non-finite guards), `derivePreviewThumbV1` (stored-thumb fast path + tiered-visibility live-sampling fallback).
+  - `capsule-preview-cluster-select.ts` — `selectPreviewSubjectCluster` picks the largest bonded cluster as the preview subject when the dominance guard passes (D138); otherwise returns the full frame. Shared by the publish pipeline and the audit page so both represent the same subject. "Bonded cluster" here means a proximity-graph connected component — not authoritative molecular connectivity (see D138 scope caveat).
+  - `capsule-preview-project.ts` — pinhole perspective 3D → 2D projector (`PERSPECTIVE_K_DEFAULT = 3.17`); `deriveBondPairs` / `deriveBondPairsForProjectedScene` run the distance-cutoff rule from `bondPolicy`.
+  - `capsule-preview-camera.ts` — PCA (Jacobi) + `{spherical, planar, linear, general, degenerate}` classification + deterministic sign normalization + fixed 5°/10° tilt; also exposes `deriveMinorAxisCamera` (shared by the baked thumb and the audit page so the published thumb matches the live preview).
+  - `capsule-preview-sketch.ts` — reference orthographic SVG sketch renderer with three presets (`AUDIT_LARGE_PRESET`, `POSTER_PRESET`, `THUMB_PRESET`). Not in the production render path — the poster Function and account row consume `CurrentPosterSceneSvg` and `CurrentThumbSvg` directly (below). Retained as a renderer reference whose output invariants are locked by `tests/unit/capsule-preview-sketch.test.ts`, `capsule-preview-audit-metrics.test.ts`, and `capsule-preview-poster-figure.test.ts`.
+  - `capsule-preview-sketch-perspective.ts` — pinhole-perspective sketch renderer (single-pass depth-sorted paint list) used by the `preview-audit/` workbench; drives the visual contract that the shipped `CurrentPosterSceneSvg` / `CurrentThumbSvg` are tuned against.
   - `capsule-preview-thumb-render.ts` — shared constants (`BONDED_ATOM_RADIUS = 2.8`, `BOND_STROKE_WIDTH = 2.5`, `MIN_VISIBLE_BOND_VIEWBOX = 3`, `RELAXED_VISIBLE_BOND_VIEWBOX = 2.0`, atoms-only density floor, margin resolvers) imported by BOTH the scene-store visibility filter and the thumb renderer — a single-point coupling that keeps the publish-time refit math in sync with the renderer.
+  - `capsule-preview-thumb-size.ts` — `ACCOUNT_THUMB_SIZE = 96` (single source of truth for the account-row thumb surface, mirrored by `public/account-layout.css`).
+  - `capsule-preview-account-derive.ts` — wires `derivePreviewThumbV1` with the account-row defaults (`ROW_ATOM_CAP_ATOMS_ONLY`, `ROW_ATOM_CAP_WITH_BONDS`, `ROW_BOND_CAP`, `sampleForSilhouette`); the single caller is `functions/api/account/capsules/index.ts`.
   - `capsule-preview-current-poster.tsx` — shared poster SVG (`CurrentPosterSceneSvg`) consumed by the Satori composer at `functions/_lib/capsule-preview-image.tsx`.
   - `capsule-preview-current-thumb.tsx` — shared thumb SVG (`CurrentThumbSvg`) consumed by `account/main.tsx`. Uses `fill="currentColor"` so ink inherits `--color-text` from `public/account-layout.css` when mounted in the account theme.
+  - `publish-core.ts` — `preparePublishRecord` / `projectCapsuleToSceneJson` / `persistRecord`: the single-parse publish pipeline (see §Capsule preview).
   - `capsule-preview-denylist.ts` — title denylist (shared with the publish path).
 
 ## Backend <a id="backend"></a>
@@ -194,7 +200,7 @@ The backend is Cloudflare-native: Pages Functions for APIs, D1 for metadata, R2 
 
 ### Services
 
-- **Pages Functions** (`functions/`) serve the API surface: share-link publish/read, auth, account, moderation, policy, privacy-request, admin gate, capsule preview poster. One Function per route; shared helpers live at `functions/` root (auth-middleware, http-cache, oauth-helpers, signed-intents, policy-acceptance) and Function-only libs live under `functions/_lib/` (capsule-preview Satori composer + bundled Latin font as base64, since Pages Functions esbuild has no `.ttf` loader).
+- **Pages Functions** (`functions/`) serve the API surface: share-link publish/read, auth, account, moderation, policy, privacy-request, admin gate, capsule preview poster (`functions/api/capsules/[code]/preview/poster.ts`), and admin backfill for preview scenes (`functions/api/admin/backfill-preview-scenes.ts`). One Function per route; shared helpers live at `functions/` root (auth-middleware, http-cache, oauth-helpers, signed-intents, policy-acceptance, admin-gate) and Function-only libs live under `functions/_lib/` (capsule-preview Satori composer at `capsule-preview-image.tsx` + bundled Latin font as base64, since Pages Functions esbuild has no `.ttf` loader).
 - **D1** is the authoritative metadata store: share records, user accounts, policy acceptance history, audit trail. Schema lives in `migrations/`.
 - **R2** stores capsule blobs keyed by share code. Blob reads go through a Function to apply privacy and moderation rules.
 - **Cron worker** (`workers/cron-sweeper/`) runs scheduled reconciliation: orphan-blob cleanup, abandoned-capsule pruning, audit-log rotation.
@@ -326,14 +332,14 @@ A single JSON cell per row carries two artifacts inside one `PreviewSceneV1` sha
   atoms: [{x,y,r,c}],           // up to SCENE_ATOM_CAP=32 — feeds the 1200×630 poster
   bonds?: [{a,b}],              // up to SCENE_BOND_CAP=64 — indices into atoms[]
   hash: "<8hex FNV-1a32>",      // over the atom array; bond-independent
-  thumb?: {                     // pre-baked at publish time from the FULL capsule
-    rev: 2,                     //   (CURRENT_THUMB_REV, bumps when algorithm changes)
-    atoms: [{x,y,r,c}],         //   up to 12 atoms, already refit into the 40×40 thumb cell
-    bonds?: [{a,b}]             //   up to 6 bonds (coverage-selected, degree-capped)
+  thumb?: {                     // pre-baked at publish time from the selected-subject atoms
+    rev: 15,                    //   (CURRENT_THUMB_REV, bumps when algorithm changes)
+    atoms: [{x,y,r,c}],         //   up to ROW_ATOM_CAP_WITH_BONDS=5000, already refit into the thumb cell
+    bonds?: [{a,b}]             //   up to ROW_BOND_CAP=5000 (coverage-selected, cycle-preserving)
   } }
 ```
 
-The critical property: the `thumb` payload is derived from the **full** capsule atoms, not from the 32-atom poster subset. That avoids the 60 → 32 → 12 double-downsampling cascade that would erase dense-structure topology (C60 et al.). Atoms + bonds in the thumb are already refit into the 40×40 thumb cell in 0..1-normalized space, so the account API emits them verbatim. `rev` lets backfill scripts identify stale rows when the thumb pipeline changes.
+The critical property: the `thumb` payload is derived from the **selected-subject atoms** — cluster-filtered when the dominance guard passes (D138), otherwise the full frame — not from the 32-atom poster subset. That avoids the double-downsampling cascade that would erase dense-structure topology (C60 et al.). Atoms + bonds in the thumb are already refit into the account thumb cell (`ACCOUNT_THUMB_SIZE = 96` px, see `src/share/capsule-preview-thumb-size.ts`) in 0..1-normalized space, so the account API emits them verbatim. `rev` lets backfill scripts identify stale rows when the thumb pipeline changes — every observable output change bumps it (currently `15`; the full history lives in the JSDoc above `CURRENT_THUMB_REV`).
 
 #### Publish flow (single-parse boundary)
 
@@ -342,8 +348,9 @@ The critical property: the `thumb` payload is derived from the **full** capsule 
 1. Parse + validate the capsule file.
 2. `buildPreviewSceneFromCapsule` picks the first dense frame.
 3. `capsule-preview-camera` computes the PCA canonical camera + tilt.
-4. `capsule-preview-project` projects 3D → 2D and derives bond pairs from the capsule's `bondPolicy`.
-5. Build the 32-atom **poster scene** (`buildPreviewSceneV1`) AND the 12-atom **full-atoms thumb** (`buildStoredThumbFromFullScene`); attach the thumb to the scene.
+4. `capsule-preview-project` derives bond pairs on the FULL frame from the capsule's `bondPolicy` (before any sampling so the graph reflects real nearest-neighbor connectivity).
+4a. `capsule-preview-cluster-select.selectPreviewSubjectCluster` filters the scene to the largest bonded cluster when the dominance guard accepts it (D138). Falls back to the full frame otherwise. The filtered atoms + bonds feed BOTH the 32-atom poster scene AND the selected-subject thumb below. "Bonded cluster" = connected component of the preview proximity graph; see D138 for the scope caveat.
+5. Project the selected-subject scene 3D → 2D and build the 32-atom **poster scene** (`buildPreviewSceneV1`) AND the **selected-subject thumb** (`buildStoredThumbFromFullScene`, capped at `ROW_ATOM_CAP_WITH_BONDS`/`ROW_BOND_CAP`); attach the thumb to the scene.
 6. Return `previewSceneV1Json` on the `PreparedPublishRecord`.
 
 `persistRecord` INSERTs the JSON into `preview_scene_v1` unchanged. The whole pipeline runs once per publish; read paths never re-project.
@@ -372,7 +379,9 @@ GET /api/account/capsules                       (functions/api/account/capsules/
   → authenticate → keyset query of capsule_share (ORDER BY created_at DESC, share_code DESC)
   → derivePreviewThumbV1(row.preview_scene_v1, { sampler: sampleForSilhouette, caps, … })
       fast path: if scene.thumb present at rev ≥ CURRENT_THUMB_REV → return verbatim
-      fallback:  atoms-only (≤18) or tiered bonded (≤12 atoms + ≤6 bonds)
+      fallback:  atoms-only (≤ROW_ATOM_CAP_ATOMS_ONLY=18) or tiered bonded
+                  (≤ROW_ATOM_CAP_WITH_BONDS=5000 atoms + ≤ROW_BOND_CAP=5000 bonds,
+                   cycle-preserving picker)
   → return AccountCapsuleSummary[] with `previewThumb: PreviewThumbV1 | null`
 ```
 
@@ -380,7 +389,20 @@ GET /api/account/capsules                       (functions/api/account/capsules/
 
 #### Account UI render (`account/main.tsx`)
 
-The account page is a thin consumer: it imports `CurrentThumbSvg` from `src/share/capsule-preview-current-thumb.tsx` and renders the server-derived payload verbatim in two regimes keyed off payload shape: **atoms-only** (≤18 `<circle>` elements) or **bonds-aware** (≤12 circles + ≤6 `<line>` elements). DOM budget is ≤20 elements per thumb. `PlaceholderThumb` covers `previewThumb: null` rows. The shared SVG sets `fill="currentColor"` so ink inherits `--color-text` from `public/account-layout.css` and follows the account theme. Under the hood, `CurrentThumbSvg` imports `capsule-preview-thumb-render.ts` so radius, stroke, and halo values are the same constants the scene-store used when filtering bond visibility.
+The account page is a thin consumer: it imports `CurrentThumbSvg` from `src/share/capsule-preview-current-thumb.tsx` and renders the server-derived payload verbatim in two regimes keyed off payload shape: **atoms-only** (≤ `ROW_ATOM_CAP_ATOMS_ONLY` = 18 atoms) or **bonds-aware** (≤ `ROW_ATOM_CAP_WITH_BONDS` = 5000 atoms + ≤ `ROW_BOND_CAP` = 5000 bonds — effectively unbounded for real capsules; see the JSDoc on the constants for the rationale). Atoms render as individual `<circle>` elements sharing a radial gradient (the shaded-sphere look introduced at `CURRENT_THUMB_REV = 11`); bonds paint in a single depth-sorted pass interleaved with atoms (rev 13) so near-side atoms occlude far-side bonds correctly. The shipped display size is `ACCOUNT_THUMB_SIZE = 96` (from `src/share/capsule-preview-thumb-size.ts`), mirrored in `public/account-layout.css`'s `.acct__upload-thumb`. `PlaceholderThumb` covers `previewThumb: null` rows. The shared SVG sets `fill="currentColor"` so ink inherits `--color-text` from the account CSS theme. Under the hood, `CurrentThumbSvg` imports `capsule-preview-thumb-render.ts` so radius, stroke, and visibility values are the same constants the scene-store uses when filtering bond visibility.
+
+#### Current preview state — single source of truth
+
+Rapid iteration made the preview pipeline easy to describe inconsistently; this section is the authoritative current-state snapshot, updated alongside the code.
+
+- **Account-row thumb surface** — 96 × 96 px; constant in `src/share/capsule-preview-thumb-size.ts`, mirrored by the CSS rule.
+- **Account thumb payload caps** — `ROW_ATOM_CAP_WITH_BONDS = 5000`, `ROW_BOND_CAP = 5000`, `ROW_ATOM_CAP_ATOMS_ONLY = 18`. Baked at publish time from the full selected-subject atoms, NOT from the 32-capped stored scene. At 5000 no realistic capsule hits the ceiling — real-world pressure is stored-JSON size and visual density on the 96 × 96 cell, both of which scale with actual atom count.
+- **Stored scene (`preview_scene_v1`) caps** — `SCENE_ATOM_CAP = 32`, `SCENE_BOND_CAP = 64`. Unchanged; the stored scene drives the 1200 × 630 OG poster (where 32 atoms is sufficient) and acts as the read-path thumb fallback for pre-bake rows. New publishes bake a richer thumb directly from the selected subject, independent of these caps.
+- **`CURRENT_THUMB_REV`** — `15`. The full per-rev history lives in the JSDoc above the constant in `src/share/capsule-preview-scene-store.ts`; recent milestones: cluster-selection (3), path-batched renderer (4), 96 px pivot (5), shared minor-axis camera (10), `<circle>` + shaded-sphere atoms (11), square perspective target (12), single-pass depth-sorted paint (13), uncapped bond retention (14), `PERSPECTIVE_K_DEFAULT = 3.17` (15).
+- **Visual grammar** — `THUMB_STYLE_MINIMAL` (the shipped preset: flat ink atoms over the shared radial-gradient sphere shader; bonds interleaved in the depth-sorted paint list). `THUMB_STYLE_HALOED` exists for audit A/B only; not shipped.
+- **Cluster selection** — `selectPreviewSubjectCluster` (ADR D138) runs before sampling. Fallback reasons visible on the `preview-audit/` workbench metadata. Balanced / multi-fragment scenes intentionally preserve the full frame (dominance guard).
+- **Dev workbench** — `preview-audit/` (standalone Vite entry; served via `scripts/serve-preview-audit.sh`) exercises `capsule-preview-sketch-perspective.ts` against the fixtures in `src/share/__fixtures__/` so visual regressions in the poster/thumb pipeline are caught before publish.
+- **Backfill** — `npm run capsule-preview:backfill:local` (Miniflare state) or `npm run capsule-preview:backfill:prod` (admin endpoint `functions/api/admin/backfill-preview-scenes.ts`, driven by `scripts/backfill-preview-scenes.ts`).
 
 #### Cache-key axes
 

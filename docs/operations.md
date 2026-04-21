@@ -10,6 +10,25 @@ Cloudflare dashboard for the `atomdojo` project.
 
 ---
 
+## Open Items
+
+Operational gaps the team is explicitly aware of. Entries stay here
+until closed, either by a follow-up ticket landing the missing work or
+by an update to the main runbook sections above.
+
+- *(none at this time — the D138 subject-cluster rollout landed under
+  Lane A. Both the local-dev backfill
+  (`npm run capsule-preview:backfill:local`) and the production
+  wrapper (`npm run capsule-preview:backfill:prod`) are live. A
+  post-backfill verification query is under "Rollout procedure for
+  a thumb-algorithm change" below; the stale-row transition is
+  regression-locked by
+  `tests/unit/backfill-stale-row-integration.test.ts`. If any future
+  rollout defers its backfill wrapper, the rollout-incomplete block
+  belongs in this section.)*
+
+---
+
 ## Deployment topology
 
 - **Cloudflare Pages** project `atomdojo` — serves Lab (`/lab/`), Watch
@@ -230,6 +249,10 @@ canaries.
 | `[publish] preview-scene-skipped: <msg>` | `src/share/publish-core.ts` | Publish succeeded but the preview-scene projection failed; row stored with `preview_scene_v1 = NULL`, later backfillable by `scripts/backfill-preview-scenes.ts` or by the poster route's lazy-backfill path. |
 | `[publish] stored-thumb-skipped: <errName>:<msg> atoms=N bonds=M` | `src/share/publish-core.ts` | Narrow catch around the full-atoms thumb builder only. Poster scene still valid, thumb absent — read path falls back to live sampling. Distinct from `preview-scene-skipped` (which indicates the whole scene failed). |
 | `[publish] bonds-skipped: <msg>` | `src/share/publish-core.ts` | Bond derivation step threw; poster is atoms-only. Cosmetic degradation; no downstream data loss. |
+| `[publish] cluster-select: mode=<m> size=<sel>/<full> components=<n> meaningful=<n> fallback=<bool> reason=<r>` | `src/share/publish-core.ts` | Per-publish cluster-selection diagnostics (ADR D138). `mode` is `full-frame` or `largest-bonded-cluster`; `reason` is `none` / `no-bonds` / `no-meaningful` / `dominance-failed` / `mode-full-frame`. Watch the guard-pass vs. `dominance-failed` ratio after a rollout — a sudden shift toward `dominance-failed` means capsules have become more balanced and the guard is preserving them, which is the intended behavior. |
+| `preview_backfill_run` audit event (`capsule_share_audit`) | `functions/api/admin/backfill-preview-scenes.ts` | One event per backfill invocation. Severity: `info` = clean sweep, `warning` = partial success (some rows failed but ≥ 1 updated), `critical` = pure failure (0 updated, ≥ 1 failed — endpoint returns HTTP 500). `details_json` carries `{ dryRun, force, pageSize, currentThumbRev, scanned, updated, skipped, failedCount }`. When to investigate: any `critical` emission, or sustained `warning` over successive runs. |
+| `[backfill] start rev=<N> force=<bool> pageSize=<N> dryRun=<bool> verbose=<bool>` | `functions/api/admin/backfill-preview-scenes.ts` | Emitted at endpoint entry. Pair with the matching `[backfill] done` line. |
+| `[backfill] done scanned=<N> updated=<N> skipped=<N> failed=<N> severity=<s>` | `functions/api/admin/backfill-preview-scenes.ts` | Emitted after the library call, before the audit event write. Per-row failure detail stays in the library's own `[backfill]` verbose logs, not in the summary. |
 
 ### Client-side (browser console, surfaces as error events)
 
@@ -481,8 +504,13 @@ warm-up.
   `capsule_share.preview_scene_v1 TEXT` column. Additive; NULL for pre-V2
   rows (which the poster route lazy-backfills on first miss). Stored
   JSON shape: `{ v:1, atoms[], bonds?, hash, thumb?: { rev, atoms, bonds? } }`.
-  `thumb.rev` is currently `2` (see `CURRENT_THUMB_REV` in
-  `src/share/capsule-preview-scene-store.ts`).
+  `thumb.rev` is currently `15` (see `CURRENT_THUMB_REV` in
+  `src/share/capsule-preview-scene-store.ts`). The rev history is
+  maintained in full in the JSDoc above `CURRENT_THUMB_REV` — consult
+  that file for the per-rev deltas (pipeline has advanced through
+  cluster-selection landing, path-batched renderer, cap raises,
+  perspective pinhole camera, single-pass depth-sorted paint, and the
+  current `PERSPECTIVE_K_DEFAULT = 3.17` tuning).
 
 ### Backfill runbooks (populate `preview_scene_v1`)
 
@@ -490,35 +518,65 @@ Two lanes — production and local dev — both idempotent, both safe to
 re-run. The poster route's lazy-backfill path handles any row either
 script misses, so V2 can ship before a full backfill completes.
 
-**Production backfill** — `scripts/backfill-preview-scenes.ts`:
+**Production backfill** — `npm run capsule-preview:backfill:prod`:
 
-```typescript
-import { backfillPreviewScenes } from './scripts/backfill-preview-scenes';
-import { CURRENT_THUMB_REV } from './src/share/capsule-preview-scene-store';
+This wraps `scripts/backfill-preview-scenes-prod.mjs`, a thin HTTP
+client that POSTs to the admin-gated Pages Function at
+`POST /api/admin/backfill-preview-scenes`. The endpoint runs the
+`backfillPreviewScenes` library inside the Pages Function runtime with
+real D1 + R2 bindings, records a single `preview_backfill_run` audit
+event per invocation, and returns the library's `BackfillSummary` as
+JSON.
 
-// Run under a wrangler context that provides DB + R2_BUCKET bindings.
-const summary = await backfillPreviewScenes({
-  db, r2,
-  currentThumbRev: CURRENT_THUMB_REV,   // required; decouples script from module internals
-  pageSize: 100,                        // optional
-  verbose: false,                       // optional
-  force: false,                         // optional — see below
-});
-```
-
-By default the script rebakes rows where `preview_scene_v1 IS NULL` OR
-`IFNULL(json_extract(preview_scene_v1, '$.thumb.rev'), 0) < currentThumbRev`
-— i.e. missing scenes and stale thumb revisions. Pass `force: true` to
-rebake every row (operator escape hatch for algorithm changes that need
-to propagate everywhere, including rows that already carry the current
-rev).
-
-Always snapshot D1 before a production backfill:
+Always snapshot D1 before a mutating backfill, and smoke-test with
+`--dry-run` first:
 
 ```bash
 wrangler d1 export atomdojo-capsules --output backup.sql
-npx tsx scripts/backfill-preview-scenes.ts   # driven by operator per environment
+
+# Step 1 — dry-run smoke test (readback only; no mutations).
+npm run capsule-preview:backfill:prod -- \
+  --base-url https://atomdojo.pages.dev \
+  --admin-secret CRON_SECRET \
+  --dry-run --verbose
+
+# Confirm the reported scan count matches the expected stale-row
+# count from D1 AND that a `preview_backfill_run` audit row with
+# details_json.dryRun === true appears in capsule_share_audit.
+
+# Step 2 — real backfill.
+npm run capsule-preview:backfill:prod -- \
+  --base-url https://atomdojo.pages.dev \
+  --admin-secret CRON_SECRET
 ```
+
+CLI flags:
+
+- `--base-url` — required. Pages origin of the target deployment.
+- `--admin-secret <ENV_VAR>` — name of the process-env variable that
+  carries the secret (default `CRON_SECRET`). The wrapper never
+  accepts the secret as an inline argument.
+- `--force` — rebake every row, including those already at the
+  current rev. Operator escape hatch.
+- `--page-size N` — override the library default (100).
+- `--verbose` — forward the library's per-row success logs to the
+  Cloudflare log stream.
+- `--dry-run` — scan-only mode. The endpoint executes the SELECT
+  loop but swaps the D1 UPDATE for a no-op, then emits a
+  `preview_backfill_run` audit row with `details_json.dryRun: true`.
+
+Exit codes: `0` on HTTP 200 + `summary.failed.length === 0`;
+non-zero on any HTTP ≥ 400, any row failure, or a missing
+admin-secret env var (pre-flight error — no fetch issued).
+
+Audit severity mapping (see `AuditEventType` in
+`src/share/audit.ts`):
+
+- `info` — `summary.failed.length === 0`.
+- `warning` — some rows failed but at least one updated.
+- `critical` — pure failure (`updated === 0 && failed > 0`). The
+  endpoint returns HTTP 500 in this case, and the wrapper exits
+  non-zero.
 
 **Local dev backfill** — `npm run capsule-preview:backfill:local`
 (alias for `node scripts/backfill-local.mjs`). Reads/writes the
@@ -544,9 +602,39 @@ completes — existing rows just fall back to live sampling with a
    rows have their stored `thumb.rev` compared against `CURRENT_THUMB_REV`
    on every read; the mismatch is non-fatal (logs `[scene-store] thumb-rev-stale`
    and falls back to live sampling from the stored atoms array).
-3. Run `scripts/backfill-preview-scenes.ts` WITHOUT `force: true` — the
-   rev predicate selects only stale rows, so this is the cheap path.
-4. The `[scene-store] thumb-rev-stale` log rate should drop to zero
+3. Run `npm run capsule-preview:backfill:prod` (without `--force`) —
+   the rev predicate selects only stale rows, so this is the cheap
+   path. Watch the emitted `preview_backfill_run` audit row's
+   severity: `info` = clean, `warning` = partial success (re-run the
+   same command; the failed rows are auto-reselected next pass),
+   `critical` = pure failure (investigate before re-running).
+4. **Post-backfill verification.** After the wrapper exits 0, query
+   D1 to confirm zero stale rows remain:
+
+   ```bash
+   wrangler d1 execute atomdojo-capsules --remote --command \
+     "SELECT COUNT(*) AS stale FROM capsule_share \
+       WHERE kind = 'capsule' AND status = 'ready' AND \
+         (preview_scene_v1 IS NULL \
+          OR IFNULL(json_extract(preview_scene_v1, '\$.thumb.rev'), 0) < 15)"
+   ```
+
+   The `< 15` predicate must match the current `CURRENT_THUMB_REV`
+   in `src/share/capsule-preview-scene-store.ts`; bump both in lockstep
+   when the rev advances.
+
+   Expected: `stale = 0`. Any non-zero residual is either (a) rows
+   whose R2 blob is missing (orphan-sweeper pending), or (b) rows
+   that `preview_backfill_run` flagged as `failed`. Inspect the
+   `details_json` on the audit row for the invocation to confirm
+   `scanned`, `updated`, and `failedCount` match.
+5. Reload one known account page and confirm the affected rows now
+   render their baked bonded thumb (not a sparse atoms-only
+   fallback). The audit page's **Account-route parity** section
+   under §4 shows the exact same code path — if the account row
+   looks like the audit page's current-rev "Fresh" panel, the rollout
+   has reached that row.
+6. The `[scene-store] thumb-rev-stale` log rate should drop to zero
    once the backfill completes. A non-zero steady-state rate after
    that means some rows are failing to update (check `summary.failed`
    from the script) — usually because the R2 blob is missing for a

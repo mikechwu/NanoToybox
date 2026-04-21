@@ -31,8 +31,11 @@ import {
 } from './capsule-preview-frame';
 import {
   projectPreviewScene,
+  projectPreviewScenePerspective,
   deriveBondPairs,
+  deriveBondPairsForProjectedScene,
 } from './capsule-preview-project';
+import { selectPreviewSubjectCluster } from './capsule-preview-cluster-select';
 import {
   attachStoredThumb,
   buildPreviewSceneV1,
@@ -48,7 +51,7 @@ import {
   deriveCanonicalPreviewCamera,
 } from './capsule-preview-camera';
 import { sampleForSilhouette } from './capsule-preview-sampling';
-import type { CapsulePreviewAtom3D } from './capsule-preview-frame';
+import type { CapsulePreviewAtom3D, CapsulePreviewScene3D } from './capsule-preview-frame';
 
 export interface PublishInput {
   capsuleJson: string;
@@ -186,7 +189,7 @@ export function projectCapsuleToSceneJson(
   capsule: AtomDojoPlaybackCapsuleFileV1,
 ): string | null {
   try {
-    const scene3d = buildPreviewSceneFromCapsule(capsule);
+    const fullScene3d = buildPreviewSceneFromCapsule(capsule);
 
     // Derive bonds on the FULL atom set, BEFORE downsampling. Bond pairs
     // reflect real nearest-neighbor connectivity in the source structure;
@@ -197,7 +200,7 @@ export function projectCapsuleToSceneJson(
     let fullBondPairs: Array<{ a: number; b: number }> = [];
     try {
       fullBondPairs = deriveBondPairs(
-        scene3d,
+        fullScene3d,
         capsule.bondPolicy?.cutoff ?? 1.85,
         capsule.bondPolicy?.minDist ?? 0.5,
       );
@@ -206,18 +209,44 @@ export function projectCapsuleToSceneJson(
       console.warn(`[publish] bonds-skipped: ${msg}`);
     }
 
-    // Snapshot the pre-sample atom array so bond-pair indices (which
-    // reference it) can be translated through to the final projected
-    // atom order even when the sampler mutates `scene3d.atoms`.
+    // Subject-cluster selection (ADR D138). Picks the largest bonded
+    // cluster when the dominance guard accepts it; otherwise the full
+    // frame. Both poster and thumb source the selected subject so they
+    // represent the same physical subject.
+    const subject = selectPreviewSubjectCluster(fullScene3d, fullBondPairs, {
+      mode: 'largest-bonded-cluster',
+    });
+    {
+      const d = subject.diagnostics;
+      console.info(
+        `[publish] cluster-select: mode=${d.mode}`
+          + ` size=${d.selectedAtomCount}/${d.fullFrameAtomCount}`
+          + ` components=${d.componentCount}`
+          + ` meaningful=${d.meaningfulComponentCount}`
+          + ` fallback=${d.fellBackToFullFrame}`
+          + ` reason=${d.fallbackReason}`,
+      );
+    }
+    const scene3d = subject.scene;
+    const selectedBondPairs = subject.bondPairs;
+
+    // Snapshot the pre-sample atom array (post-cluster-select) so bond
+    // indices — which reference it — translate correctly even when the
+    // sampler mutates `scene3d.atoms` below.
     const preSampleAtoms: ReadonlyArray<CapsulePreviewAtom3D> = scene3d.atoms.slice();
+
+    // Mutable working copy for the sampled poster path. Keeping the
+    // cluster-selected scene immutable lets the full-atoms thumb path
+    // below reuse `preSampleAtoms` verbatim.
+    const posterScene3d = { ...scene3d, atoms: scene3d.atoms.slice() };
 
     // Server-side downsample so the projected scene is always ≤ SCENE_ATOM_CAP
     // atoms regardless of how dense the capsule is. Silhouette-preserving
     // sampler (extrema + farthest-point in 3D) keeps the structure's
     // envelope + representative interior atoms.
-    if (scene3d.atoms.length > SCENE_ATOM_CAP) {
-      scene3d.atoms = sampleForSilhouette<CapsulePreviewAtom3D>(
-        scene3d.atoms,
+    if (posterScene3d.atoms.length > SCENE_ATOM_CAP) {
+      posterScene3d.atoms = sampleForSilhouette<CapsulePreviewAtom3D>(
+        posterScene3d.atoms,
         SCENE_ATOM_CAP,
         (a) => a.x,
         (a) => a.y,
@@ -225,69 +254,83 @@ export function projectCapsuleToSceneJson(
       );
     }
 
-    const projected = projectPreviewScene(scene3d, {
+    const projected = projectPreviewScene(posterScene3d, {
       targetWidth: 600,
       targetHeight: 500,
       padding: 0.1,
     });
 
-    // Translate bond pairs from pre-sample space to projected-atom space
-    // via atomId. Any bond whose endpoints didn't both survive sampling
-    // is silently dropped — atoms-only scenes are a valid fallback, and
-    // over-connecting to non-kept atoms would produce ghost edges.
+    // Translate selected bond pairs (indexed into `preSampleAtoms`) into
+    // projected-atom-index space via the shared helper. The helper maps
+    // atomId → projectedIndex; bonds whose endpoints didn't both survive
+    // sampling are silently dropped — atoms-only is a valid fallback.
+    const preSampleScene: CapsulePreviewScene3D = { ...scene3d, atoms: preSampleAtoms.slice() };
+    const projectedBonds = selectedBondPairs.length > 0
+      ? deriveBondPairsForProjectedScene(
+          preSampleScene, projected, 0, 0,
+          { precomputedRawPairs: selectedBondPairs },
+        )
+      : [];
     const bonds: Array<{ a: number; b: number }> = [];
-    if (fullBondPairs.length > 0) {
-      const atomIdToProjectedIndex = new Map<number, number>();
-      for (let i = 0; i < projected.atoms.length; i++) {
-        atomIdToProjectedIndex.set(projected.atoms[i].atomId, i);
-      }
-      for (const pair of fullBondPairs) {
-        const aId = preSampleAtoms[pair.a]?.atomId;
-        const bId = preSampleAtoms[pair.b]?.atomId;
-        if (aId == null || bId == null) continue;
-        const ia = atomIdToProjectedIndex.get(aId);
-        const ib = atomIdToProjectedIndex.get(bId);
-        if (ia == null || ib == null) continue;
-        bonds.push({ a: ia, b: ib });
-        if (bonds.length >= SCENE_BOND_CAP) break;
-      }
+    for (const pair of projectedBonds) {
+      bonds.push({ a: pair.a, b: pair.b });
+      if (bonds.length >= SCENE_BOND_CAP) break;
     }
 
     let stored = buildPreviewSceneV1(projected, bonds);
 
-    // Build the stored thumb payload from the FULL pre-sample atom set
-    // (not the 32-atom poster scene). This avoids the 60 → 32 → 12
-    // double-downsampling cascade that destroys recognizable topology
-    // for dense structures like C60 cages. The helper projects the
-    // FULL atoms into the thumb cell directly and selects bonds whose
-    // endpoints both survive its own sampling pass.
-    // Project + translate bonds from the FULL pre-sample atom set. These
-    // steps use the same routines as the poster-scene path above; if any
-    // throw, it's a real upstream bug and should surface via the outer
-    // catch with a `preview-scene-skipped` tag, not be collapsed to
-    // `stored-thumb-skipped`.
-    const fullProjected = projectPreviewScene(
-      { ...scene3d, atoms: preSampleAtoms.slice() },
-      { targetWidth: 600, targetHeight: 500, padding: 0.1 },
+    // Build the stored thumb payload from the selected-subject atoms
+    // (pre-sample — not the 32-atom poster scene). This avoids the
+    // 60 → 32 → 12 double-downsampling cascade that would destroy
+    // recognizable topology for dense structures like C60 cages.
+    //
+    // **Perspective bake (Path A).** The thumb path uses the pinhole
+    // perspective projection (K = 1.5) so per-atom radii carry depth
+    // cues — nearest atoms render larger, farthest render at ~60%.
+    // The POSTER scene above stays orthographic because the 1200×630
+    // OG card reads as a uniform structural diagram; perspective
+    // shrinkage on a large canvas looks weirder than it helps. The
+    // stored `thumb.atoms[*].r` carries the per-atom scaled radius;
+    // the renderer honors stored r in bonded mode so the paint
+    // reflects the bake.
+    const fullProjected = projectPreviewScenePerspective(
+      preSampleScene,
+      {
+        // SQUARE projection target — the account-row thumb cell is
+        // 96 × 96 (square). The previous 600 × 500 target produced
+        // near-isotropic pixel bounds for spherical subjects, but
+        // the downstream `x / 600, y / 500` normalization then
+        // warped them to a 1.2:1 tall aspect. Using a square
+        // target + uniform `/size` normalization keeps C60
+        // looking round.
+        targetWidth: 500,
+        targetHeight: 500,
+        padding: 0.1,
+        // 0.8× of the previous 28 → 22 px at publish time. At
+        // 96 px account-row scale that lands near atoms at ~4.4
+        // viewBox radius (≈ 4.2 physical px) — still clearly
+        // shaded spheres, but no longer so chunky that they pile
+        // up over each other's silhouettes on dense scenes.
+        baseAtomRadius: 22,
+      },
     );
-    const fullIdToIdx = new Map<number, number>();
-    for (let i = 0; i < fullProjected.atoms.length; i++) {
-      fullIdToIdx.set(fullProjected.atoms[i].atomId, i);
-    }
-    const fullBondsProjectedSpace: PreviewSceneBondV1[] = [];
-    for (const pair of fullBondPairs) {
-      const aId = preSampleAtoms[pair.a]?.atomId;
-      const bId = preSampleAtoms[pair.b]?.atomId;
-      if (aId == null || bId == null) continue;
-      const ia = fullIdToIdx.get(aId);
-      const ib = fullIdToIdx.get(bId);
-      if (ia == null || ib == null) continue;
-      fullBondsProjectedSpace.push({ a: ia, b: ib });
-    }
+    const fullProjectedBonds = selectedBondPairs.length > 0
+      ? deriveBondPairsForProjectedScene(
+          preSampleScene, fullProjected, 0, 0,
+          { precomputedRawPairs: selectedBondPairs },
+        )
+      : [];
+    const fullBondsProjectedSpace: PreviewSceneBondV1[] = fullProjectedBonds.map(
+      (p) => ({ a: p.a, b: p.b }),
+    );
+    // Isotropic normalization — MUST match the perspective
+    // projection's target dimensions (set to 500 × 500 above) so
+    // an isotropic 3D subject stays isotropic in storage. A mixed
+    // `/600 / /500` here warped spheres into 1.2:1 talls.
     const fullNormAtoms: PreviewSceneAtomV1[] = fullProjected.atoms.map((a) => ({
-      x: a.x / 600,
+      x: a.x / 500,
       y: a.y / 500,
-      r: a.r / Math.min(600, 500),
+      r: a.r / 500,
       c: normalizeHex(a.colorHex),
     }));
     // Narrow try around only the thumb builder — if it throws (sampler
@@ -295,8 +338,24 @@ export function projectCapsuleToSceneJson(
     // valid and we publish without the thumb pre-bake. Old read-path
     // sampling will kick in as the fallback.
     try {
+      // Effectively-uncapped bake: keep every bond whose endpoints
+      // both survived sampling, with no degree cap and no
+      // visibility filter. Under the 40 px thumb renderer the
+      // visibility filter dropped short bonds to de-clutter;
+      // under the 96 px thumb + 600 px hero poster every bond is
+      // now long enough to contribute meaningful structure, and
+      // dropping them at bake time prevents the poster from ever
+      // seeing them (it reads the thumb payload). A downstream
+      // renderer can still pick a subset if it wants; the bake is
+      // the authoritative source of structure.
       const thumb = buildStoredThumbFromFullScene(
         fullNormAtoms, fullBondsProjectedSpace,
+        {
+          minVisibleBondViewbox: 0,
+          relaxedVisibleBondViewbox: 0,
+          minAcceptableBonds: 0,
+          bondMaxDegree: Number.POSITIVE_INFINITY,
+        },
       );
       if (thumb) stored = attachStoredThumb(stored, thumb);
     } catch (err) {

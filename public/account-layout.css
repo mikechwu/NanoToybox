@@ -407,33 +407,59 @@ button {
 .acct__uploads-list {
   list-style: none; margin: 0; padding: 0;
   border-top: 1px solid var(--color-border);
+  /* Single source of truth for the thumb dimension across the row
+     layout. `account/main.tsx` injects `--account-thumb-size` at
+     render time from the TS constant
+     `src/share/capsule-preview-thumb-size.ts#ACCOUNT_THUMB_SIZE`, so
+     changing the number there propagates to the grid track, the
+     thumb box, and the row's breathing room — no CSS/TS mirror to
+     keep in sync. The fallback here covers SSR + pre-hydration. */
+  --account-thumb-size: 96px;
+  --account-thumb-gap: var(--s-4);
 }
 .acct__upload {
   display: grid;
-  /* thumb · meta · stats · actions — 4 explicit tracks. The first track
-     is sized to the thumb's intrinsic 56px width so meta can start
-     immediately to the right of the artwork instead of floating in a
-     1.5fr column the thumb under-fills. */
-  grid-template-columns: 56px minmax(0, 1.5fr) minmax(120px, auto) auto;
+  /* thumb · meta · stats · actions — 4 tracks. The thumb track IS
+     the thumb size; the row never falls into the "thumb overflows
+     its track into meta" regime that a hard-coded track width
+     produced after the 40→96 px pivot. */
+  grid-template-columns:
+    var(--account-thumb-size)
+    minmax(0, 1.5fr)
+    minmax(120px, auto)
+    auto;
   align-items: center;
-  column-gap: var(--s-3);
+  column-gap: var(--account-thumb-gap);
   row-gap: var(--s-2);
-  padding: var(--s-3) 0;
+  /* Row padding scales with the thumb so a taller thumb never crams
+     against the top/bottom rule. Floor at var(--s-3) for the
+     smallest legitimate thumb size; cap at the thumb size so the
+     row doesn't become silly on very large settings. */
+  padding: clamp(var(--s-3), calc(var(--account-thumb-size) * 0.18), var(--s-5)) 0;
   border-bottom: 1px solid var(--color-border);
 }
 .acct__upload:hover { background: var(--color-surface-hover); }
 
 .acct__upload-thumb {
   display: block;
-  /* Thumb is decorative; it should never expand past its track or vary
-     row height. Fixed box, intrinsic alignment with the meta baseline. */
-  width: 40px;
-  height: 40px;
+  /* Fixed square driven by the same variable as the grid track, so
+     thumb and track can never disagree. */
+  width: var(--account-thumb-size);
+  height: var(--account-thumb-size);
   flex: none;
   justify-self: start;
 }
 
-.acct__upload-meta { min-width: 0; padding-left: 0; }
+.acct__upload-meta {
+  min-width: 0;
+  padding-left: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  /* Vertical rhythm scaled to the thumb size so the title + code
+     stack reads roughly as a "thirds" line-up against the artwork. */
+  gap: clamp(2px, calc(var(--account-thumb-size) * 0.04), 6px);
+}
 .acct__upload-title {
   font-size: 14.5px;
   font-weight: 500;
@@ -448,16 +474,28 @@ button {
   font-family: var(--ff-mono);
   font-size: 12px;
   color: var(--color-text-secondary);
-  margin-top: 2px;
+  letter-spacing: 0.04em;
 }
-/* Untitled row: `#N <code>` on one line — no redundant code-line beneath. */
-.acct__upload-title--code { display: flex; align-items: baseline; gap: 8px; }
-.acct__upload-index { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; font-weight: 400; }
+/* Untitled row: `#N <code>` on one line — no redundant code-line
+   beneath. Uses baseline alignment so the tabular-nums index sits
+   on the same baseline as the mono hash. */
+.acct__upload-title--code {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+.acct__upload-index {
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+}
 .acct__upload-title--code code {
   font-family: var(--ff-mono);
   font-size: 13px;
   color: var(--color-text);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
 }
 
 .acct__upload-stats {
@@ -479,16 +517,26 @@ button {
 }
 
 @media (max-width: 600px) {
+  .acct__uploads-list {
+    /* Mobile surface gets a slightly smaller artwork so the 3-row
+       text stack next to it (meta · stats · actions) has breathing
+       room without a scrollbar. Still driven by the same variable
+       system so raising the desktop default doesn't re-break
+       mobile. */
+    --account-thumb-size: 72px;
+    --account-thumb-gap: var(--s-3);
+  }
   .acct__upload {
-    /* Mobile: keep the thumb anchored at the top-left, let everything else
-       stack to its right. Two columns × auto rows; thumb spans both rows
-       so the artwork stays vertically centered against the textual stack. */
-    grid-template-columns: 40px 1fr;
+    /* Mobile: keep the thumb anchored at the top-left, let everything
+       else stack to its right. Two columns × auto rows; thumb spans
+       all three rows so the artwork stays vertically centered
+       against the textual stack. */
+    grid-template-columns: var(--account-thumb-size) 1fr;
     grid-template-areas:
       "thumb meta"
       "thumb stats"
       "thumb actions";
-    column-gap: var(--s-3);
+    column-gap: var(--account-thumb-gap);
     row-gap: var(--s-1);
     padding: var(--s-3) 4px;
     align-items: start;

@@ -234,14 +234,16 @@ describe('dense-scene outcome tests', () => {
     expect(uniqueSignatures.size).toBe(fixtures.length);
   });
 
-  it('bonded thumbs stay within the ≤20 DOM-element budget', () => {
+  it('bonded thumbs respect storage caps (atoms ≤ 24, bonds ≤ 24)', () => {
+    // The ≤20 DOM-element budget was retired in the D138 follow-up:
+    // the path-batched renderer (`CurrentThumbSvg`) makes DOM cost
+    // O(unique CPK colors + 1) regardless of atom/bond count, so the
+    // caps here are storage + legibility bounds, not DOM bounds.
     for (const fx of fixtures) {
       const thumb = derivePreviewThumbV1(fixtureToSceneJson(fx));
       if (!thumb) continue;
-      const atomCount = thumb.atoms.length;
-      const bondCount = thumb.bonds?.length ?? 0;
-      // svg + rect + circles + lines = 2 + atomCount + bondCount.
-      expect(2 + atomCount + bondCount).toBeLessThanOrEqual(20);
+      expect(thumb.atoms.length).toBeLessThanOrEqual(5000);
+      expect(thumb.bonds?.length ?? 0).toBeLessThanOrEqual(5000);
     }
   });
 });

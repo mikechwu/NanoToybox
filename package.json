@@ -23,6 +23,7 @@
     "app:serve": "bash scripts/serve-app.sh",
     "preview-audit:serve": "bash scripts/serve-preview-audit.sh",
     "capsule-preview:backfill:local": "node scripts/backfill-local.mjs",
+    "capsule-preview:backfill:prod": "node scripts/backfill-preview-scenes-prod.mjs",
     "cf:d1:migrate": "wrangler d1 migrations apply atomdojo-capsules --local",
     "cf:dev": "wrangler pages dev dist",
     "cron:deploy": "cd workers/cron-sweeper && wrangler deploy",

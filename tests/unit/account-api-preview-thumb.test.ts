@@ -8,8 +8,10 @@
  *   - Sparse scenes are atoms-only (≤ ROW_ATOM_CAP_ATOMS_ONLY = 18) with
  *     no `bonds` field on the wire.
  *   - Dense scenes (≥ BONDS_AWARE_SOURCE_THRESHOLD source atoms) carry a
- *     capped bond subset (≤ ROW_BOND_CAP = 6) and the atom count drops
- *     to ROW_ATOM_CAP_WITH_BONDS = 12 to keep the ≤20 DOM budget.
+ *     capped bond subset (≤ ROW_BOND_CAP = 24) and the atom count is
+ *     bounded by ROW_ATOM_CAP_WITH_BONDS = 24. DOM cost is constant
+ *     under the path-batched renderer; caps are now driven by the
+ *     storage+legibility tradeoff, not the old ≤20 DOM budget.
  *   - Null/malformed/absent preview_scene_v1 yields `previewThumb: null`
  *     (drives the placeholder thumb on the client).
  */
@@ -20,6 +22,7 @@ import type { Env } from '../../functions/env';
 import {
   buildPreviewSceneV1,
   ROW_ATOM_CAP,
+  ROW_ATOM_CAP_WITH_BONDS,
   serializePreviewSceneV1,
 } from '../../src/share/capsule-preview-scene-store';
 import type { CapsulePreviewRenderScene } from '../../src/share/capsule-preview-project';
@@ -174,9 +177,9 @@ describe('GET /api/account/capsules — previewThumb derivation', () => {
     const body = await res.json() as { capsules: Array<{ previewThumb: { atoms: unknown[]; bonds?: unknown[] } }> };
     const thumb = body.capsules[0].previewThumb;
     expect(Array.isArray(thumb.bonds)).toBe(true);
-    expect(thumb.bonds!.length).toBeLessThanOrEqual(6);
+    expect(thumb.bonds!.length).toBeLessThanOrEqual(24);
     expect(thumb.bonds!.length).toBeGreaterThanOrEqual(2);
-    expect(thumb.atoms.length).toBeLessThanOrEqual(12);
+    expect(thumb.atoms.length).toBeLessThanOrEqual(24);
   });
 
   it('falls back to atoms-only when a dense scene is too clustered for visible bonds', async () => {
@@ -195,8 +198,13 @@ describe('GET /api/account/capsules — previewThumb derivation', () => {
       // If bonds did survive, they must be the visible ones (≥ 2).
       expect(thumb.bonds.length).toBeGreaterThanOrEqual(2);
     } else {
-      // Otherwise the fallback must have expanded to the atoms-only cap.
-      expect(thumb.atoms.length).toBeGreaterThan(12);
+      // Otherwise the fallback must have been the atoms-only path —
+      // `bonds` is absent (not an empty array) and the payload
+      // respects the atoms-only cap. Under the D138 follow-up this
+      // no longer implies "more atoms than bonded mode" (the caps
+      // converged), so we assert the MODE signal directly.
+      expect(thumb.bonds).toBeUndefined();
+      expect(thumb.atoms.length).toBeLessThanOrEqual(ROW_ATOM_CAP_WITH_BONDS);
     }
   });
 

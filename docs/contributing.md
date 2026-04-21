@@ -7,8 +7,16 @@ Read these docs in order:
 2. `architecture.md` — where everything lives
 3. `physics.md` — how the simulator works
 4. `decisions.md` — why things are the way they are
+5. `testing.md` — which suite runs what, and how the lanes split
 
-Then run the test suite to verify the codebase is healthy:
+Then run the smoke suite to verify the codebase is healthy:
+```bash
+npm run typecheck
+npm run test:unit
+```
+
+For the physics-engine test ladder (Python), the canonical runbook lives in
+[docs/testing.md](testing.md#test-ladder). A quick sanity check is still:
 ```bash
 python3 tests/test_01_dimer.py && echo "Test 1 OK"
 python3 tests/test_02_angular.py && echo "Test 2 OK"
@@ -52,7 +60,7 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 
 ### Process
 12. **Run tests before claiming anything works.**
-13. **Document decisions** in `docs/decisions.md` when making significant changes.
+13. **Document decisions** in `docs/decisions.md` when making significant changes. `decisions.md` is append-only — new entries go at the end as the next `## D<N>:` heading (the most recent accepted ADR is D138 as of 2026-04-20). Never renumber or rewrite prior entries; supersede via a new entry that references the old one.
 14. **Update `manifest.json`** when modifying the structure library.
 
 ## Completed Milestones
@@ -207,7 +215,7 @@ The destructive consume (`consumeWatchToLabHandoffFromLocation`) runs **later**,
 
 The Watch-side entry control projects the current Watch frame into a Lab hydrate token and navigates to Lab with the token referenced on the URL. Lab then consumes the token from localStorage and hydrates via the transactional pattern above. There is no arrival pill / provenance banner on the Lab side — hydrate success is signaled only by the rendered scene plus a `[lab.boot] watch handoff hydrated` console.info trace.
 
-**Entry control shape** (`watch/js/components/watch-lab-entry-control.tsx`): a single accent-filled primary pill **"Interact From Here"** plus a caret `▼` that toggles a disclosure popover. The popover exposes the secondary action **"Open a Fresh Lab"** ("Starts with a default molecule. Build and experiment from there."). The primary tooltip copy ("Take over from this exact frame. Drag atoms and watch the physics react.") is a module-local const — not exported.
+**Entry control shape** (`watch/js/components/WatchLabEntryControl.tsx`): a single accent-filled primary pill **"Interact From Here"** plus a caret `▼` that toggles a disclosure popover. The popover exposes the secondary action **"Open a Fresh Lab"** ("Starts with a default molecule. Build and experiment from there."). The primary tooltip copy ("Take over from this exact frame. Drag atoms and watch the physics react.") is a module-local const — not exported.
 
 - **Disclosure, not menu.** The caret uses `aria-haspopup="true"` / `aria-expanded`; the popover is `role="group"` with `aria-label="More ways to open Lab"`. Do NOT add `role="menu"` / `role="menuitem"` — the regression tests and E2E spec pin disclosure semantics.
 - **Mutual exclusion with hover tooltip.** React sets `data-menu-open="true"` on `.watch-lab-entry` whenever the popover is open; CSS `:has(…)` suppresses the hover tooltip. The two affordances never co-render.
@@ -644,11 +652,11 @@ The pages-dev lane spawns wrangler with `--binding DEV_ADMIN_ENABLED=true` (see 
 - More CNT chiralities, larger graphene sheets
 - Multi-structure collision presets
 
-### 3. Viewer Modernization
+### 2. Viewer Modernization
 - Port trajectory viewer (`viewer/index.html`) to InstancedMesh + spatial hash
 - Currently limited to ~250 atoms at 30 FPS due to individual meshes + O(N²) bonds
 
-### 4. ML (Future, When Needed)
+### 3. ML (Future, When Needed)
 - GNN architecture for >5,000 atoms where Wasm is too slow
 - Use existing data pipeline and force decomposition code
 
@@ -657,7 +665,7 @@ The pages-dev lane spawns wrangler with `--binding DEV_ADMIN_ENABLED=true` (see 
 The following items are intentionally deferred — do not start them without an explicit decision:
 
 - **Phase 3B-D: Interface narrowing** — further narrowing the dependency surfaces passed between modules.
-- **Phase 4: Folder reorganization** — restructuring `lab/js/` subdirectories beyond the current `app/`, `runtime/`, `components/` split.
+- **Phase 4: Folder reorganization** — restructuring `lab/js/` beyond the current `app/`, `runtime/{bonded-groups, camera, handoff, interaction, overlay, placement, timeline, worker}/`, and `components/{timeline/}` split. The 2026 sub-foldering pass (see recent commits) landed the per-concern subfolders; further reorganization is deferred.
 - **Phase 5: Workspace assessment** — evaluating monorepo / workspace tooling changes.
 
 ## Development Workflow
@@ -780,8 +788,13 @@ Load-bearing contracts when touching this pipeline:
 4. **Rebake after a bump:**
    - Local dev: `npm run capsule-preview:backfill:local` (driven by
      `scripts/backfill-local.mjs`).
-   - Production rollout: document the rollout via
-     `scripts/backfill-preview-scenes.ts` in the release PR.
+   - Production rollout: `npm run capsule-preview:backfill:prod` — this
+     POSTs to the admin-gated `/api/admin/backfill-preview-scenes`
+     endpoint, which runs the `backfillPreviewScenes` library inside
+     the Pages Function runtime with real D1 + R2 bindings, records a
+     `preview_backfill_run` audit row, and returns a `BackfillSummary`
+     JSON. Smoke-test with `--dry-run --verbose` before the mutating
+     run. See `docs/operations.md` for the full operational runbook.
 
 ##### Capsule-preview test layout
 
@@ -862,6 +875,7 @@ npm install
 | `npm run app:serve` | `build → cf:d1:migrate → wrangler pages dev dist` on port 8788 | **Canonical local-dev entrypoint for Lab + Watch.** Full Cloudflare emulation (Pages Functions + D1 + R2). Supports `--skip-build` / `--skip-migrate` for fast re-runs. Wraps the three-step pipeline behind one command. |
 | `npm run build && npm run cf:dev` | Wrangler Pages dev (port 8788) | Equivalent manual composition of the last step when you do not need the build + migrate preflight that `app:serve` adds. |
 | `npm run dev` | Vite (port 5173) | Frontend-only probing. **Not sufficient for Lab** — Lab boots against `/api/*` and `/auth/*` Pages Functions, which 404 under plain vite and cause the Lab shell to silently fail to hydrate. Use for isolated component tinkering that does not exercise Functions (rare). |
+| `npm run preview-audit:serve` | Vite dev server pinned to port 5173, opens `/preview-audit/` | Capsule-preview dev workbench. Thin wrapper around `scripts/serve-preview-audit.sh`. Dev-only — the `preview-audit/` route is gated out of production builds by `vite.config.ts`. Use when iterating on the shared `capsule-preview-*` modules, per D136 and D138. |
 | `npm run cron:dev` | Wrangler dev for the cron Worker | Tests the scheduled handler locally against `localhost:8788` |
 
 **Rule of thumb:** use `npm run app:serve` by default. It is the only command that produces a working Lab end-to-end in the post-Functions era. Fall through to raw `cf:dev` / `dev` only when you have a specific reason to skip the orchestration.
@@ -897,6 +911,8 @@ npm run seed:capsule -- path/to/capsule.atomdojo   # custom capsule
 The seed command prints `{ shareCode, objectKey }`. The capsule is then reachable via `/c/<shareCode>` and `/watch/?c=<shareCode>`. The default fixture is the same minimal capsule the pages-dev poster smoke seeds, so the no-arg form is also a quick way to manually reproduce the smoke's pre-state.
 
 #### Testing workflow
+
+For the full test-suite runbook (lane semantics, per-section test catalog, flake triage, snapshot refresh rules), see [docs/testing.md](testing.md). The notes below cover only the contributor-facing quick reference.
 
 - `npm run typecheck` — runs frontend + functions + cron tsconfigs in one command. Prefer this over the granular `typecheck:frontend` / `typecheck:functions` / `typecheck:cron` variants for CI. The frontend config (`tsconfig.json`) covers `lab/js/**`, `watch/js/**`, `account/**`, and `src/**` (including `.tsx`); the functions config (`tsconfig.functions.json`) covers `functions/**/*.{ts,tsx}`, `src/share/**`, and the listed backend-handler tests, with `jsx: "react-jsx"` and `resolveJsonModule: true` so capsule-preview `.tsx` renderers and `__fixtures__/*.json` typecheck without per-file changes.
 - `npm run test:unit` (vitest) — includes new endpoint handler tests and auth UX tests, plus the capsule-preview unit suite (`tests/unit/capsule-preview*.test.ts`, `poster-endpoint.test.ts`, `share-page-og.test.ts`, `account-capsule-row.test.tsx`).
@@ -972,12 +988,14 @@ E2E camera-snapshot hooks: `_getWatchCameraSnapshot` is gated on `?e2e=1` (`watc
 
 ```
 1. Make changes to sim/ code
-2. python -m pytest tests/test_*.py -v
+2. python -m pytest tests/test_*.py -v     # or run individual tests per docs/testing.md
 3. If adding structures: python scripts/library_cli.py <command>
 4. If changing force engine: verify tersoff.py and tersoff_fast.py match
-5. Document significant changes in docs/decisions.md
+5. Document significant changes in docs/decisions.md (append as the next `## D<N>` entry — never renumber)
 6. Update docs/ if architecture or decisions change
 ```
+
+See [docs/testing.md](testing.md#test-ladder) for the validation ladder (Tests 1–8) and pass criteria.
 
 ## Key Files to Know
 

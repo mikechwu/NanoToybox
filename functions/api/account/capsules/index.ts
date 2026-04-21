@@ -45,15 +45,8 @@ import { authenticateRequest } from '../../../auth-middleware';
 import { noCacheHeaders, noCacheJson } from '../../../http-cache';
 import { b64urlEncode, b64urlDecode } from '../../../../src/share/b64url';
 import { errorMessage } from '../../../../src/share/error-message';
-import {
-  derivePreviewThumbV1,
-  ROW_ATOM_CAP_ATOMS_ONLY,
-  ROW_ATOM_CAP_WITH_BONDS,
-  ROW_BOND_CAP,
-  type PreviewSceneAtomV1,
-  type PreviewThumbV1,
-} from '../../../../src/share/capsule-preview-scene-store';
-import { sampleForSilhouette } from '../../../../src/share/capsule-preview-sampling';
+import type { PreviewThumbV1 } from '../../../../src/share/capsule-preview-scene-store';
+import { deriveAccountThumb } from '../../../../src/share/capsule-preview-account-derive';
 
 const PAGE_SIZE = 50;
 
@@ -158,19 +151,10 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     kind: r.kind,
     status: r.status,
     previewStatus: r.preview_status,
-    previewThumb: derivePreviewThumbV1(r.preview_scene_v1, {
-      atomCap: ROW_ATOM_CAP_ATOMS_ONLY,
-      bondsAwareAtomCap: ROW_ATOM_CAP_WITH_BONDS,
-      bondCap: ROW_BOND_CAP,
-      // Silhouette-preserving sampler — extrema + farthest-point picks so
-      // the structure's visual envelope survives downsampling to 12–18.
-      sampler: (atoms, target) => sampleForSilhouette<PreviewSceneAtomV1>(
-        atoms,
-        target,
-        (a) => a.x,
-        (a) => a.y,
-      ),
-    }),
+    // Shared helper — see src/share/capsule-preview-account-derive.ts.
+    // The same call powers the audit-page "ACCOUNT FALLBACK" panel so
+    // audit and production cannot drift on the stale-row fallback path.
+    previewThumb: deriveAccountThumb(r.preview_scene_v1),
   }));
 
   return noCacheJson({

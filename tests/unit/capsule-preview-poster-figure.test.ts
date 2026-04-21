@@ -35,7 +35,13 @@ import {
   makeWaterClusterCapsule,
   makeOxidePatchCapsule,
   makeSimpleOrganicCapsule,
+  makeFragmentedCapsule,
+  makeTwoEqualFragmentsCapsule,
+  makeCloseApproachCapsule,
 } from '../../src/share/__fixtures__/capsule-preview-structures';
+import { projectCapsuleToSceneJson } from '../../src/share/publish-core';
+import { deriveBondPairs } from '../../src/share/capsule-preview-project';
+import { selectPreviewSubjectCluster } from '../../src/share/capsule-preview-cluster-select';
 import type { AtomDojoPlaybackCapsuleFileV1 } from '../../src/history/history-file-v1';
 
 function primitivesAtPoster(capsule: AtomDojoPlaybackCapsuleFileV1): PreviewSketchPrimitives {
@@ -179,6 +185,59 @@ describe('poster-figure: CPK color preservation', () => {
       const fills = new Set(prim.circles.map((c) => c.fill));
       expect(fills.size).toBe(1);
     }
+  });
+});
+
+// ── Cluster-selection poster semantics (ADR D138) ─────────────────────
+
+describe('poster-figure: cluster-selection pre-sampling', () => {
+  it('water cluster renders the FULL frame (dominance guard rejects)', () => {
+    // Water = 8 × (O + 2H) = 24 atoms in 8 disconnected molecules.
+    // Guard fails (fraction = 3/24 = 0.125 < 0.6), so the stored
+    // poster scene must carry all 24 atoms (minus any downsampling).
+    const capsule = makeWaterClusterCapsule();
+    const expectedFullAtomCount = capsule.atoms.atoms.length;
+    const sceneJson = projectCapsuleToSceneJson(capsule)!;
+    const scene = JSON.parse(sceneJson);
+    // 24 atoms ≤ SCENE_ATOM_CAP=32, so no downsampling — the stored
+    // scene should represent every atom.
+    expect(scene.atoms.length).toBe(expectedFullAtomCount);
+  });
+
+  it('fragmented fixture renders only the dominant cluster', () => {
+    const capsule = makeFragmentedCapsule();
+    expect(capsule.atoms.atoms.length).toBe(13);
+    const sceneJson = projectCapsuleToSceneJson(capsule)!;
+    const scene = JSON.parse(sceneJson);
+    // Only the 10-atom chain should appear — the 3 noise atoms drop.
+    expect(scene.atoms.length).toBe(10);
+  });
+
+  it('two balanced fragments render full frame (guard rejects)', () => {
+    const capsule = makeTwoEqualFragmentsCapsule();
+    const expected = capsule.atoms.atoms.length;
+    const sceneJson = projectCapsuleToSceneJson(capsule)!;
+    const scene = JSON.parse(sceneJson);
+    expect(scene.atoms.length).toBe(expected);
+  });
+
+  it('close-approach proximity fusion at default cutoff selects the fused 6-atom cluster', () => {
+    // With the default 1.85 Å cutoff, the selector sees one component
+    // (fused via the 1.80 Å inter-fragment pair). `publish-core` uses
+    // `bondPolicy.cutoff` which is not carried in this fixture — it
+    // defaults to 1.85 Å in publish-core.ts. Either path yields the
+    // same selection under the default.
+    const capsule = makeCloseApproachCapsule();
+    const scene3D = (() => {
+      return buildPreviewSceneFromCapsule(capsule);
+    })();
+    const bonds = deriveBondPairs(scene3D, 1.85, 0.5);
+    const res = selectPreviewSubjectCluster(scene3D, bonds, {
+      mode: 'largest-bonded-cluster',
+    });
+    expect(res.diagnostics.componentCount).toBe(1);
+    expect(res.diagnostics.selectedAtomCount).toBe(6);
+    expect(res.diagnostics.fallbackReason).toBe('none');
   });
 });
 

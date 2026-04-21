@@ -14,6 +14,7 @@ import {
   PREVIEW_SCENE_SCHEMA_VERSION,
   ROW_ATOM_CAP,
   ROW_ATOM_CAP_WITH_BONDS,
+  ROW_BOND_CAP,
   SCENE_ATOM_CAP,
   SCENE_BOND_CAP,
   sceneHash,
@@ -197,9 +198,11 @@ describe('derivePreviewThumbV1', () => {
 
   it('carries a capped bond subset for dense scenes whose storage has bonds', () => {
     // 16 atoms (≥ BONDS_AWARE_SOURCE_THRESHOLD=14), 20 bonds → crosses
-    // the dense-thumb gate; thumb caps bonds at 6. Disable the visible-
-    // bond filter so this test exercises the cap contract regardless of
-    // how tightly the fixture's atoms cluster in normalized space.
+    // the dense-thumb gate; thumb caps bonds at ROW_BOND_CAP (raised
+    // from 6 to 24 in the D138 follow-up; see the scene-store module
+    // comment). Disable the visible-bond filter so this test exercises
+    // the cap contract regardless of how tightly the fixture's atoms
+    // cluster in normalized space.
     const bonds = Array.from({ length: 20 }, (_, i) => ({ a: i % 16, b: (i + 1) % 16 }));
     const stored = buildPreviewSceneV1(makeRenderScene(16), bonds);
     const thumb = derivePreviewThumbV1(serializePreviewSceneV1(stored), {
@@ -207,7 +210,7 @@ describe('derivePreviewThumbV1', () => {
       minAcceptableBonds: 0,
     });
     expect(thumb!.bonds).toBeDefined();
-    expect(thumb!.bonds!.length).toBeLessThanOrEqual(6);
+    expect(thumb!.bonds!.length).toBeLessThanOrEqual(ROW_BOND_CAP);
     // Every bond references a real atom in the thumb payload.
     for (const b of thumb!.bonds!) {
       expect(b.a).toBeGreaterThanOrEqual(0);
@@ -228,11 +231,14 @@ describe('derivePreviewThumbV1', () => {
   });
 
   it('caps per-atom bond degree so one cluster cannot consume the budget', () => {
-    // Build a "star" where atom 0 is connected to 1, 2, 3, 4, 5, 6, 7
-    // (7 bonds all touching atom 0). With bondMaxDegree=2, only 2 bonds
-    // can reach atom 0 — remaining budget spends on other pairs.
-    // Disable visibility filter: fixture atoms are tightly spaced in
-    // normalized space, so this test asserts the cap contract directly.
+    // Build a "star" where atom 0 is connected to 1..7 (7 bonds all
+    // touching atom 0). With `bondMaxDegree=2`, only 2 bonds can reach
+    // atom 0 — remaining budget spends on other pairs. The default
+    // degree cap raised to 3 in the D138 follow-up (cage-atom sp²
+    // topology), so this test passes an explicit `bondMaxDegree: 2`
+    // to assert the cap mechanism independent of the production
+    // default. Visibility filter disabled — fixture atoms are tightly
+    // spaced, and this test covers the cap contract directly.
     const starBonds = [
       { a: 0, b: 1 }, { a: 0, b: 2 }, { a: 0, b: 3 }, { a: 0, b: 4 },
       { a: 0, b: 5 }, { a: 0, b: 6 }, { a: 0, b: 7 },
@@ -242,6 +248,7 @@ describe('derivePreviewThumbV1', () => {
     const thumb = derivePreviewThumbV1(serializePreviewSceneV1(stored), {
       minVisibleBondViewbox: 0,
       minAcceptableBonds: 0,
+      bondMaxDegree: 2,
     });
     const degree = new Map<number, number>();
     for (const b of thumb!.bonds ?? []) {
@@ -381,6 +388,6 @@ describe('derivePreviewThumbV1', () => {
       minVisibleBondViewbox: 0,
       minAcceptableBonds: 0,
     });
-    expect(thumb!.atoms.length).toBeLessThanOrEqual(12);
+    expect(thumb!.atoms.length).toBeLessThanOrEqual(ROW_ATOM_CAP_WITH_BONDS);
   });
 });

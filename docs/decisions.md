@@ -1152,8 +1152,8 @@ The Pages Function route handler MUST ignore `?v=` entirely — it is a cache-ke
 **Decision:**
 
 1. **Publish-time pre-bake into D1.** The projected scene is serialized as `PreviewSceneV1` JSON and stored in the new `capsule_share.preview_scene_v1 TEXT` column (migration `0009_capsule_preview_scene_v1.sql`). The dynamic poster route and the account-list endpoint read the scene from D1 — no per-request R2 fetch + parse on the hot path.
-2. **Two artifacts per row, one JSON.** The stored scene carries: (a) a **poster-scene** (≤32 atoms + bonds) sized for the 1200×630 OG card, AND (b) an embedded **`thumb` (`PreviewStoredThumbV1`, `rev: 2`)** pre-baked directly from the FULL capsule atom set, NOT from the 32-atom poster subset. Projecting the thumb from the full set avoids the N → 32 → 12 double-downsampling that produced sparse, non-representative thumbs on dense scenes.
-3. **Independent version constants.** `TEMPLATE_VERSION` bumped `1 → 2` (in `src/share/capsule-preview.ts`) for poster-template changes; `CURRENT_THUMB_REV = 2` (in `src/share/capsule-preview-scene-store.ts`) is a SEPARATE constant versioned independently so thumb-algorithm changes (sampler, margin math, visibility filter) do not force a poster cache invalidation and vice versa.
+2. **Two artifacts per row, one JSON.** The stored scene carries: (a) a **poster-scene** (≤32 atoms + bonds) sized for the 1200×630 OG card, AND (b) an embedded **`thumb` (`PreviewStoredThumbV1`)** pre-baked directly from the FULL capsule atom set, NOT from the 32-atom poster subset. Projecting the thumb from the full set avoids the N → 32 → 12 double-downsampling that produced sparse, non-representative thumbs on dense scenes. (V2 shipped at `thumb.rev = 2`; the constant has since been advanced by follow-ups under D138 — see the `CURRENT_THUMB_REV` JSDoc history in `capsule-preview-scene-store.ts` for the full rev timeline.)
+3. **Independent version constants.** `TEMPLATE_VERSION` bumped `1 → 2` (in `src/share/capsule-preview.ts`) for poster-template changes; `CURRENT_THUMB_REV` (in `src/share/capsule-preview-scene-store.ts`) is a SEPARATE constant versioned independently so thumb-algorithm changes (sampler, margin math, visibility filter) do not force a poster cache invalidation and vice versa. V2 launched at `CURRENT_THUMB_REV = 2`; the live value tracks subsequent D138 follow-ups.
 4. **Content-bound dynamic-poster ETag.** The ETag rebinds to the canonical scene hash: `"v2-<FNV1a32 of [TEMPLATE_VERSION, scene.hash, sanitizedTitle, shareCode]>"` (`functions/api/capsules/[code]/preview/poster.ts::dynamicPosterETag`). Any observable input to the render changes the ETag; no observable input change leaves a stale cache entry valid.
 5. **Account-list fast path.** `/api/account/capsules` returns `previewThumb: PreviewThumbV1 | null` per row, derived server-side via the stored-thumb fast path (decode D1 JSON → emit pre-baked atoms/bonds) with a live-sampling fallback when the thumb is absent/stale. Zero R2 reads on the hot path.
 6. **Canonical PCA camera.** The projection uses a canonical PCA basis with deterministic sign normalization, scene-shape classification (spherical / planar / linear / general), and a fixed 5°/10° tilt — so the same capsule always projects to the same 2D scene regardless of its stored orientation.
@@ -1170,7 +1170,7 @@ The Pages Function route handler MUST ignore `?v=` entirely — it is a cache-ke
 
 **Related ADRs:** D130 (V1 OG render stack — still in force; V2 uses the same Vercel OG plugin / bundled-font pipeline, only the scene source changed). D132 (`posterUrl` semantics — unchanged; "endpoint exists" still applies, and V2 narrows the "dynamic vs. stored" discriminator because every accessible capsule now has a pre-baked scene). D133 (two-axis `?v=` cache key — `?v=t2` now reflects `TEMPLATE_VERSION = 2`; the scheme is unchanged). D134 (`CAPSULE_PREVIEW_DYNAMIC_FALLBACK` allowlist flag — still the rollback lever for the dynamic poster path; V2 did not retire it).
 
-**Evidence:** `src/share/capsule-preview.ts` (`TEMPLATE_VERSION = 2`); `src/share/capsule-preview-scene-store.ts` (`CURRENT_THUMB_REV = 2`, `PreviewStoredThumbV1`, `rev >= CURRENT_THUMB_REV` fast-path gate); `migrations/0009_capsule_preview_scene_v1.sql`; `functions/api/capsules/[code]/preview/poster.ts::dynamicPosterETag` (`"v${TEMPLATE_VERSION}-${fnv1a32Hex(...)}"`).
+**Evidence:** `src/share/capsule-preview.ts` (`TEMPLATE_VERSION = 2`); `src/share/capsule-preview-scene-store.ts` (`CURRENT_THUMB_REV` — currently `15`; JSDoc carries the full 2→15 rev history through the D138 follow-ups; `PreviewStoredThumbV1`; `rev >= CURRENT_THUMB_REV` fast-path gate); `migrations/0009_capsule_preview_scene_v1.sql`; `functions/api/capsules/[code]/preview/poster.ts::dynamicPosterETag` (`"v${TEMPLATE_VERSION}-${fnv1a32Hex(...)}"`).
 
 ## D136: Shared Current-Poster and Current-Thumb Modules — Single Baseline, CI-Enforced Ink Mirror
 
@@ -1216,3 +1216,33 @@ The Pages Function route handler MUST ignore `?v=` entirely — it is a cache-ke
 **Alternatives rejected:** Document the three-step pipeline in the README and expect contributors to memorize it (already tried; the issue keeps coming back in PR review); fold the Functions emulator into `npm run dev` directly (vite-plugin options for Cloudflare Pages Functions exist but conflate HMR with the backend emulator, making dev-server startup slower for the common UI-only case); retire `npm run dev` (hostile to Lab/Watch UI contributors who do not touch the backend).
 
 **Evidence:** `scripts/serve-app.sh` (pipeline + preflight + fast-path flags); `package.json` scripts `app:serve`, `cf:d1:migrate`, `cf:dev`; `docs/contributing.md` (Local dev modes rule-of-thumb).
+
+## D138: Preview Subject = Largest Bonded Cluster (with Guarded Fallback)
+
+**Status:** Accepted, 2026-04-20.
+
+**Context:** The V2 capsule-preview pipeline (D135) renders the first dense frame verbatim into the poster pane and account-row thumb. In practice that frame often contains atoms that are not part of the user's visual intent — simulation debris, noise atoms, collision-reactant setup fragments, solvent boxes. Rendering everything produces busy or sparse previews for real capsules, and the poster thumbnail loses recognizability.
+
+**Decision:** Select the **largest connected component of the preview proximity graph** as the preview subject when a dominance guard passes; otherwise fall back to the full frame. The selection runs BEFORE any sampling or projection, so the filter operates on a real graph-connected subset (late filtering on sampled subsets is incoherent — §Preview Subject Policy in the plan).
+
+Dominance guard (both must pass):
+
+- `largest.size ≥ MIN_MEANINGFUL_CLUSTER_SIZE` (default 2), AND
+- `largest.size ≥ DOMINANCE_BY_RATIO * secondLargest.size` (default 2.0), AND
+- `largest.size / total ≥ DOMINANCE_BY_FRACTION` (default 0.6).
+
+When the guard fails (balanced collision/reactant pair, water-style fragmentation, single-atom noise), the full frame is preserved. Zero-bond scenes short-circuit to the full frame without any graph computation.
+
+**Scope caveat (important):** "bonded cluster" here means a **connected component of the preview proximity graph** (derived from `bondPolicy.cutoff` + `bondPolicy.minDist`), NOT authoritative molecular connectivity. The capsule file format does not carry dense-frame topology, and `deriveBondPairs` builds a pure distance-cutoff graph. Close-approach frames (mid-flight collisions, solute-solvent encounters) can fuse two unbonded molecules into one cluster, and the dominance guard cannot unfuse them. This is a deliberate tradeoff; a chemistry-aware upgrade is out of scope — see the `makeCloseApproachCapsule` regression fixture which locks in the observed fuse/separate behavior at two different cutoffs.
+
+**Rationale:** Preserves correctness for ambiguous multi-fragment scenes where the dominance guard rejects selection; captures the common single-dominant-molecule case that motivated the change; reuses existing graph primitives (`computeConnectedComponents`); keeps storage schema untouched; keeps the selector's graph identical to the renderer's bond graph so selection and render are coherent.
+
+**Alternatives rejected:**
+
+- Unconditional largest-cluster (drops fragments silently — violates user intent for collision setups).
+- "Most-photogenic frame" heuristic (out of scope; frame-pick policy is a separate decision per D135).
+- Late filtering after sampling (sampled subsets aren't graph-connected; filtering there produces incoherent subjects).
+
+**Evidence:** `src/share/capsule-preview-cluster-select.ts` (selector + dominance guard + defensive duplicate-atomId branch); `tests/unit/capsule-preview-cluster-select.test.ts` (11 cases including close-approach proximity-fusion contract); `src/share/publish-core.ts` (integration before sampling/projection + `[publish] cluster-select:` log line); `preview-audit/main.tsx` (shared selector call + §3 diagnostics + §2 Subject row); `src/share/__fixtures__/capsule-preview-structures.ts` — three new fixtures: `makeFragmentedCapsule`, `makeTwoEqualFragmentsCapsule`, `makeCloseApproachCapsule`.
+
+**Related ADRs:** D135 (V2 preview pipeline), D136 (shared poster/thumb extraction).

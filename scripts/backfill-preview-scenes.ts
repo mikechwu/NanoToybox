@@ -1,21 +1,27 @@
 /**
- * scripts/backfill-preview-scenes.ts — populate capsule_share.preview_scene_v1
- * for rows published before the V2 rollout (spec §S1 backfill).
+ * scripts/backfill-preview-scenes.ts — pure library for populating
+ * `capsule_share.preview_scene_v1` on legacy rows (spec §S1 backfill,
+ * ADR D138 rollout).
  *
- * Idempotent; safe to re-run. The poster route's lazy-backfill path handles
- * any row this script misses, so V2 can ship before this completes.
+ * Idempotent; safe to re-run. The poster route's lazy-backfill path
+ * handles any row this function misses, so a deploy can land before a
+ * full sweep completes.
  *
- * Runbook:
- *   wrangler d1 export atomdojo-capsules --output backup.sql
- *   npx tsx scripts/backfill-preview-scenes.ts
+ * **This module has no CLI entrypoint by design.** Do not add a
+ * `main()` or `import.meta.url` guard — the repo is `"type":
+ * "commonjs"` with no `tsx` dependency, and the production runtime
+ * model for "needs D1 + R2 bindings" is a Pages Function, not a
+ * standalone Node script. Consumers:
  *
- * Environment: expects wrangler bindings for DB and R2_BUCKET via
- * `wrangler d1 execute` / `wrangler r2 object get`. This module intentionally
- * does NOT hard-code runtime setup — callers drive the script in whichever
- * shape their environment provides (production is "wrangler pages invoke"
- * with the bindings attached).
- *
- * NOT a Cloudflare Worker entry point — run as a Node script.
+ * - Production: `POST /api/admin/backfill-preview-scenes`
+ *   (`functions/api/admin/backfill-preview-scenes.ts`), called via
+ *   `npm run capsule-preview:backfill:prod` which POSTs to that
+ *   admin-gated endpoint from
+ *   `scripts/backfill-preview-scenes-prod.mjs`.
+ * - Local dev: `npm run capsule-preview:backfill:local` (runs
+ *   `scripts/backfill-local.mjs` against the Miniflare state).
+ * - Tests: `tests/unit/*.test.ts` import `backfillPreviewScenes`
+ *   directly.
  */
 
 import type { AtomDojoPlaybackCapsuleFileV1 } from '../src/history/history-file-v1';

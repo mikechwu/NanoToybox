@@ -39,6 +39,18 @@ export const BOND_STROKE_WIDTH_SPARSE = 3;
  *  adjacent dark atoms read as separate glyphs at 40×40. */
 export const ATOM_HALO_WIDTH = 0.6;
 
+/** Floor factor applied to per-atom stored radii under the D138
+ *  perspective bake (rev ≥ 9). Stored `r * 100` viewBox is used
+ *  verbatim in bonded mode EXCEPT when it falls below
+ *  `densityRadius × PERSPECTIVE_RADIUS_FLOOR_FACTOR` — then the
+ *  floor kicks in so sub-pixel atoms don't vanish on the farthest
+ *  depth layer. 0.45 matches the theoretical perspective minimum
+ *  `K/(K+1) = 0.6` at K=1.5 with a small buffer for dense-scene
+ *  density shrinkage. **Both the renderer and the visibility
+ *  filter read this constant** so "what's visible" in the bond
+ *  picker and "what's painted" in the SVG stay locked in step. */
+export const PERSPECTIVE_RADIUS_FLOOR_FACTOR = 0.45;
+
 /** Resolve the bonded-mode atom radius for a given sampled-atom count.
  *  Exported so the scene-store's visibility filter uses the same
  *  resolution rule as the renderer. */

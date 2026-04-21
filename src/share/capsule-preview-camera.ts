@@ -335,3 +335,50 @@ export function deriveCanonicalPreviewCamera(
     classification,
   };
 }
+
+/**
+ * Strip the fixed cosmetic 5°/10° display tilt from a canonical
+ * preview camera, leaving a pure `(e₁, e₂, e₃) = (X, Y, depth)` PCA
+ * basis oriented for axis-aligned rendering. Shared by the
+ * experimental perspective renderer (audit-page design surface)
+ * AND the publish-time perspective-bake helper
+ * (`projectPreviewScenePerspective`) so both surfaces project
+ * through the SAME camera — otherwise per-atom depths diverge and
+ * thumbs don't match the audit-page preview.
+ *
+ * Classification asymmetry: the canonical `degenerate` branch
+ * returns identity WITHOUT applying the tilt (see the early-exit
+ * path above). For every other classification the canonical form
+ * is `R = tilt · basis`, so `tilt⁻¹ · R = basis`. For `degenerate`
+ * the input is already un-tilted; left-multiplying by `tilt⁻¹`
+ * would inject a spurious rotation. Short-circuit that case.
+ */
+export function untiltCamera(cam: CapsulePreviewCamera2D): CapsulePreviewCamera2D {
+  if (cam.classification === 'degenerate') return cam;
+  const TX = FIXED_TILT_X;
+  const TY = FIXED_TILT_Y;
+  const cx = Math.cos(-TX), sx = Math.sin(-TX);
+  const cy = Math.cos(-TY), sy = Math.sin(-TY);
+  const rotXinv = [1, 0, 0, 0, cx, -sx, 0, sx, cx];
+  const rotYinv = [cy, 0, sy, 0, 1, 0, -sy, 0, cy];
+  const tiltInv = mul3(rotYinv, rotXinv);
+  const untilted = mul3(tiltInv, cam.rotation3x3);
+  return {
+    ...cam,
+    rotation3x3: untilted as CapsulePreviewCamera2D['rotation3x3'],
+  };
+}
+
+/**
+ * Canonical PCA basis with NO display tilt. Used by the
+ * perspective renderer (audit page) and the publish-time
+ * perspective thumb bake. The untilted basis makes the screen
+ * axes align with the molecule's principal components directly —
+ * no cosmetic skew — which is the correct input for pinhole
+ * perspective math.
+ */
+export function deriveMinorAxisCamera(
+  scene: Parameters<typeof deriveCanonicalPreviewCamera>[0],
+): CapsulePreviewCamera2D {
+  return untiltCamera(deriveCanonicalPreviewCamera(scene));
+}
