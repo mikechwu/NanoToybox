@@ -324,6 +324,16 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     }
   }
 
+  // Narrowing guard for the TS checker. Every path above either
+  // assigned a non-null scene OR returned early via the terminal
+  // fallback, so in practice `scene` is always non-null here —
+  // but the compiler can't prove that through the reassignable
+  // `let`. A defensive terminal-fallback on the unreachable null
+  // path is cheap insurance.
+  if (!scene) {
+    return serveTerminalFallback(context.request, code, startedAt, 'scene-null-post-heal');
+  }
+
   try {
     const sanitizedTitle = sanitizeCapsuleTitle(row.title);
     const meta: PosterRenderMeta = {
