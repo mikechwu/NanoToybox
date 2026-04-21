@@ -90,7 +90,13 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies
-        run: pip install numpy numba pytest
+        # `--retries 5 --timeout 60` converts the occasional PyPI
+        # mid-download SSL flake (e.g. `DECRYPTION_FAILED_OR_BAD_RECORD_MAC`
+        # partway through llvmlite's 56 MB wheel) from a red-CI into a
+        # transparent retry. pip defaults to 5 retries internally but
+        # making it explicit + raising the per-chunk timeout covers
+        # the "slow CDN" variant that the default 15 s doesn't.
+        run: pip install --retries 5 --timeout 60 numpy numba pytest
 
       - name: Run physics tests
         # Excluded: test_zero_k_stability / test_perturbation (fixture issues),
