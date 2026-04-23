@@ -36,7 +36,7 @@ CAPSULE_PREVIEW_DYNAMIC_FALLBACK = "on"
 #   2. Flip to "on" in THIS file and redeploy.
 # Emergency off-switch: flip back to "off" and redeploy. See the
 # implementation plan §Rollout.
-GUEST_PUBLISH_ENABLED = "off"
+GUEST_PUBLISH_ENABLED = "on"
 
 # Turnstile site key (public) — bridged to the Lab via the session
 # endpoint's publicConfig block. The server-side secret is provisioned
