@@ -37,6 +37,46 @@ import { ActionHint } from '../ActionHint';
 import { TIMELINE_HINTS } from './timeline-hints';
 import { scheduleAfterNextPaint } from './timeline-after-paint';
 import { measureSync } from './timeline-performance';
+import {
+  isPublishOversizeError,
+  isCapsuleSnapshotStaleError,
+  type PublishOversizeError,
+} from '../../runtime/publish-errors';
+import { MAX_PUBLISH_BYTES } from '../../../../src/share/constants';
+import type {
+  CapsuleSnapshotId,
+  CapsuleSelectionRange,
+  PreparedCapsuleSummary,
+  HeldPreparedCapsule,
+} from '../../runtime/timeline/capsule-publish-types';
+import { timePsFromClientX } from './timeline-track-geometry';
+import {
+  TRIM_TARGET_BYTES,
+  MAX_SEARCH_ITERATIONS,
+  FRAME_FALLBACK_SUFFIX,
+  TRIM_KEYBOARD_PREPARE_DEBOUNCE_MS,
+  TRIM_HANDLE_PULSE_MS,
+  TRIM_HANDLE_PULSE_ITERATION_MS,
+  TRIM_HANDLE_PULSE_ITERATION_COUNT,
+} from './trim-mode-config';
+
+function snapToFrameIndex(frames: ReadonlyArray<{ timePs: number }>, timePs: number): number {
+  if (frames.length === 0) return 0;
+  if (timePs <= frames[0].timePs) return 0;
+  if (timePs >= frames[frames.length - 1].timePs) return frames.length - 1;
+  let lo = 0, hi = frames.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (frames[mid].timePs < timePs) lo = mid + 1;
+    else hi = mid;
+  }
+  // `lo` is the first index with timePs >= target — check previous for
+  // closeness to the target.
+  if (lo > 0 && Math.abs(frames[lo - 1].timePs - timePs) <= Math.abs(frames[lo].timePs - timePs)) {
+    return lo - 1;
+  }
+  return lo;
+}
 
 // ── Shared shell ──
 
@@ -209,9 +249,33 @@ function TimelineBarActive() {
 
   const handlePointerUp = useCallback(() => { isDragging.current = false; }, []);
 
-  const handleReturnToLive = useCallback(() => { callbacks?.onReturnToLive(); }, [callbacks]);
-  const handleEnterReview = useCallback(() => { callbacks?.onEnterReview(); }, [callbacks]);
-  const handleRestart = useCallback(() => { callbacks?.onRestartFromHere(); }, [callbacks]);
+  // When a trimmed publish has succeeded, `pendingTrimSuccessRestore`
+  // holds the pre-trim review/live state so closeTransfer can restore
+  // it before resume. Any user-initiated timeline interaction during
+  // that window (before close) means the user is now looking at a
+  // different view than the pre-trim state — flipping this flag tells
+  // closeTransfer to skip the restore so we don't yank the user back
+  // to a frame they just navigated away from.
+  const markPostSuccessInteraction = useCallback(() => {
+    setPendingTrimSuccessRestore((prev) =>
+      prev && !prev.userInteractedAfterSuccess
+        ? { ...prev, userInteractedAfterSuccess: true }
+        : prev,
+    );
+  }, []);
+
+  const handleReturnToLive = useCallback(() => {
+    markPostSuccessInteraction();
+    callbacks?.onReturnToLive();
+  }, [callbacks, markPostSuccessInteraction]);
+  const handleEnterReview = useCallback(() => {
+    markPostSuccessInteraction();
+    callbacks?.onEnterReview();
+  }, [callbacks, markPostSuccessInteraction]);
+  const handleRestart = useCallback(() => {
+    markPostSuccessInteraction();
+    callbacks?.onRestartFromHere();
+  }, [callbacks, markPostSuccessInteraction]);
   const handleTurnOff = useCallback(() => { callbacks?.onTurnRecordingOff(); }, [callbacks]);
 
   // Clear confirmation
@@ -253,6 +317,127 @@ function TimelineBarActive() {
     warnings?: string[];
   } | null>(null);
   const transferDidPause = useRef(false);
+
+  // ── Trim mode state ──
+  //
+  // Local to the Transfer session so the persistent timeline state
+  // machine is not polluted with export-selection concerns (plan §1).
+  // All async results are dropped when `trimRunIdRef.current` differs
+  // from the captured runId at dispatch time.
+  interface ShareTrimStateLocal {
+    active: boolean;
+    snapshotId: CapsuleSnapshotId;
+    frames: ReadonlyArray<{ frameId: number; timePs: number }>;
+    startFrameIndex: number;
+    endFrameIndex: number;
+    rangeStartPs: number;
+    rangeEndPs: number;
+    maxSelectableSpanPs: number;
+    dragMode: 'start' | 'end' | 'window' | null;
+    previewTarget: 'start' | 'end' | null;
+    previewingOutsideKept: boolean;
+    preparedArtifact: HeldPreparedCapsule | null;
+    measuredBytes: number | null;
+    safeStatus: 'measuring' | 'within-target' | 'close-to-limit' | 'over-limit' | 'unavailable';
+    /** Differentiates the two sources of `safeStatus: 'measuring'`:
+     *    'search'  — initial entry-time chunked bisect (up to 16
+     *                serializations). User-facing copy: "Finding the
+     *                best fit…".
+     *    'recheck' — a single prepare triggered by Reset (or any
+     *                future single-prepare trigger). User-facing copy:
+     *                "Checking selection…". This keeps Reset from
+     *                implying the app is re-running the whole search
+     *                — plan §9 Reset semantics. */
+    measuringKind: 'search' | 'recheck';
+    originalActualBytes: number | null;
+    maxBytes: number | null;
+    maxSource: 'server' | 'client-fallback' | 'unknown';
+    prevReviewState: { mode: 'live' | 'review'; reviewTimePs: number | null };
+    cachedDefaultStartFrameIndex: number | null;
+    runId: number;
+    snapshotStale: boolean;
+    /** True when the search found no non-empty suffix under the cap
+     *  (single-frame selection). Drives the Nothing-Fits branch. */
+    nothingFits: boolean;
+  }
+  const initialShareTrim: ShareTrimStateLocal = {
+    active: false,
+    snapshotId: '',
+    frames: [],
+    startFrameIndex: 0,
+    endFrameIndex: 0,
+    rangeStartPs: 0,
+    rangeEndPs: 0,
+    maxSelectableSpanPs: 0,
+    dragMode: null,
+    previewTarget: null,
+    previewingOutsideKept: false,
+    preparedArtifact: null,
+    measuredBytes: null,
+    safeStatus: 'measuring',
+    measuringKind: 'search',
+    originalActualBytes: null,
+    maxBytes: null,
+    maxSource: 'unknown',
+    prevReviewState: { mode: 'live', reviewTimePs: null },
+    cachedDefaultStartFrameIndex: null,
+    runId: 0,
+    snapshotStale: false,
+    nothingFits: false,
+  };
+  const [shareTrimState, setShareTrimState] = useState<ShareTrimStateLocal>(initialShareTrim);
+  // Brief attention pulse on the trim handles when the mode opens —
+  // the handles live on the main timeline, outside the Share panel,
+  // so the user could miss them on first trigger. Pulse for ~1.2 s
+  // then auto-clear; reduced-motion users get the static state
+  // thanks to the CSS media query.
+  const [handlesPulse, setHandlesPulse] = useState(false);
+  useEffect(() => {
+    if (!shareTrimState.active) { setHandlesPulse(false); return; }
+    setHandlesPulse(true);
+    const t = setTimeout(() => setHandlesPulse(false), TRIM_HANDLE_PULSE_MS);
+    return () => clearTimeout(t);
+  }, [shareTrimState.active]);
+  const shareTrimStateRef = useRef(shareTrimState);
+  // useLayoutEffect (not useEffect): the ref must reflect the latest
+  // state BEFORE any subsequent rAF callback runs. scheduleAfterNextPaint
+  // schedules rAF+setTimeout(0); in React 18, useEffect fires AFTER
+  // paint while rAF fires BEFORE paint of the next frame — so a Reset
+  // that queues a microtask which then calls scheduleAfterNextPaint can
+  // have its async body see a stale ref and bail out on the runId check,
+  // leaving safeStatus stuck at 'measuring'. useLayoutEffect fires
+  // synchronously after commit, before paint, so async work scheduled
+  // during the same click always observes the latest ref.
+  useLayoutEffect(() => { shareTrimStateRef.current = shareTrimState; }, [shareTrimState]);
+
+  // Monotonic run id used by the async default-selection search and by
+  // the drag-end measurement. Both compare captured runId vs. current
+  // after every await — any mismatch drops the result AND evicts the
+  // cache entry via onCancelPreparedPublish.
+  const trimRunIdRef = useRef(0);
+  // Best prepared artifact held during the default-selection search.
+  // Wrapped as HeldPreparedCapsule so we can always prove range
+  // identity; the bare PreparedCapsuleSummary never escapes.
+  const bestPreparedRef = useRef<HeldPreparedCapsule | null>(null);
+  // Cancellers for scheduled trim async work — one for the chunked
+  // default-selection search, one for the drag-end debounced prepare.
+  const trimSearchCancelRef = useRef<(() => void) | null>(null);
+  const trimDragPrepareCancelRef = useRef<(() => void) | null>(null);
+  // Share-measuring is the "publish-time prepare in flight" flag from
+  // the plan — drives the Preparing… label, the tab-switch disable,
+  // and the internal measuring-copy choice.
+  const [shareMeasuring, setShareMeasuring] = useState(false);
+  // Dedicated error slot for the Nothing-Fits Download Capsule action.
+  // Kept separate from `downloadError` (Download tab) and `shareError`
+  // (Share panel red error) so the fallback branch can render its own
+  // retry affordance without bleeding into the Download tab that isn't
+  // visible from the Share trim branch.
+  const [shareFallbackDownloadError, setShareFallbackDownloadError] = useState<string | null>(null);
+  // Pending restore handoff for post-success close policy (§11).
+  const [pendingTrimSuccessRestore, setPendingTrimSuccessRestore] = useState<
+    | { prevReviewState: { mode: 'live' | 'review'; reviewTimePs: number | null }; userInteractedAfterSuccess: boolean }
+    | null
+  >(null);
 
   // Latest callbacks ref — keeps unmount cleanup current even when callbacks
   // are installed after mount or reinstalled by the subsystem.
@@ -328,7 +513,69 @@ function TimelineBarActive() {
     setShareSubmitting(false);
     setShareError(null);
     setShareResult(null);
+    // Inline trim teardown — avoids a forward reference to the
+    // `exitTrimMode` helper defined later in this component. Evict any
+    // still-allocated prepareId (search best-known + current prepared
+    // artifact) so a close during measurement or between prepare and
+    // publish can't leak a cached payload.
+    trimRunIdRef.current++;
+    if (trimSearchCancelRef.current) { trimSearchCancelRef.current(); trimSearchCancelRef.current = null; }
+    if (trimDragPrepareCancelRef.current) { trimDragPrepareCancelRef.current(); trimDragPrepareCancelRef.current = null; }
+    const trim = shareTrimStateRef.current;
+    const evictCb = callbacks?.onCancelPreparedPublish;
+    if (evictCb) {
+      if (trim.preparedArtifact) evictCb(trim.preparedArtifact.prepareId);
+      if (bestPreparedRef.current) evictCb(bestPreparedRef.current.prepareId);
+    }
+    bestPreparedRef.current = null;
+    setShareMeasuring(false);
+    setShareTrimState(initialShareTrim);
+    setPendingTrimSuccessRestore(null);
+    setShareFallbackDownloadError(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callbacks, transferDialog]);
+
+  // Wrap closeTransferSession with the pre-teardown restore policy.
+  // The Transfer dialog has two scenarios where closing must restore a
+  // prior timeline view before the inline teardown wipes trim state:
+  //
+  //   1. **Trim Cancel (Acceptance #13)** — user entered trim from
+  //      live or review, may have scrub-previewed a handle frame, and
+  //      is now cancelling. The display is in review at a historical
+  //      frame; letting onResumeFromExport fire without restoring
+  //      would resume live physics against a review-rendered scene.
+  //      Restore prevReviewState captured at trim entry.
+  //
+  //   2. **Post-success restore (§11)** — trimmed publish succeeded,
+  //      success branch is showing, user has not manually interacted
+  //      with the timeline since. Same risk as above; restore via
+  //      pendingTrimSuccessRestore.
+  //
+  // Post-success takes priority over trim-active — by the time the
+  // success branch renders we've already cleared shareTrimState.
+  // Priority order is: pending success > trim active > no action.
+  const closeTransfer = useCallback(() => {
+    const pending = pendingTrimSuccessRestore;
+    if (pending) {
+      if (!pending.userInteractedAfterSuccess) {
+        if (pending.prevReviewState.mode === 'live') {
+          callbacks?.onReturnToLive();
+        } else if (pending.prevReviewState.reviewTimePs !== null) {
+          callbacks?.onScrub(pending.prevReviewState.reviewTimePs);
+        }
+      }
+    } else {
+      const trim = shareTrimStateRef.current;
+      if (trim.active) {
+        if (trim.prevReviewState.mode === 'live') {
+          callbacks?.onReturnToLive();
+        } else if (trim.prevReviewState.reviewTimePs !== null) {
+          callbacks?.onScrub(trim.prevReviewState.reviewTimePs);
+        }
+      }
+    }
+    closeTransferSession();
+  }, [pendingTrimSuccessRestore, callbacks, closeTransferSession]);
 
   const openTransfer = useCallback(() => {
     clear.reset();
@@ -339,6 +586,7 @@ function TimelineBarActive() {
     setShareSubmitting(false);
     setShareError(null);
     setShareResult(null);
+    setShareFallbackDownloadError(null);
     transferDidPause.current = pauseForTransfer();
     // Default to Share tab (Phase 6 Auth UX contract) — the cross-session,
     // higher-value path. Fall back to Download only when Share is not
@@ -347,9 +595,13 @@ function TimelineBarActive() {
   }, [clear, preferredKind, pauseForTransfer, transferDialog, shareAvailable]);
 
   const openClear = useCallback(() => {
-    closeTransferSession();
+    // Route through closeTransfer so a trim-active Cancel path
+    // restores prevReviewState (Acceptance #13) instead of leaving
+    // the display stuck on the last scrub-previewed frame while the
+    // Clear dialog opens on top.
+    closeTransfer();
     clear.request();
-  }, [clear, closeTransferSession]);
+  }, [clear, closeTransfer]);
 
   // Sign-in handler for the Share tab's auth prompt. Always sets the
   // resume-publish intent so the user lands back on the Share tab after the
@@ -496,7 +748,10 @@ function TimelineBarActive() {
       const result = await callbacks.onExportHistory(downloadKind);
       if (!mountedRef.current) return;
       if (result === 'saved') {
-        closeTransferSession();
+        // Route through closeTransfer so if trim mode happened to be
+        // active while the user switched to Download and saved, the
+        // trim preview-frame is restored to the pre-trim view.
+        closeTransfer();
       } else if (result === 'picker-cancelled') {
         setDownloadSubmitting(false);
         // keep dialog open, keep paused, keep estimates
@@ -508,7 +763,7 @@ function TimelineBarActive() {
         setDownloadSubmitting(false);
       }
     }
-  }, [callbacks, downloadKind, closeTransferSession]);
+  }, [callbacks, downloadKind, closeTransfer]);
 
   const handleShareConfirm = useCallback(async () => {
     if (!callbacks?.onPublishCapsule) {
@@ -528,6 +783,22 @@ function TimelineBarActive() {
       setShareSubmitting(false);
     } catch (e) {
       if (!mountedRef.current || shareRunIdRef.current !== runId) return;
+      if (isPublishOversizeError(e)) {
+        // Capsule too large — enter trim mode. Frames are captured
+        // from getCapsuleFrameIndex at entry; failure to capture (no
+        // frames or capsule gated off) falls through to the generic
+        // error branch so the user isn't stranded in a half-rendered
+        // trim UI with no data.
+        const entered = enterTrimMode(e);
+        setShareSubmitting(false);
+        if (!entered) {
+          setShareError({
+            kind: 'other',
+            message: e instanceof Error ? e.message : 'Share failed.',
+          });
+        }
+        return;
+      }
       if (e instanceof AuthRequiredError) {
         // 401 from publish is an authoritative signed-out answer — flip
         // the store so the Share panel re-renders the in-context prompt.
@@ -561,16 +832,1093 @@ function TimelineBarActive() {
     }
   }, [callbacks]);
 
+  // ── Trim-mode machinery ──
+
+  const cancelPreparedRef = useRef<((id: string) => void) | null>(null);
+  useEffect(() => {
+    cancelPreparedRef.current = callbacks?.onCancelPreparedPublish ?? null;
+  }, [callbacks]);
+
+  const clampTrimRange = useCallback((
+    startIdx: number,
+    endIdx: number,
+    frames: ReadonlyArray<{ frameId: number; timePs: number }>,
+    maxSpanPs: number,
+  ): { startFrameIndex: number; endFrameIndex: number; rangeStartPs: number; rangeEndPs: number } => {
+    const n = frames.length;
+    const s = Math.max(0, Math.min(startIdx, n - 1));
+    const e = Math.max(s, Math.min(endIdx, n - 1));
+    let startFrame = s;
+    let endFrame = e;
+    const width = frames[endFrame].timePs - frames[startFrame].timePs;
+    if (maxSpanPs > 0 && width > maxSpanPs) {
+      // Shrink the longer end toward the shorter. Edge-drag callers
+      // should already have clamped against maxSpanPs; this is a
+      // defensive pass after window-drag.
+      // Prefer contracting the start (newest-kept policy).
+      while (startFrame < endFrame && frames[endFrame].timePs - frames[startFrame].timePs > maxSpanPs) {
+        startFrame++;
+      }
+    }
+    return {
+      startFrameIndex: startFrame,
+      endFrameIndex: endFrame,
+      rangeStartPs: frames[startFrame].timePs,
+      rangeEndPs: frames[endFrame].timePs,
+    };
+  }, []);
+
+  const cancelPrepared = useCallback((prepareId: string | null | undefined) => {
+    if (!prepareId) return;
+    const cb = cancelPreparedRef.current;
+    if (cb) cb(prepareId);
+  }, []);
+
+  const cancelInFlightTrimSearch = useCallback(() => {
+    if (trimSearchCancelRef.current) {
+      trimSearchCancelRef.current();
+      trimSearchCancelRef.current = null;
+    }
+    if (bestPreparedRef.current) {
+      cancelPrepared(bestPreparedRef.current.prepareId);
+      bestPreparedRef.current = null;
+    }
+  }, [cancelPrepared]);
+
+  const cancelInFlightTrimDragPrepare = useCallback(() => {
+    if (trimDragPrepareCancelRef.current) {
+      trimDragPrepareCancelRef.current();
+      trimDragPrepareCancelRef.current = null;
+    }
+  }, []);
+
+  /** Compute the next safeStatus bucket for a measured byte size. */
+  const classifySafeStatus = useCallback((
+    bytes: number,
+    effectiveHardCap: number,
+  ): 'within-target' | 'close-to-limit' | 'over-limit' => {
+    if (bytes > effectiveHardCap) return 'over-limit';
+    if (bytes > TRIM_TARGET_BYTES) return 'close-to-limit';
+    return 'within-target';
+  }, []);
+
+  /** Gated-idempotent patcher for ShareTrimStateLocal.
+   *
+   *  Repeated six+ times across the async paths: apply `patch` only
+   *  if the session is still active AND the captured `runId` still
+   *  matches the current run. A mismatch means a Cancel / Reset /
+   *  Exit already bumped the runId, and a late async completion
+   *  must not overwrite the next session's state. Dropping the
+   *  patch here costs nothing (the original source already
+   *  evicted any held prepareId). */
+  const patchActiveTrim = useCallback((runId: number, patch: Partial<ShareTrimStateLocal>) => {
+    setShareTrimState((prev) =>
+      prev.active && prev.runId === runId ? { ...prev, ...patch } : prev,
+    );
+  }, []);
+
+  /** Clear a previously-surfaced measurement error after a prepare
+   *  finally succeeds. Otherwise a drag-throw → drag-succeed sequence
+   *  shows a stale "Measurement failed: …" red banner next to a valid
+   *  green "Within limit" size row — contradictory state.
+   *  Narrowly scoped to `kind: 'other'` errors whose message begins
+   *  with "Measurement failed:" so we don't accidentally clear 429
+   *  quota errors, auth errors, or age-confirmation errors that came
+   *  from different code paths. */
+  const clearMeasurementErrorIfPresent = useCallback(() => {
+    setShareError((prev) => {
+      if (prev && prev.kind === 'other' && prev.message.startsWith('Measurement failed')) {
+        return null;
+      }
+      return prev;
+    });
+  }, []);
+
+  const abortSearchSnapshotStale = useCallback((runId: number) => {
+    if (runId !== trimRunIdRef.current) return;
+    cancelInFlightTrimSearch();
+    cancelInFlightTrimDragPrepare();
+    trimRunIdRef.current++;
+    let toCancel: string | null = null;
+    setShareTrimState((prev) => {
+      if (!prev.active) return prev;
+      if (prev.preparedArtifact) toCancel = prev.preparedArtifact.prepareId;
+      return {
+        ...prev,
+        preparedArtifact: null,
+        safeStatus: 'unavailable',
+        snapshotStale: true,
+      };
+    });
+    if (toCancel) cancelPrepared(toCancel);
+  }, [cancelInFlightTrimSearch, cancelInFlightTrimDragPrepare, cancelPrepared]);
+
+  /** Chunked suffix search — one prepare per scheduled tick.
+   *  Bisects dense-frame start indices for the widest suffix that
+   *  serializes under TRIM_TARGET_BYTES. Honors runId cancellation
+   *  both before and after every await. */
+  const scheduleDefaultSelectionSearch = useCallback((
+    runId: number,
+    snapshotId: CapsuleSnapshotId,
+    frames: ReadonlyArray<{ frameId: number; timePs: number }>,
+    endFrameIndex: number,
+  ) => {
+    const n = frames.length;
+    const prepare = callbacks?.onPrepareCapsulePublish;
+    if (!prepare) {
+      patchActiveTrim(runId, { safeStatus: 'unavailable' });
+      return;
+    }
+    let lo = 0;
+    let hi = endFrameIndex; // inclusive
+    let bestStart: number | null = null;
+    let iterations = 0;
+
+    const scheduleNext = () => {
+      trimSearchCancelRef.current = scheduleAfterNextPaint(async () => {
+        if (runId !== trimRunIdRef.current) return;
+        if (lo > hi || iterations >= MAX_SEARCH_ITERATIONS) {
+          finalize();
+          return;
+        }
+        iterations++;
+        const mid = (lo + hi) >>> 1;
+        const candidateRange: CapsuleSelectionRange = {
+          snapshotId,
+          startFrameIndex: mid,
+          endFrameIndex,
+        };
+        let summary: PreparedCapsuleSummary;
+        try {
+          summary = await prepare(candidateRange);
+        } catch (err) {
+          if (isCapsuleSnapshotStaleError(err)) {
+            abortSearchSnapshotStale(runId);
+            return;
+          }
+          console.warn('[trim] default-selection prepare failed:', err);
+          // A prior iteration may have produced a best-so-far whose
+          // prepareId is still held in `bestPreparedRef`. Evict it
+          // here so the cached JSON doesn't survive past the
+          // aborted search — next Cancel / Reset / close-after-exit
+          // would otherwise log a stray cancel for it, and the
+          // publisher cache could retain the payload until its
+          // bound kicks in.
+          if (bestPreparedRef.current) {
+            cancelPrepared(bestPreparedRef.current.prepareId);
+            bestPreparedRef.current = null;
+          }
+          patchActiveTrim(runId, { safeStatus: 'unavailable' });
+          // Distinguish "prepare call threw" from "measurement
+          // yielded no fit" — the status row's `'unavailable'` copy
+          // ("Couldn't measure. Drag the handles to adjust.") alone
+          // is indistinguishable between the two. Surface a red
+          // error explicitly so the user knows to retry, not to
+          // keep adjusting.
+          setShareError({
+            kind: 'other',
+            message: err instanceof Error
+              ? `Measurement failed: ${err.message}`
+              : 'Measurement failed — try again.',
+          });
+          return;
+        }
+        if (runId !== trimRunIdRef.current) {
+          cancelPrepared(summary.prepareId);
+          return;
+        }
+        const held: HeldPreparedCapsule = { ...summary, range: candidateRange };
+        if (held.bytes <= TRIM_TARGET_BYTES) {
+          // Fits — this is a new best; try earlier (wider suffix).
+          const prev = bestPreparedRef.current;
+          bestPreparedRef.current = held;
+          if (prev) cancelPrepared(prev.prepareId);
+          bestStart = mid;
+          hi = mid - 1;
+        } else {
+          // Does not fit — must start later (narrower suffix).
+          cancelPrepared(held.prepareId);
+          lo = mid + 1;
+        }
+        if (lo > hi || iterations >= MAX_SEARCH_ITERATIONS) {
+          finalize();
+        } else {
+          scheduleNext();
+        }
+      });
+    };
+
+    const finalize = () => {
+      if (runId !== trimRunIdRef.current) return;
+      trimSearchCancelRef.current = null;
+      const best = bestPreparedRef.current;
+      if (!best) {
+        // Nothing fits — check if even a single-frame end serializes.
+        // Run one more prepare for the single-frame case to confirm.
+        (async () => {
+          try {
+            const singleRange: CapsuleSelectionRange = {
+              snapshotId,
+              startFrameIndex: endFrameIndex,
+              endFrameIndex,
+            };
+            const summary = await prepare(singleRange);
+            if (runId !== trimRunIdRef.current) {
+              cancelPrepared(summary.prepareId);
+              return;
+            }
+            const held: HeldPreparedCapsule = { ...summary, range: singleRange };
+            const status = classifySafeStatus(held.bytes, MAX_PUBLISH_BYTES);
+            const nothingFits = status === 'over-limit';
+            // If even the single-frame case exceeds the cap, we still
+            // keep a prepared artifact so the user can inspect the
+            // measurement but publish is disabled.
+            setShareTrimState((prev) => {
+              if (!prev.active || prev.runId !== runId) return prev;
+              return {
+                ...prev,
+                startFrameIndex: endFrameIndex,
+                endFrameIndex,
+                rangeStartPs: frames[endFrameIndex].timePs,
+                rangeEndPs: frames[endFrameIndex].timePs,
+                maxSelectableSpanPs: 0,
+                measuredBytes: held.bytes,
+                preparedArtifact: held,
+                safeStatus: status,
+                nothingFits,
+                cachedDefaultStartFrameIndex: endFrameIndex,
+              };
+            });
+            clearMeasurementErrorIfPresent();
+          } catch (err) {
+            if (isCapsuleSnapshotStaleError(err)) {
+              abortSearchSnapshotStale(runId);
+              return;
+            }
+            console.warn('[trim] nothing-fits fallback prepare failed:', err);
+            patchActiveTrim(runId, { safeStatus: 'unavailable' });
+            setShareError({
+              kind: 'other',
+              message: err instanceof Error
+                ? `Measurement failed: ${err.message}`
+                : 'Measurement failed — try again.',
+            });
+          }
+        })();
+        return;
+      }
+      // Best suffix found — commit.
+      const startIdx = bestStart ?? best.range.startFrameIndex;
+      setShareTrimState((prev) => {
+        if (!prev.active || prev.runId !== runId) return prev;
+        const spanPs = frames[endFrameIndex].timePs - frames[startIdx].timePs;
+        return {
+          ...prev,
+          startFrameIndex: startIdx,
+          endFrameIndex,
+          rangeStartPs: frames[startIdx].timePs,
+          rangeEndPs: frames[endFrameIndex].timePs,
+          maxSelectableSpanPs: spanPs,
+          measuredBytes: best.bytes,
+          preparedArtifact: best,
+          safeStatus: classifySafeStatus(best.bytes, MAX_PUBLISH_BYTES),
+          cachedDefaultStartFrameIndex: startIdx,
+          nothingFits: false,
+        };
+      });
+      bestPreparedRef.current = null;
+      clearMeasurementErrorIfPresent();
+    };
+
+    scheduleNext();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callbacks, abortSearchSnapshotStale, cancelPrepared, classifySafeStatus]);
+
+  const enterTrimMode = useCallback((error: PublishOversizeError) => {
+    const frameIndex = callbacks?.getCapsuleFrameIndex?.();
+    if (!frameIndex || frameIndex.frames.length === 0) {
+      // Not viable for trim mode — fall through to generic error.
+      return false;
+    }
+    // Cancel any existing trim work and capture prevReviewState.
+    cancelInFlightTrimSearch();
+    cancelInFlightTrimDragPrepare();
+    const runId = ++trimRunIdRef.current;
+    const timelineState = useAppStore.getState();
+    const prevReviewState = {
+      mode: (timelineState.timelineMode === 'review' ? 'review' : 'live') as 'live' | 'review',
+      reviewTimePs:
+        timelineState.timelineMode === 'review' && timelineState.timelineCurrentTimePs != null
+          ? timelineState.timelineCurrentTimePs
+          : null,
+    };
+    const frames = frameIndex.frames;
+    const endFrameIndex = frames.length - 1;
+    const fallbackStart = Math.max(0, endFrameIndex - (FRAME_FALLBACK_SUFFIX - 1));
+    // Derive maxSource from the error's provenance, not just whether
+    // maxBytes is non-null:
+    //   · preflight: the client already decided to reject against
+    //     MAX_PUBLISH_BYTES — render as client-fallback since the
+    //     client IS the source of truth for its own preflight check.
+    //   · 413 with parsed maxBytes: server confirmed the cap — 'server'.
+    //   · 413 without parsed maxBytes: server rejected but gave no
+    //     trustworthy limit. Rendering MAX_PUBLISH_BYTES here with a
+    //     'client-fallback' label would assert a limit the client has
+    //     no authority for under deploy skew. Render 'unknown' (no
+    //     denominator) instead — the effectiveHardCap gate still
+    //     enforces MAX_PUBLISH_BYTES internally.
+    const errorMaxBytes = error.maxBytes;
+    let maxSource: 'server' | 'client-fallback' | 'unknown';
+    let maxBytes: number | null;
+    if (error.source === 'preflight') {
+      maxSource = 'client-fallback';
+      maxBytes = MAX_PUBLISH_BYTES;
+    } else if (errorMaxBytes !== null) {
+      maxSource = 'server';
+      maxBytes = errorMaxBytes;
+    } else {
+      maxSource = 'unknown';
+      maxBytes = null;
+    }
+    const next: ShareTrimStateLocal = {
+      active: true,
+      snapshotId: frameIndex.snapshotId,
+      frames,
+      startFrameIndex: fallbackStart,
+      endFrameIndex,
+      rangeStartPs: frames[fallbackStart].timePs,
+      rangeEndPs: frames[endFrameIndex].timePs,
+      maxSelectableSpanPs: frames[endFrameIndex].timePs - frames[fallbackStart].timePs,
+      dragMode: null,
+      previewTarget: null,
+      previewingOutsideKept: false,
+      preparedArtifact: null,
+      measuredBytes: null,
+      safeStatus: 'measuring',
+      measuringKind: 'search',
+      originalActualBytes: error.actualBytes,
+      maxBytes,
+      maxSource,
+      prevReviewState,
+      cachedDefaultStartFrameIndex: null,
+      runId,
+      snapshotStale: false,
+      nothingFits: false,
+    };
+    setShareTrimState(next);
+    // Kick off the chunked suffix search off the click path.
+    scheduleDefaultSelectionSearch(runId, frameIndex.snapshotId, frames, endFrameIndex);
+    return true;
+  }, [callbacks, cancelInFlightTrimSearch, cancelInFlightTrimDragPrepare, scheduleDefaultSelectionSearch]);
+
+  // Trim teardown lives in two places intentionally:
+  //   · `closeTransferSession` (above) owns the inline teardown —
+  //     cancels in-flight search / drag prepare, evicts any held
+  //     prepareId, resets `shareTrimState`, clears `shareMeasuring`.
+  //     Defined BEFORE the trim machinery helpers so it can be called
+  //     as an onCancel prop / from effects without a forward-reference
+  //     TDZ hazard.
+  //   · `closeTransfer` (above) wraps `closeTransferSession` with the
+  //     restore policy: if pendingTrimSuccessRestore or
+  //     shareTrimStateRef.current.active is set, fire the prior
+  //     live/review callback BEFORE the inline teardown runs (so the
+  //     subsequent onResumeFromExport sees the correct mode — Risk 3).
+  //
+  // An earlier `exitTrimMode({ restore: true })` helper existed here
+  // but became dead once all close paths routed through closeTransfer.
+  // Intentionally removed to prevent two-lifecycle drift: a future
+  // contributor fixing one path and missing the duplicate.
+
+  // Preview the frame at the given edge (start or end), entering review
+  // if necessary — routed through callbacks.onScrub which the
+  // coordinator decides how to handle.
+  const previewAtTimePs = useCallback((timePs: number) => {
+    callbacks?.onScrub(timePs);
+  }, [callbacks]);
+
+  const handleResetShareTrim = useCallback(() => {
+    // Read pre-Reset state from the ref (synced via useLayoutEffect,
+    // so it reflects the latest committed state at click time). We
+    // can't read it inside the setShareTrimState updater because in
+    // React 18 the updater may not execute synchronously — any
+    // post-setState variable reads would land stale.
+    const pre = shareTrimStateRef.current;
+    if (!pre.active || pre.frames.length === 0) return;
+    const frames = pre.frames;
+    const endIdx = frames.length - 1;
+    const startIdx = pre.cachedDefaultStartFrameIndex ?? Math.max(0, endIdx - (FRAME_FALLBACK_SUFFIX - 1));
+
+    // Bump the runId + cancel in-flight drag prepare so any concurrent
+    // drag-end completion with the pre-reset runId is dropped by its
+    // own post-await runId check.
+    trimRunIdRef.current++;
+    cancelInFlightTrimDragPrepare();
+    const runId = trimRunIdRef.current;
+
+    // Evict any prior prepared artifact synchronously — the ref gave
+    // us the committed value, so this is not racy against a concurrent
+    // drag-end setState.
+    if (pre.preparedArtifact) cancelPrepared(pre.preparedArtifact.prepareId);
+
+    setShareTrimState((prev) => {
+      if (!prev.active) return prev;
+      // Re-check the prior artifact in case a drag-end commit landed
+      // between the ref read above and this updater (idempotent cancel).
+      if (prev.preparedArtifact) cancelPrepared(prev.preparedArtifact.prepareId);
+      const f = prev.frames;
+      return {
+        ...prev,
+        startFrameIndex: startIdx,
+        endFrameIndex: endIdx,
+        rangeStartPs: f[startIdx].timePs,
+        rangeEndPs: f[endIdx].timePs,
+        maxSelectableSpanPs: f[endIdx].timePs - f[startIdx].timePs,
+        safeStatus: 'measuring',
+        // Reset fires a single prepare against the cached default,
+        // not the entry-time chunked bisect. The status row renders
+        // "Checking selection…" instead of "Finding the best fit…"
+        // so users don't assume the app is redoing the full search.
+        measuringKind: 'recheck',
+        preparedArtifact: null,
+        measuredBytes: null,
+        previewingOutsideKept: false,
+        runId,
+        dragMode: null,
+        previewTarget: null,
+      };
+    });
+
+    // Visible feedback: scrub the molecule view to the restored end
+    // edge so the click has an immediate on-screen effect. Without
+    // this the user may not notice anything happened when the reset
+    // size matches what's already displayed — the status row just
+    // flips to a brief "Checking selection…" which is easy to miss.
+    // `endIdx` is the right-anchored edge (plan §Default Selection),
+    // and matches the preview contract for whole-region and end-drag
+    // moves (plan §Live Preview Rule).
+    previewAtTimePs(frames[endIdx].timePs);
+
+    // Issue the prepare after the setter commits. `debouncedPrepareAfterEdit`
+    // is resolved at call time (TDZ-safe) since this only runs on user
+    // action, after all other top-level bindings are defined.
+    queueMicrotask(() => debouncedPrepareAfterEdit(runId, { startFrameIndex: startIdx, endFrameIndex: endIdx }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cancelPrepared, cancelInFlightTrimDragPrepare]);
+
+  /** Debounced prepare after a drag-end / keyboard-commit. Evicts any
+   *  prior prepared artifact, then issues a single prepare for the
+   *  current selection. runId gate drops stale completions. */
+  const debouncedPrepareAfterEdit = useCallback((runId: number, selection: { startFrameIndex: number; endFrameIndex: number }) => {
+    if (trimDragPrepareCancelRef.current) {
+      trimDragPrepareCancelRef.current();
+      trimDragPrepareCancelRef.current = null;
+    }
+    const prepare = callbacks?.onPrepareCapsulePublish;
+    if (!prepare) return;
+    trimDragPrepareCancelRef.current = scheduleAfterNextPaint(async () => {
+      if (runId !== trimRunIdRef.current) return;
+      const current = shareTrimStateRef.current;
+      // `trimRunIdRef` is the authoritative staleness signal; do NOT
+      // additionally gate on `current.runId !== runId` here. That check
+      // is a false-positive trap: the ref sync runs via useLayoutEffect
+      // but any lingering ordering quirk would strand the measurement
+      // at 'measuring' forever — we only need to confirm trim mode is
+      // still open, which `current.active` expresses precisely.
+      if (!current.active) return;
+      const range: CapsuleSelectionRange = {
+        snapshotId: current.snapshotId,
+        startFrameIndex: selection.startFrameIndex,
+        endFrameIndex: selection.endFrameIndex,
+      };
+      let summary: PreparedCapsuleSummary;
+      try {
+        summary = await prepare(range);
+      } catch (err) {
+        if (isCapsuleSnapshotStaleError(err)) {
+          abortSearchSnapshotStale(runId);
+          return;
+        }
+        console.warn('[trim] drag-end prepare failed:', err);
+        patchActiveTrim(runId, { safeStatus: 'unavailable' });
+        // Same rationale as the default-selection search: the
+        // "Couldn't measure" copy reads as a range problem rather
+        // than a network/server problem. Surface the error class
+        // explicitly so the user reaches for "try again" instead of
+        // "drag some more".
+        setShareError({
+          kind: 'other',
+          message: err instanceof Error
+            ? `Measurement failed: ${err.message}`
+            : 'Measurement failed — try again.',
+        });
+        return;
+      }
+      if (runId !== trimRunIdRef.current) {
+        cancelPrepared(summary.prepareId);
+        return;
+      }
+      const held: HeldPreparedCapsule = { ...summary, range };
+      // Decide whether this result will actually commit BEFORE scheduling
+      // the setState — `setShareTrimState`'s updater does NOT run
+      // synchronously in React 18, so a closure-assignment inside it
+      // cannot be read by follow-up code in this turn. The ref is
+      // kept in sync via useLayoutEffect and — because we're past the
+      // `await` boundary — reflects the latest committed state.
+      const refSnapshot = shareTrimStateRef.current;
+      const willCommit =
+        refSnapshot.active
+        && refSnapshot.snapshotId === held.range.snapshotId
+        && refSnapshot.startFrameIndex === held.range.startFrameIndex
+        && refSnapshot.endFrameIndex === held.range.endFrameIndex;
+      if (!willCommit) {
+        cancelPrepared(held.prepareId);
+        return;
+      }
+      setShareTrimState((prev) => {
+        // Same rule as the outer guard: `runId !== trimRunIdRef.current`
+        // (checked above) is the authoritative staleness signal.
+        if (!prev.active) {
+          cancelPrepared(held.prepareId);
+          return prev;
+        }
+        // Re-check range consistency defensively: the ref snapshot
+        // above reflects commits up to the await boundary, but another
+        // microtask-queued setState could have landed in between. Drop
+        // the result rather than overwriting the displayed size/status
+        // with a measurement for a range the user is no longer on.
+        const rangeStillCurrent =
+          prev.snapshotId === held.range.snapshotId
+          && prev.startFrameIndex === held.range.startFrameIndex
+          && prev.endFrameIndex === held.range.endFrameIndex;
+        if (!rangeStillCurrent) {
+          cancelPrepared(held.prepareId);
+          return prev;
+        }
+        // Evict any prior preparedArtifact — the selection changed.
+        if (prev.preparedArtifact && prev.preparedArtifact.prepareId !== held.prepareId) {
+          cancelPrepared(prev.preparedArtifact.prepareId);
+        }
+        return {
+          ...prev,
+          preparedArtifact: held,
+          measuredBytes: held.bytes,
+          safeStatus: classifySafeStatus(held.bytes, MAX_PUBLISH_BYTES),
+        };
+      });
+      clearMeasurementErrorIfPresent();
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callbacks, cancelPrepared, classifySafeStatus, abortSearchSnapshotStale]);
+
+  const handleConfirmShareTrim = useCallback(async () => {
+    if (shareMeasuring || shareSubmitting) return; // no-op second click
+    const prepare = callbacks?.onPrepareCapsulePublish;
+    const publishPrepared = callbacks?.onPublishPreparedCapsule;
+    if (!prepare || !publishPrepared) {
+      setShareError({ kind: 'other', message: 'Share is not available right now.' });
+      return;
+    }
+    const captured = shareTrimStateRef.current;
+    if (!captured.active || captured.snapshotStale) return;
+
+    // Phase 1 — Prepare (if not already prepared for current selection).
+    const currentRange: CapsuleSelectionRange = {
+      snapshotId: captured.snapshotId,
+      startFrameIndex: captured.startFrameIndex,
+      endFrameIndex: captured.endFrameIndex,
+    };
+    const runId = trimRunIdRef.current;
+
+    let held: HeldPreparedCapsule | null = null;
+    const existing = captured.preparedArtifact;
+    const reusable = existing
+      && existing.range.snapshotId === currentRange.snapshotId
+      && existing.range.startFrameIndex === currentRange.startFrameIndex
+      && existing.range.endFrameIndex === currentRange.endFrameIndex;
+    if (reusable && existing) {
+      held = existing;
+    } else {
+      if (existing) cancelPrepared(existing.prepareId);
+      setShareMeasuring(true);
+      try {
+        const summary = await prepare(currentRange);
+        if (runId !== trimRunIdRef.current) {
+          cancelPrepared(summary.prepareId);
+          setShareMeasuring(false);
+          return;
+        }
+        // Range-consistency check happens BEFORE we commit any
+        // measurement to state. If the user edited the selection while
+        // this prepare was in flight, writing `measuredBytes: summary.bytes`
+        // into state — even momentarily — flashes the wrong size on
+        // the status row (the newer drag-end prepare hasn't landed yet,
+        // but we've already overwritten 'measuring' with a stale
+        // number). Cancel the prepareId, leave the row in 'measuring'
+        // for the newer prepare to own, and bail without POSTing.
+        const latest = shareTrimStateRef.current;
+        const stillCurrent = latest.active
+          && latest.snapshotId === currentRange.snapshotId
+          && latest.startFrameIndex === currentRange.startFrameIndex
+          && latest.endFrameIndex === currentRange.endFrameIndex;
+        if (!stillCurrent) {
+          cancelPrepared(summary.prepareId);
+          setShareMeasuring(false);
+          return;
+        }
+        held = { ...summary, range: currentRange };
+        // Safe to commit — the range is still what the user sees.
+        patchActiveTrim(runId, {
+          preparedArtifact: held,
+          measuredBytes: held.bytes,
+        });
+        // Phase-1 prepare succeeded; any prior "Measurement failed"
+        // banner from a transient earlier attempt is now stale.
+        clearMeasurementErrorIfPresent();
+      } catch (err) {
+        setShareMeasuring(false);
+        if (isCapsuleSnapshotStaleError(err)) {
+          abortSearchSnapshotStale(runId);
+          return;
+        }
+        console.error('[trim] publish prepare failed:', err);
+        setShareError({
+          kind: 'other',
+          message: err instanceof Error ? err.message : 'Share failed.',
+        });
+        return;
+      }
+    }
+
+    // Second range-check just before Phase 3 submit: even if the
+    // reused-path held artifact was current at click time, state could
+    // have shifted between the reuse decision and this point. Cheap
+    // invariant — if mismatched, do not POST.
+    const latestBeforeSubmit = shareTrimStateRef.current;
+    const stillCurrent = latestBeforeSubmit.active
+      && latestBeforeSubmit.snapshotId === held.range.snapshotId
+      && latestBeforeSubmit.startFrameIndex === held.range.startFrameIndex
+      && latestBeforeSubmit.endFrameIndex === held.range.endFrameIndex;
+    if (!stillCurrent) {
+      cancelPrepared(held.prepareId);
+      setShareMeasuring(false);
+      // Clear the held reference from state if it's still the same
+      // prepareId so a subsequent click doesn't try to reuse it.
+      setShareTrimState((prev) => {
+        if (!prev.active) return prev;
+        if (prev.preparedArtifact?.prepareId === held!.prepareId) {
+          return { ...prev, preparedArtifact: null };
+        }
+        return prev;
+      });
+      return;
+    }
+
+    // Phase 2 — Decide.
+    const effectiveHardCap = Math.min(
+      captured.maxBytes ?? MAX_PUBLISH_BYTES,
+      MAX_PUBLISH_BYTES,
+    );
+    if (held.bytes > effectiveHardCap) {
+      // Over the hard cap — keep trim active, mark over-limit, evict prepared.
+      cancelPrepared(held.prepareId);
+      patchActiveTrim(runId, {
+        preparedArtifact: null,
+        measuredBytes: held.bytes,
+        safeStatus: 'over-limit',
+      });
+      setShareMeasuring(false);
+      return;
+    }
+
+    // Phase 3 — Submit.
+    setShareMeasuring(false);
+    setShareSubmitting(true);
+    setShareError(null);
+    try {
+      const result = await publishPrepared(held.prepareId);
+      if (!mountedRef.current || trimRunIdRef.current !== runId) return;
+      // Record pending-restore BEFORE clearing trim state so the
+      // close-after-success policy has what it needs.
+      setPendingTrimSuccessRestore({
+        prevReviewState: captured.prevReviewState,
+        userInteractedAfterSuccess: false,
+      });
+      setShareResult(result);
+      setShareSubmitting(false);
+      // Clear trim state so the success branch renders.
+      cancelInFlightTrimSearch();
+      cancelInFlightTrimDragPrepare();
+      setShareTrimState(initialShareTrim);
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setShareSubmitting(false);
+      if (isCapsuleSnapshotStaleError(e)) {
+        abortSearchSnapshotStale(runId);
+        return;
+      }
+      if (isPublishOversizeError(e)) {
+        // Race-with-quota — re-enter trim with the new oversize error.
+        // Existing trim session already active; just refresh the state.
+        cancelInFlightTrimSearch();
+        // Re-enter — this also refreshes snapshot + frames. If
+        // `enterTrimMode` returns false (no frames — history was
+        // cleared between Prepare and Submit) we must surface the
+        // oversize error ourselves; otherwise the user just sees
+        // the Submit button re-enable with no explanation.
+        const entered = enterTrimMode(e);
+        if (!entered) {
+          setShareError({
+            kind: 'other',
+            message: e instanceof Error ? e.message : 'Share failed.',
+          });
+        }
+        return;
+      }
+      if (e instanceof AuthRequiredError) {
+        useAppStore.getState().setAuthSignedOut();
+        setShareError({ kind: 'auth', message: e.message });
+        return;
+      }
+      if (e instanceof AgeConfirmationRequiredError) {
+        setShareError({
+          kind: 'age-confirmation',
+          message: e.message,
+          policyVersion: e.policyVersion,
+        });
+        return;
+      }
+      console.error('[trim] publish submit failed:', e);
+      setShareError({
+        kind: 'other',
+        message: e instanceof Error ? e.message : 'Share failed.',
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callbacks, shareMeasuring, shareSubmitting, cancelPrepared, abortSearchSnapshotStale, cancelInFlightTrimSearch, cancelInFlightTrimDragPrepare, enterTrimMode]);
+
+  const handleDownloadCapsuleFromShareFallback = useCallback(async () => {
+    if (!callbacks?.onExportHistory) {
+      setShareFallbackDownloadError('Download is not available right now.');
+      return;
+    }
+    setDownloadSubmitting(true);
+    setShareFallbackDownloadError(null);
+    try {
+      const result = await callbacks.onExportHistory('capsule');
+      if (!mountedRef.current) return;
+      if (result === 'saved') {
+        closeTransfer();
+      } else if (result === 'picker-cancelled') {
+        setDownloadSubmitting(false);
+      }
+    } catch (e) {
+      console.error('[TimelineBar] download capsule (trim fallback) failed:', e);
+      if (mountedRef.current) {
+        // Write to the fallback-dedicated slot so the error surfaces
+        // inside the Share trim branch (the Download tab's error slot
+        // is not visible when shareTrim.nothingFits is true).
+        setShareFallbackDownloadError(e instanceof Error ? e.message : 'Download failed.');
+        setDownloadSubmitting(false);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callbacks]);
+
+  // ── Trim-mode pointer handling ──
+
+  const trimDragRef = useRef<{
+    pointerId: number;
+    mode: 'start' | 'end' | 'window';
+    /** Only set when mode === 'window'. */
+    anchorOffsetPs?: number;
+  } | null>(null);
+
+  /** Resolve which trim target a client X coordinate falls on. */
+  const resolveTrimHitTarget = useCallback((clientX: number): 'start' | 'end' | 'window' | 'none' => {
+    const trim = shareTrimStateRef.current;
+    const track = trackRef.current;
+    if (!trim.active || !track || !rangePs) return 'none';
+    const rect = track.getBoundingClientRect();
+    if (rect.width <= 0) return 'none';
+    const duration = rangePs.end - rangePs.start;
+    if (duration <= 0) return 'none';
+    const startPx = rect.left + ((trim.rangeStartPs - rangePs.start) / duration) * rect.width;
+    const endPx = rect.left + ((trim.rangeEndPs - rangePs.start) / duration) * rect.width;
+    // 16px handle half-width so the 32px hit-area centered on each
+    // handle position is respected. Matches CSS width in trim-handle.
+    const hitHalf = 16;
+    if (Math.abs(clientX - startPx) <= hitHalf) return 'start';
+    if (Math.abs(clientX - endPx) <= hitHalf) return 'end';
+    // Kept-region body hit: anywhere strictly between the handles.
+    if (clientX > startPx + hitHalf && clientX < endPx - hitHalf) return 'window';
+    return 'none';
+  }, [rangePs]);
+
+  const applyTrimEdgeDrag = useCallback((mode: 'start' | 'end', candidateTimePs: number) => {
+    const trim = shareTrimStateRef.current;
+    if (!trim.active || trim.frames.length === 0) return;
+    const historyStart = trim.frames[0].timePs;
+    const historyEnd = trim.frames[trim.frames.length - 1].timePs;
+    const maxSpan = trim.maxSelectableSpanPs;
+    if (mode === 'start') {
+      let nextStart = Math.max(historyStart, Math.min(candidateTimePs, trim.rangeEndPs));
+      if (maxSpan > 0 && trim.rangeEndPs - nextStart > maxSpan) {
+        nextStart = trim.rangeEndPs - maxSpan;
+      }
+      // Snap to the nearest dense frame.
+      const idx = snapToFrameIndex(trim.frames, nextStart);
+      let clampedIdx = Math.min(idx, trim.endFrameIndex);
+      // Post-snap span enforcement: for irregular frame spacing the
+      // nearest frame may land just outside the allowed span even when
+      // the pre-snap candidate was clamped correctly. Walk forward
+      // (toward the end handle) until the span fits.
+      if (maxSpan > 0) {
+        while (
+          clampedIdx < trim.endFrameIndex
+          && trim.frames[trim.endFrameIndex].timePs - trim.frames[clampedIdx].timePs > maxSpan
+        ) {
+          clampedIdx++;
+        }
+      }
+      setShareTrimState((prev) => prev.active ? {
+        ...prev,
+        startFrameIndex: clampedIdx,
+        rangeStartPs: prev.frames[clampedIdx].timePs,
+        dragMode: 'start',
+        previewTarget: 'start',
+        previewingOutsideKept: false,
+      } : prev);
+      previewAtTimePs(trim.frames[clampedIdx].timePs);
+    } else {
+      let nextEnd = Math.min(historyEnd, Math.max(candidateTimePs, trim.rangeStartPs));
+      if (maxSpan > 0 && nextEnd - trim.rangeStartPs > maxSpan) {
+        nextEnd = trim.rangeStartPs + maxSpan;
+      }
+      const idx = snapToFrameIndex(trim.frames, nextEnd);
+      let clampedIdx = Math.max(idx, trim.startFrameIndex);
+      // Post-snap span enforcement: walk backward (toward the start
+      // handle) until the span fits.
+      if (maxSpan > 0) {
+        while (
+          clampedIdx > trim.startFrameIndex
+          && trim.frames[clampedIdx].timePs - trim.frames[trim.startFrameIndex].timePs > maxSpan
+        ) {
+          clampedIdx--;
+        }
+      }
+      setShareTrimState((prev) => prev.active ? {
+        ...prev,
+        endFrameIndex: clampedIdx,
+        rangeEndPs: prev.frames[clampedIdx].timePs,
+        dragMode: 'end',
+        previewTarget: 'end',
+        previewingOutsideKept: false,
+      } : prev);
+      previewAtTimePs(trim.frames[clampedIdx].timePs);
+    }
+  }, [previewAtTimePs]);
+
+  const applyTrimWindowDrag = useCallback((candidateTimePs: number, anchorOffsetPs: number) => {
+    const trim = shareTrimStateRef.current;
+    if (!trim.active || trim.frames.length === 0) return;
+    const historyStart = trim.frames[0].timePs;
+    const historyEnd = trim.frames[trim.frames.length - 1].timePs;
+    const width = trim.rangeEndPs - trim.rangeStartPs;
+    let candidateStart = candidateTimePs - anchorOffsetPs;
+    let candidateEnd = candidateStart + width;
+    if (candidateStart < historyStart) {
+      candidateStart = historyStart;
+      candidateEnd = historyStart + width;
+    }
+    if (candidateEnd > historyEnd) {
+      candidateEnd = historyEnd;
+      candidateStart = historyEnd - width;
+    }
+    const startIdx = snapToFrameIndex(trim.frames, candidateStart);
+    const endIdx = snapToFrameIndex(trim.frames, candidateEnd);
+    setShareTrimState((prev) => prev.active ? {
+      ...prev,
+      startFrameIndex: startIdx,
+      endFrameIndex: endIdx,
+      rangeStartPs: prev.frames[startIdx].timePs,
+      rangeEndPs: prev.frames[endIdx].timePs,
+      dragMode: 'window',
+      previewTarget: 'end',
+      previewingOutsideKept: false,
+    } : prev);
+    previewAtTimePs(trim.frames[endIdx].timePs);
+  }, [previewAtTimePs]);
+
+  const handleTrimHandleKeyDown = useCallback((handle: 'start' | 'end', e: React.KeyboardEvent) => {
+    const trim = shareTrimStateRef.current;
+    if (!trim.active || trim.frames.length === 0) return;
+    const step = e.shiftKey ? 10 : 1;
+    let handled = true;
+    let nextStart = trim.startFrameIndex;
+    let nextEnd = trim.endFrameIndex;
+    const n = trim.frames.length;
+    if (e.key === 'ArrowLeft') {
+      if (handle === 'start') nextStart = Math.max(0, nextStart - step);
+      else nextEnd = Math.max(nextStart, nextEnd - step);
+    } else if (e.key === 'ArrowRight') {
+      if (handle === 'start') nextStart = Math.min(nextEnd, nextStart + step);
+      else nextEnd = Math.min(n - 1, nextEnd + step);
+    } else if (e.key === 'Home') {
+      if (handle === 'start') nextStart = 0;
+      else nextEnd = nextStart;
+    } else if (e.key === 'End') {
+      if (handle === 'start') nextStart = nextEnd;
+      else nextEnd = n - 1;
+    } else {
+      handled = false;
+    }
+    if (!handled) return;
+    e.preventDefault();
+    const maxSpan = trim.maxSelectableSpanPs;
+    if (maxSpan > 0 && trim.frames[nextEnd].timePs - trim.frames[nextStart].timePs > maxSpan) {
+      if (handle === 'start') {
+        // Shift end down implicitly — but plan says edge-drags clamp.
+        while (nextStart < nextEnd && trim.frames[nextEnd].timePs - trim.frames[nextStart].timePs > maxSpan) nextStart++;
+      } else {
+        while (nextEnd > nextStart && trim.frames[nextEnd].timePs - trim.frames[nextStart].timePs > maxSpan) nextEnd--;
+      }
+    }
+    setShareTrimState((prev) => prev.active ? {
+      ...prev,
+      startFrameIndex: nextStart,
+      endFrameIndex: nextEnd,
+      rangeStartPs: prev.frames[nextStart].timePs,
+      rangeEndPs: prev.frames[nextEnd].timePs,
+      previewTarget: handle,
+      previewingOutsideKept: false,
+    } : prev);
+    const previewFrame = trim.frames[handle === 'start' ? nextStart : nextEnd];
+    previewAtTimePs(previewFrame.timePs);
+    // Debounce prepare after the last keystroke.
+    const runId = trimRunIdRef.current;
+    if (trimDragPrepareCancelRef.current) {
+      trimDragPrepareCancelRef.current();
+      trimDragPrepareCancelRef.current = null;
+    }
+    const t = setTimeout(() => {
+      debouncedPrepareAfterEdit(runId, { startFrameIndex: nextStart, endFrameIndex: nextEnd });
+    }, TRIM_KEYBOARD_PREPARE_DEBOUNCE_MS);
+    trimDragPrepareCancelRef.current = () => clearTimeout(t);
+  }, [previewAtTimePs, debouncedPrepareAfterEdit]);
+
+  // Wrap the original scrub pointer-down so trim mode intercepts it.
+  const handleTrackPointerDown = useCallback((e: React.PointerEvent) => {
+    if (!hasRange) return;
+    const trim = shareTrimStateRef.current;
+    if (trim.active) {
+      const target = resolveTrimHitTarget(e.clientX);
+      if (target === 'start' || target === 'end') {
+        trimDragRef.current = { pointerId: e.pointerId, mode: target };
+        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        const track = trackRef.current;
+        if (!track || !rangePs) return;
+        const tPs = timePsFromClientX(e.clientX, rangePs, track);
+        applyTrimEdgeDrag(target, tPs);
+        return;
+      }
+      if (target === 'window') {
+        const track = trackRef.current;
+        if (!track || !rangePs) return;
+        const tPs = timePsFromClientX(e.clientX, rangePs, track);
+        const anchorOffsetPs = tPs - trim.rangeStartPs;
+        trimDragRef.current = { pointerId: e.pointerId, mode: 'window', anchorOffsetPs };
+        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        applyTrimWindowDrag(tPs, anchorOffsetPs);
+        return;
+      }
+      // Outside kept region — scrub-only preview, no selection change.
+      const track = trackRef.current;
+      if (!track || !rangePs) return;
+      const tPs = timePsFromClientX(e.clientX, rangePs, track);
+      previewAtTimePs(tPs);
+      setShareTrimState((prev) => prev.active
+        ? { ...prev, previewingOutsideKept: tPs < prev.rangeStartPs || tPs > prev.rangeEndPs }
+        : prev);
+      return;
+    }
+    // Non-trim path: existing scrub behavior. Mark the post-success
+    // restore opt-out — if the user is scrubbing while the trim-success
+    // dialog is open, they've chosen a different view than the pre-trim
+    // state and closeTransfer must NOT snap back.
+    markPostSuccessInteraction();
+    isDragging.current = true;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    scrubFromEvent(e.clientX);
+  }, [hasRange, rangePs, resolveTrimHitTarget, applyTrimEdgeDrag, applyTrimWindowDrag, previewAtTimePs, scrubFromEvent, markPostSuccessInteraction]);
+
+  const handleTrackPointerMove = useCallback((e: React.PointerEvent) => {
+    const drag = trimDragRef.current;
+    if (drag && drag.pointerId === e.pointerId) {
+      const track = trackRef.current;
+      if (!track || !rangePs) return;
+      const tPs = timePsFromClientX(e.clientX, rangePs, track);
+      if (drag.mode === 'start' || drag.mode === 'end') {
+        applyTrimEdgeDrag(drag.mode, tPs);
+      } else {
+        applyTrimWindowDrag(tPs, drag.anchorOffsetPs ?? 0);
+      }
+      return;
+    }
+    if (isDragging.current) {
+      scrubFromEvent(e.clientX);
+    }
+  }, [rangePs, applyTrimEdgeDrag, applyTrimWindowDrag, scrubFromEvent]);
+
+  const handleTrackPointerUp = useCallback((e: React.PointerEvent) => {
+    const drag = trimDragRef.current;
+    if (drag && drag.pointerId === e.pointerId) {
+      trimDragRef.current = null;
+      // Read the committed selection from the ref (synced by
+      // useLayoutEffect so it reflects the final pointermove's setState
+      // by this point). Reading inside the setShareTrimState updater
+      // would be unreliable — in React 18, updaters aren't guaranteed
+      // to fire synchronously within the event callback, so any
+      // post-setState variable capture could land before the updater
+      // ran.
+      const pre = shareTrimStateRef.current;
+      if (!pre.active) return;
+      const capturedRunId = trimRunIdRef.current;
+      const selection = {
+        startFrameIndex: pre.startFrameIndex,
+        endFrameIndex: pre.endFrameIndex,
+      };
+      if (pre.preparedArtifact) cancelPrepared(pre.preparedArtifact.prepareId);
+      setShareTrimState((prev) => {
+        if (!prev.active) return prev;
+        // Idempotent cancel in case a stale prepared artifact slipped
+        // in between the ref read and this updater.
+        if (prev.preparedArtifact) cancelPrepared(prev.preparedArtifact.prepareId);
+        return {
+          ...prev,
+          dragMode: null,
+          previewTarget: null,
+          preparedArtifact: null,
+        };
+      });
+      queueMicrotask(() => debouncedPrepareAfterEdit(capturedRunId, selection));
+      return;
+    }
+    isDragging.current = false;
+  }, [cancelPrepared, debouncedPrepareAfterEdit]);
+
   const isReview = mode === 'review';
 
   // Guard: close clear dialog on mode transition
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (!isReview) clear.reset(); }, [isReview]);
 
-  // Guard: close transfer dialog when both download and share are unavailable
+  // Guard: close transfer dialog when both download and share are unavailable.
+  // Routes through closeTransfer so a trim-active capability-loss close
+  // still restores prevReviewState — Acceptance #13 applies to every
+  // non-success trim exit, not just the explicit Cancel button.
   useEffect(() => {
     if (!showTransfer) {
-      closeTransferSession();
+      closeTransfer();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showTransfer]);
@@ -662,7 +2010,14 @@ function TimelineBarActive() {
   //                    by tilting the triangle asymmetrically.
   const [restartBaseOffsetPx, setRestartBaseOffsetPx] = useState<number>(0);
   const [restartSkewOffsetPx, setRestartSkewOffsetPx] = useState<number>(0);
-  const showRestart = isReview && canRestart && restartTargetPs !== null;
+  // Trim mode uses the timeline as its adjustable range control. A
+  // "Restart here" pill sitting on the same track would:
+  //   1. visually collide with the end handle / playhead marker, and
+  //   2. suggest a destructive simulation action while the user is
+  //      choosing a publish range (unrelated intent).
+  // Hide it entirely during trim; normal review mode is unchanged.
+  const trimActive = shareTrimState.active;
+  const showRestart = !trimActive && isReview && canRestart && restartTargetPs !== null;
 
   useLayoutEffect(() => {
     if (!showRestart) {
@@ -774,6 +2129,17 @@ function TimelineBarActive() {
   // different rules, so the more-specific `:hover` rule replaces
   // the centering translate and the button visually escapes the
   // cursor.
+  // Overlay-zone content priority:
+  //   1. review + can-restart → the Restart here pill. Hidden during
+  //      trim (unrelated intent, visually competes with end handle).
+  //   2. otherwise (including trim mode) → empty placeholder.
+  //
+  // An inline "Drag the highlighted range" hint used to live in the
+  // overlay zone during trim, but the end-caps extend upward into
+  // the same absolutely-positioned region and the two collided.
+  // The dialog's description already tells the user what to do — a
+  // duplicate caption tucked under the end-caps adds noise without
+  // adding information.
   const overlayContent = showRestart ? (
     <span className="timeline-restart-anchor" style={restartAnchorStyle}>
       <button
@@ -804,17 +2170,111 @@ function TimelineBarActive() {
     </span>
   ) : <span />;
 
+  // Derive trim overlay positions in track-relative percent. Uses the
+  // current live rangePs as the track's coordinate system so handles
+  // land on the same pixels the user sees under the thumb. `trimActive`
+  // is declared earlier alongside the `showRestart` gate.
+  const trimOverlay = (() => {
+    if (!trimActive || !rangePs) return null;
+    const duration = rangePs.end - rangePs.start;
+    if (duration <= 0) return null;
+    const pctOf = (ps: number) => ((ps - rangePs.start) / duration) * 100;
+    const startPct = Math.max(0, Math.min(100, pctOf(shareTrimState.rangeStartPs)));
+    const endPct = Math.max(0, Math.min(100, pctOf(shareTrimState.rangeEndPs)));
+    const rightPct = Math.max(0, 100 - endPct);
+    const historyStart = shareTrimState.frames.length > 0 ? shareTrimState.frames[0].timePs : rangePs.start;
+    const historyEnd = shareTrimState.frames.length > 0 ? shareTrimState.frames[shareTrimState.frames.length - 1].timePs : rangePs.end;
+    return (
+      <>
+        {startPct > 0 && (
+          <div
+            className="timeline-track__trimmed-left"
+            style={{ left: 0, width: `${startPct}%` }}
+            data-testid="timeline-trim-left"
+          />
+        )}
+        <div
+          className="timeline-track__kept"
+          style={{ left: `${startPct}%`, right: `${rightPct}%` }}
+          data-testid="timeline-trim-kept"
+        />
+        {rightPct > 0 && (
+          <div
+            className="timeline-track__trimmed-right"
+            style={{ right: 0, width: `${rightPct}%` }}
+            data-testid="timeline-trim-right"
+          />
+        )}
+        {/*
+          Pulse timing is driven from `trim-mode-config.ts`:
+            · `--trim-handle-pulse-duration` / `--trim-handle-pulse-count`
+              feed the CSS `animation` shorthand so the JS
+              `setTimeout(... , ITERATION_MS * COUNT)` and the CSS
+              iteration can never drift.
+            · If a future contributor tunes the pulse, they edit the
+              config and both sides follow.
+        */}
+        {/*
+          Two-handle range slider: each handle's aria-valuemin /
+          aria-valuemax reflect the ACTUAL range it can reach, not
+          the full history. The start handle cannot move past the
+          end handle, and vice versa — screen readers should
+          announce the movable bound, not a theoretical one. WAI-ARIA
+          1.2 pattern for a paired range slider.
+        */}
+        <button
+          type="button"
+          className={`timeline-track__trim-handle timeline-track__trim-handle--start${handlesPulse ? ' timeline-track__trim-handle--pulse' : ''}`}
+          style={{
+            left: `${startPct}%`,
+            '--trim-handle-pulse-duration': `${TRIM_HANDLE_PULSE_ITERATION_MS}ms`,
+            '--trim-handle-pulse-count': String(TRIM_HANDLE_PULSE_ITERATION_COUNT),
+          } as React.CSSProperties}
+          role="slider"
+          aria-label="Trim start"
+          aria-valuemin={Math.round(historyStart)}
+          aria-valuemax={Math.round(shareTrimState.rangeEndPs)}
+          aria-valuenow={Math.round(shareTrimState.rangeStartPs)}
+          aria-valuetext={`${formatTime(shareTrimState.rangeStartPs)} — start of selection`}
+          onKeyDown={(e) => handleTrimHandleKeyDown('start', e)}
+          data-testid="timeline-trim-handle-start"
+        />
+        <button
+          type="button"
+          className={`timeline-track__trim-handle timeline-track__trim-handle--end${handlesPulse ? ' timeline-track__trim-handle--pulse' : ''}`}
+          style={{
+            left: `${endPct}%`,
+            '--trim-handle-pulse-duration': `${TRIM_HANDLE_PULSE_ITERATION_MS}ms`,
+            '--trim-handle-pulse-count': String(TRIM_HANDLE_PULSE_ITERATION_COUNT),
+          } as React.CSSProperties}
+          role="slider"
+          aria-label="Trim end"
+          aria-valuemin={Math.round(shareTrimState.rangeStartPs)}
+          aria-valuemax={Math.round(historyEnd)}
+          aria-valuenow={Math.round(shareTrimState.rangeEndPs)}
+          aria-valuetext={`${formatTime(shareTrimState.rangeEndPs)} — end of selection`}
+          onKeyDown={(e) => handleTrimHandleKeyDown('end', e)}
+          data-testid="timeline-trim-handle-end"
+        />
+      </>
+    );
+  })();
+
   const trackContent = (
     <div
-      className={`timeline-track timeline-track--thick${hasRange ? '' : ' timeline-track--disabled'}`}
+      className={`timeline-track timeline-track--thick${hasRange ? '' : ' timeline-track--disabled'}${trimActive ? ' timeline-track--trim' : ''}`}
       ref={trackRef}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
+      onPointerDown={handleTrackPointerDown}
+      onPointerMove={handleTrackPointerMove}
+      onPointerUp={handleTrackPointerUp}
+      onPointerCancel={handleTrackPointerUp}
     >
       <div className="timeline-fill" style={{ width: `${progress * 100}%` }} />
-      {hasRange && <div className="timeline-thumb" style={{ left: `${progress * 100}%` }} />}
+      {hasRange && !trimActive && <div className="timeline-thumb" style={{ left: `${progress * 100}%` }} />}
+      {trimActive && hasRange && (
+        <div className="timeline-track__trim-playhead" style={{ left: `${progress * 100}%` }} />
+      )}
+      {trimOverlay}
     </div>
   );
 
@@ -833,14 +2293,23 @@ function TimelineBarActive() {
         time={formatTime(currentTimePs)}
         overlay={overlayContent}
         track={trackContent}
-        action={<TimelineActionZone showTransfer={showTransfer} onTransfer={openTransfer} showClear onClear={openClear} />}
+        action={<TimelineActionZone
+          showTransfer={showTransfer}
+          onTransfer={openTransfer}
+          // Hide Clear during trim: it would wipe the entire recording
+          // mid-trim — a destructive action with zero related intent
+          // for a user who is actively selecting a publish range.
+          // Clear remains available the moment trim exits.
+          showClear={!trimActive}
+          onClear={openClear}
+        />}
       />
       <TimelineClearDialog open={clear.open} onCancel={clear.cancel} onConfirm={clear.confirm} />
       <TimelineTransferDialog
         open={transferDialog.open}
         tab={transferDialog.tab}
         onTabChange={transferDialog.setTab}
-        onCancel={closeTransferSession}
+        onCancel={closeTransfer}
 
         downloadTabAvailable={downloadActionAvailable}
         availableKinds={exportCaps ?? { full: false, capsule: false }}
@@ -892,6 +2361,53 @@ function TimelineBarActive() {
         onRetryPopup={handleRetryPopup}
         onSignInSameTab={handleContinueInTab}
         onDismissPopupBlocked={handleDismissPopupBlocked}
+
+        shareTrim={
+          shareTrimState.active
+            ? (() => {
+                // A Reset is a no-op when the selection already matches
+                // the cached default suggested by the entry-time
+                // search (start index = cachedDefault, end index =
+                // last frame). Disabling the button prevents a
+                // clickable control whose only effect is invisible.
+                const lastFrameIdx = shareTrimState.frames.length - 1;
+                const isAtDefault =
+                  shareTrimState.cachedDefaultStartFrameIndex !== null
+                  && shareTrimState.startFrameIndex === shareTrimState.cachedDefaultStartFrameIndex
+                  && shareTrimState.endFrameIndex === lastFrameIdx;
+                return {
+                  status: shareTrimState.safeStatus,
+                  measuringKind: shareTrimState.measuringKind,
+                  measuredBytes: shareTrimState.measuredBytes,
+                  maxBytes: shareTrimState.maxBytes,
+                  maxSource: shareTrimState.maxSource,
+                  originalActualBytes: shareTrimState.originalActualBytes,
+                  previewingOutsideKept: shareTrimState.previewingOutsideKept,
+                  snapshotStale: shareTrimState.snapshotStale,
+                  publishDisabled:
+                    shareTrimState.safeStatus === 'over-limit' ||
+                    shareTrimState.safeStatus === 'measuring' ||
+                    shareTrimState.safeStatus === 'unavailable' ||
+                    shareTrimState.nothingFits ||
+                    shareTrimState.snapshotStale,
+                  // Reset is only meaningful when the selection has
+                  // drifted from the cached default. When null, Reset
+                  // would scroll to the fallback end-anchored window —
+                  // still useful, so allow in that case.
+                  canReset:
+                    shareTrimState.cachedDefaultStartFrameIndex === null
+                    || !isAtDefault,
+                  nothingFits: shareTrimState.nothingFits,
+                  message: 'Capsule too large — trim to publish.',
+                };
+              })()
+            : null
+        }
+        shareMeasuring={shareMeasuring}
+        onResetShareTrim={handleResetShareTrim}
+        onConfirmShareTrim={handleConfirmShareTrim}
+        onDownloadCapsuleFromShareFallback={handleDownloadCapsuleFromShareFallback}
+        shareFallbackDownloadError={shareFallbackDownloadError}
       />
     </>
   );

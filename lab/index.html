@@ -1645,6 +1645,15 @@ canvas { display: block; touch-action: none; }
 }
 .timeline-transfer-dialog__confirm:disabled { opacity: 0.5; cursor: default; }
 .timeline-transfer-dialog__confirm:not(:disabled):hover { opacity: 0.9; }
+/* Trim-panel CSS lives in `src/ui/timeline-trim-panel.css` (imported
+   from main.ts). That file owns every rule that exists only because
+   of the Capsule Publish trim-mode UX: the non-modal floating panel
+   variant, the status row / size / pill / caption / reset-link
+   pieces, the Publish button's ch-based min-width, and the handle
+   attention-pulse keyframe + usage. Keeping those styles in one
+   feature-scoped file prevents z-index drift between the panel and
+   the timeline surface, and makes it obvious where to look when a
+   future contributor needs to polish the trim UI. */
 /* ── Restart-here CTA ──────────────────────────────────────────────
    Architecture (IMPORTANT — do not flatten into one element):
 

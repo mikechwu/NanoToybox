@@ -13,8 +13,8 @@ import '../../src/ui/dock-shell.css';
 import '../../src/ui/sheet-shell.css';
 import '../../src/ui/segmented.css';
 import '../../src/ui/timeline-track.css';
+import '../../src/ui/timeline-trim-panel.css';
 import '../../src/ui/bottom-region.css';
-import * as THREE from 'three';
 import { loadManifest, loadStructure } from './loader';
 import { PhysicsEngine } from './physics';
 import { StateMachine, type Command } from './state-machine';
@@ -51,6 +51,14 @@ import { createBondedGroupCoordinator, type BondedGroupCoordinator } from './run
 import { createTimelineSubsystem, type TimelineSubsystem } from './runtime/timeline/timeline-subsystem';
 import { buildFullHistoryFile, validateFullHistoryFile, buildCapsuleHistoryFile, formatBytes, generateExportFileName, saveHistoryFile, type AtomDojoHistoryFileV1 } from './runtime/timeline/history-export';
 import { validateCapsuleFile, type AtomDojoPlaybackCapsuleFileV1 } from '../../src/history/history-file-v1';
+import {
+  createPreparedCapsulePublisher,
+  postCapsuleArtifact,
+  type CapsuleArtifact,
+} from './runtime/publish-capsule-artifacts';
+import { buildCapsuleArtifact as buildCapsuleArtifactImpl } from './runtime/build-capsule-artifact';
+import type { CapsuleSelectionRange } from './runtime/timeline/capsule-publish-types';
+import { PublishOversizeError } from './runtime/publish-errors';
 import { executeFrame, type FrameRuntimeSurface } from './app/frame-runtime';
 import { teardownAllSubsystems, resetSchedulerState, resetSessionState, resetEffectsGate, type TeardownSurface } from './app/app-lifecycle';
 import { serializeForWorkerRestore } from './runtime/timeline/restart-state-adapter';
@@ -58,14 +66,7 @@ import {
   createAuthRuntime,
   consumeResumePublishIntent,
   attachAuthCompleteListener,
-  AuthRequiredError,
-  AgeConfirmationRequiredError,
 } from './runtime/auth-runtime';
-import { MAX_PUBLISH_BYTES } from '../../src/share/constants';
-import {
-  formatPayloadTooLargeMessage,
-  parsePayloadTooLargeMessage,
-} from './runtime/publish-size';
 
 // --- Globals ---
 let renderer, physics, stateMachine;
@@ -265,6 +266,7 @@ let _bondedGroupAppearance: BondedGroupAppearanceRuntime | null = null;
 
 // Simulation timeline subsystem
 let _timelineSub: TimelineSubsystem | null = null;
+let _capsulePublisher: ReturnType<typeof createPreparedCapsulePublisher> | null = null;
 /** Track the last reconciled snapshot version to avoid double-counting steps. */
 let _lastReconciledSnapshotVersion = -1;
 /** Frozen visible-anchor set for placement framing (captured at placement start). */
@@ -888,6 +890,43 @@ async function init() {
     }
   }
 
+  // ── Capsule artifact builder (range-aware) ──
+  //
+  // Thin wiring adapter. The actual builder lives in
+  // `./runtime/build-capsule-artifact.ts` so the critical guards
+  // (identity-stale / snapshot-version / empty-frames / validation)
+  // can be unit-tested without booting this file. Here we just
+  // inject current-subsystem accessors as closures; the builder is
+  // pure relative to those deps.
+  function buildCapsuleArtifact(range: CapsuleSelectionRange | null): CapsuleArtifact | null {
+    if (!_timelineSub) return null;
+    return buildCapsuleArtifactImpl({
+      isIdentityStale: () => _timelineSub!.isIdentityStale(),
+      getCapsuleExportInputVersion: () => _timelineSub!.getCapsuleExportInputVersion(),
+      getTimelineExportSnapshot: () => _timelineSub!.getTimelineExportSnapshot(),
+      getAtomTable: () => _timelineSub!.getAtomMetadataRegistry().getAtomTable(),
+      getColorAssignments: () => useAppStore.getState().bondedGroupColorAssignments.map(a => ({
+        atomIds: a.atomIds,
+        colorHex: a.colorHex,
+      })),
+      appVersion: '0.1.0',
+    }, range);
+  }
+
+  function _buildCapsuleArtifactForPublish(): CapsuleArtifact | null {
+    return buildCapsuleArtifact(null);
+  }
+
+  // Construct the publisher once the subsystem accessor is available.
+  // Deps are lazily read through closures so the publisher can outlive
+  // transient subsystem rebuilds (teardown + reinstall happens in a
+  // Watch→Lab handoff).
+  _capsulePublisher = createPreparedCapsulePublisher({
+    buildCapsuleArtifact: (range) => buildCapsuleArtifact(range),
+    getCapsuleExportInputVersion: () => _timelineSub!.getCapsuleExportInputVersion(),
+    postCapsuleArtifact,
+  });
+
   // ── Simulation timeline subsystem ──
   _timelineSub = createTimelineSubsystem({
     getPhysics: () => physics,
@@ -944,116 +983,18 @@ async function init() {
     },
     exportCapabilities: { full: true, capsule: true },
     publishCapsule: async () => {
-      const artifact = buildExportArtifact('capsule');
+      // No-arg publish path (non-trim). Builds a fresh artifact over
+      // the full current history and POSTs via the shared
+      // postCapsuleArtifact. Trim-mode callers go through the
+      // prepared-artifact publisher so measured == POSTed bytes.
+      const artifact = _buildCapsuleArtifactForPublish();
       if (!artifact) throw new Error('No recorded history to publish.');
-      const errors = validateCapsuleFile(artifact.file);
-      if (errors.length > 0) throw new Error(`Validation failed: ${errors[0]}`);
-
-      // Advisory client-side preflight: measure the exact byte length the
-      // request body will have (TextEncoder gives real UTF-8 bytes, not
-      // UTF-16 code-unit count) and reject here if it's over the shared
-      // limit. Saves a round-trip for a payload that the server would
-      // reject anyway. Server stays authoritative — this is a UX shortcut,
-      // not a security boundary.
-      const artifactBytes = new TextEncoder().encode(artifact.json).byteLength;
-      if (artifactBytes > MAX_PUBLISH_BYTES) {
-        throw new Error(formatPayloadTooLargeMessage({
-          actualBytes: artifactBytes,
-          maxBytes: MAX_PUBLISH_BYTES,
-        }));
-      }
-
-      const res = await fetch('/api/capsules/publish', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: artifact.json,
-      });
-      if (!res.ok) {
-        // 401 means the session expired or was revoked between boot and
-        // click. Throw a typed error so the caller can flip the store's
-        // auth state to signed-out and the Share panel re-renders the
-        // in-context auth prompt instead of a generic error.
-        if (res.status === 401) {
-          throw new AuthRequiredError('Your session expired. Sign in to publish again.');
-        }
-        // 428 Precondition Required — legacy/pre-D120 user with no
-        // acceptance row. The Transfer dialog catches this like the 413
-        // branch and renders the publish-clickwrap fallback (single
-        // Publish button; clicking IS the consent).
-        if (res.status === 428) {
-          let policyVersion: string | null = null;
-          try {
-            const body = await res.json();
-            if (body && typeof body.policyVersion === 'string') {
-              policyVersion = body.policyVersion;
-            }
-          } catch { /* fall through */ }
-          throw new AgeConfirmationRequiredError(
-            'Please confirm you meet the minimum age required in your country of residence before publishing.',
-            policyVersion,
-          );
-        }
-        // 413 (payload too large). The server returns a structured JSON
-        // body { error, message, maxBytes, actualBytes? } so the client
-        // can format a precise, size-specific message driven by server
-        // data — the limit only lives in src/share/constants.ts. Fall
-        // back to maxBytes-only copy if actualBytes is missing (server
-        // rejected on Content-Length before reading body), and to the
-        // shared client-side MAX_PUBLISH_BYTES as a last resort if the
-        // body isn't parseable.
-        if (res.status === 413) {
-          throw new Error(await parsePayloadTooLargeMessage(res));
-        }
-        // 429 is rate-limited; surface the Retry-After hint if present so
-        // the UI can show a human-readable delay. Retry-After is officially
-        // either delta-seconds OR an HTTP-date — only honor a positive
-        // finite numeric value; anything else falls back to the generic
-        // copy so we never render nonsense like "try again in abcs.".
-        if (res.status === 429) {
-          const retryAfterRaw = res.headers.get('Retry-After');
-          const retrySecs = retryAfterRaw === null ? NaN : Number(retryAfterRaw);
-          throw new Error(
-            Number.isFinite(retrySecs) && retrySecs > 0
-              ? `Publish quota exceeded — try again in ${Math.ceil(retrySecs)}s.`
-              : 'Publish quota exceeded. Try again later.',
-          );
-        }
-        // Body read can itself fail on flaky connections (chunked transfer
-        // interrupted, body already consumed by middleware). Fall back to
-        // the status code so the user always sees a "Publish failed:" prefix
-        // instead of a bare browser-level error message.
-        let detail = `status ${res.status}`;
-        try { detail = (await res.text()) || detail; } catch { /* keep status */ }
-        throw new Error(`Publish failed: ${detail}`);
-      }
-      // Typed payload + shape check — res.json() returns any, which
-      // would silently propagate malformed responses (CDN error page,
-      // proxy-rewritten body) as undefined shareCode/shareUrl in the UI.
-      const payload = (await res.json()) as {
-        shareCode?: unknown;
-        shareUrl?: unknown;
-        warnings?: unknown;
-      };
-      if (typeof payload.shareCode !== 'string' || typeof payload.shareUrl !== 'string') {
-        throw new Error('Publish: unexpected server response shape.');
-      }
-      const warnings = Array.isArray(payload.warnings)
-        ? payload.warnings.filter((w): w is string => typeof w === 'string')
-        : undefined;
-      // The share succeeded (server returned 201). If the server attached
-      // any warnings (e.g. quota counter write failed), surface them in
-      // the devtools console so they show up in user-reported bug reports.
-      // The share URL itself is still valid and returned to the UI.
-      if (warnings && warnings.length > 0) {
-        console.warn('[publish] server reported non-fatal warnings:', warnings);
-      }
-      return {
-        shareCode: payload.shareCode,
-        shareUrl: payload.shareUrl,
-        ...(warnings && warnings.length > 0 ? { warnings } : {}),
-      };
+      return postCapsuleArtifact(artifact);
     },
+    bondedGroupAppearance: _bondedGroupAppearance ?? undefined,
+    prepareCapsulePublish: (range) => _capsulePublisher!.prepareCapsulePublish(range),
+    publishPreparedCapsule: (prepareId) => _capsulePublisher!.publishPreparedCapsule(prepareId),
+    cancelPreparedPublish: (prepareId) => _capsulePublisher!.cancelPreparedPublish(prepareId),
   });
   _timelineSub.installAndEnable(); // Atomic: install callbacks + enter ready state (no transient off flash)
 
@@ -1227,6 +1168,13 @@ async function init() {
   // Gated behind ?e2e=1 so it is never part of the production runtime surface.
   if (new URLSearchParams(window.location.search).get('e2e') === '1') {
     (window as unknown as Record<string, unknown>).__useAppStore = useAppStore;
+    // Trim-mode E2E needs to simulate the PublishOversizeError path
+    // without running a real server 413. Exposing the class under the
+    // same e2e gate lets the spec construct a real instance (the
+    // `isPublishOversizeError` guard uses `instanceof`). Synchronous
+    // assignment — an `await import(...)` would race the E2E helper's
+    // `waitForUIState` poll.
+    (window as unknown as Record<string, unknown>).__PublishOversizeError = PublishOversizeError;
   }
 
   // Plan §"Test observability seams": pure pass-through to the same
@@ -1237,6 +1185,32 @@ async function init() {
   // gate-check here would prevent E2E camera assertions on the Lab
   // tab that actually matters. Production impact is negligible: a
   // single read-only getter added to `window`.
+  //
+  // ── Public diagnostic surface — stability expectations ──
+  //
+  // `_getLabCameraSnapshot` and `_getUIState` (just below) are
+  // INTENTIONALLY exposed unconditionally, NOT gated by `?e2e=1`.
+  // Justification:
+  //   · cross-tab E2E handoff: Watch → Lab tab doesn't carry the
+  //     `?e2e=1` query (URL template is `?from=watch&handoff=...`)
+  //     so a gate-check blocks the assertions from the Lab side.
+  //   · they are READ-ONLY and do not expose credentials or session
+  //     tokens — only renderer + non-sensitive store state.
+  //   · they are WIDTHLESS: adding a new field requires review here,
+  //     so the surface cannot grow silently.
+  //
+  // Stability contract for external callers:
+  //   · _getLabCameraSnapshot(): null | { position, target, up }
+  //     — additive fields OK; removing/renaming counts as a break.
+  //   · _getUIState(): a flat record with named primitives. Fields
+  //     listed below are considered stable; additions are non-
+  //     breaking; removals/renames require a review cycle.
+  //
+  // Prefer `?e2e=1`-gated hooks (like `__useAppStore` and
+  // `__PublishOversizeError`) for anything that mutates state or
+  // exposes internals. The two unconditional getters here remain
+  // acceptable because they satisfy a narrow cross-tab E2E need
+  // without a mutable surface.
   (window as unknown as Record<string, unknown>)._getLabCameraSnapshot = () => renderer?.getOrbitCameraSnapshot?.() ?? null;
 
   // Narrow test hook — returns only the specific observable E2E tests need.

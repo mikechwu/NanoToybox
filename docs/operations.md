@@ -539,7 +539,7 @@ run for the system to keep healing itself.
 | `mode` | Status | Body | `Cache-Control` | Notes |
 |---|---|---|---|---|
 | `stored` | 200 | PNG (R2-stored poster) | `public, max-age=31536000, immutable` | Stored asset for the capsule exists in R2. Browser- and edge-cacheable for one year; the R2 key is content-addressed so the URL changes when the asset does. |
-| `generated` | 200 | PNG (Satori-rendered from `preview_scene_v1`) | `public, max-age=300, s-maxage=3600, stale-while-revalidate=86400` + `ETag: "v2-<FNV1a32 over [TEMPLATE_VERSION, scene.hash, sanitizedTitle, shareCode]>"` | Dynamic render per request via `@cloudflare/pages-plugin-vercel-og`. Short browser cache, longer edge cache, day-long SWR window. Gated by `CAPSULE_PREVIEW_DYNAMIC_FALLBACK`. |
+| `generated` | 200 | PNG (Satori-rendered from `preview_scene_v1`) | `public, max-age=300, s-maxage=3600, stale-while-revalidate=86400` + `ETag: "v<TEMPLATE_VERSION>-<FNV1a32 over [TEMPLATE_VERSION, scene.hash, sanitizedTitle, shareCode]>"` (currently `"v4-<8hex>"`) | Dynamic render per request via `@cloudflare/pages-plugin-vercel-og`. Short browser cache, longer edge cache, day-long SWR window. Gated by `CAPSULE_PREVIEW_DYNAMIC_FALLBACK`. |
 | `error` (terminal `/og-fallback.png`) | 200 | PNG (`public/og-fallback.png`, 1200×630) | `public, max-age=60` | Last-resort fallback when both stored and dynamic paths fail. Short cache so a fix propagates fast. |
 | `error` (1×1 safety net) | 200 | 1×1 PNG | `public, max-age=60` | Reached only when even `/og-fallback.png` fetch fails. Short cache; presence in logs (`fallback-fetch-failed:` cause) is itself a signal. |
 | `flag-off` / `inaccessible` | 404 | — | `public, max-age=60` | Capsule row is moderation-deleted, account-deleted, or the flag is off and no stored asset exists. Short cache so a flag flip or moderation reverse takes effect within a minute. |
@@ -554,10 +554,10 @@ and browsers don't sniff a fallback to non-PNG MIME.
 `posterUrlFor()` in `src/share/share-record.ts` emits two URL shapes,
 keyed by whether a stored R2 poster asset exists for the row:
 
-- **Dynamic** (no stored asset): `/api/capsules/<code>/preview/poster?v=t<TEMPLATE_VERSION>` — currently `?v=t2`. Busts on `TEMPLATE_VERSION` bump.
-- **Stored** (R2 asset present): `/api/capsules/<code>/preview/poster?v=p<FNV1a32 first-8-hex of preview_poster_key>`. Busts on any change to the stored key (content-addressed).
+- **Dynamic** (no stored asset): `/api/capsules/<code>/preview/poster?v=t<TEMPLATE_VERSION>` — currently `?v=t4`. Busts on `TEMPLATE_VERSION` bump.
+- **Stored** (R2 asset present): `/api/capsules/<code>/preview/poster?v=p<FNV1a32 hex of preview_poster_key>` (8 hex chars). Busts on any change to the stored key (content-addressed).
 
-`TEMPLATE_VERSION` lives in `src/share/capsule-preview.ts` and is currently `2`.
+`TEMPLATE_VERSION` lives in `src/share/capsule-preview.ts` and is currently `4`.
 
 ### Public-API metadata semantics — RELEASE-NOTE
 
@@ -1423,8 +1423,8 @@ curl -I "https://atomdojo.pages.dev/api/capsules/<code>/preview/poster"
 # one of the four tiers in the Capsule preview poster section above.
 # A stored asset returns max-age=31536000, immutable; a dynamic render
 # returns max-age=300, s-maxage=3600, stale-while-revalidate=86400 with
-# an ETag of shape "v2-<8hex>" (FNV1a32 over [TEMPLATE_VERSION, scene.hash,
-# sanitizedTitle, shareCode]; TEMPLATE_VERSION is currently 2).
+# an ETag of shape "v<TEMPLATE_VERSION>-<8hex>" (FNV1a32 over [TEMPLATE_VERSION, scene.hash,
+# sanitizedTitle, shareCode]; TEMPLATE_VERSION is currently 4, so "v4-<8hex>").
 #
 # Then tail to confirm the structured log line:
 wrangler pages deployment tail | grep '\[capsule-poster\]'

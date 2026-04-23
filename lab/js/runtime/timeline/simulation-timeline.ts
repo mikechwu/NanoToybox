@@ -203,6 +203,14 @@ export interface SimulationTimeline {
   getFrameCount(): number;
   getCheckpointCount(): number;
   getRestartFrameCount(): number;
+
+  /** Capsule-export input version. Bumped by every dense-frame mutation
+   *  that would change a serialized capsule (recordFrame always; truncateAfter
+   *  only when it removes ≥1 frame; clear only when frames were present).
+   *  Monotonically increasing for the lifetime of the SimulationTimeline;
+   *  never reset — even `clear` bumps it rather than resetting. Read by
+   *  the subsystem to build the CapsuleFrameIndex.snapshotId. */
+  getCapsuleSnapshotVersion(): number;
 }
 
 // ── Factory ──
@@ -218,6 +226,14 @@ export function createSimulationTimeline(
   let _nextFrameId = 0;
   let _nextRestartFrameId = 0;
   let _nextCheckpointId = 0;
+  // Monotonic counter bumped by every mutation of `_frames` that changes
+  // a serialized capsule. Never reset — clear() bumps it rather than
+  // resetting so a trim session captured pre-clear is unambiguously
+  // stale afterwards. Restart frames + checkpoints are NOT capsule
+  // inputs in v1 (only `_frames` is), so recordRestartFrame /
+  // recordCheckpoint do NOT bump — bumping them would cause spurious
+  // trim-session aborts.
+  let _capsuleSnapshotVersion = 0;
 
   let _lastFrameRecordTs = 0;
   let _lastCheckpointRecordTs = 0;
@@ -264,6 +280,8 @@ export function createSimulationTimeline(
     _frames.push({ ...frame, atomIds: frame.atomIds ?? [], frameId: _nextFrameId++, positions: new Float64Array(frame.positions) });
     _lastFrameRecordTs = performance.now();
     while (_frames.length > cfg.maxDenseFrames) _frames.shift();
+    // Always bumps: recordFrame by definition changes the capsule.
+    _capsuleSnapshotVersion++;
   }
 
   function recordRestartFrame(frame: Omit<TimelineRestartFrame, 'frameId' | 'atomIds'> & { atomIds?: number[] }): void {
@@ -407,14 +425,19 @@ export function createSimulationTimeline(
   function truncateAfter(timePs: number): void {
     // Remove all entries with timePs > cutoff to maintain a single monotonic history.
     // After restart, new frames will be recorded starting from the restart time.
-    while (_frames.length > 0 && _frames[_frames.length - 1].timePs > timePs) _frames.pop();
+    let framesRemoved = 0;
+    while (_frames.length > 0 && _frames[_frames.length - 1].timePs > timePs) { _frames.pop(); framesRemoved++; }
     while (_restartFrames.length > 0 && _restartFrames[_restartFrames.length - 1].timePs > timePs) _restartFrames.pop();
     while (_checkpoints.length > 0 && _checkpoints[_checkpoints.length - 1].timePs > timePs) _checkpoints.pop();
+    // Only bump when a dense frame was actually removed; no-op truncates
+    // (e.g., cutoff past the end) must not invalidate trim sessions.
+    if (framesRemoved > 0) _capsuleSnapshotVersion++;
   }
 
   // ── Lifecycle ──
 
   function clear(): void {
+    const hadFrames = _frames.length > 0;
     _frames.length = 0;
     _restartFrames.length = 0;
     _checkpoints.length = 0;
@@ -427,6 +450,11 @@ export function createSimulationTimeline(
     _reviewTimePs = null;
     _currentReviewFrame = null;
     _frozenRange = null;
+    // Bump only when clearing actually removed frames, so clearing an
+    // already-empty timeline doesn't spuriously abort a trim session.
+    // NEVER reset — capsule snapshot version is monotonic for the
+    // lifetime of this SimulationTimeline.
+    if (hadFrames) _capsuleSnapshotVersion++;
   }
 
   return {
@@ -451,6 +479,7 @@ export function createSimulationTimeline(
     getFrameCount: () => _frames.length,
     getCheckpointCount: () => _checkpoints.length,
     getRestartFrameCount: () => _restartFrames.length,
+    getCapsuleSnapshotVersion: () => _capsuleSnapshotVersion,
     getExportSnapshot: () => ({
       denseFrames: _frames.map(f => ({
         ...f,

@@ -71,23 +71,18 @@ function parsePositiveInt(raw: string | null): number | undefined {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
 }
 
-/** Parse the 413 JSON body from a fetch Response and format the user-facing
- *  message. Priority chain, strictly one trust tier per rendered message:
- *    1. Parsed JSON body with valid `maxBytes` — render from body, and
- *       include `actualBytes` only if ALSO from that same body. Both
- *       figures come from a single trusted source.
- *    2. `X-Max-Publish-Bytes` header — render Maximum-only. Do NOT pull
- *       `actualBytes` from a body whose `maxBytes` was invalid; mixing
- *       an untrusted body's `actualBytes` with a trusted header's
- *       `maxBytes` would put two trust tiers in one user-facing message.
- *    3. Neither — render the generic message without any numeric limit.
- *
- *  Never falls back to the client's own `MAX_PUBLISH_BYTES` for SERVER
- *  responses; under deploy skew the client's constant may not match the
- *  responding server's enforced limit. Client preflight rejections are a
- *  different path that consults `MAX_PUBLISH_BYTES` directly (local
- *  reasoning, the client IS the source of truth for its own decision). */
-export async function parsePayloadTooLargeMessage(res: Response): Promise<string> {
+export interface PayloadTooLargeDetails {
+  message: string;
+  actualBytes: number | null;
+  maxBytes: number | null;
+  source: 'body' | 'header' | 'generic';
+}
+
+/** Structured parser for 413 responses. Returns the same trust-tiered
+ *  decision as `parsePayloadTooLargeMessage` but also exposes the
+ *  numeric values so callers can construct `PublishOversizeError` with
+ *  structured details. Consumes the response body (single read). */
+export async function parsePayloadTooLargeDetails(res: Response): Promise<PayloadTooLargeDetails> {
   const headerBytes = parsePositiveInt(res.headers.get('X-Max-Publish-Bytes'));
   let bodyMax: number | undefined;
   let bodyActual: number | undefined;
@@ -105,18 +100,41 @@ export async function parsePayloadTooLargeMessage(res: Response): Promise<string
   }
 
   if (bodyMax !== undefined) {
-    // Tier 1: body is the single source of truth for this message.
-    // actualBytes is only honored when from the same body.
-    return formatPayloadTooLargeMessage({ maxBytes: bodyMax, actualBytes: bodyActual });
+    // Tier 1: body is the single source of truth. actualBytes is only
+    // honored when from the same body.
+    return {
+      message: formatPayloadTooLargeMessage({ maxBytes: bodyMax, actualBytes: bodyActual }),
+      maxBytes: bodyMax,
+      actualBytes: bodyActual ?? null,
+      source: 'body',
+    };
   }
   if (headerBytes !== undefined) {
     // Tier 2: header provides the max. actualBytes from an invalid body
     // is deliberately dropped — mixing tiers would render a misleading
     // "Current size" alongside a header-sourced "Maximum allowed".
-    return formatPayloadTooLargeMessage({ maxBytes: headerBytes });
+    return {
+      message: formatPayloadTooLargeMessage({ maxBytes: headerBytes }),
+      maxBytes: headerBytes,
+      actualBytes: null,
+      source: 'header',
+    };
   }
   // Tier 3: no trustworthy numeric source; render generic only.
-  return formatPayloadTooLargeMessage({});
+  return {
+    message: formatPayloadTooLargeMessage({}),
+    maxBytes: null,
+    actualBytes: null,
+    source: 'generic',
+  };
+}
+
+/** Legacy string-only wrapper — kept for callers that only need the
+ *  user-facing message. New callers should use `parsePayloadTooLargeDetails`
+ *  instead so they can build structured errors. */
+export async function parsePayloadTooLargeMessage(res: Response): Promise<string> {
+  const details = await parsePayloadTooLargeDetails(res);
+  return details.message;
 }
 
 // Re-export so main.ts's preflight path can use the shared constant

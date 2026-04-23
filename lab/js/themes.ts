@@ -37,6 +37,11 @@ export const THEMES = {
     uiDanger: '#e05050',
     uiFpsText: '#aab0c0',
     uiHintBg: 'rgba(100,180,140,0.15)',
+    // Trim-dialog status pill colors (dark mode): brighter so 11 px
+    // bold text meets WCAG AA 4.5:1 against the translucent pill fill.
+    uiTrimOk: '#7cd4a6',
+    uiTrimWarn: '#e3b36a',
+    uiTrimOver: '#ef8a7a',
   },
   'light': {
     // Three.js renderer
@@ -65,6 +70,11 @@ export const THEMES = {
     uiDanger: '#d04040',
     uiFpsText: '#666',
     uiHintBg: 'rgba(60,140,100,0.12)',
+    // Trim-dialog status pill colors (light mode): deeper saturation
+    // so text stays legible on the light translucent pill fill.
+    uiTrimOk: '#1f7a53',
+    uiTrimWarn: '#a3670f',
+    uiTrimOver: '#b34a3b',
   },
 };
 
@@ -91,6 +101,9 @@ export function applyThemeTokens(name) {
   s.setProperty('--color-danger', t.uiDanger);
   s.setProperty('--color-fps-text', t.uiFpsText);
   s.setProperty('--color-hint-bg', t.uiHintBg);
+  s.setProperty('--color-trim-ok', t.uiTrimOk);
+  s.setProperty('--color-trim-warn', t.uiTrimWarn);
+  s.setProperty('--color-trim-over', t.uiTrimOver);
   // --atom-base-color mirrors THEMES[name].atom — the same source the renderer uses
   // for InstancedMesh default color (renderer.ts _createAtomMaterial, _applyAtomColorOverrides).
   s.setProperty('--atom-base-color', '#' + t.atom.toString(16).padStart(6, '0'));

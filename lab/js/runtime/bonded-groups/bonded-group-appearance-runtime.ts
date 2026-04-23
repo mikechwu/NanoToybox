@@ -41,6 +41,13 @@ export interface BondedGroupAppearanceRuntime {
    *     install via `restoreAssignments`, rollback via same),
    *   - future analysis / save-load / undo surfaces. */
   restoreAssignments(assignments: readonly BondedGroupColorAssignment[]): void;
+  /** Monotonic version of the capsule-relevant appearance inputs.
+   *  Bumped ONLY inside `writeAssignments` (the single private bump
+   *  point) and only when the serialized-relevant representation
+   *  actually changes. `syncToRenderer` MUST NOT bump — it does not
+   *  change the exported assignment list, only the live renderer's
+   *  view. Never reset. */
+  getAppearanceVersion(): number;
 }
 
 export const rebuildOverridesFromAssignments = rebuildOverridesFromDenseIndices;
@@ -53,6 +60,29 @@ export function createBondedGroupAppearanceRuntime(deps: {
 }): BondedGroupAppearanceRuntime {
 
   let nextAssignmentId = 1;
+  let _appearanceVersion = 0;
+  let _lastWrittenAssignments: BondedGroupColorAssignment[] = [];
+
+  // Serialized-relevant equality: the capsule export iterates assignments
+  // in store order and emits each assignment's `atomIds` array as-is, so
+  // the serialized JSON is sensitive to both assignment order AND the
+  // order of `atomIds` within each assignment. A naive membership check
+  // (ignoring order) would leak past the stale guard and silently change
+  // the published bytes. `id` and `atomIndices` are NOT serialized, so
+  // they are excluded from the comparison.
+  function sameAssignments(prev: readonly BondedGroupColorAssignment[], next: readonly BondedGroupColorAssignment[]): boolean {
+    if (prev.length !== next.length) return false;
+    for (let i = 0; i < prev.length; i++) {
+      const p = prev[i], q = next[i];
+      if (p.colorHex !== q.colorHex) return false;
+      const a = p.atomIds, b = q.atomIds;
+      if (a.length !== b.length) return false;
+      for (let j = 0; j < a.length; j++) {
+        if (a[j] !== b[j]) return false;
+      }
+    }
+    return true;
+  }
 
   function projectOverridesFromAtomIds(assignments: BondedGroupColorAssignment[]): AtomColorOverrideMap {
     if (assignments.length === 0) return {};
@@ -115,9 +145,28 @@ export function createBondedGroupAppearanceRuntime(deps: {
   }
 
   function writeAssignments(assignments: BondedGroupColorAssignment[]): void {
+    // Single private bump point. Other mutators (applyGroupColor,
+    // clearGroupColor, clearColorAssignment, clearAllColors,
+    // restoreAssignments, pruneAndSync) all funnel
+    // through here, so the bump rule is uniform. Skip when the write is
+    // serialized-equivalent to the last written value so no-op writes
+    // don't strand active trim sessions.
+    const changed = !sameAssignments(_lastWrittenAssignments, assignments);
     const overrides = projectOverridesFromAtomIds(assignments);
     useAppStore.setState({ bondedGroupColorAssignments: assignments, bondedGroupColorOverrides: overrides });
     applyOverridesToRenderer(overrides);
+    if (changed) {
+      _appearanceVersion++;
+      // Keep a detached copy so later in-place mutation of store state
+      // cannot make a subsequent sameAssignments check pass incorrectly.
+      _lastWrittenAssignments = assignments.map((a) => ({
+        id: a.id,
+        atomIds: a.atomIds.slice(),
+        atomIndices: a.atomIndices.slice(),
+        colorHex: a.colorHex,
+        sourceGroupId: a.sourceGroupId,
+      }));
+    }
   }
 
   function syncToRenderer(): void {
@@ -166,6 +215,20 @@ export function createBondedGroupAppearanceRuntime(deps: {
     }));
   }
 
+  /** Install a snapshotted / externally-computed assignment list.
+   *
+   *  Used by:
+   *    · the Watch → Lab hydrate transaction (capture via
+   *      `snapshotAssignments`, install + rollback via this).
+   *    · the subsystem's post-rebuild cleanup path that filters
+   *      out assignments whose atomIds no longer exist in the
+   *      current scene.
+   *    · future analysis / save-load / undo surfaces.
+   *
+   *  Routes through `writeAssignments` so the bump rule + renderer
+   *  sync apply uniformly — no caller can bypass by writing the
+   *  store directly. (Previously a separate `replaceAssignments`
+   *  duplicated this body; collapsed into `restoreAssignments`.) */
   function restoreAssignments(assignments: readonly BondedGroupColorAssignment[]): void {
     const copy = assignments.map((a) => ({
       id: a.id,
@@ -177,5 +240,15 @@ export function createBondedGroupAppearanceRuntime(deps: {
     writeAssignments(copy);
   }
 
-  return { applyGroupColor, clearGroupColor, clearColorAssignment, clearAllColors, syncToRenderer, pruneAndSync, snapshotAssignments, restoreAssignments };
+  return {
+    applyGroupColor,
+    clearGroupColor,
+    clearColorAssignment,
+    clearAllColors,
+    syncToRenderer,
+    pruneAndSync,
+    snapshotAssignments,
+    restoreAssignments,
+    getAppearanceVersion: () => _appearanceVersion,
+  };
 }

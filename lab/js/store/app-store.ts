@@ -81,6 +81,34 @@ export interface TimelineCallbacks {
   onResumeFromExport?: () => void;
   getExportEstimates?: () => { capsule: string | null; full: string | null };
   onPublishCapsule?: () => Promise<{ shareCode: string; shareUrl: string; warnings?: string[] }>;
+  /** Read the timeline's dense-frame projection + capsule snapshot id.
+   *  Returns null when the capsule publish path is not viable
+   *  (identity stale, capsule capability gated off, no frames). Used
+   *  by the trim-mode UI in TimelineBar for snapping, default
+   *  selection, and keyboard moves. */
+  getCapsuleFrameIndex?: () =>
+    | import('../runtime/timeline/capsule-publish-types').CapsuleFrameIndex
+    | null;
+  /** Build + serialize the candidate capsule exactly once, cache the
+   *  JSON, and return a summary that identifies it via `prepareId`.
+   *  The bytes in the returned summary are the bytes that will be
+   *  POSTed by `onPublishPreparedCapsule` — no rebuild, byte-identical.
+   *  May reject with CapsuleSnapshotStaleError when the range's
+   *  snapshotId no longer matches the current export input version. */
+  onPrepareCapsulePublish?: (
+    range: import('../runtime/timeline/capsule-publish-types').CapsuleSelectionRange,
+  ) => Promise<import('../runtime/timeline/capsule-publish-types').PreparedCapsuleSummary>;
+  /** POST the cached JSON for the given prepareId. Passes cached bytes
+   *  through unchanged. May throw PublishOversizeError,
+   *  AuthRequiredError, AgeConfirmationRequiredError, or
+   *  CapsuleSnapshotStaleError (on pre-POST snapshot recheck). */
+  onPublishPreparedCapsule?: (
+    prepareId: string,
+  ) => Promise<{ shareCode: string; shareUrl: string; warnings?: string[] }>;
+  /** Evict the cached JSON for this prepareId. Idempotent. Must be
+   *  called on Cancel, Reset, dialog close, snapshot invalidation, and
+   *  after any publish attempt completes. */
+  onCancelPreparedPublish?: (prepareId: string) => void;
 }
 
 /** Authenticated user summary, or null when signed out.
