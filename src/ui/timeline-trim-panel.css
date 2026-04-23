@@ -1,0 +1,284 @@
+/**
+ * Capsule Publish — trim-panel stylesheet.
+ *
+ * Owns every CSS rule that only exists because of the trim-mode UX:
+ *   · the non-modal floating-panel variant of the transfer dialog
+ *   · the status row (size + denominator + pill + caption)
+ *   · the Reset-link leading-edge button
+ *   · the Preview-outside-kept note and Nothing-Fits help copy
+ *   · the Publish button's trim-specific min-width reservation
+ *   · the trim-handle attention-pulse keyframe + usage
+ *
+ * What is NOT here:
+ *   · `.timeline-modal-card` / `.timeline-dialog-backdrop` / the
+ *     base `.timeline-transfer-dialog` rules — those are the shared
+ *     modal-dialog primitives used by Download, Share (non-trim),
+ *     auth prompts, and the Clear dialog. They remain in
+ *     `lab/index.html` next to the other dialog primitives.
+ *   · `.timeline-track__kept` / `__trimmed-*` / `__trim-handle`
+ *     core rules — those are timeline-surface primitives and live
+ *     in `src/ui/timeline-track.css` alongside the track / fill /
+ *     thumb rules.
+ *
+ * Imported by `lab/js/main.ts` after `core-tokens.css` and before
+ * `bottom-region.css`, so the variant rules resolve theme tokens
+ * correctly and the dialog layout wins against any late
+ * overrides in `lab/index.html`'s remaining inline <style> block.
+ */
+
+/* Publish-trim variant: reserve enough width so the button does not
+   change size between "Publish", "Preparing…", and "Publishing…".
+   Prevents layout jitter while the two-phase submit progresses. */
+.timeline-transfer-dialog__confirm--publish-trim {
+  /* Expressed in ch so the reservation scales with font size —
+     "Publishing…" is ~10 ch bold. This keeps the label from jittering
+     between Publish / Preparing… / Publishing… at every font scale
+     (normal AND [data-text-size="large"] which enlarges --font-xs). */
+  min-width: 10.5ch;
+  text-align: center;
+}
+
+/* ── Trim-mode dialog chrome ──
+ *
+ * The plan rule: "use the existing timeline surface, do not create a
+ * second trim timeline inside the modal." Keeping the modal chrome
+ * (backdrop + center-screen card + focus trap) would make the actual
+ * trim handles on the main TimelineBar unreachable — the backdrop
+ * would intercept pointer events and the focus trap would blackhole
+ * Tab. When shareTrim is active the dialog renders non-modal via this
+ * variant: anchored above the timeline, no backdrop, transparent to
+ * pointer events outside the card itself.
+ */
+/* ── Transform-driven enter/exit animation ──
+ *
+ * The dialog has two resting positions: center-of-viewport (normal
+ * branches) and anchored-above-timeline (trim mode). Switching
+ * between them by swapping `top: 50%` for `top: auto; bottom: X`
+ * can't transition smoothly — CSS cannot interpolate between
+ * `auto` and a length. Instead we keep the card anchored at the
+ * viewport center and drive a `translateY` offset via a custom
+ * property that CAN transition, so the card glides down into the
+ * trim slot and glides back up on exit.
+ *
+ * `.timeline-modal-card` (base, in lab/index.html) already sets
+ * `transform: translate(-50%, -50%)` to center the card. We
+ * override that with the same centering plus an additive Y offset
+ * supplied by JS. `--dialog-translate-y` defaults to 0, so non-
+ * trim dialogs are unaffected.
+ *
+ * Animation curve: cubic-bezier(0.22, 1, 0.36, 1) (easeOutQuint)
+ *   · no overshoot — this is a UI dock, not a spring toy
+ *   · fast kick-off with a long gentle tail, so the card "settles"
+ *     into place instead of snapping
+ *   · 380 ms reads as deliberate but not sluggish; matches the
+ *     macOS system animation feel for panel repositioning.
+ *
+ * `will-change: transform` hints the browser to promote the card
+ * to a compositor layer while the dialog is open, so the
+ * transition stays at 60 fps on modest hardware.
+ *
+ * `prefers-reduced-motion`: the transition is suppressed entirely;
+ * the card snaps into place, which matches user intent for reduced
+ * motion (less movement, not a slower movement).
+ */
+.timeline-modal-card.timeline-transfer-dialog {
+  transform: translate(-50%, calc(-50% + var(--dialog-translate-y, 0px)));
+  transition: transform 380ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline-modal-card.timeline-transfer-dialog {
+    transition: none;
+  }
+}
+
+/* Floating variant only changes PAINT + SIZE (shadow, width,
+   max-height) — position is handled by --dialog-translate-y above
+   so the enter/exit transition can animate smoothly across modes.
+
+   Compound selector (`.timeline-modal-card` + `--trim-floating`)
+   so the override beats the base modal-card rules regardless of
+   load order. `.timeline-modal-card` currently lives in
+   `lab/index.html`'s inline <style> block, which cascades AFTER
+   external stylesheets. */
+.timeline-modal-card.timeline-transfer-dialog--trim-floating {
+  width: min(420px, calc(100vw - 32px));
+  /* Cap max-height so a tall panel never spills past the viewport
+     top when anchored above the timeline. --trim-panel-available-height
+     is set by JS from the real bottom-region top. */
+  max-height: var(--trim-panel-available-height, calc(100vh - 160px));
+  overflow: auto;
+  /* Softer shadow now that there's no backdrop doing the depth work. */
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.08),
+    0 18px 40px rgba(0, 0, 0, 0.22);
+}
+@media (max-width: 767px) {
+  .timeline-modal-card.timeline-transfer-dialog--trim-floating {
+    width: calc(100vw - 16px);
+  }
+}
+
+/* Draw the reader's eye to the end-caps for a short moment when trim
+ * mode opens. Uses `outline` (not `box-shadow`) so the ring stacks on
+ * top of the cap's own drop shadow without clobbering it mid-animation.
+ *
+ * Duration and iteration count come from custom properties set by
+ * TimelineBar from `trim-mode-config.ts` — the JS `setTimeout` that
+ * removes the `--pulse` class is computed as the same
+ * (iteration × count) product, so CSS and JS timing cannot drift.
+ * Fallbacks below match the current config defaults (1200ms × 2).
+ * Respects `prefers-reduced-motion`. */
+@keyframes timelineTrimHandlePulse {
+  0%   { outline-color: color-mix(in srgb, var(--color-accent-text) 65%, transparent); outline-width: 0px; }
+  70%  { outline-color: color-mix(in srgb, var(--color-accent-text) 0%, transparent); outline-width: 10px; }
+  100% { outline-color: color-mix(in srgb, var(--color-accent-text) 0%, transparent); outline-width: 0px; }
+}
+.timeline-track__trim-handle--pulse::before {
+  outline-style: solid;
+  outline-offset: 2px;
+  animation:
+    timelineTrimHandlePulse
+    var(--trim-handle-pulse-duration, 1200ms)
+    ease-out
+    var(--trim-handle-pulse-count, 2);
+}
+@media (prefers-reduced-motion: reduce) {
+  .timeline-track__trim-handle--pulse::before {
+    animation: none;
+    outline: none;
+  }
+}
+
+/* The trim dialog's status row is a structured readout (big size +
+ * subtle denominator + colored status pill + optional caption). Each
+ * piece can be scanned independently instead of parsing one long
+ * composite sentence.
+ */
+.timeline-transfer-dialog__trim-status {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 10px 0 12px;
+}
+.timeline-transfer-dialog__trim-status-measuring,
+.timeline-transfer-dialog__trim-status-unavailable {
+  font-size: var(--font-sm, 13px);
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+/* Two separate class names (same base styling today) so a future
+   restyle of the "couldn't measure" state can diverge without
+   coupling to the measuring-copy presentation. */
+.timeline-transfer-dialog__trim-size-row {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px;
+}
+.timeline-transfer-dialog__trim-size {
+  font-family: var(--font-family);
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+}
+/* The fallback "Size unknown" variant is demoted in both weight and
+   size so it reads as metadata, not a number. */
+.timeline-transfer-dialog__trim-size--unknown {
+  font-size: var(--font-sm, 13px);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  letter-spacing: 0;
+  font-style: italic;
+}
+.timeline-transfer-dialog__trim-denom {
+  font-size: var(--font-xs);
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.timeline-transfer-dialog__trim-caption {
+  font-size: var(--font-xs);
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+/* Status pill: dot + label. Color is redundant with text for
+ * accessibility — we never rely on color alone. */
+.timeline-transfer-dialog__trim-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 9px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+  line-height: 1.5;
+  border: 1px solid transparent;
+  margin-left: auto; /* push to end of the size row */
+}
+.timeline-transfer-dialog__trim-pill-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+/* Pill colors reference theme-aware tokens (set by applyThemeTokens).
+   Dark mode uses lighter hues so the 11 px bold text on the translucent
+   fill still clears WCAG AA 4.5:1. */
+.timeline-transfer-dialog__trim-pill--within-target {
+  color: var(--color-trim-ok);
+  background: color-mix(in srgb, var(--color-trim-ok) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-trim-ok) 30%, transparent);
+}
+.timeline-transfer-dialog__trim-pill--close-to-limit {
+  color: var(--color-trim-warn);
+  background: color-mix(in srgb, var(--color-trim-warn) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-trim-warn) 30%, transparent);
+}
+.timeline-transfer-dialog__trim-pill--over-limit {
+  color: var(--color-trim-over);
+  background: color-mix(in srgb, var(--color-trim-over) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-trim-over) 30%, transparent);
+}
+
+/* Reset-link — subtle leading-edge button styled to match the share-
+ * success branch's "Manage uploads" link pattern. Used to sit between
+ * Cancel and Publish with no styling; now it lives on the leading
+ * edge as a clearly-secondary action. */
+.timeline-transfer-dialog__reset-link {
+  margin-right: auto;
+  align-self: center;
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+  color: var(--color-text-secondary);
+  background: none;
+  border: none;
+  padding: 4px 2px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.timeline-transfer-dialog__reset-link:hover:not(:disabled) {
+  color: var(--color-text);
+}
+.timeline-transfer-dialog__reset-link:disabled {
+  opacity: 0.4;
+  cursor: default;
+  text-decoration: none;
+}
+.timeline-transfer-dialog__reset-link:focus-visible {
+  outline: 2px solid var(--color-accent-text);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Preview-outside-kept and "nothing fits" copy */
+.timeline-transfer-dialog__preview-note {
+  font-size: var(--font-xs);
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
+  border-left: 2px solid var(--color-text-secondary);
+  padding: 6px 10px;
+  margin: 0 0 10px;
+  line-height: 1.45;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.timeline-transfer-dialog__help {
+  font-size: var(--font-xs);
+  color: var(--color-text);
+  line-height: 1.5;
+  margin: 0 0 12px;
+}

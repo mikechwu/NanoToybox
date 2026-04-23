@@ -65,16 +65,42 @@ describe('AtomMetadataRegistry snapshot + restore', () => {
     expect(snap[0]).toEqual({ id: 0, element: 'C' });
   });
 
-  it('overwriting an id via registerAppendedAtoms survives snapshot/restore (last-write-wins)', () => {
+  it('registerAppendedAtoms is append-only — re-registering an existing id throws', () => {
+    // Stable atom IDs are monotonic for the lifetime of a session;
+    // they are never reused. A caller trying to "overwrite" an id
+    // is almost certainly confusing id with slot index — a
+    // lifecycle bug that would corrupt identity upstream. Throw so
+    // it surfaces at the origin instead of causing ghost atoms on
+    // export.
     const r = createAtomMetadataRegistry();
     r.registerAppendedAtoms([0], [{ element: 'C' }]);
-    r.registerAppendedAtoms([0], [{ element: 'N' }]); // overwrite
-    const snap = r.snapshot();
-    expect(snap).toHaveLength(1);
-    expect(snap[0].element).toBe('N');
-    r.reset();
-    r.restore(snap);
-    expect(r.getAtomTable()[0].element).toBe('N');
+    expect(() => r.registerAppendedAtoms([0], [{ element: 'N' }]))
+      .toThrow(/already registered/i);
+    // The prior entry is preserved intact — atomic validation before
+    // commit means a failed call never partially mutates state.
+    expect(r.getAtomTable()[0].element).toBe('C');
+  });
+
+  it('registerAppendedAtoms rejects duplicate ids within the same batch', () => {
+    const r = createAtomMetadataRegistry();
+    expect(() => r.registerAppendedAtoms([5, 5], [{ element: 'C' }, { element: 'H' }]))
+      .toThrow(/duplicate id/i);
+    // Atomic: the registry stays empty — neither element committed.
+    expect(r.getAtomTable()).toHaveLength(0);
+  });
+
+  it('registerAppendedAtoms is atomic under a mid-batch collision', () => {
+    // If id N is already registered and a batch [new, N, also-new]
+    // is submitted, NONE of the three entries should land. This
+    // keeps the registry in a well-defined state after the throw.
+    const r = createAtomMetadataRegistry();
+    r.registerAppendedAtoms([1], [{ element: 'C' }]);
+    expect(() => r.registerAppendedAtoms(
+      [2, 1, 3],
+      [{ element: 'H' }, { element: 'X' }, { element: 'O' }],
+    )).toThrow(/already registered/i);
+    expect(r.getAtomTable()).toHaveLength(1);
+    expect(r.getAtomTable()[0].element).toBe('C');
   });
 
   it('restore into a pre-populated registry cleanly replaces all prior entries', () => {

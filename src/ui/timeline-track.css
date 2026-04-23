@@ -59,3 +59,208 @@
 .timeline-track--thick:active .timeline-thumb {
   transform: translate(-50%, -50%) scale(1.15);
 }
+
+/* ── Trim-mode overlays + handles ──
+ *
+ * Media-range ("QuickTime-style") treatment. The trim selection reads
+ * as a single adjustable object:
+ *   · kept region is an outlined + glowing band — the user's chosen
+ *     publishable window
+ *   · trimmed regions are visibly dimmed with a diagonal hatch so
+ *     they read as "out of scope"
+ *   · start/end handles are thick end-caps with subtle grip lines —
+ *     they look like handles you grab, not thin slider ticks
+ *   · the normal .timeline-fill is suppressed while trim is active
+ *     (kept region owns the primary accent; competing fills would
+ *     ambiguate "what is selected?")
+ *
+ * Trim-specific design tokens. The trim UI is a self-contained
+ * primitive; extracting its tuning as CSS custom properties keeps
+ * the styling consistent and makes theme-level overrides (including
+ * dark / light / future compact variants) one-stop edits. Themes
+ * can override any of these on `:root` or on a scoped ancestor;
+ * values below are the defaults derived from the existing palette.
+ */
+.timeline-track {
+  /* Selection (kept band) */
+  --trim-selection-bg: color-mix(in srgb, var(--color-accent-text) 26%, transparent);
+  --trim-selection-border: var(--color-accent-text);
+  --trim-selection-glow-outer: color-mix(in srgb, var(--color-accent-text) 14%, transparent);
+  --trim-selection-glow-drop: color-mix(in srgb, var(--color-accent-text) 18%, transparent);
+  --trim-selection-radius: 8px;
+  --trim-selection-overshoot: 4px; /* how far the band extends past the rail */
+
+  /* End-cap handles */
+  --trim-hit-area-width: 32px;
+  --trim-hit-area-height: 40px;
+  --trim-cap-width: 14px;
+  --trim-cap-height: 28px;
+  --trim-cap-radius: 5px;
+  --trim-cap-border-width: 2px;
+
+  /* Trimmed regions (outside the selection) */
+  --trim-muted-veil: color-mix(in srgb, var(--color-text) 18%, transparent);
+  --trim-muted-stripe: color-mix(in srgb, var(--color-text) 55%, transparent);
+  --trim-muted-stripe-period: 6px;
+  --trim-muted-stripe-width: 2px;
+  --trim-muted-outline: color-mix(in srgb, var(--color-text) 30%, transparent);
+  --trim-muted-radius: 4px;
+  --trim-muted-overshoot: 3px;
+
+  /* Passive fill (the normal accent fill, demoted during trim) */
+  --trim-passive-fill: color-mix(in srgb, var(--color-text-secondary) 35%, transparent);
+  --trim-passive-fill-opacity: 0.35;
+}
+
+.timeline-track--trim {
+  /* Prevent page scroll from stealing touch drags of trim handles. */
+  touch-action: none;
+}
+
+/* Suppress the normal fill in trim mode so the kept band is the only
+   primary-color element on the track. */
+.timeline-track--trim .timeline-fill {
+  background: var(--trim-passive-fill);
+  opacity: var(--trim-passive-fill-opacity);
+}
+
+.timeline-track__trimmed-left,
+.timeline-track__trimmed-right {
+  position: absolute;
+  /* Extend just past the track rail so the hatch reads as "this part
+     is cut" rather than "this part is thin". */
+  top: calc(-1 * var(--trim-muted-overshoot));
+  bottom: calc(-1 * var(--trim-muted-overshoot));
+  background:
+    /* Dark veil layered on top so the hatch feels darker than the rail. */
+    linear-gradient(var(--trim-muted-veil), var(--trim-muted-veil)),
+    repeating-linear-gradient(
+      45deg,
+      var(--trim-muted-stripe) 0 var(--trim-muted-stripe-width),
+      transparent var(--trim-muted-stripe-width) var(--trim-muted-stripe-period)
+    );
+  pointer-events: none;
+  border-radius: var(--trim-muted-radius);
+  /* Crisp inner outline so the edge between kept + trimmed is legible
+     even at 1 px gaps. */
+  box-shadow: inset 0 0 0 1px var(--trim-muted-outline);
+}
+
+.timeline-track__kept {
+  position: absolute;
+  /* Extend slightly above/below the track rail so the band reads as
+     a container the rail sits INSIDE, not a stripe painted on top. */
+  top: calc(-1 * var(--trim-selection-overshoot));
+  bottom: calc(-1 * var(--trim-selection-overshoot));
+  background: var(--trim-selection-bg);
+  border: 2px solid var(--trim-selection-border);
+  border-radius: var(--trim-selection-radius);
+  pointer-events: auto;
+  cursor: grab;
+  /* Soft outer glow so the selection pops against the dimmed fill
+     and hatched trimmed zones. */
+  box-shadow:
+    0 0 0 3px var(--trim-selection-glow-outer),
+    0 2px 8px var(--trim-selection-glow-drop);
+  z-index: 1;
+}
+
+.timeline-track__kept:active {
+  cursor: grabbing;
+}
+
+.timeline-track__trim-handle {
+  position: absolute;
+  top: 50%;
+  /* Hit-area. The visible end-cap appears at ::before. */
+  width: var(--trim-hit-area-width);
+  height: var(--trim-hit-area-height);
+  transform: translate(-50%, -50%);
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 3;
+}
+
+/* Thick end-cap — the visible handle. Taller than the track rail so
+   the cap reads as an attached grab point, and rounded with a
+   horizontal double-line grip so it clearly invites dragging. */
+.timeline-track__trim-handle::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--trim-cap-width);
+  height: var(--trim-cap-height);
+  transform: translate(-50%, -50%);
+  background: var(--trim-selection-border);
+  border: var(--trim-cap-border-width) solid var(--panel-bg);
+  border-radius: var(--trim-cap-radius);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+/* Grip — two horizontal rules stacked on the cap, drawn with a
+   background-image so a single ::after owns both marks. Horizontal
+   (not vertical) so the affordance reads as "pinch/grab" rather
+   than looking like the letter "I". Uses --panel-bg at reduced
+   alpha so the grip is visible on the accent cap without being
+   heavy. */
+.timeline-track__trim-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  background-image: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--panel-bg) 70%, transparent) 0 2px,
+    transparent 2px 4px,
+    color-mix(in srgb, var(--panel-bg) 70%, transparent) 4px 6px,
+    transparent 6px 8px
+  );
+  background-repeat: no-repeat;
+  pointer-events: none;
+  z-index: 4;
+  border-radius: 1px;
+}
+
+.timeline-track__trim-handle:hover::before,
+.timeline-track__trim-handle:focus-visible::before {
+  transform: translate(-50%, -50%) scale(1.08);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.28);
+}
+
+.timeline-track__trim-handle:focus-visible {
+  outline: none;
+}
+.timeline-track__trim-handle:focus-visible::before {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--trim-selection-border) 40%, transparent),
+    0 4px 10px rgba(0, 0, 0, 0.28);
+}
+
+.timeline-track__trim-handle:active::before {
+  transform: translate(-50%, -50%) scale(0.98);
+}
+
+/* Playhead marker in trim mode — smaller + hollow so it does not
+   compete visually with the end-caps. */
+.timeline-track__trim-playhead {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  transform: translate(-50%, -50%);
+  border: 2px solid var(--color-text);
+  border-radius: 50%;
+  background: var(--panel-bg);
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0.7;
+}
+

@@ -260,6 +260,157 @@ interface TimelineTransferDialogProps {
    *  calls the shared `recordAge13PlusAcceptance` helper) then
    *  re-attempts the publish. */
   onAgeConfirmationAck: () => void;
+
+  // ── Trim mode (Capsule Too Large) ──
+  /** When non-null, the Share panel renders the trim-mode copy and
+   *  action set instead of the plain signed-in Publish branch. */
+  shareTrim: TrimDialogState | null;
+  /** True while a prepare is in flight at publish-click time. Drives
+   *  the "Preparing…" label and the tab-switch disable rule; also
+   *  controls which "measuring" copy the status row renders. */
+  shareMeasuring: boolean;
+  onResetShareTrim: () => void;
+  onConfirmShareTrim: () => void;
+  /** Dedicated entry for the "Nothing fits" Download Capsule action.
+   *  Distinct from onConfirmDownload because that one closes over
+   *  downloadKind — a setDownloadKind('capsule')-then-onConfirmDownload
+   *  sequence would race React's async batching. */
+  onDownloadCapsuleFromShareFallback: () => void;
+  /** Error surfaced from the Nothing-Fits Download Capsule action.
+   *  Rendered inside the Share trim branch so the user sees actionable
+   *  feedback without switching tabs. Null when no error. */
+  shareFallbackDownloadError: string | null;
+}
+
+export interface TrimDialogState {
+  status: 'measuring' | 'within-target' | 'close-to-limit' | 'over-limit' | 'unavailable';
+  /** Differentiates the two sources of `status === 'measuring'`:
+   *    'search'  — initial entry-time chunked bisect. Copy:
+   *                "Finding the best fit…".
+   *    'recheck' — single prepare triggered by Reset (or any future
+   *                single-prepare trigger). Copy: "Checking selection…".
+   *  Only meaningful when `status === 'measuring'`. */
+  measuringKind: 'search' | 'recheck';
+  measuredBytes: number | null;
+  maxBytes: number | null;
+  maxSource: 'server' | 'client-fallback' | 'unknown';
+  originalActualBytes: number | null;
+  previewingOutsideKept: boolean;
+  snapshotStale: boolean;
+  publishDisabled: boolean;
+  /** True when the current selection differs from the cached default
+   *  suggested at trim entry — i.e., Reset would actually change
+   *  something. False when start/end indices already match the default
+   *  suggestion, so Reset is disabled to avoid a no-op clickable. */
+  canReset: boolean;
+  /** True when trim mode is in the Nothing-Fits fallback — the action
+   *  row replaces Publish Selected Range + Reset with Download Capsule. */
+  nothingFits: boolean;
+  message: string;
+}
+
+function formatMegabytes(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  return `${mb.toFixed(1)} MB`;
+}
+
+/** Status pill copy — short, scannable labels. Paired with a small
+ *  dot whose color encodes the state (redundant with text for
+ *  accessibility; color alone is not sufficient per WCAG). */
+const STATUS_PILL_LABEL: Record<'within-target' | 'close-to-limit' | 'over-limit', string> = {
+  'within-target': 'Within limit',
+  'close-to-limit': 'Close to limit',
+  'over-limit': 'Over limit',
+};
+
+/** Structured status readout for the trim dialog.
+ *
+ *  Why JSX instead of the previous single-string helper: the former
+ *  composite "Selected range: 19.0 MB / 20.0 MB (estimated against
+ *  local limit) — Within limit" crammed four signals onto one line
+ *  (current size, limit, trust tier, status verdict). Scanning it
+ *  required parsing the full sentence. This component splits the row
+ *  into scannable parts: a prominent size with a quiet denominator,
+ *  a color-coded status pill with text (never color-only), and an
+ *  optional caption for trust/remediation. */
+function TrimStatusRow({ trim, shareMeasuring }: { trim: TrimDialogState; shareMeasuring: boolean }) {
+  if (trim.status === 'measuring') {
+    // Three distinct copies for three intent signals, in priority order:
+    //   · shareMeasuring → publish-click Phase-1 prepare in flight.
+    //   · measuringKind === 'recheck' → Reset-triggered single prepare.
+    //     "Checking selection…" avoids implying a full re-search.
+    //   · measuringKind === 'search' → initial entry-time chunked bisect.
+    let copy: string;
+    if (shareMeasuring) copy = 'Preparing…';
+    else if (trim.measuringKind === 'recheck') copy = 'Checking selection…';
+    else copy = 'Finding the best fit…';
+    return (
+      <span className="timeline-transfer-dialog__trim-status-measuring">
+        {copy}
+      </span>
+    );
+  }
+  if (trim.status === 'unavailable') {
+    return (
+      <span className="timeline-transfer-dialog__trim-status-unavailable">
+        Couldn{'’'}t measure. Drag the handles to adjust.
+      </span>
+    );
+  }
+
+  const bytesForDisplay = trim.measuredBytes ?? trim.originalActualBytes;
+  const showDenom = trim.maxBytes !== null && trim.maxSource !== 'unknown';
+  const pillLabel = STATUS_PILL_LABEL[trim.status];
+  const statusClass = `timeline-transfer-dialog__trim-pill timeline-transfer-dialog__trim-pill--${trim.status}`;
+
+  // Only the actionable remediation caption is rendered. The former
+  // client-fallback "Local estimate — the server may enforce a slightly
+  // different limit" line was engineering noise — users don't care
+  // whether the limit came from the client or a server header; they
+  // care that Publish actually publishes. Deploy skew (server enforces
+  // a tighter cap) is handled by the 413 fallback, which re-enters
+  // trim mode with the server-reported number. If the denominator we
+  // show turns out to be slightly wrong, the worst case is one extra
+  // trim cycle — not a silent failure.
+  const caption: React.ReactNode = trim.status === 'over-limit'
+    ? 'Reduce your selection to publish.'
+    : null;
+
+  return (
+    <>
+      <span className="timeline-transfer-dialog__trim-size-row">
+        {bytesForDisplay !== null ? (
+          <span className="timeline-transfer-dialog__trim-size">
+            {formatMegabytes(bytesForDisplay)}
+          </span>
+        ) : (
+          // Neither a measurement nor the originating 413 provided a
+          // byte count. Rendering a bare em-dash would be announced as
+          // nothing (or literally "—") by assistive tech; an explicit
+          // label makes the state audible AND visible without claiming
+          // a number we don't have.
+          <span
+            className="timeline-transfer-dialog__trim-size timeline-transfer-dialog__trim-size--unknown"
+            aria-label="Size unknown"
+          >
+            Size unknown
+          </span>
+        )}
+        {showDenom && (
+          <span className="timeline-transfer-dialog__trim-denom">
+            of {formatMegabytes(trim.maxBytes!)}
+          </span>
+        )}
+        <span className={statusClass}>
+          <span className="timeline-transfer-dialog__trim-pill-dot" aria-hidden="true" />
+          {pillLabel}
+        </span>
+      </span>
+      {caption && (
+        <span className="timeline-transfer-dialog__trim-caption">{caption}</span>
+      )}
+    </>
+  );
 }
 
 /** Human-readable provider label used by the popup-blocked sub-panel
@@ -312,6 +463,8 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
     shareSubmitting, shareError, authNote, shareUrl, shareCode, shareWarnings,
     authStatus, onSignIn, popupBlocked, onRetryPopup, onSignInSameTab, onDismissPopupBlocked,
     ageConfirmationRequired, onAgeConfirmationAck,
+    shareTrim, shareMeasuring, onResetShareTrim, onConfirmShareTrim,
+    onDownloadCapsuleFromShareFallback, shareFallbackDownloadError,
   } = props;
   const [retryingAuth, setRetryingAuth] = useState(false);
   // Sign-in attempt status surfaced inline below the provider buttons
@@ -330,6 +483,122 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
   // While busy: close/cancel/tab-switch are disabled (Escape is also ignored)
   // to prevent hiding an in-flight publish/download behind a closed dialog.
   const transferBusy = downloadSubmitting || shareSubmitting;
+  // Tab switching is ALSO disabled during the trim-mode prepare phase,
+  // but Cancel/Escape/backdrop stay enabled (the user can abort
+  // measurement). See §10 tab-switch behavior in the plan.
+  const tabSwitchBlocked = transferBusy || shareMeasuring;
+
+  // Trim mode is LOAD-BEARING non-modal. The plan ("use the existing
+  // timeline surface, do not create a second trim timeline inside the
+  // modal") requires users to reach the trim handles that live on the
+  // main TimelineBar — outside this dialog tree. A full-screen
+  // backdrop + aria-modal=true + focus trap would silently steal
+  // pointer events and keyboard focus from those handles.
+  //
+  // When shareTrim is active:
+  //   · no backdrop is rendered (timeline stays interactable)
+  //   · aria-modal is false, role="dialog" remains (a non-modal
+  //     accessible dialog is valid per ARIA 1.2)
+  //   · focus trap is disabled (Tab flows naturally to the handles)
+  //   · the card is repositioned as a floating panel above the
+  //     timeline via the --trim-floating class variant
+  //
+  // All other dialog branches (Download, signed-out auth, success,
+  // age-confirmation, unverified, loading) remain modal because they
+  // need the user's full attention and do not depend on the timeline.
+  const isTrimMode = shareTrim !== null;
+
+  // Compute the vertical translate offset that moves the dialog from
+  // the viewport center (its default resting position) to a point
+  // JUST ABOVE the Lab's bottom-region (timeline + dock). Driving the
+  // position via a `translateY` delta (instead of swapping `top: 50%`
+  // for `top: auto; bottom: X`) lets the card glide smoothly between
+  // the two states — the CSS `transition: transform` on the card
+  // animates between `translate(-50%, -50%)` and
+  // `translate(-50%, calc(-50% + Ypx))`.
+  //
+  // When `isTrimMode` is false (dialog is centered), the offset is 0
+  // and the transition naturally animates the card back to center.
+  //
+  // `dialogHeight` is re-read from the live card so the offset stays
+  // correct when content swaps between Share-signed-in, trim, and
+  // share-success branches.
+  const [dialogTranslateY, setDialogTranslateY] = useState(0);
+  const [trimPanelAvailableHeightPx, setTrimPanelAvailableHeightPx] = useState<number | null>(null);
+  useEffect(() => {
+    if (!open) {
+      setDialogTranslateY(0);
+      setTrimPanelAvailableHeightPx(null);
+      return;
+    }
+    if (!isTrimMode) {
+      // Dialog stays centered: offset 0 triggers the return-to-center
+      // transition whenever we leave trim mode with the dialog still
+      // open (e.g. publish succeeded and the success branch took over).
+      setDialogTranslateY(0);
+      setTrimPanelAvailableHeightPx(null);
+      return;
+    }
+    let cancelled = false;
+    const GAP_ABOVE_BOTTOM_REGION = 16;
+    const VIEWPORT_TOP_SAFETY = 16;
+    const measure = () => {
+      if (cancelled) return;
+      // Prefer `.bottom-region` (the whole bottom wrapper) so the
+      // panel clears everything inside it — timeline shell, dock,
+      // safe-area padding. Fall back to `.timeline-shell` for hosts
+      // that mount TimelineBar outside a bottom-region.
+      const anchor =
+        document.querySelector('.bottom-region') as HTMLElement | null
+        ?? document.querySelector('.timeline-shell') as HTMLElement | null;
+      const card = dialogRef.current;
+      if (!anchor || !card) return;
+      const anchorRect = anchor.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+      const viewportH = window.innerHeight;
+      // Target center-Y of the card: its bottom edge lands
+      // GAP_ABOVE_BOTTOM_REGION above the anchor's top. The target
+      // can be ABOVE or BELOW the viewport's vertical midpoint
+      // depending on how tall the card is and where the bottom-
+      // region sits — we must allow both directions.
+      const viewportCenterY = viewportH / 2;
+      const targetCenterY = anchorRect.top - GAP_ABOVE_BOTTOM_REGION - cardRect.height / 2;
+      const rawOffset = targetCenterY - viewportCenterY;
+      // Safety clamp ONLY prevents the card's top edge from going
+      // above the viewport top (would be unreachable with a normal
+      // scrollbar in a modal context). No artificial sign restriction.
+      const cardTopIfApplied = viewportCenterY + rawOffset - cardRect.height / 2;
+      const clampedOffset = cardTopIfApplied < VIEWPORT_TOP_SAFETY
+        ? VIEWPORT_TOP_SAFETY - (viewportCenterY - cardRect.height / 2)
+        : rawOffset;
+      setDialogTranslateY(clampedOffset);
+      // Also publish the available height so the card's max-height
+      // cap respects the usable area between viewport-top and the
+      // bottom-region. If the card is naturally shorter this has
+      // no effect; if it would overflow, `overflow: auto` kicks in.
+      const availableH = Math.max(
+        100,
+        anchorRect.top - GAP_ABOVE_BOTTOM_REGION - VIEWPORT_TOP_SAFETY,
+      );
+      setTrimPanelAvailableHeightPx(availableH);
+    };
+    // Measure synchronously on entry so the first paint in trim mode
+    // already has the target offset — the transition then animates
+    // from translateY=0 (previous state) to the computed value.
+    measure();
+    const ro = new ResizeObserver(measure);
+    const anchor =
+      document.querySelector('.bottom-region')
+      ?? document.querySelector('.timeline-shell');
+    if (anchor) ro.observe(anchor);
+    if (dialogRef.current) ro.observe(dialogRef.current);
+    window.addEventListener('resize', measure);
+    return () => {
+      cancelled = true;
+      ro.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [isTrimMode, open]);
 
   // Cancel only allowed when not busy; wire through a guarded handler.
   const handleCancel = useCallback(() => {
@@ -338,9 +607,9 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
   }, [transferBusy, onCancel]);
 
   const handleTabChange = useCallback((next: TransferTab) => {
-    if (transferBusy) return;
+    if (tabSwitchBlocked) return;
     onTabChange(next);
-  }, [transferBusy, onTabChange]);
+  }, [tabSwitchBlocked, onTabChange]);
 
   // Focus management on open transition
   useEffect(() => {
@@ -358,6 +627,12 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
 
   // Escape + focus trap. Escape is suppressed while busy so an in-flight
   // submission cannot be hidden by a stray keystroke.
+  //
+  // Tab-trap is suppressed in trim mode because the interactive trim
+  // handles live on the main TimelineBar, outside this dialog's
+  // subtree. Trapping focus here would make them unreachable via
+  // keyboard — a WCAG 2.1.1 (Keyboard) regression. Escape still
+  // closes the dialog.
   useEffect(() => {
     if (!open) return;
     const handleKey = (e: KeyboardEvent) => {
@@ -366,7 +641,7 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
         e.preventDefault();
         if (!transferBusy) onCancel();
       }
-      if (e.key === 'Tab' && dialogRef.current) {
+      if (!isTrimMode && e.key === 'Tab' && dialogRef.current) {
         const focusable = dialogRef.current.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]');
         if (focusable.length === 0) return;
         const first = focusable[0];
@@ -380,7 +655,7 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
     };
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
-  }, [open, onCancel, transferBusy]);
+  }, [open, onCancel, transferBusy, isTrimMode]);
 
   const handleCopy = useCallback(async () => {
     if (!shareUrl) return;
@@ -402,15 +677,39 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
   // Backdrop click only cancels when we are not mid-submission.
   const handleBackdropClick = transferBusy ? undefined : onCancel;
 
+  const TRIM_DESCRIPTION_ID = 'timeline-transfer-dialog-trim-description';
+
   return createPortal(
     <>
-      <div className="timeline-dialog-backdrop" onClick={handleBackdropClick} />
+      {/* Backdrop is omitted in trim mode so the user can still reach
+          the trim handles on the main timeline surface. */}
+      {!isTrimMode && (
+        <div className="timeline-dialog-backdrop" onClick={handleBackdropClick} />
+      )}
       <div
-        className="timeline-modal-card timeline-transfer-dialog"
+        className={
+          `timeline-modal-card timeline-transfer-dialog${
+            isTrimMode ? ' timeline-transfer-dialog--trim-floating' : ''
+          }`
+        }
         role="dialog"
-        aria-modal="true"
-        aria-label="Transfer history"
+        aria-modal={isTrimMode ? false : true}
+        aria-label={isTrimMode ? 'Capsule trim controls' : 'Transfer history'}
+        aria-describedby={isTrimMode ? TRIM_DESCRIPTION_ID : undefined}
         aria-busy={transferBusy}
+        // Custom properties drive the transform-based enter/exit
+        // animation. `--dialog-translate-y` is 0 when the dialog is
+        // centered and a negative pixel offset when docked above the
+        // timeline; the CSS transition on `transform` animates the
+        // card smoothly between the two resting positions.
+        // `--trim-panel-available-height` caps the card's max-height
+        // to the usable space above the bottom-region.
+        style={{
+          ['--dialog-translate-y' as const]: `${dialogTranslateY}px`,
+          ...(isTrimMode && trimPanelAvailableHeightPx !== null
+            ? { ['--trim-panel-available-height' as const]: `${trimPanelAvailableHeightPx}px` }
+            : {}),
+        } as React.CSSProperties}
         ref={dialogRef}
       >
         {/* No visible heading — the Download / Share tab row is
@@ -426,7 +725,7 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
               aria-selected={tab === 'download'}
               className={`timeline-transfer-dialog__tab${tab === 'download' ? ' timeline-transfer-dialog__tab--active' : ''}`}
               onClick={() => handleTabChange('download')}
-              disabled={transferBusy && tab !== 'download'}
+              disabled={tabSwitchBlocked && tab !== 'download'}
             >
               Download
             </button>
@@ -435,7 +734,7 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
               aria-selected={tab === 'share'}
               className={`timeline-transfer-dialog__tab${tab === 'share' ? ' timeline-transfer-dialog__tab--active' : ''}`}
               onClick={() => handleTabChange('share')}
-              disabled={transferBusy && tab !== 'share'}
+              disabled={tabSwitchBlocked && tab !== 'share'}
             >
               Share
             </button>
@@ -755,6 +1054,121 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                   </button>
                 </ShareActions>
               </>
+            ) : shareTrim ? (
+              /* Capsule Too Large \u2014 trim mode. Renders inside the
+                 existing signed-in Share branch so the Transfer dialog
+                 and Share tab stay the single surface. */
+              <div
+                className="timeline-transfer-dialog__trim"
+                data-testid="transfer-share-trim"
+              >
+                <p
+                  id={TRIM_DESCRIPTION_ID}
+                  className="timeline-transfer-dialog__description"
+                >
+                  Too large to publish. Drag the green selection on the timeline below, or grab either end, to trim it under the limit.
+                </p>
+                {shareTrim.snapshotStale ? (
+                  <p
+                    className="timeline-transfer-dialog__error"
+                    role="status"
+                    aria-live="polite"
+                    data-testid="transfer-share-trim-stale"
+                  >
+                    The recording changed. Close this dialog and try again.
+                  </p>
+                ) : (
+                  <div
+                    className="timeline-transfer-dialog__trim-status"
+                    role="status"
+                    aria-live="polite"
+                    data-testid="transfer-share-trim-status"
+                  >
+                    <TrimStatusRow trim={shareTrim} shareMeasuring={shareMeasuring} />
+                  </div>
+                )}
+                {shareTrim.previewingOutsideKept && !shareTrim.snapshotStale && (
+                  <p
+                    className="timeline-transfer-dialog__preview-note"
+                    role="status"
+                    aria-live="polite"
+                    data-testid="transfer-share-trim-preview-note"
+                  >
+                    You{'\u2019'}re previewing a frame outside your selection. It won{'\u2019'}t be shared.
+                  </p>
+                )}
+                {shareTrim.nothingFits && (
+                  <p
+                    className="timeline-transfer-dialog__help"
+                    data-testid="transfer-share-trim-nothing-fits"
+                  >
+                    Even a single frame is over the limit. Simplify the scene or record a shorter clip \u2014 or download this capsule locally.
+                  </p>
+                )}
+                {shareError && <p className="timeline-transfer-dialog__error">{shareError}</p>}
+                {shareTrim.nothingFits && shareFallbackDownloadError && (
+                  <p
+                    className="timeline-transfer-dialog__error"
+                    role="status"
+                    aria-live="polite"
+                    data-testid="transfer-share-trim-fallback-error"
+                  >
+                    {shareFallbackDownloadError}
+                  </p>
+                )}
+                {shareTrim.nothingFits ? (
+                  <ShareActions onCancel={handleCancel} transferBusy={transferBusy}>
+                    <button
+                      className="timeline-transfer-dialog__confirm"
+                      onClick={onDownloadCapsuleFromShareFallback}
+                      disabled={transferBusy || downloadSubmitting}
+                      data-testid="transfer-share-trim-download"
+                    >
+                      {downloadSubmitting ? 'Saving\u2026' : 'Download capsule'}
+                    </button>
+                  </ShareActions>
+                ) : (
+                  <ShareActions
+                    onCancel={handleCancel}
+                    transferBusy={transferBusy}
+                    leadingLink={
+                      <button
+                        type="button"
+                        className="timeline-transfer-dialog__reset-link"
+                        onClick={onResetShareTrim}
+                        disabled={transferBusy || shareMeasuring || !shareTrim.canReset}
+                        aria-label={
+                          shareTrim.canReset
+                            ? 'Reset to the suggested trim (newest history that fits the publish limit)'
+                            : 'Already using the suggested selection'
+                        }
+                        data-testid="transfer-share-trim-reset"
+                      >
+                        Reset selection
+                      </button>
+                    }
+                  >
+                    <button
+                      className="timeline-transfer-dialog__confirm timeline-transfer-dialog__confirm--publish-trim"
+                      onClick={onConfirmShareTrim}
+                      disabled={
+                        transferBusy ||
+                        shareMeasuring ||
+                        shareTrim.publishDisabled ||
+                        shareTrim.snapshotStale
+                      }
+                      data-testid="transfer-share-trim-publish"
+                    >
+                      {(() => {
+                        // Priority: active POST > Phase-1 prepare > idle.
+                        if (shareSubmitting) return 'Publishing\u2026';
+                        if (shareMeasuring) return 'Preparing\u2026';
+                        return 'Publish';
+                      })()}
+                    </button>
+                  </ShareActions>
+                )}
+              </div>
             ) : (
               /* signed-in */
               <>

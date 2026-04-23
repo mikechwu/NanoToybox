@@ -100,7 +100,7 @@ This split is the main load-bearing decision in the frontend. It lets the test s
 
 Lab is the authoring surface. Users pick a structure from the library, place it on the canvas, drag and rotate to assemble a scene, run the simulation, record a timeline, and export. Every one of those actions touches the store, which renders the UI, and issues commands into the runtime, which mutates the scene and physics.
 
-The composition root is the top-level entry script under `lab/js/`. It wires a worker, a renderer, a store, and every feature runtime module together in a fixed boot order, then hands control to the per-frame pipeline. Each runtime subfolder owns one subsystem; a small set of top-level seams live at the runtime root on purpose (auth, scene, onboarding, UI bindings, publish-size heuristics).
+The composition root is the top-level entry script under `lab/js/` (`lab/js/main.ts`). It wires a worker, a renderer, a store, and every feature runtime module together in a fixed boot order, then hands control to the per-frame pipeline. Each runtime subfolder owns one subsystem; a small set of top-level seams live at the runtime root on purpose (auth, scene, onboarding, UI bindings, publish-size heuristics, prepared-capsule publisher).
 
 | Folder | Owns |
 |---|---|
@@ -113,7 +113,7 @@ The composition root is the top-level entry script under `lab/js/`. It wires a w
 | `lab/js/runtime/placement/` | Placement solver + camera framing |
 | `lab/js/runtime/timeline/` | Simulation timeline, recording orchestrator, context capture, atom identity, history export, restart-state adapter |
 | `lab/js/runtime/worker/` | Worker lifecycle, snapshot reconciler, reconciled steps |
-| `lab/js/runtime/` (root) | Top-level seams kept at root by design: auth-runtime, scene-runtime, onboarding, ui-bindings, publish-size |
+| `lab/js/runtime/` (root) | Top-level seams kept at root by design: auth-runtime, scene-runtime, onboarding, ui-bindings, publish-size, publish-capsule-artifacts (`PreparedCapsulePublisher` — shared prepare/publish seam used by both the publish button and the oversize trim-mode flow), build-capsule-artifact, physics-config-store-sync, publish-errors |
 | `lab/js/components/` | React UI: dock, settings sheet, structure chooser, status bar, review-locked controls |
 | `lab/js/components/timeline/` | Timeline UI family: TimelineBar, clear/export/transfer dialogs, format, hints, mode switch, performance, after-paint |
 | `lab/js/store/` | Zustand store + selectors |

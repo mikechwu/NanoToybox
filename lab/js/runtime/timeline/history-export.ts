@@ -307,3 +307,39 @@ function canonicalInteractionKey(s: TimelineInteractionState): string {
   return `${s.kind}:${s.atomIndex}:${s.target[0]},${s.target[1]},${s.target[2]}`;
 }
 
+// ── Capsule-publish frame-index slice ──
+//
+// Pure helper scoped to capsule publish/download artifacts. Frame indices
+// are the single source of truth — there is no parallel time-range helper
+// that must agree with it. Callers must pre-validate indices; the helper
+// itself throws on malformed input rather than silently returning an
+// empty slice.
+//
+// LOAD-BEARING ordering rule: slice MUST run on the snapshot BEFORE
+// `buildCapsuleHistoryFile` is invoked. The capsule builder's
+// `sparsifyInteractionTimeline` emits interaction events whose `frameId`
+// references the kept frames. Watch's importer rejects events whose
+// `frameId` is not present in the kept dense frames, so inverting the
+// order (build-then-slice) would orphan events.
+export function sliceExportSnapshotToCapsuleFrameRange(
+  snapshot: TimelineExportData,
+  range: { startFrameIndex: number; endFrameIndex: number },
+): TimelineExportData {
+  const { startFrameIndex, endFrameIndex } = range;
+  const n = snapshot.denseFrames.length;
+  if (!Number.isInteger(startFrameIndex) || !Number.isInteger(endFrameIndex)) {
+    throw new Error(`sliceExportSnapshotToCapsuleFrameRange: indices must be integers (start=${startFrameIndex}, end=${endFrameIndex})`);
+  }
+  if (startFrameIndex < 0 || endFrameIndex >= n || startFrameIndex > endFrameIndex) {
+    throw new Error(`sliceExportSnapshotToCapsuleFrameRange: invalid range [${startFrameIndex}, ${endFrameIndex}] for ${n} frames`);
+  }
+  return {
+    denseFrames: snapshot.denseFrames.slice(startFrameIndex, endFrameIndex + 1),
+    // Capsule builder does not read restart frames or checkpoints; emit
+    // empty arrays so the sliced snapshot is self-consistent for capsule
+    // export and callers can't accidentally pull pre-slice state.
+    restartFrames: [],
+    checkpoints: [],
+  };
+}
+

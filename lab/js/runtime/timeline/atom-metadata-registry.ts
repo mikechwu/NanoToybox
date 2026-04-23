@@ -53,23 +53,67 @@ export interface AtomMetadataRegistry {
   restore(snapshot: AtomMetadataSnapshot): void;
   /** Reset all state (new scene / teardown). */
   reset(): void;
+  /** Monotonic version of the capsule-relevant metadata inputs. Bumped
+   *  by `registerAppendedAtoms` (when entries added), `restore` (when
+   *  the restored snapshot differs in id-sorted content), and `reset`
+   *  (when the registry was non-empty). Never reset — reset() bumps
+   *  instead. Comparing in id-sorted order (the order the capsule
+   *  export reads via `getAtomTable`) so a `restore` with identical
+   *  content in a different insertion order does NOT bump. */
+  getMetadataVersion(): number;
 }
 
 export function createAtomMetadataRegistry(): AtomMetadataRegistry {
   const _entries = new Map<number, AtomMetadataEntry>();
+  // Monotonic counter: see getMetadataVersion() JSDoc. Bumped only on
+  // actual content changes, compared in id-sorted order (the order the
+  // capsule export reads via getAtomTable).
+  let _metadataVersion = 0;
+
+  function sameContent(next: AtomMetadataSnapshot): boolean {
+    if (next.length !== _entries.size) return false;
+    for (const entry of next) {
+      const existing = _entries.get(entry.id);
+      if (!existing) return false;
+      if (existing.element !== entry.element) return false;
+    }
+    return true;
+  }
 
   return {
     registerAppendedAtoms(ids, atoms, _source) {
       if (ids.length !== atoms.length) {
         throw new Error(`registerAppendedAtoms: ids.length (${ids.length}) !== atoms.length (${atoms.length})`);
       }
+      if (ids.length === 0) return; // no-op — do not bump
+      // Contract: this method is APPEND-ONLY. A duplicate id in the
+      // incoming batch, or an id that collides with an existing
+      // entry, means some caller has confused "stable ID" (monotonic
+      // across the session) with "slot index" (reusable across
+      // mutations). Silently overwriting would corrupt the identity
+      // tracker upstream and surface later as ghost atoms in export.
+      // Throw so the lifecycle bug shows up at its origin.
+      const incoming = new Set<number>();
       for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
         const element = atoms[i]?.element;
         if (!element) {
-          throw new Error(`registerAppendedAtoms: atom at index ${i} (id=${ids[i]}) has no element`);
+          throw new Error(`registerAppendedAtoms: atom at index ${i} (id=${id}) has no element`);
         }
-        _entries.set(ids[i], { id: ids[i], element });
+        if (incoming.has(id)) {
+          throw new Error(`registerAppendedAtoms: duplicate id ${id} within the same batch`);
+        }
+        incoming.add(id);
+        if (_entries.has(id)) {
+          throw new Error(`registerAppendedAtoms: id ${id} is already registered (append-only violation)`);
+        }
       }
+      // Only commit once every entry has passed validation — keeps
+      // the registry consistent on failure.
+      for (let i = 0; i < ids.length; i++) {
+        _entries.set(ids[i], { id: ids[i], element: atoms[i].element });
+      }
+      _metadataVersion++;
     },
 
     getAtomTable(): AtomMetadataEntry[] {
@@ -90,14 +134,25 @@ export function createAtomMetadataRegistry(): AtomMetadataRegistry {
     },
 
     restore(snapshot: AtomMetadataSnapshot): void {
+      // Skip the bump when the restored snapshot is structurally
+      // identical to the current entries in the id-keyed comparison the
+      // capsule export is sensitive to.
+      const unchanged = sameContent(snapshot);
       _entries.clear();
       for (const entry of snapshot) {
         _entries.set(entry.id, { id: entry.id, element: entry.element });
       }
+      if (!unchanged) _metadataVersion++;
     },
 
     reset(): void {
+      const hadEntries = _entries.size > 0;
       _entries.clear();
+      if (hadEntries) _metadataVersion++;
+    },
+
+    getMetadataVersion(): number {
+      return _metadataVersion;
     },
   };
 }

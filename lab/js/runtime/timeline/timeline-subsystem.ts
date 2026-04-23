@@ -35,6 +35,18 @@ import { createTimelineAtomIdentityTracker } from './timeline-atom-identity';
 import { createAtomMetadataRegistry } from './atom-metadata-registry';
 import { useAppStore } from '../../store/app-store';
 import type { PhysicsCheckpoint } from '../../../../src/types/interfaces';
+import type {
+  CapsuleFrameIndex,
+  CapsuleSelectionRange,
+  CapsuleSnapshotId,
+  PreparedCapsuleSummary,
+} from './capsule-publish-types';
+import type { BondedGroupAppearanceRuntime } from '../bonded-groups/bonded-group-appearance-runtime';
+// NOTE: any future runtime bond-policy edit path MUST own a
+// getPolicyVersion() counter and feed it into the combined snapshot
+// string tuple below. Today `buildExportBondPolicy()` is a pure
+// function over static BOND_DEFAULTS, so the policy slot is the
+// constant `0`.
 
 export type { RecordingMode } from './timeline-recording-policy';
 
@@ -72,6 +84,20 @@ export interface TimelineSubsystemDeps {
    *  `warnings` carries non-fatal server-reported issues (e.g. quota-accounting
    *  drift) that the UI should surface subtly without blocking the share. */
   publishCapsule?: () => Promise<{ shareCode: string; shareUrl: string; warnings?: string[] }>;
+  /** Bonded-group appearance runtime. Owner of appearanceVersion bumps
+   *  on color-assignment writes. Optional for back-compat with tests
+   *  that construct the subsystem with a minimal dep set; when absent,
+   *  the appearance slot in the capsule snapshot id is the constant
+   *  `0` and the post-rebuild cleanup falls back to the direct-setState
+   *  path (with a diagnostic warn). */
+  bondedGroupAppearance?: BondedGroupAppearanceRuntime;
+  /** Trim-mode publisher. When provided, the subsystem exposes
+   *  prepare/publish/cancel through the installed TimelineCallbacks so
+   *  TimelineBar can drive the two-phase submit. `main.ts` constructs
+   *  one publisher at boot and passes its three operations here. */
+  prepareCapsulePublish?: (range: CapsuleSelectionRange) => Promise<PreparedCapsuleSummary>;
+  publishPreparedCapsule?: (prepareId: string) => Promise<{ shareCode: string; shareUrl: string; warnings?: string[] }>;
+  cancelPreparedPublish?: (prepareId: string) => void;
 }
 
 /** High-level subsystem handle — main.ts should only use these methods. */
@@ -121,6 +147,14 @@ export interface TimelineSubsystem {
   markIdentityStale(): void;
   /** Check if atom identity may be stale (worker compaction without keep[] mapping). */
   isIdentityStale(): boolean;
+  /** Lightweight capsule frame index + combined snapshotId. Returns
+   *  null when capsule publish is not viable for this instant (no
+   *  export capability, identity stale, empty timeline). Used by the
+   *  TimelineBar trim-mode UI. */
+  getCapsuleFrameIndex(): CapsuleFrameIndex | null;
+  /** Combined capsule export input version. Read by the publisher
+   *  directly (bypassing React) during the pre-POST staleness recheck. */
+  getCapsuleExportInputVersion(): CapsuleSnapshotId;
 }
 
 export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSubsystem {
@@ -276,6 +310,14 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
   const STALE_EXPORT_STATUS = 'Export disabled: scene atom metadata is inconsistent.';
 
   function tryRebuildExportAtomState() {
+    // One try-block wraps BOTH the rebuild and the post-rebuild
+    // appearance cleanup. If the cleanup at the bottom of the try
+    // throws (e.g. a renderer goes missing between frames), the
+    // catch below resets the tracker + registry and re-sets
+    // identity-staleness — undoing the `clearIdentityStaleness` /
+    // `syncExportCapability` that ran earlier in the try. Net
+    // outcome on cleanup failure: registry stays clean, export
+    // capability is gated off, status text surfaces the reason.
     try {
       rebuildExportAtomState();
       clearIdentityStaleness();
@@ -287,8 +329,23 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
       const assignments = useAppStore.getState().bondedGroupColorAssignments;
       const clean = assignments.filter(a => a.atomIds.length > 0 && a.atomIds.every(id => id >= 0));
       if (clean.length !== assignments.length) {
-        useAppStore.setState({ bondedGroupColorAssignments: clean });
-        deps.syncAppearance?.();
+        // Route the cleanup through the appearance runtime so the
+        // capsule appearance-version counter bumps uniformly. A direct
+        // `useAppStore.setState({ bondedGroupColorAssignments: clean })`
+        // would bypass writeAssignments and strand any active trim
+        // session on a snapshotId that looks unchanged.
+        if (deps.bondedGroupAppearance) {
+          // `restoreAssignments` routes through the same
+          // `writeAssignments` bump point every other mutator uses,
+          // so the capsule appearance-version counter moves
+          // uniformly. The method name matches the "install a
+          // snapshotted list" intent.
+          deps.bondedGroupAppearance.restoreAssignments(clean);
+        } else {
+          console.warn('[timeline-subsystem] bondedGroupAppearance dep missing; falling back to direct setState (appearance version not bumped).');
+          useAppStore.setState({ bondedGroupColorAssignments: clean });
+          deps.syncAppearance?.();
+        }
       }
     } catch (err) {
       console.error('[timeline-subsystem] export atom state rebuild failed:', err);
@@ -312,6 +369,34 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
     policy.turnOff();
     resetRuntime();
     publishOffState();
+  }
+
+  // ── Capsule snapshot id composition ──
+  //
+  // Concatenate per-component monotonic counters into a string tuple
+  // (never sum, never hash — sums collide when resets happen, hashes
+  // collide on content, string equality is exact and cheap). The
+  // policy slot is the constant 0 in v1 — add a getPolicyVersion()
+  // counter if any runtime bond-policy edit path ships in the future.
+  function getCapsuleExportInputVersion(): CapsuleSnapshotId {
+    const frameV = timeline.getCapsuleSnapshotVersion();
+    const metaV = atomMetadataRegistry.getMetadataVersion();
+    const appearanceV = deps.bondedGroupAppearance?.getAppearanceVersion() ?? 0;
+    return `${frameV}:${metaV}:${appearanceV}:0`;
+  }
+
+  function getCapsuleFrameIndex(): CapsuleFrameIndex | null {
+    // Gate matches `buildExportArtifact('capsule')` in main.ts so the
+    // trim UI can never open when capsule publish would not be viable.
+    if (!currentExportCapability()?.capsule) return null;
+    if (_identityMayBeStale) return null;
+    const snapshot = timeline.getExportSnapshot();
+    if (snapshot.denseFrames.length === 0) return null;
+    const frames = snapshot.denseFrames.map((f) => ({ frameId: f.frameId, timePs: f.timePs }));
+    return {
+      snapshotId: getCapsuleExportInputVersion(),
+      frames,
+    };
   }
 
   return {
@@ -369,6 +454,16 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
         onResumeFromExport: () => { deps.resume(); },
         ...(deps.getExportEstimates ? { getExportEstimates: () => deps.getExportEstimates!() } : {}),
         ...(deps.publishCapsule ? { onPublishCapsule: () => deps.publishCapsule!() } : {}),
+        getCapsuleFrameIndex: () => getCapsuleFrameIndex(),
+        ...(deps.prepareCapsulePublish
+          ? { onPrepareCapsulePublish: (range: CapsuleSelectionRange) => deps.prepareCapsulePublish!(range) }
+          : {}),
+        ...(deps.publishPreparedCapsule
+          ? { onPublishPreparedCapsule: (prepareId: string) => deps.publishPreparedCapsule!(prepareId) }
+          : {}),
+        ...(deps.cancelPreparedPublish
+          ? { onCancelPreparedPublish: (prepareId: string) => deps.cancelPreparedPublish!(prepareId) }
+          : {}),
       }, 'ready', currentExportCapability());
     },
     getReviewBondedGroupComponents: (timePs) => timeline.getReviewBondedGroupComponents(timePs),
@@ -384,5 +479,7 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
     getTimelineExportSnapshot: () => timeline.getExportSnapshot(),
     markIdentityStale: () => setIdentityStale(),
     isIdentityStale: () => _identityMayBeStale,
+    getCapsuleFrameIndex,
+    getCapsuleExportInputVersion,
   };
 }
