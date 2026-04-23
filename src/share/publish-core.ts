@@ -24,7 +24,7 @@ import { validateCapsuleFile } from '../history/history-file-v1';
 import type { D1Database } from './d1-types';
 import type { AtomDojoPlaybackCapsuleFileV1 } from '../history/history-file-v1';
 import { generateShareCode } from './share-code';
-import type { ShareRecordStatus, PreviewStatus } from './share-record';
+import type { ShareRecordStatus, PreviewStatus, ShareMode } from './share-record';
 import {
   buildPreviewSceneFromCapsule,
   PreviewSceneBuildException,
@@ -55,7 +55,13 @@ import type { CapsulePreviewAtom3D, CapsulePreviewScene3D } from './capsule-prev
 
 export interface PublishInput {
   capsuleJson: string;
-  ownerUserId: string;
+  /** Null when `shareMode === 'guest'`; a string user id when 'account'.
+   *  The runtime invariant is enforced by {@link preparePublishRecord}
+   *  and mirrored by the DB CHECK constraint (migration 0011). */
+  ownerUserId: string | null;
+  shareMode: ShareMode;
+  /** ISO timestamp for guest rows; null for account rows. */
+  expiresAt: string | null;
   appVersion: string;
 }
 
@@ -88,7 +94,9 @@ export interface CapsuleShareMetadata {
 export interface PreparedPublishRecord {
   id: string;
   objectKey: string;
-  ownerUserId: string;
+  ownerUserId: string | null;
+  shareMode: ShareMode;
+  expiresAt: string | null;
   metadata: CapsuleShareMetadata;
   sha256: string;
   sizeBytes: number;
@@ -110,6 +118,14 @@ export type PersistedPublishRecord = PreparedPublishRecord & {
 export async function preparePublishRecord(
   input: PublishInput,
 ): Promise<PreparedPublishRecord> {
+  // Invariant mirrors the DB CHECK constraint (migration 0011).
+  if (input.shareMode === 'account' && input.ownerUserId == null) {
+    throw new PublishValidationError('shareMode=account requires ownerUserId');
+  }
+  if (input.shareMode === 'guest' && input.ownerUserId != null) {
+    throw new PublishValidationError('shareMode=guest requires ownerUserId=null');
+  }
+
   // Parse JSON
   let parsed: unknown;
   try {
@@ -168,6 +184,8 @@ export async function preparePublishRecord(
     id,
     objectKey,
     ownerUserId: input.ownerUserId,
+    shareMode: input.shareMode,
+    expiresAt: input.expiresAt,
     metadata,
     sha256,
     sizeBytes,
@@ -450,12 +468,14 @@ export async function persistRecord(
             size_bytes, frame_count, atom_count, max_atom_count, duration_ps,
             has_appearance, has_interaction, title,
             preview_status, preview_scene_v1,
+            share_mode, expires_at,
             created_at, uploaded_at, published_at
           ) VALUES (
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, ?, ?,
+            ?, ?,
             ?, ?,
             ?, ?, ?
           )`,
@@ -481,6 +501,8 @@ export async function persistRecord(
           m.title,
           'none' satisfies PreviewStatus,
           record.previewSceneV1Json,
+          record.shareMode,
+          record.expiresAt,
           now,
           now,
           now,

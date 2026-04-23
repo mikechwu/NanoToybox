@@ -58,11 +58,11 @@ python -m pytest tests/test_*.py -v
 
 | Doc | When to read |
 |---|---|
-| [architecture.md](architecture.md) | New engineers and maintainers — system mental model, Lab/Watch/shared/backend boundaries, key runtime flows |
+| [architecture.md](architecture.md) | New engineers and maintainers — system mental model, Lab/Watch/shared/backend boundaries, dual publish endpoints (account + guest), key runtime flows |
 | [viewer.md](viewer.md) | UI/UX contributors — Lab, Watch, and static Viewer behavior, Watch→Lab entry control, tooltip contract |
 | [physics.md](physics.md) | Anyone touching force calculation — Tersoff potential, integrator, units, validation |
-| [testing.md](testing.md) | Before every merge — test ladder, pass criteria, manual WebGL checks, Pages-dev E2E lane |
-| [operations.md](operations.md) | Deploying or on-call — backend runbook, endpoints, cron, privacy-request operator flow |
+| [testing.md](testing.md) | Before every merge — test ladder, pass criteria, manual WebGL checks, Pages-dev E2E lane, guest-publish + Turnstile + quota coverage |
+| [operations.md](operations.md) | Deploying or on-call — backend runbook, endpoints, cron (incl. guest-expires), Turnstile secret, guest-publish WAF rule, privacy-request operator flow |
 | [contributing.md](contributing.md) | Adding code — code style, architecture rules, extension points |
 | [decisions.md](decisions.md) | Why things are shaped this way — historical rationale |
 | [scaling-research.md](scaling-research.md) | Performance research — browser limits, collision benchmarks |

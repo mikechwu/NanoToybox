@@ -13,6 +13,10 @@
 
 import { create } from 'zustand';
 import { CONFIG, DEFAULT_THEME } from '../config';
+import type {
+  ShareResultAccount,
+  ShareResultGuest,
+} from '../../../src/share/share-result';
 
 export interface MoleculeMetadata {
   id: number;
@@ -80,7 +84,7 @@ export interface TimelineCallbacks {
   onPauseForExport?: () => boolean;
   onResumeFromExport?: () => void;
   getExportEstimates?: () => { capsule: string | null; full: string | null };
-  onPublishCapsule?: () => Promise<{ shareCode: string; shareUrl: string; warnings?: string[] }>;
+  onPublishCapsule?: () => Promise<ShareResultAccount>;
   /** Read the timeline's dense-frame projection + capsule snapshot id.
    *  Returns null when the capsule publish path is not viable
    *  (identity stale, capsule capability gated off, no frames). Used
@@ -104,7 +108,14 @@ export interface TimelineCallbacks {
    *  CapsuleSnapshotStaleError (on pre-POST snapshot recheck). */
   onPublishPreparedCapsule?: (
     prepareId: string,
-  ) => Promise<{ shareCode: string; shareUrl: string; warnings?: string[] }>;
+  ) => Promise<ShareResultAccount>;
+  /** Anonymous Quick Share publish — POST /api/capsules/guest-publish.
+   *  Runtime callback only; returns a `ShareResultGuest` so the
+   *  TimelineBar can branch its success UI on `result.mode`.
+   *  TimelineBar reads the Turnstile token from the dialog-owned
+   *  controller and passes it in; a guest publish without a live token
+   *  must never be attempted. */
+  onConfirmGuestShare?: (turnstileToken: string) => Promise<ShareResultGuest>;
   /** Evict the cached JSON for this prepareId. Idempotent. Must be
    *  called on Cancel, Reset, dialog close, snapshot invalidation, and
    *  after any publish attempt completes. */
@@ -117,6 +128,17 @@ export interface AuthSessionState {
   userId: string;
   /** Display name from the identity provider; may be null. */
   displayName: string | null;
+}
+
+/** Public, non-sensitive config surfaced by the session-endpoint bridge.
+ *  Guests publish UI keys off `guestPublish.enabled` + a non-null
+ *  `guestPublish.turnstileSiteKey` together; either falsy → hide the
+ *  Quick Share block. */
+export interface PublicConfig {
+  guestPublish: {
+    enabled: boolean;
+    turnstileSiteKey: string | null;
+  };
 }
 
 /** Discriminator for the Lab-side auth-UX state machine.
@@ -482,6 +504,16 @@ export interface AppStore {
   authSignInAttempt: AuthSignInAttempt | null;
   setAuthSignInAttempt: (next: AuthSignInAttempt | null) => void;
 
+  /** Non-sensitive config delivered by the session endpoint. Populated
+   *  on every successful /api/auth/session response. Guest publish UI
+   *  renders only when `guestPublish.enabled === true` AND
+   *  `guestPublish.turnstileSiteKey !== null`. Initial value is the
+   *  disabled variant so the Quick Share block stays hidden until the
+   *  first hydrate. See `lab/js/runtime/auth-runtime.ts` for the
+   *  wire contract. */
+  publicConfig: PublicConfig;
+  setPublicConfig: (config: PublicConfig) => void;
+
   /** One-shot resume-publish trigger.
    *
    *  Producer: main.ts boot, after a successful OAuth round-trip with a
@@ -648,6 +680,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   auth: { status: 'loading', session: null },
   authPopupBlocked: null,
   authSignInAttempt: null,
+  publicConfig: { guestPublish: { enabled: false, turnstileSiteKey: null } },
   shareTabOpenRequested: false,
   bondedGroupCallbacks: null,
   bondedGroupColorAssignments: [],
@@ -796,6 +829,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setAuthCallbacks: (cbs) => set({ authCallbacks: cbs }),
   setAuthPopupBlocked: (pending) => set({ authPopupBlocked: pending }),
   setAuthSignInAttempt: (next) => set({ authSignInAttempt: next }),
+  setPublicConfig: (config) => set({ publicConfig: config }),
   requestShareTabOpen: () => set({ shareTabOpenRequested: true }),
   consumeShareTabOpen: () => {
     const pending = get().shareTabOpenRequested;

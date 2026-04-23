@@ -159,6 +159,45 @@ function formatShareWarning(codes: readonly string[]): string {
   return `Share created. Note: ${codes.join(', ')}`;
 }
 
+/** Format a future ISO timestamp as a short relative phrase. Uses the
+ *  native Intl.RelativeTimeFormat when available (every modern browser)
+ *  and falls back to a terse English phrase otherwise.
+ *
+ *  The chip layer pairs this with the absolute timestamp in a `title`
+ *  attribute + a side-labeled `<span class="…__expiry-chip-abs">` so
+ *  users who prefer the concrete date are never more than a hover away.
+ *
+ *  "Just now" is surfaced for the narrow window immediately after
+ *  publish where the chip briefly renders before any rounding kicks in.
+ *  Negative deltas (clock drift between client + server > server expiry)
+ *  render as "moments ago" rather than leaking a nonsensical "-1h". */
+function formatRelativeFromNow(iso: string): string {
+  const target = new Date(iso).getTime();
+  if (!Number.isFinite(target)) return iso;
+  const diffMs = target - Date.now();
+  const absMs = Math.abs(diffMs);
+  if (absMs < 45 * 1000) return diffMs < 0 ? 'moments ago' : 'in moments';
+
+  const rtf =
+    typeof Intl !== 'undefined' && typeof Intl.RelativeTimeFormat === 'function'
+      ? new Intl.RelativeTimeFormat(undefined, { numeric: 'auto', style: 'long' })
+      : null;
+
+  const ranges: Array<{ unit: Intl.RelativeTimeFormatUnit; ms: number }> = [
+    { unit: 'day', ms: 86_400_000 },
+    { unit: 'hour', ms: 3_600_000 },
+    { unit: 'minute', ms: 60_000 },
+  ];
+  for (const { unit, ms } of ranges) {
+    if (absMs >= ms) {
+      const value = Math.round(diffMs / ms);
+      if (rtf) return rtf.format(value, unit);
+      return value >= 0 ? `in ${value} ${unit}${value === 1 ? '' : 's'}` : `${-value} ${unit}${-value === 1 ? '' : 's'} ago`;
+    }
+  }
+  return diffMs < 0 ? 'moments ago' : 'in moments';
+}
+
 function EstimateSlot({ value }: { value: EstimateValue }) {
   if (value === undefined) {
     return <span className="timeline-transfer-dialog__estimate timeline-transfer-dialog__estimate--muted" aria-live="polite">Estimating…</span>;
@@ -280,6 +319,29 @@ interface TimelineTransferDialogProps {
    *  Rendered inside the Share trim branch so the user sees actionable
    *  feedback without switching tabs. Null when no error. */
   shareFallbackDownloadError: string | null;
+
+  // ── Guest Quick Share (§Transfer Dialog Changes) ──────────────
+  /** Runtime-config descriptor from the session endpoint. Quick Share
+   *  renders ONLY when `enabled === true` AND `turnstileSiteKey` is
+   *  non-null. */
+  guestPublishConfig: {
+    enabled: boolean;
+    turnstileSiteKey: string | null;
+  };
+  /** Mutable ref that the dialog populates with a controller once the
+   *  Turnstile widget mounts. TimelineBar's submit handler reads the
+   *  current token and calls reset() on verification failure. */
+  guestTurnstileControllerRef: React.MutableRefObject<
+    import('./TimelineBar').GuestTurnstileController | null
+  >;
+  /** Host invokes the guest share flow (reads the live Turnstile token
+   *  from the controller, awaits the store callback, sets shareResult). */
+  onSubmitGuestShare: () => void;
+  /** Structured share result, including `mode` for UI branching. The
+   *  existing `shareUrl`/`shareCode`/`shareWarnings` props are kept as
+   *  a compatibility view; `shareResult` is authoritative and carries
+   *  `expiresAt` for guest mode. */
+  shareResult: import('../../../../src/share/share-result').ShareResult | null;
 }
 
 export interface TrimDialogState {
@@ -465,6 +527,8 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
     ageConfirmationRequired, onAgeConfirmationAck,
     shareTrim, shareMeasuring, onResetShareTrim, onConfirmShareTrim,
     onDownloadCapsuleFromShareFallback, shareFallbackDownloadError,
+    guestPublishConfig, guestTurnstileControllerRef, onSubmitGuestShare,
+    shareResult,
   } = props;
   const [retryingAuth, setRetryingAuth] = useState(false);
   // Sign-in attempt status surfaced inline below the provider buttons
@@ -664,7 +728,18 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard may be unavailable (permissions, insecure context) — ignore.
+      // Clipboard API unavailable (insecure context, permissions-blocked
+      // iframe, some mobile webviews). Fall back to auto-selecting the
+      // URL input so the user can Ctrl/Cmd+C manually. Previously this
+      // branch was silent — the user would click Copy, see nothing
+      // change, and have no path forward (audit H2).
+      const input = document.getElementById('transfer-share-url-input') as HTMLInputElement | null;
+      if (input) {
+        try {
+          input.focus();
+          input.select();
+        } catch { /* best-effort */ }
+      }
     }
   }, [shareUrl]);
 
@@ -743,7 +818,20 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
 
         {/* Download panel — only rendered when tab is download AND download is available */}
         {tab === 'download' && downloadTabAvailable && (
+          /* Download panel \u2014 refined 2026-04-23 v5 to share language
+           *  with the signed-out Share panel:
+           *    - opening lede (one-line orientation)
+           *    - radio-cards unchanged in semantics but reused with
+           *      the same visual weight as the Quick Share tier card
+           *    - primary action = full-width stadium-shape pill,
+           *      matching `Continue as Guest` / provider buttons
+           *    - dismissal = centered text-link, no border-top bar
+           *  The goal is one coherent dialog, not two differently-
+           *  styled tabs glued under a shared header. */
           <div role="tabpanel" aria-label="Download">
+            <p className="timeline-transfer-dialog__description timeline-transfer-dialog__lede">
+              Pick what to save — both replay in Watch.
+            </p>
             <div className="timeline-transfer-dialog__options" role="radiogroup" aria-label="Download format">
               <label className={`timeline-transfer-dialog__option${!availableKinds.capsule ? ' timeline-transfer-dialog__option--disabled' : ''}`}>
                 <input
@@ -781,20 +869,46 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
               </label>
             </div>
             {downloadError && <p className="timeline-transfer-dialog__error">{downloadError}</p>}
-            <div className="timeline-transfer-dialog__actions">
+            <button
+              className="timeline-transfer-dialog__confirm timeline-transfer-dialog__confirm--primary-pill"
+              onClick={onConfirmDownload}
+              disabled={transferBusy || !downloadConfirmEnabled}
+              data-testid="transfer-download-confirm"
+            >
+              {downloadSubmitting ? 'Downloading\u2026' : 'Download'}
+              {!downloadSubmitting && (
+                <svg
+                  className="timeline-transfer-dialog__confirm-arrow"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <line x1="12" y1="4" x2="12" y2="17" />
+                  <polyline points="6,11 12,17 18,11" />
+                </svg>
+              )}
+            </button>
+            <div className="timeline-transfer-dialog__minor-actions">
+              {/* Canonical Cancel affordance — byte-for-byte identical
+               *  class set, wording, and wrapper as the signed-out
+               *  Share panel's Cancel (see below). The `__cancel`
+               *  class carries no styling of its own (styling lives
+               *  on `__text-dismiss`); it's a back-compat selector
+               *  hook for existing lifecycle tests that reach the
+               *  dismiss via `document.querySelector('.__cancel')`. */}
               <button
-                className="timeline-transfer-dialog__cancel"
+                type="button"
+                className="timeline-transfer-dialog__text-dismiss timeline-transfer-dialog__cancel"
                 onClick={handleCancel}
                 disabled={transferBusy}
               >
                 Cancel
-              </button>
-              <button
-                className="timeline-transfer-dialog__confirm"
-                onClick={onConfirmDownload}
-                disabled={transferBusy || !downloadConfirmEnabled}
-              >
-                {downloadSubmitting ? 'Downloading\u2026' : 'Download'}
               </button>
             </div>
           </div>
@@ -812,51 +926,114 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
         {tab === 'share' && shareTabAvailable && (
           <div role="tabpanel" aria-label="Share">
             {shareSuccess ? (
+              /* Success state (redesign 2026-04-23):
+               *
+               *   ✓ Shared
+               *   ┌─────────────────────────────────────┐
+               *   │  <domain>/c/<code>                  │
+               *   │  [ Copy link ]  ↗ Open in Watch     │
+               *   └─────────────────────────────────────┘
+               *   ●  EXPIRES · in 2 days                (guest only)
+               *   ↗ Manage uploads     [Close]          (account only)
+               *
+               * Design intent:
+               *   - One unified "link card" replaces the three disjoint
+               *     rows (url input / watch button / code badge) and
+               *     removes the duplicated code that appeared both
+               *     inside the URL and as a separate badge.
+               *   - `Copy link` is the visual primary action; Open in
+               *     Watch is an inline tertiary link. 80 % of share
+               *     moments want the clipboard, not a self-preview.
+               *   - Guest-success state: expiry chip is the terminal
+               *     element. No upsell footer — that was an explicit
+               *     product decision (2026-04-23 v3), not an oversight.
+               *     The account path was already surfaced in the
+               *     pre-publish signed-out panel; re-offering it after
+               *     publish was redundant noise.
+               *   - Account-success state: Manage uploads inline-link
+               *     + Close text link share a one-line footer row; no
+               *     bordered bottom action bar. */
               <div className="timeline-transfer-dialog__success">
-                <div className="timeline-transfer-dialog__url-row">
+                <div className="timeline-transfer-dialog__success-header">
+                  <span
+                    className="timeline-transfer-dialog__success-check"
+                    aria-hidden="true"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="5,12 10,17 19,7" />
+                    </svg>
+                  </span>
+                  <span className="timeline-transfer-dialog__success-label">Shared</span>
+                </div>
+
+                <div
+                  className="timeline-transfer-dialog__link-card"
+                  data-testid="transfer-link-card"
+                >
+                  <label
+                    className="timeline-transfer-dialog__link-card-label"
+                    htmlFor="transfer-share-url-input"
+                  >
+                    Share link
+                  </label>
+                  {/* Retain a plain <input> so users can still
+                   *  Cmd+A / Ctrl+A select-all, but strip the form-chrome
+                   *  styling that falsely implied it was editable. */}
                   <input
-                    className="timeline-transfer-dialog__url-input"
+                    id="transfer-share-url-input"
+                    /* `__url-input` is retained as an alias class for
+                     *  back-compat with existing test selectors +
+                     *  external E2E harnesses. The new
+                     *  `__link-card-url` owns the actual styling. */
+                    className="timeline-transfer-dialog__link-card-url timeline-transfer-dialog__url-input"
                     type="text"
                     value={shareUrl}
                     readOnly
                     onFocus={(e) => e.target.select()}
                     aria-label="Share link"
                   />
-                  <button
-                    className="timeline-transfer-dialog__copy"
-                    onClick={handleCopy}
-                    title="Copy link to clipboard"
-                  >
-                    {/* Clipboard icon */}
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                    </svg>
-                    <span>{copied ? 'Copied' : 'Copy'}</span>
-                  </button>
-                </div>
-                {shareCode && (
-                  <div className="timeline-transfer-dialog__share-actions-row">
-                    <a
-                      className="timeline-transfer-dialog__watch-link"
-                      href={`/watch/?c=${shareCode}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      data-testid="transfer-open-in-watch"
-                      aria-label="Open in Watch (opens in new tab)"
+
+                  <div className="timeline-transfer-dialog__link-card-actions">
+                    <button
+                      className="timeline-transfer-dialog__copy-primary"
+                      onClick={handleCopy}
+                      data-copied={copied ? 'true' : undefined}
+                      title="Copy link to clipboard"
                     >
-                      {/* Play-circle icon */}
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <circle cx="12" cy="12" r="10" />
-                        <polygon points="10,8 16,12 10,16" fill="currentColor" stroke="none" />
-                      </svg>
-                      <span>Open in Watch</span>
-                    </a>
-                    <span className="timeline-transfer-dialog__code-badge">
-                      {shareCode}
-                    </span>
+                      <span className="timeline-transfer-dialog__copy-icon" aria-hidden="true">
+                        {copied ? (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="5,12 10,17 19,7" />
+                          </svg>
+                        ) : (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                          </svg>
+                        )}
+                      </span>
+                      <span>{copied ? 'Copied to clipboard' : 'Copy link'}</span>
+                    </button>
+
+                    {shareCode && (
+                      <a
+                        className="timeline-transfer-dialog__open-inline"
+                        href={`/watch/?c=${shareCode}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        data-testid="transfer-open-in-watch"
+                        aria-label="Open in Watch (opens in new tab)"
+                      >
+                        <span>Open in Watch</span>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <polyline points="8,5 19,5 19,16" />
+                          <line x1="5" y1="19" x2="19" y2="5" />
+                        </svg>
+                      </a>
+                    )}
                   </div>
-                )}
+                </div>
+
                 {shareWarnings && shareWarnings.length > 0 && (
                   <p
                     className="timeline-transfer-dialog__warning"
@@ -867,29 +1044,48 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                     {formatShareWarning(shareWarnings)}
                   </p>
                 )}
-                <ShareActions
-                  onCancel={handleCancel}
-                  transferBusy={transferBusy}
-                  cancelLabel="Close"
-                  leadingLink={
+
+                {shareResult?.mode === 'guest' ? (
+                  /* Guest success: expiry chip is the terminal element.
+                   *  No upsell footer, no Close affordance — Esc and
+                   *  outside-click dismiss the dialog (both already
+                   *  wired). The account path is surfaced in the
+                   *  pre-publish signed-out panel, so re-upselling it
+                   *  after publish is redundant; see `GuestSuccessFooter`
+                   *  docstring for full rationale. */
+                  <GuestSuccessFooter expiresAt={shareResult.expiresAt} />
+                ) : (
+                  /* Account success: Manage uploads is the tertiary
+                   *  next action; a Close text link lets the user
+                   *  acknowledge-and-exit without needing Esc. */
+                  <div className="timeline-transfer-dialog__account-success-footer">
                     <a
-                      className="timeline-transfer-dialog__manage-link"
+                      className="timeline-transfer-dialog__manage-link-inline"
                       href="/account/"
                       target="_blank"
                       rel="noopener noreferrer"
                       data-testid="transfer-manage-uploads"
                       aria-label="Manage uploads (opens in new tab)"
                     >
-                      {/* External link icon */}
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{verticalAlign: '-1px', marginRight: '4px'}}>
-                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                        <polyline points="15,3 21,3 21,9" />
-                        <line x1="10" y1="14" x2="21" y2="3" />
+                      <span>Manage uploads</span>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <polyline points="8,5 19,5 19,16" />
+                        <line x1="5" y1="19" x2="19" y2="5" />
                       </svg>
-                      Manage uploads
                     </a>
-                  }
-                />
+                    {/* `__cancel` + text "Close" preserved for back-
+                     *  compat with existing lifecycle tests that drive
+                     *  dismissal through this affordance. */}
+                    <button
+                      type="button"
+                      className="timeline-transfer-dialog__text-dismiss timeline-transfer-dialog__cancel"
+                      onClick={handleCancel}
+                      disabled={transferBusy}
+                    >
+                      Close
+                    </button>
+                  </div>
+                )}
               </div>
             ) : authStatus === 'loading' ? (
               <div className="timeline-transfer-dialog__auth-checking" aria-live="polite">
@@ -917,18 +1113,65 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                 </ShareActions>
               </div>
             ) : authStatus === 'signed-out' ? (
+              /* Signed-out Share panel.
+               *
+               * Redesign (2026-04-23):
+               *   - Primary tier = Quick Share card (tinted, accent-bordered)
+               *   - Secondary tier = "Save to account" with OAuth buttons
+               *   - Single shared clickwrap at the bottom; every CTA
+               *     references it via aria-describedby. Previously this
+               *     sentence appeared twice, which tripled the visual
+               *     noise of the primary action.
+               *   - No bottom-action Cancel bar; an inline link sits
+               *     with the primary CTA so the panel feels one-surface
+               *     instead of form-footer.
+               * Quick Share is omitted when the feature flag is off
+               * OR the site key isn't delivered — the legacy auth-only
+               * copy fills in via `hasGuestTier === false`. */
+              (() => {
+                const hasGuestTier = Boolean(
+                  guestPublishConfig.enabled
+                    && guestPublishConfig.turnstileSiteKey
+                    && shareTabAvailable,
+                );
+                return (
               <div className="timeline-transfer-dialog__auth-prompt" data-testid="transfer-auth-prompt">
-                <p className="timeline-transfer-dialog__description">
-                  Sign in to publish a share link. Anyone with the link can open it
-                  in Watch without signing in.
-                </p>
-                {/* authNote is set ONLY from AuthRequiredError.message — other
-                 *  error classes (429, generic publish failure) never reach
-                 *  this slot because the host component splits shareError
-                 *  by kind before passing it down. This prevents the
-                 *  "Publish quota exceeded…" bleed that an earlier
-                 *  string-only `shareError` allowed when opportunistic
-                 *  hydrate flipped signed-in → signed-out. */}
+                {hasGuestTier ? (
+                  <>
+                    <p className="timeline-transfer-dialog__description timeline-transfer-dialog__lede">
+                      Pick a link type — both open in Watch.
+                    </p>
+                    <GuestQuickShareBlock
+                      turnstileSiteKey={guestPublishConfig.turnstileSiteKey!}
+                      controllerRef={guestTurnstileControllerRef}
+                      onSubmitGuestShare={onSubmitGuestShare}
+                      shareSubmitting={shareSubmitting}
+                      shareError={shareError}
+                      transferBusy={transferBusy}
+                      clickwrapId={CLICKWRAP_SHARE_ID}
+                    />
+                    <div
+                      className="timeline-transfer-dialog__section-rule"
+                      role="separator"
+                      aria-label="Or sign in to save"
+                    >
+                      <span>or · sign in to save</span>
+                    </div>
+                  </>
+                ) : (
+                  <p className="timeline-transfer-dialog__description">
+                    Sign in to publish a share link. Anyone with the link
+                    can open it in Watch without signing in.
+                  </p>
+                )}
+
+                {/* authNote is set ONLY from AuthRequiredError.message —
+                 *  other error classes (429, generic publish failure)
+                 *  never reach this slot because the host component
+                 *  splits shareError by kind before passing it down.
+                 *  This prevents the "Publish quota exceeded…" bleed
+                 *  that an earlier string-only `shareError` allowed
+                 *  when opportunistic hydrate flipped signed-in → out. */}
                 {authNote && (
                   <p
                     className="timeline-transfer-dialog__auth-note"
@@ -939,100 +1182,147 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                     {authNote}
                   </p>
                 )}
-                {popupBlocked ? (
-                  /* Popup-blocked sub-panel — replaces the provider buttons
-                   *  with an explicit Retry / Continue-in-tab / Back choice
-                   *  so we never silently destroy in-memory Lab state on a
-                   *  same-tab redirect the user didn't ask for, and the
-                   *  user can back out to pick a different provider. */
-                  <div className="timeline-transfer-dialog__popup-blocked" data-testid="transfer-popup-blocked">
-                    <p className="timeline-transfer-dialog__auth-note" role="status" aria-live="polite">
-                      {providerLabel(popupBlocked.provider)} popup was blocked. Retry, continue in this tab,
-                      or go back to choose another sign-in method —
-                      unsaved Lab state may be lost on same-tab sign-in.
-                    </p>
-                    <div className="timeline-transfer-dialog__auth-buttons">
-                      {/* Disable while a sign-in attempt is in flight so a
-                       *  rapid Retry/Continue click can't open a second
-                       *  popup shell or fire a parallel intent fetch
-                       *  (matches the AccountControl gating). */}
-                      <button
-                        className="timeline-transfer-dialog__auth-button"
-                        onClick={onRetryPopup}
-                        disabled={transferBusy || isStartingSignIn}
-                        data-testid="transfer-popup-retry"
+
+                <section
+                  className="timeline-transfer-dialog__account-tier"
+                  aria-labelledby={hasGuestTier ? 'transfer-account-heading' : undefined}
+                >
+                  {hasGuestTier && (
+                    /* Single centered subtitle — the "OR · SIGN IN TO
+                     *  SAVE" divider above already announces the
+                     *  section, so the prior tracked-caps "SAVE TO
+                     *  YOUR ACCOUNT" heading was redundant and has
+                     *  been removed. The `sr-only` label preserves
+                     *  the semantic <section> landmark for screen
+                     *  readers without shouting it visually. */
+                    <>
+                      <h3
+                        id="transfer-account-heading"
+                        className="timeline-transfer-dialog__sr-only"
                       >
-                        Retry {providerLabel(popupBlocked.provider)} popup
-                      </button>
-                      <button
-                        className="timeline-transfer-dialog__auth-button"
-                        onClick={onSignInSameTab}
-                        disabled={transferBusy || isStartingSignIn}
-                        data-testid="transfer-popup-same-tab"
-                      >
-                        Continue in this tab
-                      </button>
-                      <button
-                        className="timeline-transfer-dialog__auth-button timeline-transfer-dialog__auth-button--subtle"
-                        onClick={onDismissPopupBlocked}
-                        disabled={transferBusy || isStartingSignIn}
-                        data-testid="transfer-popup-back"
-                      >
-                        Back
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <AgeClickwrapNotice id={CLICKWRAP_SHARE_ID} action="continue" />
-                    <div className="timeline-transfer-dialog__auth-buttons">
-                      <button
-                        className="timeline-transfer-dialog__auth-button"
-                        onClick={() => onSignIn('google')}
-                        disabled={transferBusy || isStartingSignIn}
-                        aria-describedby={CLICKWRAP_SHARE_ID}
-                        data-testid="transfer-auth-google"
-                      >
-                        Continue with Google
-                      </button>
-                      <button
-                        className="timeline-transfer-dialog__auth-button"
-                        onClick={() => onSignIn('github')}
-                        disabled={transferBusy || isStartingSignIn}
-                        aria-describedby={CLICKWRAP_SHARE_ID}
-                        data-testid="transfer-auth-github"
-                      >
-                        Continue with GitHub
-                      </button>
-                    </div>
-                    {isStartingSignIn ? (
-                      <p className="auth-attempt-status" role="status" aria-live="polite">
-                        Starting sign-in…
+                        Save to your account
+                      </h3>
+                      <p className="timeline-transfer-dialog__account-subtitle">
+                        Permanent links, managed in Account.
                       </p>
-                    ) : null}
-                    {failedSignInMessage ? (
-                      <p
-                        className="auth-attempt-status auth-attempt-status--failed"
-                        role="status"
-                        aria-live="polite"
-                        data-testid="transfer-auth-error"
-                      >
-                        {failedSignInMessage}
-                        {failedSignInProvider ? (
-                          <button
-                            className="auth-attempt-retry"
-                            onClick={() => onSignIn(failedSignInProvider)}
-                            data-testid="transfer-auth-retry"
-                          >
-                            Retry
-                          </button>
-                        ) : null}
+                    </>
+                  )}
+
+                  {popupBlocked ? (
+                    /* Popup-blocked sub-panel — see original comment. */
+                    <div className="timeline-transfer-dialog__popup-blocked" data-testid="transfer-popup-blocked">
+                      <p className="timeline-transfer-dialog__auth-note" role="status" aria-live="polite">
+                        {providerLabel(popupBlocked.provider)} popup was blocked. Retry, continue in this tab,
+                        or go back to choose another sign-in method —
+                        unsaved Lab state may be lost on same-tab sign-in.
                       </p>
-                    ) : null}
-                  </>
-                )}
-                <ShareActions onCancel={handleCancel} transferBusy={transferBusy} />
+                      <div className="timeline-transfer-dialog__auth-buttons">
+                        <button
+                          className="timeline-transfer-dialog__auth-button"
+                          onClick={onRetryPopup}
+                          disabled={transferBusy || isStartingSignIn}
+                          aria-describedby={CLICKWRAP_SHARE_ID}
+                          data-testid="transfer-popup-retry"
+                        >
+                          Retry {providerLabel(popupBlocked.provider)} popup
+                        </button>
+                        <button
+                          className="timeline-transfer-dialog__auth-button"
+                          onClick={onSignInSameTab}
+                          disabled={transferBusy || isStartingSignIn}
+                          aria-describedby={CLICKWRAP_SHARE_ID}
+                          data-testid="transfer-popup-same-tab"
+                        >
+                          Continue in this tab
+                        </button>
+                        <button
+                          className="timeline-transfer-dialog__auth-button timeline-transfer-dialog__auth-button--subtle"
+                          onClick={onDismissPopupBlocked}
+                          disabled={transferBusy || isStartingSignIn}
+                          data-testid="transfer-popup-back"
+                        >
+                          Back
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="timeline-transfer-dialog__auth-buttons">
+                        <button
+                          className="timeline-transfer-dialog__auth-button timeline-transfer-dialog__auth-button--provider"
+                          onClick={() => onSignIn('google')}
+                          disabled={transferBusy || isStartingSignIn}
+                          aria-describedby={CLICKWRAP_SHARE_ID}
+                          data-testid="transfer-auth-google"
+                        >
+                          <ProviderGlyph provider="google" />
+                          <span>Continue with Google</span>
+                        </button>
+                        <button
+                          className="timeline-transfer-dialog__auth-button timeline-transfer-dialog__auth-button--provider"
+                          onClick={() => onSignIn('github')}
+                          disabled={transferBusy || isStartingSignIn}
+                          aria-describedby={CLICKWRAP_SHARE_ID}
+                          data-testid="transfer-auth-github"
+                        >
+                          <ProviderGlyph provider="github" />
+                          <span>Continue with GitHub</span>
+                        </button>
+                      </div>
+                      {isStartingSignIn ? (
+                        <p className="auth-attempt-status" role="status" aria-live="polite">
+                          Starting sign-in…
+                        </p>
+                      ) : null}
+                      {failedSignInMessage ? (
+                        <p
+                          className="auth-attempt-status auth-attempt-status--failed"
+                          role="status"
+                          aria-live="polite"
+                          data-testid="transfer-auth-error"
+                        >
+                          {failedSignInMessage}
+                          {failedSignInProvider ? (
+                            <button
+                              className="auth-attempt-retry"
+                              onClick={() => onSignIn(failedSignInProvider)}
+                              data-testid="transfer-auth-retry"
+                            >
+                              Retry
+                            </button>
+                          ) : null}
+                        </p>
+                      ) : null}
+                    </>
+                  )}
+                </section>
+
+                {/* Single shared clickwrap — the legal sentence is
+                 *  identical for the guest path and both OAuth paths,
+                 *  so rendering it twice (as the original design did)
+                 *  was pure visual noise. All CTAs above reference this
+                 *  id via aria-describedby. */}
+                <AgeClickwrapNotice id={CLICKWRAP_SHARE_ID} action="continue" />
+
+                {/* Canonical Cancel affordance — byte-for-byte
+                 *  identical class set, wording, and wrapper as the
+                 *  Download panel's Cancel above. Keeping both
+                 *  on `__text-dismiss __cancel` means styling lives
+                 *  in one rule and existing lifecycle tests that
+                 *  reach the dismiss via `.__cancel` keep working. */}
+                <div className="timeline-transfer-dialog__minor-actions">
+                  <button
+                    type="button"
+                    className="timeline-transfer-dialog__text-dismiss timeline-transfer-dialog__cancel"
+                    onClick={handleCancel}
+                    disabled={transferBusy}
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
+                );
+              })()
             ) : ageConfirmationRequired ? (
               /* signed-in, but publish returned 428 — clickwrap retry. The
                  server-side acceptance row was never written for this user
@@ -1170,27 +1460,705 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                 )}
               </div>
             ) : (
-              /* signed-in */
-              <>
-                <p className="timeline-transfer-dialog__description">
-                  Publish this capsule to get a share link that anyone can open in Watch.
-                </p>
-                {shareError && <p className="timeline-transfer-dialog__error">{shareError}</p>}
-                <ShareActions onCancel={handleCancel} transferBusy={transferBusy}>
-                  <button
-                    className="timeline-transfer-dialog__confirm"
-                    onClick={onConfirmShare}
-                    disabled={transferBusy || !shareConfirmEnabled}
-                  >
-                    {shareSubmitting ? 'Publishing\u2026' : 'Publish'}
-                  </button>
-                </ShareActions>
-              </>
+              /* signed-in \u2014 redesigned 2026-04-23 v5.
+               *
+               * Adds lightweight identity + stats context without
+               * burying the primary action. Three strata:
+               *
+               *   1. Identity chip (avatar monogram \u00b7 display name \u00b7
+               *      manage-profile link) \u2014 tells the user who's
+               *      signing this publish and gives a one-click path
+               *      to account management.
+               *   2. Capsule-count stat \u2014 "this will be your 4th
+               *      capsule" framing. Fetched once per dialog open
+               *      from /api/account/capsules/count; falls back to
+               *      omission on fetch failure so a backend blip
+               *      can't block publishing.
+               *   3. Primary stadium Publish pill + centered Cancel
+               *      text-link, matching Download and the signed-out
+               *      Share panel so the three dialog surfaces feel
+               *      like one family.
+               *
+               * The SignedInPublishPanel component owns the fetch +
+               * render; keeping it local to this file means the
+               * fetch lifecycle is tied to the signed-in render
+               * branch (no fetch while signed-out, no stale count
+               * when the dialog re-opens). */
+              <SignedInPublishPanel
+                onConfirmShare={onConfirmShare}
+                shareConfirmEnabled={shareConfirmEnabled}
+                shareSubmitting={shareSubmitting}
+                shareError={shareError}
+                transferBusy={transferBusy}
+                handleCancel={handleCancel}
+              />
             )}
           </div>
         )}
       </div>
     </>,
     document.body,
+  );
+}
+
+// ── Guest Quick Share helpers ────────────────────────────────────────
+
+interface GuestQuickShareBlockProps {
+  turnstileSiteKey: string;
+  controllerRef: React.MutableRefObject<
+    import('./TimelineBar').GuestTurnstileController | null
+  >;
+  onSubmitGuestShare: () => void;
+  shareSubmitting: boolean;
+  shareError: string | null;
+  transferBusy: boolean;
+  /** Id of the single shared clickwrap paragraph. Wired via
+   *  aria-describedby so screen readers associate the 13+ consent
+   *  with the CTA; the actual paragraph is rendered once at the
+   *  bottom of the signed-out panel (not inside this block). */
+  clickwrapId: string;
+}
+
+/** Signed-in Publish panel — identity chip + capsule-count stat +
+ *  primary Publish pill + centered Cancel link. See the call-site
+ *  comment in the signed-in render branch for the design intent.
+ *
+ *  Count fetch: single GET /api/account/capsules/count on mount.
+ *  The fetch runs once per panel-open because mounting is tied to
+ *  `authStatus === 'signed-in' && tab === 'share' && !shareSuccess`
+ *  — re-opening the dialog or re-entering the Share tab remounts
+ *  the component and re-fetches. A useRef sentinel prevents a
+ *  React-strict-mode double-invoke from firing two requests.
+ *
+ *  Failure posture: on fetch error the count chip is hidden
+ *  (`count === null`), the rest of the panel is unaffected, and
+ *  the user can still publish. No retry button — a count
+ *  hiccup shouldn't nag the user. */
+interface SignedInPublishPanelProps {
+  onConfirmShare: () => void;
+  shareConfirmEnabled: boolean;
+  shareSubmitting: boolean;
+  shareError: string | null;
+  transferBusy: boolean;
+  handleCancel: () => void;
+}
+
+function SignedInPublishPanel({
+  onConfirmShare,
+  shareConfirmEnabled,
+  shareSubmitting,
+  shareError,
+  transferBusy,
+  handleCancel,
+}: SignedInPublishPanelProps) {
+  const session = useAppStore((s) => s.auth.session);
+  const displayName = session?.displayName ?? null;
+  const userId = session?.userId ?? '';
+
+  const [capsuleCount, setCapsuleCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    // Count fetch — rewritten after a React-18 StrictMode audit
+    // (2026-04-23 v5). The previous pattern used a `useRef` sentinel
+    // to avoid double-fetch under StrictMode, but the sentinel
+    // combined with the AbortController created a silent failure:
+    // effect#1 set the sentinel + started fetch, cleanup#1 aborted
+    // the fetch, effect#2 saw the sentinel and skipped — so the only
+    // in-flight request was the aborted one and the count never
+    // populated in dev mode.
+    //
+    // New pattern: no sentinel. Both StrictMode passes fire; each
+    // owns its own AbortController; only the second (surviving)
+    // one's resolve commits state. `ac.signal.aborted` guards the
+    // commit so a late resolve from a cancelled fetch cannot
+    // overwrite state from the live fetch. Cheap: an extra request
+    // under StrictMode dev only; production sees one fetch.
+    const ac = new AbortController();
+    void (async () => {
+      try {
+        const res = await fetch('/api/account/capsules/count', {
+          method: 'GET',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          signal: ac.signal,
+        });
+        if (ac.signal.aborted) return;
+        // 401 here is not just "no count" — it's authoritative
+        // proof that the session cookie was invalidated between
+        // the initial hydrate (when we rendered the signed-in
+        // panel) and this fetch. Flip the store to 'signed-out'
+        // so the parent re-renders the correct auth state and the
+        // user sees the real reason the panel doesn't work,
+        // instead of clicking Publish only to hit a 401 there too.
+        if (res.status === 401) {
+          void hydrateAuthSession();
+          return;
+        }
+        if (!res.ok) return;
+        const body = await res.json() as { count?: unknown };
+        if (ac.signal.aborted) return;
+        if (typeof body.count === 'number' && Number.isFinite(body.count)) {
+          setCapsuleCount(body.count);
+        }
+      } catch {
+        /* Silent — a count hiccup shouldn't interrupt publishing. */
+      }
+    })();
+    return () => ac.abort();
+  }, []);
+
+  // Monogram: first letter of display name, else first letter of the
+  // user id (stable fallback for GitHub users who never set a public
+  // display name). Upper-cased for visual parity.
+  const monogramSource = (displayName ?? userId ?? '?').trim() || '?';
+  const monogram = monogramSource.charAt(0).toUpperCase();
+
+  const countLabel = (() => {
+    if (capsuleCount === null) return null;
+    if (capsuleCount === 0) return 'First capsule';
+    if (capsuleCount === 1) return '1 capsule published';
+    return `${capsuleCount.toLocaleString()} capsules published`;
+  })();
+
+  return (
+    <>
+      <div
+        className="timeline-transfer-dialog__identity"
+        data-testid="transfer-signed-in-identity"
+      >
+        <span
+          className="timeline-transfer-dialog__avatar"
+          aria-hidden="true"
+          title={displayName ?? userId}
+        >
+          {monogram}
+        </span>
+        <div className="timeline-transfer-dialog__identity-body">
+          <span className="timeline-transfer-dialog__identity-name">
+            {displayName ?? 'Your account'}
+          </span>
+          {countLabel && (
+            <span
+              className="timeline-transfer-dialog__identity-stat"
+              data-testid="transfer-capsule-count"
+            >
+              {countLabel}
+            </span>
+          )}
+        </div>
+        <a
+          className="timeline-transfer-dialog__identity-link"
+          href="/account/"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid="transfer-identity-profile-link"
+          aria-label="Open account page (opens in new tab)"
+        >
+          <span>Profile</span>
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <polyline points="8,5 19,5 19,16" />
+            <line x1="5" y1="19" x2="19" y2="5" />
+          </svg>
+        </a>
+      </div>
+
+      <p className="timeline-transfer-dialog__description timeline-transfer-dialog__lede">
+        Publish to get a permanent share link — opens in Watch for anyone with it.
+      </p>
+
+      {shareError && <p className="timeline-transfer-dialog__error">{shareError}</p>}
+
+      <button
+        className="timeline-transfer-dialog__confirm timeline-transfer-dialog__confirm--primary-pill"
+        onClick={onConfirmShare}
+        disabled={transferBusy || !shareConfirmEnabled}
+        data-testid="transfer-publish-confirm"
+      >
+        {shareSubmitting ? 'Publishing…' : 'Publish'}
+        {!shareSubmitting && (
+          <svg
+            className="timeline-transfer-dialog__confirm-arrow"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <line x1="5" y1="12" x2="19" y2="12" />
+            <polyline points="13,6 19,12 13,18" />
+          </svg>
+        )}
+      </button>
+
+      <div className="timeline-transfer-dialog__minor-actions">
+        <button
+          type="button"
+          className="timeline-transfer-dialog__text-dismiss timeline-transfer-dialog__cancel"
+          onClick={handleCancel}
+          disabled={transferBusy}
+        >
+          Cancel
+        </button>
+      </div>
+    </>
+  );
+}
+
+/** Brand glyphs (Google 4-color G / GitHub monochrome Octocat). See
+ *  comment before the component for the palette + theme rules.
+ *  GitHub: single-path Octocat mark rendered in `currentColor` so it
+ *  inherits the button's ink color — black on light theme, near-white
+ *  on dark theme. Matches GitHub's own monochrome-on-button pattern
+ *  and avoids the low-contrast "black glyph on dark button" trap a
+ *  hard-coded fill would create. */
+function ProviderGlyph({ provider }: { provider: 'google' | 'github' }) {
+  if (provider === 'google') {
+    return (
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 18 18"
+        aria-hidden="true"
+        className="timeline-transfer-dialog__provider-glyph"
+      >
+        <path
+          fill="#4285F4"
+          d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"
+        />
+        <path
+          fill="#34A853"
+          d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"
+        />
+        <path
+          fill="#FBBC05"
+          d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"
+        />
+        <path
+          fill="#EA4335"
+          d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"
+        />
+      </svg>
+    );
+  }
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="timeline-transfer-dialog__provider-glyph"
+    >
+      <path
+        fill="currentColor"
+        d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.438 9.8 8.205 11.387.6.113.82-.258.82-.578 0-.286-.01-1.04-.015-2.04-3.338.725-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.09-.744.082-.729.082-.729 1.205.085 1.838 1.237 1.838 1.237 1.07 1.835 2.807 1.305 3.492.998.108-.776.42-1.306.763-1.607-2.665-.303-5.467-1.332-5.467-5.93 0-1.31.468-2.38 1.235-3.22-.124-.303-.535-1.523.117-3.176 0 0 1.008-.323 3.3 1.23a11.49 11.49 0 0 1 3.003-.404c1.02.005 2.047.138 3.006.404 2.29-1.553 3.297-1.23 3.297-1.23.653 1.653.243 2.873.12 3.176.77.84 1.233 1.91 1.233 3.22 0 4.61-2.807 5.624-5.48 5.921.43.372.815 1.103.815 2.222 0 1.606-.015 2.9-.015 3.293 0 .323.217.697.825.578C20.565 22.297 24 17.797 24 12.5 24 5.87 18.627.5 12 .5z"
+      />
+    </svg>
+  );
+}
+
+/** Signed-out Share panel PRIMARY tier. Tinted accent card containing:
+ *   - pill badges surfacing the two defining props (72 h · no account)
+ *   - display heading + micro-copy
+ *   - reserved Turnstile slot (prevents layout jump at widget-load time)
+ *   - primary CTA ("Continue as Guest") disabled until a live token
+ *
+ * Consent is handled by the single shared clickwrap rendered OUTSIDE
+ * this block at the bottom of the signed-out panel; this block only
+ * wires `aria-describedby` onto the CTA via `clickwrapId`. */
+function GuestQuickShareBlock({
+  turnstileSiteKey,
+  controllerRef,
+  onSubmitGuestShare,
+  shareSubmitting,
+  shareError,
+  transferBusy,
+  clickwrapId,
+}: GuestQuickShareBlockProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [widgetReady, setWidgetReady] = useState(false);
+  /** Script-load-failure / render-timeout sentinel. When set, the
+   *  CTA switches to a dead state with a visible explanation so the
+   *  user is never stuck staring at "Preparing…" forever. Common
+   *  causes: content blockers, strict corporate proxies, CSP
+   *  misconfig on a surface Turnstile is embedded into, captive
+   *  Wi-Fi intercepts. Audit 2026-04-23 silent-failure C1. */
+  const [widgetLoadFailed, setWidgetLoadFailed] = useState(false);
+  /** Inline error from Turnstile's own `error-callback` (widget
+   *  mounted but a subsequent challenge errored — distinct from
+   *  load-failure). Surfaced so the user knows why the CTA just
+   *  became disabled instead of watching it silently gray out. */
+  const [widgetChallengeError, setWidgetChallengeError] = useState(false);
+  const widgetIdRef = useRef<string | null>(null);
+  const solvedAtRef = useRef<number | null>(null);
+
+  // Token is the single source of truth. Controller `reset()` clears
+  // it (and the widget) so a resubmit after a 400 turnstile_failed is
+  // forced through a fresh solve rather than reusing the stale token.
+  //
+  // The controller object is stable for the block's lifetime (not
+  // recreated on every token change) so a concurrent submit click
+  // cannot observe a null controllerRef during the effect-cleanup /
+  // effect-setup microtask gap. `getToken` reads the latest `token`
+  // state through a ref mirror.
+  //
+  // Reviewer follow-up (2026-04-23): the controller is assigned
+  // during RENDER (not inside an effect) so React-18 StrictMode's
+  // unmount-then-remount sequence — which would otherwise transiently
+  // null the ref between cleanup and the next effect — can never
+  // surface a null controller to a concurrent submit click. The
+  // controller object reads mutable state through refs, so rebuilding
+  // it every render is free (no state capture). Cleanup is handled
+  // in the widget-install effect below, which removes the iframe —
+  // the controller itself has no resources to release.
+  const tokenRef = useRef<string | null>(null);
+  tokenRef.current = token;
+  const resetController = useCallback(() => {
+    setToken(null);
+    solvedAtRef.current = null;
+    const api = (window as unknown as { turnstile?: { reset: (id?: string) => void } }).turnstile;
+    if (api && widgetIdRef.current) {
+      try { api.reset(widgetIdRef.current); } catch { /* ignore */ }
+    }
+  }, []);
+  controllerRef.current = {
+    getToken: () => tokenRef.current,
+    reset: resetController,
+  };
+
+  // Proactive refresh — the Turnstile token expires 5 minutes after
+  // solve. When the user sits on a solved widget for >4 minutes before
+  // clicking Continue as Guest, re-execute so we don't submit a stale
+  // token and eat a 400 round-trip.
+  useEffect(() => {
+    if (!token) return;
+    const handle = window.setInterval(() => {
+      const solvedAt = solvedAtRef.current;
+      if (!solvedAt) return;
+      if (Date.now() - solvedAt < 4 * 60 * 1000) return;
+      const api = (window as unknown as { turnstile?: { execute: (id?: string) => void } }).turnstile;
+      if (api && widgetIdRef.current) {
+        try { api.execute(widgetIdRef.current); } catch { /* ignore */ }
+      }
+    }, 30 * 1000);
+    return () => window.clearInterval(handle);
+  }, [token]);
+
+  useEffect(() => {
+    // Inject the Turnstile script once per document and mount the
+    // widget explicitly. Hardened 2026-04-23 per audit C1 against the
+    // "widget never loads → CTA stuck in Preparing… forever" failure
+    // mode, which previously had no path to recovery when the script
+    // was blocked (ad blockers, strict proxies, CSP misconfig,
+    // captive Wi-Fi). Now surfaces a visible widgetLoadFailed state
+    // with a fallback-to-sign-in message; CTA fully disables.
+    const existing = document.querySelector(
+      'script[data-atomdojo-turnstile]',
+    ) as HTMLScriptElement | null;
+
+    let script = existing;
+    if (!script) {
+      script = document.createElement('script');
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      script.async = true;
+      script.defer = true;
+      script.dataset.atomdojoTurnstile = '1';
+      document.head.appendChild(script);
+    }
+
+    let cancelled = false;
+    // 10 s end-to-end budget from effect start to widget-ready.
+    // Covers slow 3G and script-load stall; any legitimate mount
+    // resolves in well under 2 s. Over this threshold we give the
+    // user an actionable message instead of silently pending.
+    const LOAD_TIMEOUT_MS = 10_000;
+    const loadTimer = window.setTimeout(() => {
+      if (cancelled || widgetIdRef.current) return;
+      console.warn(
+        '[turnstile] widget failed to load within timeout — entering widget-load-failed state',
+      );
+      setWidgetLoadFailed(true);
+    }, LOAD_TIMEOUT_MS);
+
+    const handleScriptError = () => {
+      if (cancelled) return;
+      console.warn('[turnstile] script element fired error — widget unavailable');
+      setWidgetLoadFailed(true);
+    };
+    script.addEventListener('error', handleScriptError);
+
+    const attemptRender = () => {
+      if (cancelled) return;
+      const api = (window as unknown as {
+        turnstile?: {
+          render: (el: HTMLElement, opts: Record<string, unknown>) => string;
+          remove: (id: string) => void;
+        };
+      }).turnstile;
+      if (!api) {
+        window.setTimeout(attemptRender, 100);
+        return;
+      }
+      const container = containerRef.current;
+      if (!container) return;
+      const id = api.render(container, {
+        sitekey: turnstileSiteKey,
+        theme: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark',
+        appearance: 'interaction-only',
+        callback: (tok: string) => {
+          if (cancelled) return;
+          solvedAtRef.current = Date.now();
+          setWidgetChallengeError(false);
+          setToken(tok);
+        },
+        'error-callback': () => {
+          if (cancelled) return;
+          // Surface inline feedback — previously this was silent and
+          // the user saw the CTA gray out for no apparent reason
+          // (audit M5). Token reset lets the widget re-solve on the
+          // next interaction.
+          setToken(null);
+          setWidgetChallengeError(true);
+        },
+        'expired-callback': () => {
+          if (cancelled) return;
+          setToken(null);
+        },
+      });
+      widgetIdRef.current = id;
+      window.clearTimeout(loadTimer);
+      setWidgetReady(true);
+    };
+
+    if ((window as unknown as { turnstile?: unknown }).turnstile) {
+      attemptRender();
+    } else {
+      script.addEventListener('load', attemptRender, { once: true });
+    }
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(loadTimer);
+      if (script) script.removeEventListener('error', handleScriptError);
+      const api = (window as unknown as { turnstile?: { remove: (id: string) => void } }).turnstile;
+      if (api && widgetIdRef.current) {
+        try { api.remove(widgetIdRef.current); } catch { /* ignore */ }
+      }
+      widgetIdRef.current = null;
+    };
+  }, [turnstileSiteKey]);
+
+  const ctaDisabled = transferBusy || shareSubmitting || widgetLoadFailed || !widgetReady || !token;
+
+  // The CTA label narrates the security handshake so the user always
+  // knows what's happening — replacing the prior dashed "Verifying
+  // you're human…" slot. Five states, in order:
+  //   1. widget failed to load                    → "Verification unavailable"
+  //      (permanent until reload; fallback message below points to OAuth)
+  //   2. script + widget still mounting           → "Preparing…"
+  //   3. widget ready, silent solve in flight     → "Continue as Guest"
+  //      (disabled, no implication that anything is pending on the user)
+  //   4. token acquired                           → "Continue as Guest →"
+  //      (enabled)
+  //   5. submit in flight                         → "Publishing…"
+  const ctaLabel = shareSubmitting
+    ? 'Publishing…'
+    : widgetLoadFailed
+      ? 'Verification unavailable'
+      : !widgetReady
+        ? 'Preparing…'
+        : 'Continue as Guest';
+
+  return (
+    <section
+      className="timeline-transfer-dialog__quick-share"
+      data-testid="transfer-guest-block"
+      aria-labelledby="transfer-guest-heading"
+    >
+      {/* Header row — the heading owns the visual weight; the two
+       *  differentiators sit to the right as a tiny hairline meta
+       *  string. Merging the old two-pill badge bar into one inline
+       *  meta line reclaims ~20 px of vertical rhythm and keeps the
+       *  first thing the user reads as a clean product name. */}
+      <header className="timeline-transfer-dialog__qs-header">
+        <h3
+          id="transfer-guest-heading"
+          className="timeline-transfer-dialog__tier-heading"
+        >
+          Quick Share
+        </h3>
+        <span className="timeline-transfer-dialog__qs-meta" aria-hidden="true">
+          72-hour link · no account
+        </span>
+      </header>
+      <p className="timeline-transfer-dialog__helper">
+        One-tap temporary link. No sign-in required.
+      </p>
+
+      {/* Turnstile in `interaction-only` mode is an invisible captcha
+       *  by design — Cloudflare only raises a visible challenge for
+       *  suspicious traffic. We therefore REFUSE to reserve a
+       *  permanent visible slot (the previous dashed placeholder
+       *  confused users into thinking something was missing). The
+       *  container stays empty and zero-height until Cloudflare
+       *  chooses to render; in that rare case its challenge UI pushes
+       *  the CTA down naturally — acceptable reflow for a rare event,
+       *  better than a permanent empty box for every user. */}
+      <div
+        ref={containerRef}
+        className="timeline-transfer-dialog__turnstile"
+        data-testid="transfer-guest-turnstile"
+      />
+
+      {widgetLoadFailed && (
+        <p
+          className="timeline-transfer-dialog__error"
+          role="status"
+          aria-live="polite"
+          data-testid="transfer-guest-widget-unavailable"
+        >
+          Couldn't load verification. Disable ad blockers and reload, or use a
+          sign-in option below.
+        </p>
+      )}
+      {!widgetLoadFailed && widgetChallengeError && (
+        <p
+          className="timeline-transfer-dialog__error"
+          role="status"
+          aria-live="polite"
+          data-testid="transfer-guest-widget-challenge-error"
+        >
+          Verification was reset — please try again.
+        </p>
+      )}
+      {shareError && (
+        <p className="timeline-transfer-dialog__error" role="status" aria-live="polite">
+          {shareError}
+        </p>
+      )}
+
+      <button
+        className="timeline-transfer-dialog__confirm timeline-transfer-dialog__confirm--guest"
+        onClick={onSubmitGuestShare}
+        disabled={ctaDisabled}
+        aria-describedby={clickwrapId}
+        data-testid="transfer-guest-continue"
+      >
+        {ctaLabel}
+        {!shareSubmitting && widgetReady && !widgetLoadFailed && (
+          <svg
+            className="timeline-transfer-dialog__confirm-arrow"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <line x1="5" y1="12" x2="19" y2="12" />
+            <polyline points="13,6 19,12 13,18" />
+          </svg>
+        )}
+      </button>
+
+      {/* Trust attribution — tiny legend replaces the prior dashed
+       *  placeholder. Tells the user that verification exists (so
+       *  they're not surprised if Cloudflare does surface a challenge)
+       *  without claiming anything is pending on them. Rendered only
+       *  once the widget has actually loaded, so a connectivity /
+       *  script-blocker failure doesn't pretend to protection that
+       *  isn't there. */}
+      {widgetReady && (
+        <p className="timeline-transfer-dialog__attribution" aria-hidden="true">
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5l8-3z" />
+          </svg>
+          <span>Protected by Cloudflare</span>
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** Guest success footer — expiry chip only.
+ *
+ *  The prior rhetorical question ("Need permanent share links and
+ *  account management?") was deleted in the 2026-04-23 v3 pass: a
+ *  dead-end rhetorical question violates conversational-UX norms
+ *  (users expect an answer or action after a "?"), and the expiry
+ *  chip already communicates "this link is temporary." The account
+ *  path is already exposed in the signed-out pre-publish panel, so
+ *  re-upselling here was redundant noise.
+ *
+ *  Rendered
+ *  alongside the shared success URL block when `shareResult.mode ===
+ *  'guest'`. The `title={iso}` attribute preserves the raw timestamp
+ *  so hover reveals UTC. */
+function GuestSuccessFooter({ expiresAt }: { expiresAt: string }) {
+  // Render BOTH the relative phrase ("in 2 days") and an absolute
+  // fallback. Relative is the primary read — users don't want to do
+  // date math against a 72-hour window — and absolute lives in the
+  // element's `title` attribute for hover/longpress + screen-reader
+  // context, matching the pattern recommended by the W3C for
+  // time-sensitive UI.
+  const formattedAbs = (() => {
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }).format(new Date(expiresAt));
+    } catch {
+      return expiresAt;
+    }
+  })();
+  const relative = formatRelativeFromNow(expiresAt);
+  return (
+    <div
+      className="timeline-transfer-dialog__expiry-chip"
+      title={`${formattedAbs} · ${expiresAt}`}
+      data-testid="transfer-guest-expiry"
+    >
+      {/* The `transfer-guest-success` test-id used to live on an outer
+       *  wrapper div that carried no CSS and only one child; the
+       *  wrapper was flattened 2026-04-23 v5. The same id rides on
+       *  the expiry chip now so existing tests that query the
+       *  signal keep working. */}
+      <span
+        className="timeline-transfer-dialog__expiry-chip-dot"
+        aria-hidden="true"
+        data-testid="transfer-guest-success"
+      />
+      <span className="timeline-transfer-dialog__expiry-chip-label">Expires</span>
+      <span className="timeline-transfer-dialog__expiry-chip-when">{relative}</span>
+      <span className="timeline-transfer-dialog__expiry-chip-abs" aria-hidden="true">
+        {formattedAbs}
+      </span>
+    </div>
   );
 }

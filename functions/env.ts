@@ -32,6 +32,31 @@ export interface Env {
    * Set in wrangler.toml under [vars]; rollback is one-line config + redeploy.
    */
   CAPSULE_PREVIEW_DYNAMIC_FALLBACK?: string;
+
+  // ── Guest Quick Share ────────────────────────────────────────────
+  //
+  // Feature-flag and Turnstile config for the anonymous publish path.
+  // Default is OFF — only "on" / "true" / "1" (case-insensitive,
+  // trimmed) enables the path. Resolved exclusively through
+  // `isGuestPublishEnabled(env)` in src/share/guest-publish-flag.ts.
+  GUEST_PUBLISH_ENABLED?: string;
+
+  /** Cloudflare Turnstile — public site key. Surfaced to the Lab via
+   *  the session publicConfig bridge. Published through wrangler.toml
+   *  [vars]; NOT a secret. */
+  TURNSTILE_SITE_KEY?: string;
+
+  /** Cloudflare Turnstile — server-side secret. Provisioned via
+   *  `wrangler pages secret put TURNSTILE_SECRET_KEY`. The guest-publish
+   *  endpoint fails closed (500 server_not_configured) when this is
+   *  missing AND the flag is on. */
+  TURNSTILE_SECRET_KEY?: string;
+
+  /** Operator override for the guest publish per-IP quota ceiling. */
+  GUEST_PUBLISH_QUOTA_MAX?: string;
+
+  /** Operator override for the guest publish quota window length (seconds). */
+  GUEST_PUBLISH_QUOTA_WINDOW_SECONDS?: string;
 }
 
 /** Extended context with authenticated user ID (set by auth middleware). */

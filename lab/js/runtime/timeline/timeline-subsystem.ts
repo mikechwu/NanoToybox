@@ -83,7 +83,11 @@ export interface TimelineSubsystemDeps {
   /** Publish dependency — publishes a capsule to cloud storage and returns share info.
    *  `warnings` carries non-fatal server-reported issues (e.g. quota-accounting
    *  drift) that the UI should surface subtly without blocking the share. */
-  publishCapsule?: () => Promise<{ shareCode: string; shareUrl: string; warnings?: string[] }>;
+  publishCapsule?: () => Promise<import('../../../../src/share/share-result').ShareResultAccount>;
+  /** Anonymous Quick Share publish — POST /api/capsules/guest-publish.
+   *  Takes the Turnstile token captured by the dialog's widget
+   *  controller; callers must not invoke this without a live token. */
+  publishGuestCapsule?: (turnstileToken: string) => Promise<import('../../../../src/share/share-result').ShareResultGuest>;
   /** Bonded-group appearance runtime. Owner of appearanceVersion bumps
    *  on color-assignment writes. Optional for back-compat with tests
    *  that construct the subsystem with a minimal dep set; when absent,
@@ -96,7 +100,7 @@ export interface TimelineSubsystemDeps {
    *  TimelineBar can drive the two-phase submit. `main.ts` constructs
    *  one publisher at boot and passes its three operations here. */
   prepareCapsulePublish?: (range: CapsuleSelectionRange) => Promise<PreparedCapsuleSummary>;
-  publishPreparedCapsule?: (prepareId: string) => Promise<{ shareCode: string; shareUrl: string; warnings?: string[] }>;
+  publishPreparedCapsule?: (prepareId: string) => Promise<import('../../../../src/share/share-result').ShareResultAccount>;
   cancelPreparedPublish?: (prepareId: string) => void;
 }
 
@@ -454,6 +458,9 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
         onResumeFromExport: () => { deps.resume(); },
         ...(deps.getExportEstimates ? { getExportEstimates: () => deps.getExportEstimates!() } : {}),
         ...(deps.publishCapsule ? { onPublishCapsule: () => deps.publishCapsule!() } : {}),
+        ...(deps.publishGuestCapsule
+          ? { onConfirmGuestShare: (token: string) => deps.publishGuestCapsule!(token) }
+          : {}),
         getCapsuleFrameIndex: () => getCapsuleFrameIndex(),
         ...(deps.prepareCapsulePublish
           ? { onPrepareCapsulePublish: (range: CapsuleSelectionRange) => deps.prepareCapsulePublish!(range) }

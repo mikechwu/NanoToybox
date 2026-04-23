@@ -164,6 +164,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     prepared = await preparePublishRecord({
       capsuleJson: body,
       ownerUserId: userId,
+      shareMode: 'account',
+      expiresAt: null,
       appVersion: '0.1.0',
     });
   } catch (err) {

@@ -10,13 +10,14 @@ support scheduled handlers, so this Worker deploys separately.
 | Cron | Endpoint | Purpose |
 |------|----------|---------|
 | `0 */6 * * *` | `POST /api/admin/sweep/sessions` | Clean expired + idle sessions, prune stale quota buckets |
+| `10 */6 * * *` | `POST /api/admin/sweep/guest-expires` | Tombstone expired guest-share rows (`share_mode='guest'`, `expires_at <= now()`); 10-min offset from sessions sweep |
 | `30 3 * * *` | `POST /api/admin/sweep/orphans` | Delete R2 blobs older than 24h with no matching D1 row |
 | `15 4 * * 0` | `POST /api/admin/sweep/audit?mode=scrub` | Weekly Sun 04:15 UTC — null `ip_hash`/`user_agent`/`reason` on audit rows older than 180 days |
 | `45 4 * * 0` | `POST /api/admin/sweep/audit?mode=delete-abuse-reports` | Weekly Sun 04:45 UTC — row-delete `abuse_report` audit rows older than 180 days |
 
-This is 4 of the 5 cron triggers allowed on the Cloudflare Workers
-free tier. Adding a fifth is fine; a sixth requires the paid plan
-(which raises the ceiling to 250 crons/account).
+This is 5 of the 5 cron triggers allowed on the Cloudflare Workers
+free tier. Adding a sixth requires the paid plan (which raises the
+ceiling to 250 crons/account).
 
 The sessions sweep is a safety net, not the primary orphan-session
 collector. `functions/auth-middleware.ts` deletes orphan sessions
@@ -64,9 +65,11 @@ curl -X GET "https://atomdojo-cron-sweeper.<account>.workers.dev/?target=audit-s
   -H "X-Cron-Secret: $CRON_SECRET"
 curl -X GET "https://atomdojo-cron-sweeper.<account>.workers.dev/?target=audit-delete" \
   -H "X-Cron-Secret: $CRON_SECRET"
+curl -X GET "https://atomdojo-cron-sweeper.<account>.workers.dev/?target=guest-expires" \
+  -H "X-Cron-Secret: $CRON_SECRET"
 ```
 
-The `?target` must be one of `sessions | orphans | audit-scrub | audit-delete`.
+The `?target` must be one of `sessions | orphans | audit-scrub | audit-delete | guest-expires`.
 Without a valid `X-Cron-Secret` header, every request returns 404 (no
 route existence leak to unauthorized callers).
 

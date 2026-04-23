@@ -24,6 +24,10 @@ Path fragments such as `lab/`, `watch/`, and `viewer/` refer to directories, not
 - **handoff** — the Watch→Lab scene transfer at a chosen frame. Produces a seed, a localStorage token, and a Lab URL flag.
 - **seed** — the serialized `WatchLabSceneSeed` payload Lab consumes during hydration. Carries atoms, velocities, bonds, camera pose, and authored colors.
 - **share link** — a URL of the form `/c/:code` that resolves to a stored capsule. Backed by D1 + R2.
+- **Quick Share** — the guest/anonymous publish path producing a 72-hour expiring share link; no account required, Turnstile-gated. Distinct from the authenticated permanent-link share flow.
+- **share mode** — the `share_mode` discriminator column on `capsule_share` rows: `'account'` for authenticated permanent shares, `'guest'` for Quick Share rows.
+- **guest share** — a `capsule_share` row with `share_mode='guest'`, `owner_user_id=NULL`, and `expires_at = created_at + 72h`. Also "guest row."
+- **isAccessibleShare** — predicate in `src/share/share-record.ts` (replaced the earlier `isAccessibleStatus`) that returns true iff the row's status is live AND (no `expires_at` OR `expires_at` is in the future).
 
 ## Analysis (common noun — lowercase in prose)
 
@@ -79,6 +83,9 @@ Path fragments such as `lab/`, `watch/`, and `viewer/` refer to directories, not
 - **admin gate** — the second check layered on top of `signed intent` for moderation and privacy-operator endpoints. Verifies a signed admin intent against an allowlist; failures are audit-logged.
 - **age gate** — the one-time minimum-age attestation required before a user can create an account. Stored as a boolean; distinct from `policy acceptance`.
 - **policy acceptance** — versioned terms acceptance tracked in D1 (policy version + timestamp). Re-acceptance is required when the version bumps; version is pinned at build time from `src/policy/policy-config.ts`.
+- **clickwrap** — the inline "By continuing, you confirm you are at least 13 years old…" paragraph referenced by publish CTAs via `aria-describedby`. Identical wording on the authenticated and guest (Quick Share) paths.
+- **age-13 attestation** — the `age_13_plus` per-publish attestation. On the authenticated path it is persisted in `user_policy_acceptance`; on the guest (Quick Share) path it is recorded per-publish in the audit log as `guest_publish_age_attested`.
+- **Turnstile** — Cloudflare's captcha, used in `interaction-only` mode on the Quick Share path. Server-verified via Siteverify with an 8-second timeout. Referenced by `env.TURNSTILE_SITE_KEY` (public) and `env.TURNSTILE_SECRET_KEY` (secret).
 - **erasure** — user-initiated account-and-data deletion flow routed through `/privacy-request`. Backed by a tombstone on the `users` row (not hard-delete) plus an ordered capsule-delete cascade.
 - **primary-pill contract** — the UI contract enforced by `WatchLabEntryControl`: a single primary pill ("Interact From Here") with a caret-toggled disclosure popover revealing secondary actions; tooltip auto-cues at the 50% and 100% timeline milestones, once per file.
 

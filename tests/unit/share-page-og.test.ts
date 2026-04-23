@@ -40,6 +40,8 @@ function makeRow(over: Partial<CapsuleShareRow> = {}): CapsuleShareRow {
     last_accessed_at: null,
     rejection_reason: null,
     preview_scene_v1: null,
+    share_mode: 'account',
+    expires_at: null,
     ...over,
   };
 }

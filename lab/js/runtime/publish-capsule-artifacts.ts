@@ -50,11 +50,12 @@ export interface CapsuleArtifact {
   bytes: number;
 }
 
-export interface PublishResult {
-  shareCode: string;
-  shareUrl: string;
-  warnings?: string[];
-}
+// The prepared-artifact publisher is account-mode only in v1 — guest
+// trim is explicitly out of scope (§Frontend Result Contract "Deferred").
+// Aliasing to the canonical type keeps the wire contract + UI branching
+// aligned with the store/runtime without duplicating the shape.
+import type { ShareResultAccount } from '../../../src/share/share-result';
+export type PublishResult = ShareResultAccount;
 
 export interface PreparedCapsulePublisherDeps {
   /** Builds the capsule for a given range. Throws on identity-stale,
@@ -207,6 +208,7 @@ export async function postCapsuleArtifact(artifact: CapsuleArtifact): Promise<Pu
     console.warn('[publish] server reported non-fatal warnings:', warnings);
   }
   return {
+    mode: 'account',
     shareCode: payload.shareCode,
     shareUrl: payload.shareUrl,
     ...(warnings && warnings.length > 0 ? { warnings } : {}),

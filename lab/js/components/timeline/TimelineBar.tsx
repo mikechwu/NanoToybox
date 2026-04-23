@@ -43,6 +43,23 @@ import {
   type PublishOversizeError,
 } from '../../runtime/publish-errors';
 import { MAX_PUBLISH_BYTES } from '../../../../src/share/constants';
+import type { ShareResult } from '../../../../src/share/share-result';
+import {
+  GuestTurnstileError,
+  GuestAgeAttestationError,
+  GuestQuotaExceededError,
+  GuestPublishDisabledError,
+} from '../../runtime/publish-guest-artifact';
+
+/** Minimal Turnstile widget handle the dialog owns and hands back to
+ *  TimelineBar via a mutable ref. Keeps the widget lifecycle local to
+ *  the dialog while letting the submit handler read the latest token. */
+export interface GuestTurnstileController {
+  /** Returns the latest solved token, or null when none is live. */
+  getToken: () => string | null;
+  /** Dispose the current token so the next submit requires a fresh solve. */
+  reset: () => void;
+}
 import type {
   CapsuleSnapshotId,
   CapsuleSelectionRange,
@@ -213,6 +230,7 @@ function TimelineBarActive() {
   const authStatus = useAppStore((s) => s.auth.status);
   const authCallbacks = useAppStore((s) => s.authCallbacks);
   const authPopupBlocked = useAppStore((s) => s.authPopupBlocked);
+  const guestPublishConfig = useAppStore((s) => s.publicConfig.guestPublish);
   const shareTabOpenRequested = useAppStore((s) => s.shareTabOpenRequested);
 
   const trackRef = useRef<HTMLDivElement>(null);
@@ -311,11 +329,7 @@ function TimelineBarActive() {
     | { kind: 'age-confirmation'; message: string; policyVersion: string | null }
     | null
   >(null);
-  const [shareResult, setShareResult] = useState<{
-    shareCode: string;
-    shareUrl: string;
-    warnings?: string[];
-  } | null>(null);
+  const [shareResult, setShareResult] = useState<ShareResult | null>(null);
   const transferDidPause = useRef(false);
 
   // ── Trim mode state ──
@@ -764,6 +778,81 @@ function TimelineBarActive() {
       }
     }
   }, [callbacks, downloadKind, closeTransfer]);
+
+  // ── Guest Quick Share wiring ──
+  //
+  // The Turnstile widget lives inside the Transfer dialog (signed-out
+  // Share panel only — rendered when `publicConfig.guestPublish.enabled`
+  // + a non-null `turnstileSiteKey`). The dialog owns the widget
+  // lifecycle and surfaces a controller ref that TimelineBar reads
+  // from at submit time.
+  const guestTurnstileControllerRef = useRef<GuestTurnstileController | null>(null);
+
+  const handleConfirmGuestShare = useCallback(async () => {
+    if (!callbacks?.onConfirmGuestShare) {
+      setShareError({ kind: 'other', message: 'Quick Share is not available right now.' });
+      return;
+    }
+    const token = guestTurnstileControllerRef.current?.getToken?.() ?? null;
+    if (!token) {
+      setShareError({
+        kind: 'other',
+        message: 'Verification required. Please solve the challenge above.',
+      });
+      return;
+    }
+    const runId = ++shareRunIdRef.current;
+    setShareSubmitting(true);
+    setShareError(null);
+    try {
+      const result = await callbacks.onConfirmGuestShare(token);
+      if (!mountedRef.current || shareRunIdRef.current !== runId) return;
+      setShareResult(result);
+      setShareSubmitting(false);
+    } catch (e) {
+      if (!mountedRef.current || shareRunIdRef.current !== runId) return;
+      // Guest-specific error mapping — see §TimelineBar Ownership.
+      if (e instanceof GuestTurnstileError) {
+        // Invalidate the token on failed/unavailable Siteverify so the
+        // user is not allowed to resubmit with the same stale bytes.
+        guestTurnstileControllerRef.current?.reset?.();
+        setShareError({ kind: 'other', message: e.message });
+        setShareSubmitting(false);
+        return;
+      }
+      if (e instanceof GuestAgeAttestationError) {
+        setShareError({ kind: 'other', message: e.message });
+        setShareSubmitting(false);
+        return;
+      }
+      if (e instanceof GuestQuotaExceededError) {
+        setShareError({ kind: 'other', message: e.message });
+        setShareSubmitting(false);
+        return;
+      }
+      if (e instanceof GuestPublishDisabledError) {
+        setShareError({ kind: 'other', message: e.message });
+        setShareSubmitting(false);
+        return;
+      }
+      if (isPublishOversizeError(e)) {
+        // Guest path does not support trim in v1 — surface the sign-in
+        // upsell helper copy rather than routing into trim mode.
+        setShareError({
+          kind: 'other',
+          message: 'Capture exceeds 20 MB. Trim is available after sign-in.',
+        });
+        setShareSubmitting(false);
+        return;
+      }
+      console.error('[TimelineBar] guest share failed:', e);
+      setShareError({
+        kind: 'other',
+        message: e instanceof Error ? e.message : 'Share failed.',
+      });
+      setShareSubmitting(false);
+    }
+  }, [callbacks]);
 
   const handleShareConfirm = useCallback(async () => {
     if (!callbacks?.onPublishCapsule) {
@@ -2325,6 +2414,10 @@ function TimelineBarActive() {
         shareTabAvailable={shareAvailable}
         shareConfirmEnabled={shareAvailable && authStatus === 'signed-in'}
         onConfirmShare={handleShareConfirm}
+        guestPublishConfig={guestPublishConfig}
+        guestTurnstileControllerRef={guestTurnstileControllerRef}
+        onSubmitGuestShare={handleConfirmGuestShare}
+        shareResult={shareResult}
         shareSubmitting={shareSubmitting}
         shareError={shareError?.kind === 'other' ? shareError.message : null}
         authNote={shareError?.kind === 'auth' ? shareError.message : null}

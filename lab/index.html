@@ -1258,6 +1258,493 @@ canvas { display: block; touch-action: none; }
   font-size: var(--font-xs); line-height: 1.4;
 }
 
+/* ── Share panel redesign (Guest Quick Share + Save to account) ────
+ *
+ * Two-tier hierarchy: the Quick Share card sits on a tinted accent
+ * surface with a stronger border so it visibly *wins* the scan; the
+ * Save-to-account section is typographically de-emphasized beneath.
+ * A single clickwrap at the bottom covers both tiers (the previous
+ * design repeated it verbatim).
+ *
+ * Motion: quiet staggered fade-up — 32 ms offsets — on panel entry.
+ * Deliberately subtle; this is a tool, not a landing page. */
+@keyframes timeline-transfer-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.timeline-transfer-dialog__auth-prompt > *:not(.timeline-transfer-dialog__section-rule) {
+  animation: timeline-transfer-enter 260ms cubic-bezier(.2,.8,.2,1) both;
+}
+.timeline-transfer-dialog__auth-prompt > *:nth-child(1) { animation-delay: 0ms; }
+.timeline-transfer-dialog__auth-prompt > *:nth-child(2) { animation-delay: 32ms; }
+.timeline-transfer-dialog__auth-prompt > *:nth-child(3) { animation-delay: 64ms; }
+.timeline-transfer-dialog__auth-prompt > *:nth-child(4) { animation-delay: 96ms; }
+.timeline-transfer-dialog__auth-prompt > *:nth-child(5) { animation-delay: 128ms; }
+
+/* Short scene-setting sentence at the very top of the panel. Sits
+ * between the tabs and the Quick Share card; acts as an anchor
+ * without taking visual weight. */
+.timeline-transfer-dialog__lede {
+  margin: 0 0 12px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
+  line-height: 1.45;
+}
+
+/* ── Signed-in identity chip ───────────────────────────────────
+ *
+ * Three-column row above the lede on the signed-in Publish panel:
+ *   [ monogram ] [ display name + stat ] [ Profile ↗ link ]
+ *
+ * Styling language matches the shared "card with a micro-label and
+ * a trailing link" pattern from the account surface. The chip is
+ * low-contrast so it reads as context, not as a call-to-action that
+ * competes with the primary Publish pill below it.
+ *
+ * Layout: flex with `min-width: 0` on the center column so a long
+ * display name ellipsizes instead of pushing the Profile link off
+ * the panel. */
+.timeline-transfer-dialog__identity {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--color-text) 4%, var(--panel-bg));
+  border: 1px solid var(--color-border);
+}
+.timeline-transfer-dialog__avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--color-accent-text) 18%, transparent);
+  color: var(--color-accent-text);
+  font-family: var(--font-family-display, var(--font-family));
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  /* Thin accent ring — echoes the success check + expiry chip
+   *  treatments so the three accent-ringed circles in this dialog
+   *  belong to a visual family. */
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-accent-text) 30%, transparent);
+}
+.timeline-transfer-dialog__identity-body {
+  display: flex; flex-direction: column; gap: 1px;
+  min-width: 0;  /* lets the name ellipsize */
+  flex: 1;
+}
+.timeline-transfer-dialog__identity-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  letter-spacing: -0.005em;
+  /* Ellipsize over-long display names (some providers return very
+   *  long display_name strings; we don't want them to shove the
+   *  Profile link off the right edge). */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timeline-transfer-dialog__identity-stat {
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.005em;
+}
+.timeline-transfer-dialog__identity-link {
+  display: inline-flex; align-items: center; gap: 3px;
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: color 120ms ease, background 120ms ease;
+}
+.timeline-transfer-dialog__identity-link:hover {
+  color: var(--color-accent-text);
+  background: color-mix(in oklab, var(--color-accent-text) 8%, transparent);
+}
+.timeline-transfer-dialog__identity-link svg {
+  transition: transform 140ms cubic-bezier(.2,.8,.2,1);
+}
+.timeline-transfer-dialog__identity-link:hover svg {
+  transform: translate(1px, -1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline-transfer-dialog__identity-link:hover svg { transform: none; }
+}
+
+/* Primary tier — Quick Share card.
+ * Tinted accent-surface + 1px accent-hued border. The tint is
+ * computed via color-mix so it stays legible in light + dark themes
+ * without a hard-coded hex. */
+.timeline-transfer-dialog__quick-share {
+  position: relative;
+  margin: 0 0 14px;
+  padding: 14px 14px 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--color-accent-text) 6%, transparent);
+  border: 1px solid color-mix(in oklab, var(--color-accent-text) 22%, transparent);
+}
+
+/* Header row — heading + inline meta line. Heading carries visual
+ * weight; the meta string (72-hour link · no account) sits on the
+ * same row at the trailing edge when space permits, collapsing
+ * beneath on narrow widths. Replaces the prior two-pill badge bar
+ * that stole ~20 px of vertical rhythm for tracked uppercase noise. */
+.timeline-transfer-dialog__qs-header {
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: 4px 10px;
+  margin-bottom: 4px;
+}
+.timeline-transfer-dialog__qs-meta {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--color-accent-text);
+  opacity: 0.9;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tier heading — display-weight. Uses the display stack when a
+ * --font-family-display token is defined; otherwise falls back to
+ * the app's body family, preserving cohesion in environments that
+ * haven't yet wired a distinct display face. Weight + size are what
+ * actually carry the hierarchy, not a specific font choice. */
+.timeline-transfer-dialog__tier-heading {
+  margin: 0;
+  font-family: var(--font-family-display, var(--font-family));
+  font-size: 18px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+
+.timeline-transfer-dialog__helper {
+  margin: 0 0 14px;
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+/* Turnstile container — zero-footprint by default. The widget is
+ * invisible under `appearance: 'interaction-only'`: Cloudflare only
+ * renders a visible challenge for suspicious traffic, so reserving
+ * permanent vertical space was the inverse of what the captcha was
+ * built for. When Cloudflare DOES raise a challenge, the iframe
+ * naturally takes space and pushes the CTA down (rare event,
+ * acceptable reflow). When silent, this container stays collapsed
+ * and the card layout flows heading → helper → CTA. */
+.timeline-transfer-dialog__turnstile {
+  /* `:empty` keeps the element a layout no-op when Turnstile hasn't
+   *  injected an iframe yet; once an iframe mounts the `&:not(:empty)`
+   *  branch gives it breathing room. */
+  margin: 0;
+}
+.timeline-transfer-dialog__turnstile:not(:empty) {
+  margin: 0 0 12px;
+}
+
+/* Primary-pill CTAs — shared silhouette for Continue as Guest and
+ * Download. Full-width stadium, accent fill, shadow lift. The
+ * `--primary-pill` modifier is the generic name; `--guest` is kept
+ * as an alias for back-compat with existing callsites and to let the
+ * guest-card-specific hover animation (arrow slides RIGHT, toward
+ * the share destination) diverge from Download's own arrow (slides
+ * DOWN, toward the file). The union selector below covers both with
+ * one rule for the base + hover + disabled states, then each variant
+ * owns its arrow-direction micro-interaction. */
+.timeline-transfer-dialog__confirm--guest,
+.timeline-transfer-dialog__confirm--primary-pill {
+  width: 100%;
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 1px 0 color-mix(in oklab, var(--color-accent-text) 30%, transparent),
+              0 6px 20px -10px color-mix(in oklab, var(--color-accent-text) 55%, transparent);
+  transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+}
+.timeline-transfer-dialog__confirm--guest:not(:disabled):hover,
+.timeline-transfer-dialog__confirm--primary-pill:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 0 color-mix(in oklab, var(--color-accent-text) 40%, transparent),
+              0 10px 24px -10px color-mix(in oklab, var(--color-accent-text) 65%, transparent);
+}
+.timeline-transfer-dialog__confirm--guest:disabled,
+.timeline-transfer-dialog__confirm--primary-pill:disabled {
+  box-shadow: none;
+}
+.timeline-transfer-dialog__confirm-arrow {
+  opacity: 0.9;
+  transition: transform 140ms cubic-bezier(.2,.8,.2,1);
+}
+/* Guest action is a "send" — arrow pushes RIGHT toward the recipient. */
+.timeline-transfer-dialog__confirm--guest:not(:disabled):hover .timeline-transfer-dialog__confirm-arrow {
+  transform: translateX(3px);
+}
+/* Download action is a "pull to disk" — arrow pushes DOWN toward the
+ * user's device. Two different directions for two different verbs. */
+.timeline-transfer-dialog__confirm--primary-pill:not(:disabled):hover .timeline-transfer-dialog__confirm-arrow {
+  transform: translateY(2px);
+}
+
+/* Trust attribution — tiny legend below the CTA when Turnstile has
+ * mounted. Replaces the old dashed visible slot as the trust signal:
+ * users know security exists but nothing pretends to be a pending
+ * obligation on them. Sits as its own hairline line under the card,
+ * visually detached from the CTA. */
+.timeline-transfer-dialog__attribution {
+  /* Centered under the CTA it attests to — the attribution visually
+   *  pairs with the button above, not the leading edge of the card.
+   *  `flex` instead of `inline-flex` so the container centers via
+   *  `justify-content`, not via the parent's alignment. */
+  display: flex; align-items: center; justify-content: center;
+  gap: 4px;
+  margin: 10px 0 0;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--color-text-secondary);
+  opacity: 0.65;
+}
+.timeline-transfer-dialog__attribution svg {
+  opacity: 0.8;
+  color: var(--color-accent-text);
+}
+
+/* Divider between tiers. The label sits inline on the rule so the
+ * reader gets a clear "or" connector instead of an orphan label. */
+.timeline-transfer-dialog__section-rule {
+  display: flex; align-items: center;
+  gap: 10px;
+  margin: 4px 0 12px;
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+.timeline-transfer-dialog__section-rule::before,
+.timeline-transfer-dialog__section-rule::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
+/* Secondary tier — Save to account.
+ *
+ * 2026-04-23 v4 refinement: the previous tracked-caps heading
+ * (`SAVE TO YOUR ACCOUNT`) was redundant with the `OR · SIGN IN TO
+ * SAVE` divider immediately above it — the divider already announces
+ * the section. Collapsed to a single centered subtitle on the panel's
+ * center spine, paired with a visually-hidden `<h3>` kept for the
+ * <section aria-labelledby> landmark contract. */
+.timeline-transfer-dialog__account-tier {
+  margin: 0 0 10px;
+}
+.timeline-transfer-dialog__account-subtitle {
+  /* Centered subtitle — inhabits the same central axis as the
+   *  OR-divider above it and the Cancel link at the bottom of the
+   *  panel. Spacing mirrors the divider's 12 px bottom-margin so the
+   *  two elements read as a stacked connector block, not two
+   *  independent section headers. */
+  margin: 0 0 12px;
+  text-align: center;
+  font-size: var(--font-xs);
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+}
+
+/* Accessibility-only heading — preserves the `aria-labelledby` target
+ * for the Save-to-account <section> without rendering a visible
+ * duplicate of what the OR-divider already announces. Standard
+ * screen-reader-only pattern (WCAG-safe). */
+.timeline-transfer-dialog__sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Provider button variant — stadium-shape pill with centered
+ * icon + label pair. Matches the Google-style "Continue with"
+ * button pattern: generous vertical padding, fully-rounded
+ * corners, subtle elevation shadow, icon in authentic brand
+ * color (Google 4-color G / GitHub solid octocat), label in a
+ * medium-weight type.
+ *
+ * Alignment rationale (2026-04-23 v4): the icon+text PAIR is
+ * centered inside the button, not left-anchored. In this panel
+ * the OAuth buttons sit on the visual "center spine" alongside
+ * the OR-divider, account subtitle, clickwrap block, and Cancel
+ * link — reinforcing that central axis. Both provider labels
+ * are near-identical length ("Google" / "GitHub" both 6 chars),
+ * so the icon positions remain visually aligned between the two
+ * stacked buttons. If a third provider with a drastically
+ * different name is added later, consider switching to a shared
+ * leading-edge grid so all icons stack on one vertical rule. */
+.timeline-transfer-dialog__auth-button--provider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+  padding: 11px 18px;
+  min-height: 44px;
+  border-radius: 999px;
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  box-shadow: 0 1px 0 color-mix(in oklab, var(--color-text) 4%, transparent),
+              0 4px 14px -8px color-mix(in oklab, var(--color-text) 12%, transparent);
+  transition: background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s;
+}
+.timeline-transfer-dialog__auth-button--provider:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 0 color-mix(in oklab, var(--color-text) 5%, transparent),
+              0 8px 18px -8px color-mix(in oklab, var(--color-text) 18%, transparent);
+}
+.timeline-transfer-dialog__auth-button--provider:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 1px 0 color-mix(in oklab, var(--color-text) 4%, transparent);
+}
+.timeline-transfer-dialog__provider-glyph {
+  flex-shrink: 0;
+  display: block;
+}
+/* GitHub glyph inherits currentColor (theme-aware); Google glyph
+ * carries its own 4-color palette and ignores the hover nudge. The
+ * shared rule keeps both from scaling on hover so the label remains
+ * the obvious interactive zone. */
+
+/* Minor actions — inline Cancel link replacing the old footer bar.
+ *
+ * 2026-04-23 v4: Centered (was right-aligned). The panel now has a
+ * clear central spine running through OR-divider → account-subtitle
+ * → clickwrap → Cancel. Centering the dismiss link on that spine
+ * gives the bottom of the panel visual closure instead of the
+ * lonely-right-corner tension the previous right-align created. */
+.timeline-transfer-dialog__minor-actions {
+  display: flex; justify-content: center;
+  margin-top: 6px;
+}
+
+/* Clickwrap — centered block with constrained max-width so the
+ * paragraph reads as "contained prose within the panel," not a
+ * corner-to-corner legal wrapper.
+ *
+ * Composition: the BLOCK is centered (auto margins) on the panel's
+ * spine; the TEXT inside stays LEFT-ALIGNED because multi-line
+ * legal prose is meaningfully harder to scan when every line is
+ * center-justified (line lengths jitter, ragged edges break
+ * reading rhythm). This follows the principle "center the
+ * connector, not the prose."
+ *
+ * Scoped to the Transfer dialog so account-menu + other
+ * `.age-clickwrap` callers are unaffected. */
+.timeline-transfer-dialog__auth-prompt .age-clickwrap {
+  max-width: 34ch;
+  margin-left: auto;
+  margin-right: auto;
+  margin-bottom: 10px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.timeline-transfer-dialog__text-dismiss {
+  background: none;
+  border: none;
+  padding: 4px 2px;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in oklab, var(--color-text-secondary) 40%, transparent);
+}
+.timeline-transfer-dialog__text-dismiss:hover:not(:disabled) {
+  color: var(--color-text);
+  text-decoration-color: var(--color-text);
+}
+.timeline-transfer-dialog__text-dismiss:disabled {
+  opacity: 0.5; cursor: not-allowed;
+}
+
+/* Expiry chip — terminal element of the guest-success state.
+ *
+ * Inline-flex pill with a pulsing accent dot so the ephemerality is
+ * visible at a glance, then the relative phrase + absolute date.
+ * `title={iso}` on the TSX provides the raw UTC on hover.
+ *
+ * Since 2026-04-23 v3 the chip is the last element of the success
+ * panel (the rhetorical "Need permanent share links…?" question was
+ * deleted). The trailing margin collapses to 0 so the chip sits
+ * flush at the panel's terminus without a dangling air-gap that
+ * would make the panel read as "cut off." */
+.timeline-transfer-dialog__expiry-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin: 6px 0 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--color-accent-text) 10%, transparent);
+  border: 1px solid color-mix(in oklab, var(--color-accent-text) 24%, transparent);
+  font-size: var(--font-xs);
+  color: var(--color-text);
+}
+.timeline-transfer-dialog__expiry-chip-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--color-accent-text);
+  box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-accent-text) 40%, transparent);
+  animation: timeline-transfer-chip-pulse 2s ease-in-out infinite;
+}
+@keyframes timeline-transfer-chip-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-accent-text) 0%, transparent); }
+  50%      { box-shadow: 0 0 0 4px color-mix(in oklab, var(--color-accent-text) 18%, transparent); }
+}
+.timeline-transfer-dialog__expiry-chip-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-accent-text);
+}
+.timeline-transfer-dialog__expiry-chip-when {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  font-weight: 500;
+}
+/* Absolute timestamp — rendered alongside the relative phrase in the
+ * same chip so hover-impaired users (touch, keyboard-only) still see
+ * the concrete date without needing to find the `title` tooltip. A
+ * thin divider sits between relative and absolute via the ::before. */
+.timeline-transfer-dialog__expiry-chip-abs {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+  font-size: 10.5px;
+  opacity: 0.75;
+  padding-left: 8px;
+  border-left: 1px solid color-mix(in oklab, var(--color-accent-text) 24%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline-transfer-dialog__auth-prompt > * { animation: none !important; }
+  .timeline-transfer-dialog__expiry-chip-dot { animation: none; }
+  .timeline-transfer-dialog__confirm--guest:not(:disabled):hover,
+  .timeline-transfer-dialog__confirm--primary-pill:not(:disabled):hover { transform: none; }
+  .timeline-transfer-dialog__confirm--guest:not(:disabled):hover .timeline-transfer-dialog__confirm-arrow,
+  .timeline-transfer-dialog__confirm--primary-pill:not(:disabled):hover .timeline-transfer-dialog__confirm-arrow { transform: none; }
+}
+
 /* ── Timeline bar (inside dock-region, normal flow above dock-bar) ── */
 /* ── Timeline bar ──
    Unified timeline shell — all states (off, ready, live, review) share one flex row.
@@ -1490,20 +1977,30 @@ canvas { display: block; touch-action: none; }
   color: var(--color-text); border-bottom-color: var(--color-accent-text);
   font-weight: 600;
 }
-/* Radio options (Download tab) */
+/* Radio options (Download tab) — 2026-04-23 v5 refined to echo the
+ * Quick Share tier card's visual weight. The selected card picks up
+ * the same tinted-accent surface + accent-hued border the tier card
+ * uses, so the two tabs feel like one family: "active choice on
+ * tinted accent surface" is the shared language. */
 .timeline-transfer-dialog__options {
-  display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px;
+  display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px;
 }
 .timeline-transfer-dialog__option {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px; border-radius: var(--radius-sm);
-  cursor: pointer; transition: background 0.1s;
-  border: 1px solid transparent;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  border: 1px solid var(--color-border);
+  background: color-mix(in oklab, var(--color-text) 2%, transparent);
 }
-.timeline-transfer-dialog__option:hover { background: var(--color-surface-hover); }
+.timeline-transfer-dialog__option:hover {
+  border-color: color-mix(in oklab, var(--color-accent-text) 18%, var(--color-border));
+  background: var(--color-surface-hover);
+}
 .timeline-transfer-dialog__option:has(input:checked) {
-  border-color: var(--color-accent-text);
-  background: color-mix(in srgb, var(--color-accent-text) 4%, transparent);
+  border-color: color-mix(in oklab, var(--color-accent-text) 30%, transparent);
+  background: color-mix(in oklab, var(--color-accent-text) 6%, transparent);
 }
 .timeline-transfer-dialog__option:has(input:focus-visible) {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent-text) 24%, transparent);
@@ -1552,62 +2049,217 @@ canvas { display: block; touch-action: none; }
   font-size: var(--font-xs); color: var(--color-text-secondary);
   margin-bottom: 16px; line-height: 1.4;
 }
-.timeline-transfer-dialog__success { margin-bottom: 16px; }
-.timeline-transfer-dialog__url-row {
-  display: flex; gap: 6px; align-items: center;
+/* ── Success state (redesign 2026-04-23) ──────────────────────────
+ *
+ * Replaces the old three-row layout (url-row / share-actions-row /
+ * manage-link-in-actions) with a single "link card" composition:
+ *
+ *     [✓ Shared]                       ← success header
+ *     ┌──────────────────────────────┐
+ *     │ SHARE LINK                   │ ← micro label
+ *     │ atomdojo.pages.dev/c/ABC123  │ ← read-only URL (mono)
+ *     │ [Copy link]   ↗ Open in Watch│ ← primary + tertiary
+ *     └──────────────────────────────┘
+ *     [● EXPIRES · in 2 days]    ← guest only (chip, relative+abs)
+ *     Need permanent share links?   ← guest only (muted question)
+ *     ↗ Manage uploads              ← account only
+ *
+ * No bottom action bar. The dialog's Esc + outside-click handle
+ * dismissal; the success panel therefore has no "Close" button —
+ * eliminating the old bordered footer that made the panel feel like
+ * a form.
+ *
+ * Motion: one staggered fade-up on entry; a single checkmark
+ * "draw-in" SVG animation on the success header. Deliberately quiet. */
+.timeline-transfer-dialog__success { margin-bottom: 4px; }
+@keyframes transfer-success-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-.timeline-transfer-dialog__url-input {
-  flex: 1; padding: 6px 10px; border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border); background: var(--panel-bg);
-  color: var(--color-text); font-family: var(--font-family);
-  font-size: var(--font-xs); outline: none;
+.timeline-transfer-dialog__success > * {
+  animation: transfer-success-enter 260ms cubic-bezier(.2,.8,.2,1) both;
 }
-.timeline-transfer-dialog__url-input:focus { border-color: var(--color-accent-text); }
-.timeline-transfer-dialog__copy {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 6px 10px; border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border); background: none;
-  color: var(--color-text); font-family: var(--font-family);
-  font-size: var(--font-xs); cursor: pointer; white-space: nowrap;
+.timeline-transfer-dialog__success > *:nth-child(1) { animation-delay: 0ms; }
+.timeline-transfer-dialog__success > *:nth-child(2) { animation-delay: 40ms; }
+.timeline-transfer-dialog__success > *:nth-child(3) { animation-delay: 80ms; }
+.timeline-transfer-dialog__success > *:nth-child(4) { animation-delay: 120ms; }
+
+/* Success header — "✓ Shared" with a drawn-in green check. The check
+ * sits in a small circular puck so it reads as an iconic confirm
+ * rather than just a tick floating in space. */
+.timeline-transfer-dialog__success-header {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-bottom: 12px;
 }
-.timeline-transfer-dialog__copy:hover { background: var(--color-surface-hover); }
-.timeline-transfer-dialog__copy svg { flex: 0 0 auto; }
-/* Share actions row: Open in Watch + code badge */
-.timeline-transfer-dialog__share-actions-row {
-  display: flex; align-items: center; gap: 8px;
-  margin-top: 10px; margin-bottom: 10px;
+.timeline-transfer-dialog__success-check {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: color-mix(in oklab, var(--color-accent-text) 14%, transparent);
+  border: 1px solid color-mix(in oklab, var(--color-accent-text) 32%, transparent);
+  color: var(--color-accent-text);
 }
-.timeline-transfer-dialog__watch-link {
+.timeline-transfer-dialog__success-check svg polyline {
+  stroke-dasharray: 20;
+  stroke-dashoffset: 20;
+  animation: transfer-check-draw 420ms cubic-bezier(.5,0,.2,1) 100ms forwards;
+}
+@keyframes transfer-check-draw {
+  to { stroke-dashoffset: 0; }
+}
+.timeline-transfer-dialog__success-label {
+  font-size: 13px; font-weight: 600; letter-spacing: -0.005em;
+  color: var(--color-text);
+}
+
+/* Link card — the single primary surface. Subtle surface elevation,
+ * mono URL, and a two-action row (Copy = primary, Open in Watch =
+ * inline tertiary link). The card hovers gain a 1 px lift + stronger
+ * border for scannability. */
+.timeline-transfer-dialog__link-card {
+  display: flex; flex-direction: column; gap: 10px;
+  margin: 0 0 12px;
+  padding: 12px 12px 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--color-text) 4%, var(--panel-bg));
+  border: 1px solid var(--color-border);
+  transition: border-color 150ms ease, transform 150ms ease;
+}
+.timeline-transfer-dialog__link-card:hover {
+  border-color: color-mix(in oklab, var(--color-accent-text) 28%, var(--color-border));
+}
+.timeline-transfer-dialog__link-card-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+  opacity: 0.8;
+}
+.timeline-transfer-dialog__link-card-url {
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  /* Fallback stack — the app does not ship a monospace token by
+   * default, so use widely-installed mono families with a final
+   * generic. Tabular-numerics keep the share-code portion aligned. */
+  font-family: ui-monospace, "SF Mono", "Menlo", "Roboto Mono", monospace;
+  font-size: 13px;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  outline: none;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.timeline-transfer-dialog__link-card-url:focus {
+  /* Faint focus rail — no border-chrome change. */
+  box-shadow: inset 0 -2px 0 color-mix(in oklab, var(--color-accent-text) 35%, transparent);
+  border-radius: 2px;
+}
+.timeline-transfer-dialog__link-card-actions {
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 2px;
+}
+
+/* Primary Copy button — accent fill, same silhouette as other primary
+ * confirms in this dialog so the UI language stays consistent. The
+ * `data-copied` state flips to a check icon + success phrasing and
+ * briefly pulses. */
+.timeline-transfer-dialog__copy-primary {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-text);
+  color: var(--panel-bg);
+  border: 1px solid var(--color-accent-text);
+  font-family: var(--font-family);
+  font-size: 12.5px; font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+  box-shadow: 0 1px 0 color-mix(in oklab, var(--color-accent-text) 30%, transparent);
+}
+.timeline-transfer-dialog__copy-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 0 color-mix(in oklab, var(--color-accent-text) 40%, transparent);
+}
+.timeline-transfer-dialog__copy-primary[data-copied="true"] {
+  animation: transfer-copy-pulse 520ms ease-out;
+}
+@keyframes transfer-copy-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-accent-text) 40%, transparent); }
+  50% { box-shadow: 0 0 0 8px color-mix(in oklab, var(--color-accent-text) 0%, transparent); }
+  100% { box-shadow: 0 1px 0 color-mix(in oklab, var(--color-accent-text) 30%, transparent); }
+}
+.timeline-transfer-dialog__copy-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
+/* Open in Watch — inline tertiary, plain text link with an "↗" glyph.
+ * Visually de-emphasized so Copy wins the primary read. */
+.timeline-transfer-dialog__open-inline {
   display: inline-flex; align-items: center; gap: 5px;
-  padding: 6px 12px; border-radius: var(--radius-sm);
-  background: var(--color-accent, #6ab89a); color: #111;
-  font-family: var(--font-family); font-size: var(--font-xs);
-  font-weight: 600; text-decoration: none; white-space: nowrap;
+  margin-left: auto;
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+  text-decoration: none;
+  opacity: 0.82;
+  transition: opacity 120ms ease, color 120ms ease;
 }
-.timeline-transfer-dialog__watch-link:hover { filter: brightness(1.1); }
-.timeline-transfer-dialog__watch-link svg { flex: 0 0 auto; }
-.timeline-transfer-dialog__code-badge {
-  font-size: var(--font-xs); color: var(--color-text-secondary);
-  font-family: var(--font-family); letter-spacing: 0.05em;
-  opacity: 0.7;
+.timeline-transfer-dialog__open-inline:hover {
+  opacity: 1;
+  color: var(--color-accent-text);
 }
-/* Leading link inside .timeline-transfer-dialog__actions for the
- * share-success branch. `margin-right: auto` floats it to the row's
- * leading edge while the cancel/confirm buttons stay anchored to the
- * right (the row's `justify-content: flex-end` is unchanged).
- * Intentionally low-emphasis: a small underlined secondary action,
- * not a CTA — the divider above it reads as a clean separator
- * between content and actions. */
-.timeline-transfer-dialog__manage-link {
-  margin-right: auto;
-  align-self: center;
+.timeline-transfer-dialog__open-inline svg {
+  transition: transform 140ms cubic-bezier(.2,.8,.2,1);
+}
+.timeline-transfer-dialog__open-inline:hover svg {
+  transform: translate(1px, -1px);
+}
+
+/* Account branch: "Manage uploads" as a single inline link beneath
+ * the link card. Replaces the old leadingLink-in-ShareActions
+ * pattern; the whole panel is now one stack, not content + footer. */
+.timeline-transfer-dialog__manage-link-inline {
+  display: inline-flex; align-items: center; gap: 4px;
   font-size: var(--font-xs);
   color: var(--color-text-secondary);
-  text-decoration: underline;
-  text-underline-offset: 2px;
+  text-decoration: none;
 }
-.timeline-transfer-dialog__manage-link:hover {
+.timeline-transfer-dialog__manage-link-inline:hover {
   color: var(--color-text);
+}
+.timeline-transfer-dialog__manage-link-inline svg {
+  transition: transform 140ms cubic-bezier(.2,.8,.2,1);
+}
+.timeline-transfer-dialog__manage-link-inline:hover svg {
+  transform: translate(1px, -1px);
+}
+
+/* Account-branch footer row — puts Manage uploads on the left and
+ * Close on the right without a divider bar. Simple flex-justify-between
+ * keeps the panel one surface rather than a content + footer split. */
+.timeline-transfer-dialog__account-success-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 10px;
+}
+
+/* The old `.__upsell-question` rule (rhetorical dead-end question
+ * below the expiry chip) was deleted in the 2026-04-23 v3 pass —
+ * see `GuestSuccessFooter` JSX comment. The expiry chip is now the
+ * terminal element of the guest-success state; no rule needed. */
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline-transfer-dialog__success > * { animation: none !important; }
+  .timeline-transfer-dialog__success-check svg polyline { stroke-dashoffset: 0; animation: none; }
+  .timeline-transfer-dialog__copy-primary[data-copied="true"] { animation: none; }
+  .timeline-transfer-dialog__copy-primary:hover { transform: none; }
+  .timeline-transfer-dialog__open-inline:hover svg,
+  .timeline-transfer-dialog__manage-link-inline:hover svg { transform: none; }
 }
 /* Non-fatal publish warning — rendered alongside the share URL when the
    server returns warnings[] on a real success (e.g. quota-accounting

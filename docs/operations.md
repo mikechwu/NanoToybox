@@ -70,10 +70,14 @@ values are stored as encrypted Pages Secrets.
 | `GOOGLE_CLIENT_ID` | Public var | `wrangler.toml` `[vars]` | Google OAuth app identifier |
 | `GITHUB_CLIENT_ID` | Public var | `wrangler.toml` `[vars]` | GitHub OAuth app identifier |
 | `CAPSULE_PREVIEW_DYNAMIC_FALLBACK` | Public var | `wrangler.toml` `[vars]` | Feature flag (default `"on"`) gating dynamic Satori-rendered poster fallback for `GET /api/capsules/:code/preview/poster`. Allowlist parser: only `on` / `true` / `1` enable; anything else (`off`, `disabled`, typos, empty) disables. See *Capsule preview poster* below for rollback procedure. |
+| `GUEST_PUBLISH_ENABLED` | Public var | `wrangler.toml` `[vars]` | Feature flag (default `"off"`) gating the Guest Quick Share path (`POST /api/capsules/guest-publish`). Same allowlist parser as `CAPSULE_PREVIEW_DYNAMIC_FALLBACK` — only `on` / `true` / `1` enable. Two-step rollout: ship code with flag off, verify on preview, then flip to `"on"` in a follow-up redeploy. Emergency off-switch: flip back to `"off"` and redeploy — the endpoint immediately returns 404, the client-config bridge reports `enabled: false`, and the Lab hides the Quick Share block. Existing guest rows keep serving until the cron sweep tombstones them at their natural expiry. |
+| `TURNSTILE_SITE_KEY` | Public var | `wrangler.toml` `[vars]` | Cloudflare Turnstile widget site key (public, committed). Bridged to the Lab via `/api/auth/session`'s `publicConfig` block. |
 | `GOOGLE_CLIENT_SECRET` | Secret | Pages Secret | Google OAuth app secret |
 | `GITHUB_CLIENT_SECRET` | Secret | Pages Secret | GitHub OAuth app secret |
 | `SESSION_SECRET` | Secret | Pages Secret | Single key for OAuth signed-state HMAC, session cookie signing, and abuse-report IP hashing. One rotate point, three dependents — read the rotation section before touching it. |
 | `CRON_SECRET` | Secret | Pages Secret **AND** cron Worker secret (IDENTICAL byte-for-byte) | Authorizes the production automation path to `/api/admin/*` endpoints (see `functions/admin-gate.ts`). |
+| `TURNSTILE_SECRET_KEY` | Secret | Pages Secret (prod **and** `--env=preview`) | Server-side key for Turnstile Siteverify on the Guest Quick Share endpoint. Provision via `npx wrangler pages secret put TURNSTILE_SECRET_KEY --project-name=atomdojo` (re-run with `--env=preview` so the preview lane can verify). Rotatable via the same command with a new value (no redeploy — runtime picks up new value on next request). |
+| `GUEST_PUBLISH_QUOTA_MAX` / `GUEST_PUBLISH_QUOTA_WINDOW_SECONDS` | Optional public vars | `wrangler.toml` `[vars]` (unset by default) | Operator knobs for the per-IP Guest Quick Share D1 quota (`guest_publish_quota_window`). Defaults (hard-coded in `src/share/rate-limit.ts` as `DEFAULT_GUEST_PUBLISH_QUOTA`): **5 publishes per 24-hour rolling window, 1-hour bucket granularity** — overshoot is bounded by `bucket_start` math (worst case ≈ one extra publish at the bucket-roll boundary). Leave unset unless you are deliberately tuning the layer-2 app-level gate; the WAF rule is the primary defense. |
 | `AUTH_DEV_USER_ID` / `DEV_ADMIN_ENABLED` | **NEVER in production** | — | Local dev bypass only. Setting either in the production Pages project breaks the admin gate (`DEV_ADMIN_ENABLED=true` would expose admin routes to any request with a spoofed `Host: localhost` header that survives Cloudflare normalization, and `AUTH_DEV_USER_ID` would attach a fixed identity to every unauthenticated request). |
 
 Cloudflare Pages treats `wrangler.toml` as the source of truth for public
@@ -90,6 +94,8 @@ wrangler pages secret put GOOGLE_CLIENT_SECRET --project-name=atomdojo
 wrangler pages secret put GITHUB_CLIENT_SECRET --project-name=atomdojo
 wrangler pages secret put SESSION_SECRET       --project-name=atomdojo
 wrangler pages secret put CRON_SECRET          --project-name=atomdojo
+wrangler pages secret put TURNSTILE_SECRET_KEY --project-name=atomdojo
+wrangler pages secret put TURNSTILE_SECRET_KEY --project-name=atomdojo --env=preview
 
 # Cron Worker secrets (CRON_SECRET must match Pages value)
 cd workers/cron-sweeper
@@ -109,9 +115,14 @@ Pages admin endpoints with `X-Cron-Secret: $CRON_SECRET`.
 | Cron pattern | Endpoint | Purpose |
 |---|---|---|
 | `0 */6 * * *` | `POST /api/admin/sweep/sessions` | Delete expired + idle sessions, prune stale quota buckets, clean up abandoned OAuth state records. Cheap, frequent. |
+| `10 */6 * * *` | `POST /api/admin/sweep/guest-expires` | Guest Quick Share expiry sweep. Tombstones rows matching `share_mode='guest' AND expires_at <= now() AND status != 'deleted'` through the shared delete core with `actor='cron'`; per-row audit event is `guest_publish_expired`. 10-minute offset from the sessions sweep so the two 6-hourly ticks never fire simultaneously against the same D1 database. The sweep returns its normal summary envelope even when `GUEST_PUBLISH_ENABLED="off"` (MUST NOT 404 on the flag-off state — that would cause a cron-sweeper retry storm). |
 | `30 3 * * *` | `POST /api/admin/sweep/orphans` | Delete R2 objects under `capsules/` older than 24h with no matching D1 row (the narrow window where R2 put succeeded but D1 persist + rollback both failed). |
 | `15 4 * * 0` | `POST /api/admin/sweep/audit?mode=scrub` | Weekly (Sun 04:15 UTC). NULL `ip_hash`, `user_agent`, and — for `abuse_report` + `moderation_delete` only — `reason` on `capsule_share_audit` rows older than 180 days. Event skeleton is retained for forensics. |
 | `45 4 * * 0` | `POST /api/admin/sweep/audit?mode=delete-abuse-reports` | Weekly (Sun 04:45 UTC). Row-delete `event_type='abuse_report'` audit rows older than 180 days; also row-deletes `privacy_requests` past the 180-day SLA window. |
+
+Manual invocation of any sweep target: `GET <cron-worker-url>/?target=<name>`
+with `X-Cron-Secret`. Supported `<name>` values: `sessions`, `orphans`,
+`audit-scrub`, `audit-delete`, `guest-expires`.
 
 Stream live Worker logs during investigation:
 
@@ -854,6 +865,14 @@ in place.
   - When: hostname `eq` `atomdojo.pages.dev` AND path `contains` `/api/capsules/`
   - Rate: 300 requests per 1 minute per IP
   - Action: Managed Challenge
+- **Guest publish per IP** (Quick Share)
+  - When: hostname `eq` `atomdojo.pages.dev` AND path `eq` `/api/capsules/guest-publish`
+  - Rate: 10 requests per 1 minute per IP
+  - Action: Managed Challenge; escalate to block for 10 minutes after 3 challenge hits in a rolling hour
+  - Tighter than the auth Publish rule because an anonymous abuser has no cookie to bind behavior against. The per-IP D1 quota in `guest_publish_quota_window` is the layer-2 app-level gate; the two layers compose — an edge-blocked request never reaches Turnstile Siteverify, the quota table, or the capsule validator.
+
+The inline canonical-source copy of these rules lives alongside the
+bindings block in `wrangler.toml` for review discoverability.
 
 If you ever point the deployment at a custom hostname, update these rules.
 
@@ -880,10 +899,28 @@ All of the above signals are referenced in code:
 - `src/share/rate-limit.ts` — quota accounting and audit calls
 - `src/share/audit.ts` — event type enum
 - `functions/api/capsules/publish.ts` — publish pipeline
+- `functions/api/capsules/guest-publish.ts` — Guest Quick Share pipeline
 - `functions/api/capsules/[code]/report.ts` — abuse reports
 - `functions/api/admin/sweep/orphans.ts` — orphan sweep
 - `functions/api/admin/sweep/audit.ts` — audit-retention sweeper
 - `functions/api/account/delete.ts` — account-delete cascade
+
+**Guest Quick Share audit events.** The `functions/api/capsules/guest-publish.ts`
+path emits a dedicated event family on the shared
+`capsule_share_audit` stream, all with `actor='guest'`:
+`guest_publish_success`, `guest_publish_age_attested`,
+`guest_publish_rejected_turnstile`, `guest_publish_rejected_quota`,
+`guest_publish_rejected_size`, `guest_publish_rejected_invalid`,
+`guest_publish_expired` (written by the cron sweep per tombstoned row
+with `actor='cron'`). Successful guest publishes also bump the
+`guest_publish_success` row in `usage_counter` — a daily aggregate with
+no PII, mirroring the `publish_success` counter pattern. None of these
+are MUST-alert signals today; they are grep/query targets for
+investigating abuse or verifying rollout traffic shape. A spike in
+`guest_publish_rejected_turnstile` after rotating `TURNSTILE_SECRET_KEY`
+usually just means the rotate + re-provision window was longer than
+intended (see *Secret rotation*); a sustained rate with no rotation
+underway is a signal to inspect Turnstile widget health.
 
 ---
 
@@ -1284,6 +1321,22 @@ Users already signed in via cookie are unaffected — the OAuth secret is only
 used during the token exchange on the callback endpoint. Only in-flight
 auth flows will break; users just retry the login.
 
+### TURNSTILE_SECRET_KEY
+
+Rotate in the Cloudflare dashboard (**Turnstile → widget → Rotate**),
+then immediately re-provision both Pages envs with the new value:
+
+```bash
+wrangler pages secret put TURNSTILE_SECRET_KEY --project-name=atomdojo
+wrangler pages secret put TURNSTILE_SECRET_KEY --project-name=atomdojo --env=preview
+```
+
+No redeploy required — the runtime picks up the new value on the next
+request. Any Guest Quick Share request that lands between the dashboard
+rotate and the `wrangler pages secret put` call will fail Siteverify and
+emit a `guest_publish_rejected_turnstile` audit event; keep the two
+commands back-to-back so the window is < 1 s.
+
 ---
 
 ## Migrations
@@ -1319,6 +1372,21 @@ Current migrations (in `migrations/`, applied in order by wrangler):
   account-page lazy-rebake lease; TTL (90 s) lives in application code
   as `HEAL_LEASE_TTL_MS`. See *Read-time auto-heal for bondless legacy
   rows* above.
+- `0011_capsule_share_guest.sql` — Guest Quick Share columns on
+  `capsule_share`. Full table rebuild (SQLite has no ALTER COLUMN /
+  ADD CHECK): `owner_user_id` relaxed to nullable, adds `share_mode`
+  (`'account' | 'guest'`, default `'account'` for the backfill),
+  `expires_at` (ISO timestamp, non-null only for guest rows), a CHECK
+  constraint binding `share_mode ↔ owner_user_id` nullability, and the
+  partial index `idx_capsule_guest_expires ON capsule_share(expires_at)
+  WHERE share_mode = 'guest' AND status != 'deleted'` for the expiry
+  sweep. Template mirrors migration `0008`.
+- `0012_guest_publish_quota_window.sql` — `guest_publish_quota_window(ip_hash,
+  bucket_start, count)` table backing the per-IP rolling-window quota for
+  the Guest Quick Share publish path. Bucket math mirrors
+  `privacy_request_quota_window`; consumed by the helpers in
+  `src/share/rate-limit.ts` and pruned implicitly by
+  `pruneExpiredGuestPublishQuotaBuckets` during operator cleanup runs.
 
 Remote application is automatic on deploy: `.github/workflows/deploy.yml`
 runs `wrangler d1 migrations apply atomdojo-capsules --remote` right
@@ -1414,6 +1482,23 @@ curl -I "https://atomdojo.pages.dev/c/<code>"
 # Expect 200 / redirect respectively.
 ```
 
+Lab CSP header check (one-time verification after the first production
+deploy that ships `public/_headers`, then again after any change to
+that file):
+
+```bash
+curl -sI "https://atomdojo.pages.dev/lab/" | grep -i content-security-policy
+# Expect a single header permitting https://challenges.cloudflare.com in
+# script-src, frame-src, and connect-src (required for the Turnstile
+# explicit-render widget to load from the Lab document response).
+```
+
+Also visually confirm the Turnstile widget mounts in a real browser
+without CSP violations — the Guest Quick Share block in the Lab is the
+end-to-end probe. The popup-complete CSP in
+`functions/auth/popup-complete.ts` is deliberately scoped to the OAuth
+callback page and has no Turnstile dependency; leave it alone.
+
 Capsule preview poster smoke test (use any accessible capsule code):
 
 ```bash
@@ -1468,11 +1553,12 @@ wrangler pages deployment tail | grep '\[capsule-poster\]'
   bucket public (even for a "debug" window) would allow deleted /
   moderated capsules to continue serving via direct R2 URLs.
 - **Cron Worker free-tier ceiling:** the account can register up to 5 cron
-  triggers on the free tier (paid: 250). The sweeper currently uses 4
-  (sessions every 6h; orphans daily 03:30 UTC; audit-scrub Sun 04:15 UTC;
-  audit-delete-abuse-reports Sun 04:45 UTC). Only one free-tier slot
-  remains — adding another schedule requires either collapsing an
-  existing trigger or moving the Worker to a paid plan.
+  triggers on the free tier (paid: 250). The sweeper currently uses 5
+  (sessions every 6h at :00; guest-expires every 6h at :10; orphans
+  daily 03:30 UTC; audit-scrub Sun 04:15 UTC; audit-delete-abuse-reports
+  Sun 04:45 UTC). **The free-tier quota is now fully consumed** —
+  adding another schedule requires either collapsing an existing
+  trigger or moving the Worker to a paid plan.
 - **Watch→Lab handoff is pure client-side.** The `localStorage` handoff
   payload (see *Client-side sentinels*) never crosses an origin boundary
   and never hits the Pages Functions or R2. It costs nothing on the

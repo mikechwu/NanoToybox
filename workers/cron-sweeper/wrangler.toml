@@ -28,7 +28,8 @@ PAGES_BASE_URL = "https://atomdojo.pages.dev"
 # on a paid plan (free tier: 5 crons/account; paid: 250/account).
 [triggers]
 crons = [
-  "0 */6 * * *",    # every 6h — /api/admin/sweep/sessions
+  "0 */6 * * *",    # every 6h at :00 — /api/admin/sweep/sessions
+  "10 */6 * * *",   # every 6h at :10 — /api/admin/sweep/guest-expires (offset from sessions)
   "30 3 * * *",     # daily 03:30 UTC — /api/admin/sweep/orphans
   "15 4 * * 0",     # weekly Sun 04:15 UTC — /api/admin/sweep/audit?mode=scrub
   "45 4 * * 0",     # weekly Sun 04:45 UTC — /api/admin/sweep/audit?mode=delete-abuse-reports

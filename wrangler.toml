@@ -29,6 +29,25 @@ GITHUB_CLIENT_ID = "Ov23liucwJPJKHZEnwtJ"
 #   npx wrangler pages deploy dist --project-name=atomdojo
 CAPSULE_PREVIEW_DYNAMIC_FALLBACK = "on"
 
+# ── Guest Quick Share (Turnstile-gated anonymous publish) ─────────────────
+# Flag resolved via src/share/guest-publish-flag.ts (allow-list: "on",
+# "true", "1"). Default is "off" — rollout is a two-step redeploy:
+#   1. Ship the code + migration + _headers with the flag off.
+#   2. Flip to "on" in THIS file and redeploy.
+# Emergency off-switch: flip back to "off" and redeploy. See the
+# implementation plan §Rollout.
+GUEST_PUBLISH_ENABLED = "off"
+
+# Turnstile site key (public) — bridged to the Lab via the session
+# endpoint's publicConfig block. The server-side secret is provisioned
+# via `wrangler pages secret put TURNSTILE_SECRET_KEY` (NEVER committed).
+# Use Cloudflare's test keys in .dev.vars for local development.
+#
+# Widget configured in Cloudflare dashboard against hostname
+# `atomdojo.pages.dev` (covers all `*.atomdojo.pages.dev` Pages preview
+# deploys automatically per Turnstile subdomain-inheritance rules).
+TURNSTILE_SITE_KEY = "0x4AAAAAADCAi9oIgE2zwmjH"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "atomdojo-capsules"
@@ -71,6 +90,18 @@ bucket_name = "atomdojo-capsules-prod"
 #       When: hostname eq atomdojo.pages.dev AND path contains /api/capsules/
 #       Rate: 300 requests per 1 minute per IP
 #       Action: challenge (managed challenge)
+#     Rule: "Guest publish per IP" (Quick Share)
+#       When: hostname eq atomdojo.pages.dev AND path eq /api/capsules/guest-publish
+#       Rate: 10 requests per 1 minute per IP
+#       Action: managed challenge, escalate to block for 10 minutes
+#               after 3 challenge hits in a rolling hour
+#       Rationale: anonymous POSTs that consume Turnstile + D1 budget.
+#       Tighter than "Publish per IP" (30/min) because abusers have no
+#       cookie to bind behavior against. The per-IP D1 quota in
+#       `guest_publish_quota_window` is the layer-2 app-level gate; the
+#       two layers compose (an edge-blocked request never reaches
+#       Turnstile Siteverify, the quota table, or the capsule validator).
+#
 #     Rule: "Age-intent signing per IP" (D120)
 #       When: hostname eq atomdojo.pages.dev AND path eq /api/account/age-confirmation/intent
 #       Rate: 30 requests per 1 minute per IP

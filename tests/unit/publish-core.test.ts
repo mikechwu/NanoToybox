@@ -46,6 +46,8 @@ describe('preparePublishRecord', () => {
     const record = await preparePublishRecord({
       capsuleJson: json,
       ownerUserId: 'user-1',
+      shareMode: 'account',
+      expiresAt: null,
       appVersion: '0.1.0',
     });
 
@@ -74,6 +76,8 @@ describe('preparePublishRecord', () => {
     const record = await preparePublishRecord({
       capsuleJson: JSON.stringify(capsule),
       ownerUserId: 'user-1',
+      shareMode: 'account',
+      expiresAt: null,
       appVersion: '0.1.0',
     });
     expect(record.metadata.hasAppearance).toBe(true);
@@ -85,6 +89,8 @@ describe('preparePublishRecord', () => {
     const record = await preparePublishRecord({
       capsuleJson: JSON.stringify(capsule),
       ownerUserId: 'user-1',
+      shareMode: 'account',
+      expiresAt: null,
       appVersion: '0.1.0',
     });
     expect(record.metadata.hasInteraction).toBe(true);
@@ -95,6 +101,8 @@ describe('preparePublishRecord', () => {
       preparePublishRecord({
         capsuleJson: '{bad json',
         ownerUserId: 'user-1',
+        shareMode: 'account',
+        expiresAt: null,
         appVersion: '0.1.0',
       }),
     ).rejects.toThrow(PublishValidationError);
@@ -107,6 +115,8 @@ describe('preparePublishRecord', () => {
       preparePublishRecord({
         capsuleJson: JSON.stringify(full),
         ownerUserId: 'user-1',
+        shareMode: 'account',
+        expiresAt: null,
         appVersion: '0.1.0',
       }),
     ).rejects.toThrow(PublishValidationError);
@@ -119,6 +129,8 @@ describe('preparePublishRecord', () => {
       preparePublishRecord({
         capsuleJson: JSON.stringify(capsule),
         ownerUserId: 'user-1',
+        shareMode: 'account',
+        expiresAt: null,
         appVersion: '0.1.0',
       }),
     ).rejects.toThrow(PublishValidationError);
@@ -131,6 +143,8 @@ describe('preparePublishRecord', () => {
       preparePublishRecord({
         capsuleJson: JSON.stringify(capsule),
         ownerUserId: 'user-1',
+        shareMode: 'account',
+        expiresAt: null,
         appVersion: '0.1.0',
       }),
     ).rejects.toThrow(PublishValidationError);
@@ -138,15 +152,15 @@ describe('preparePublishRecord', () => {
 
   it('computes deterministic SHA-256', async () => {
     const json = makeValidCapsuleJson();
-    const r1 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', appVersion: '0.1.0' });
-    const r2 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', appVersion: '0.1.0' });
+    const r1 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', shareMode: 'account', expiresAt: null, appVersion: '0.1.0' });
+    const r2 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', shareMode: 'account', expiresAt: null, appVersion: '0.1.0' });
     expect(r1.sha256).toBe(r2.sha256);
   });
 
   it('generates different record IDs for same input', async () => {
     const json = makeValidCapsuleJson();
-    const r1 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', appVersion: '0.1.0' });
-    const r2 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', appVersion: '0.1.0' });
+    const r1 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', shareMode: 'account', expiresAt: null, appVersion: '0.1.0' });
+    const r2 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', shareMode: 'account', expiresAt: null, appVersion: '0.1.0' });
     expect(r1.id).not.toBe(r2.id);
   });
 
@@ -155,6 +169,8 @@ describe('preparePublishRecord', () => {
     const r = await preparePublishRecord({
       capsuleJson: makeValidCapsuleJson(),
       ownerUserId: 'u',
+      shareMode: 'account',
+      expiresAt: null,
       appVersion: '0.1.0',
     });
     expect(r.previewSceneV1Json).not.toBeNull();
@@ -166,8 +182,8 @@ describe('preparePublishRecord', () => {
 
   it('V2: previewSceneV1Json is deterministic for identical capsule JSON', async () => {
     const json = makeValidCapsuleJson();
-    const r1 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', appVersion: '0.1.0' });
-    const r2 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', appVersion: '0.1.0' });
+    const r1 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', shareMode: 'account', expiresAt: null, appVersion: '0.1.0' });
+    const r2 = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', shareMode: 'account', expiresAt: null, appVersion: '0.1.0' });
     expect(r1.previewSceneV1Json).toBe(r2.previewSceneV1Json);
   });
 });
@@ -217,7 +233,7 @@ type D1Database = import('../../src/share/publish-core').PersistedPublishRecord 
 describe('persistRecord', () => {
   it('succeeds on first attempt', async () => {
     const json = makeValidCapsuleJson();
-    const prepared = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', appVersion: '0.1.0' });
+    const prepared = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', shareMode: 'account', expiresAt: null, appVersion: '0.1.0' });
     const db = makeMockDb();
 
     const result = await persistRecord(db, prepared);
@@ -229,7 +245,7 @@ describe('persistRecord', () => {
 
   it('retries on UNIQUE constraint error and succeeds', async () => {
     const json = makeValidCapsuleJson();
-    const prepared = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', appVersion: '0.1.0' });
+    const prepared = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', shareMode: 'account', expiresAt: null, appVersion: '0.1.0' });
     const db = makeMockDb({ failCount: 2 }); // fail first 2, succeed on 3rd
 
     const result = await persistRecord(db, prepared);
@@ -239,7 +255,7 @@ describe('persistRecord', () => {
 
   it('throws after 5 consecutive UNIQUE constraint failures', async () => {
     const json = makeValidCapsuleJson();
-    const prepared = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', appVersion: '0.1.0' });
+    const prepared = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', shareMode: 'account', expiresAt: null, appVersion: '0.1.0' });
     const db = makeMockDb({ failCount: 5 });
 
     await expect(persistRecord(db, prepared)).rejects.toThrow(
@@ -250,7 +266,7 @@ describe('persistRecord', () => {
 
   it('rethrows non-UNIQUE errors immediately without retry', async () => {
     const json = makeValidCapsuleJson();
-    const prepared = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', appVersion: '0.1.0' });
+    const prepared = await preparePublishRecord({ capsuleJson: json, ownerUserId: 'u', shareMode: 'account', expiresAt: null, appVersion: '0.1.0' });
     const db = makeMockDb({ failCount: 1, failWithUniqueError: false });
 
     await expect(persistRecord(db, prepared)).rejects.toThrow('Database connection error');

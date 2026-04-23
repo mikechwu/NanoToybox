@@ -8,7 +8,7 @@
 
 import type { Env } from '../../../env';
 import { normalizeShareInput } from '../../../../src/share/share-code';
-import { isAccessibleStatus } from '../../../../src/share/share-record';
+import { isAccessibleShare } from '../../../../src/share/share-record';
 import type { CapsuleShareRow } from '../../../../src/share/share-record';
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
@@ -23,12 +23,12 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   }
 
   const row = await context.env.DB.prepare(
-    'SELECT id, status, object_key, share_code FROM capsule_share WHERE share_code = ?',
+    'SELECT id, status, object_key, share_code, expires_at FROM capsule_share WHERE share_code = ?',
   )
     .bind(code)
-    .first<Pick<CapsuleShareRow, 'id' | 'status' | 'object_key' | 'share_code'>>();
+    .first<Pick<CapsuleShareRow, 'id' | 'status' | 'object_key' | 'share_code' | 'expires_at'>>();
 
-  if (!row || !isAccessibleStatus(row.status)) {
+  if (!row || !isAccessibleShare(row, new Date().toISOString())) {
     return new Response('Not found', { status: 404 });
   }
 

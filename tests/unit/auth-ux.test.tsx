@@ -53,6 +53,7 @@ function installPublishableTimeline() {
       ...baseTimelineCallbacks,
       onExportHistory: vi.fn(async () => 'saved' as const),
       onPublishCapsule: vi.fn(async () => ({
+        mode: 'account' as const,
         shareCode: 'AAAA1111BBBB',
         shareUrl: 'https://atomdojo.pages.dev/c/AAAA1111BBBB',
       })),

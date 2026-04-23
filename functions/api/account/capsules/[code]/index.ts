@@ -38,10 +38,14 @@ export const onRequestDelete: PagesFunction<Env> = async (context) => {
     return new Response('Not found', { status: 404 });
   }
 
-  // Ownership check — a row owned by someone else is indistinguishable
-  // from a non-existent code at the HTTP layer.
+  // Ownership check — a row owned by someone else (or a guest row with
+  // no owner at all) is indistinguishable from a non-existent code at
+  // the HTTP layer. `share_mode = 'account'` is explicit belt-and-braces
+  // over the `owner_user_id IS NOT NULL` that the CHECK constraint
+  // already guarantees for account rows; a guest row with NULL owner
+  // cannot be reached this way even by a user forging their own id.
   const owned = await env.DB.prepare(
-    'SELECT owner_user_id FROM capsule_share WHERE share_code = ?',
+    "SELECT owner_user_id FROM capsule_share WHERE share_code = ? AND share_mode = 'account'",
   )
     .bind(code)
     .first<OwnerCheckRow>();

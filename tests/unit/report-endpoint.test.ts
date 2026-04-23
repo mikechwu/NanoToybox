@@ -37,6 +37,7 @@ vi.mock('../../src/share/audit', async () => {
 interface ShareRow {
   id: string;
   status: string;
+  expires_at?: string | null;
 }
 
 function makeDb(row: ShareRow | null) {
@@ -130,7 +131,7 @@ describe('report endpoint', () => {
     const res = await onRequestPost(
       makeContext({
         code: '7M4K2D8Q9T1V',
-        row: { id: 'sh-1', status: 'ready' },
+        row: { id: 'sh-1', status: 'ready', expires_at: null },
         body: JSON.stringify({ reason: 'spam' }),
         headers: { 'User-Agent': 'Mozilla/5.0 test-browser' },
         sessionSecret: 'salt',
@@ -158,7 +159,7 @@ describe('report endpoint', () => {
     const res = await onRequestPost(
       makeContext({
         code: '7M4K2D8Q9T1V',
-        row: { id: 'sh-1', status: 'ready' },
+        row: { id: 'sh-1', status: 'ready', expires_at: null },
         body: JSON.stringify({ reason: 'still spam' }),
         sessionSecret: 'salt',
       }),
@@ -175,7 +176,7 @@ describe('report endpoint', () => {
     const res = await onRequestPost(
       makeContext({
         code: '7M4K2D8Q9T1V',
-        row: { id: 'sh-1', status: 'ready' },
+        row: { id: 'sh-1', status: 'ready', expires_at: null },
         body: JSON.stringify({ reason: 'misconfig env' }),
         // sessionSecret intentionally undefined
       }),
@@ -194,7 +195,7 @@ describe('report endpoint', () => {
     const res = await onRequestPost(
       makeContext({
         code: '7M4K2D8Q9T1V',
-        row: { id: 'sh-1', status: 'ready' },
+        row: { id: 'sh-1', status: 'ready', expires_at: null },
         body: '{not-json',
         sessionSecret: 'salt',
       }),
@@ -214,7 +215,7 @@ describe('report endpoint', () => {
     await onRequestPost(
       makeContext({
         code: '7M4K2D8Q9T1V',
-        row: { id: 'sh-1', status: 'ready' },
+        row: { id: 'sh-1', status: 'ready', expires_at: null },
         body: JSON.stringify({ reason: longReason }),
         sessionSecret: 'salt',
       }),

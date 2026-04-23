@@ -623,9 +623,9 @@ New `AuditEventType` values introduced in Phase 7: `'owner_delete'`, `'account_d
 
 Per-row PII fields (`ip_hash`, `user_agent`, `reason`) are scrubbed at 180 days by the cron sweeper. When adding a new audit field, classify it explicitly: **skeleton** (retained indefinitely) or **PII** (scrubbed at the 180-day window). Document the classification in the same PR.
 
-#### Migrations 0004–0010
+#### Migrations 0004–0011
 
-Additive only; applied automatically by `deploy.yml`. New tables/columns contributors should know about:
+Additive only (with the documented exception of 0011's controlled rebuild); applied automatically by `deploy.yml`. New tables/columns contributors should know about:
 
 - `user_policy_acceptance` (0006)
 - `privacy_requests`, `privacy_request_quota_window` (0007)
@@ -633,8 +633,15 @@ Additive only; applied automatically by `deploy.yml`. New tables/columns contrib
 - `capsule_share.object_key` nullability relaxation for tombstone DELETE (0008)
 - `capsule_preview_scene_v1` row columns (0009) — backs the V2 preview pipeline
 - `capsule_share.preview_rebake_claimed_at` lease column (0010) — dedups account-page lazy-heal rebake claims across concurrent tabs; TTL lives in application code (`HEAL_LEASE_TTL_MS`)
+- `capsule_share` full table rebuild (0011) — adds a `share_mode` CHECK constraint and relaxes `owner_user_id` to nullable to back Guest Quick Share; also adds `guest_publish_quota_window` for per-IP quota tracking
 
-Latest applied migration is `0010`. Convention is unchanged from prior migrations — name files `NNNN_<slug>.sql`, additive only, no destructive operations.
+Latest applied migration is `0011`. Convention is unchanged from prior migrations — name files `NNNN_<slug>.sql`, additive only, no destructive operations.
+
+**SQLite rebuild rule:** 0011 is the template for any future `capsule_share` schema change that cannot be expressed as a pure `ALTER TABLE ADD COLUMN`. SQLite does not support `ALTER COLUMN`, so CHECK-constraint or nullability changes must follow the full-rebuild pattern: create `capsule_share_new`, `INSERT INTO … SELECT …` from the old table, drop the old, rename. Rebuild migrations are the one documented exception to the "additive only" rule — hand-roll the rebuild rather than reaching for a destructive `ALTER`.
+
+#### Feature-flag rollout convention
+
+New gated features ship their flag `"off"` on `main` and flip on via a second deploy once the off-state has verified. `GUEST_PUBLISH_ENABLED` is the reference implementation — the flag lives in `wrangler.toml [vars]`, defaults to `"off"` in production, and local development sets `GUEST_PUBLISH_ENABLED=on` in `.dev.vars` to exercise the gated path. The two-step redeploy pattern (ship flag-off, verify nothing regresses, flip to `"on"` in a follow-up PR) is the expected shape for future gated features; it keeps the code-landing and enablement decisions independently revertible. Operational specifics of flipping the flag in production live in `operations.md`.
 
 #### E2E lanes
 
@@ -887,6 +894,21 @@ npm install
 | `AUTH_DEV_USER_ID` | Optional dev bypass. With this set AND running on localhost, publish/admin endpoints treat every request as this user. **Never set in production.** |
 | `DEV_ADMIN_ENABLED=true` | Optional. Unlocks admin routes for local testing alongside the localhost origin check. |
 | `CRON_SECRET` | Optional. For local testing of the cron Worker dispatch. Production value must match between Pages and the companion Worker. |
+| `GUEST_PUBLISH_ENABLED` | Guest Quick Share feature flag. Ships `"off"` on `main` — flip to `"on"` locally to exercise the Turnstile-gated anonymous publish path. |
+| `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile credentials for Guest Quick Share. Use the always-pass testing keys `1x00000000000000000000AA` / `1x0000000000000000000000000000000AA` locally (safe to commit — documented at <https://developers.cloudflare.com/turnstile/troubleshooting/testing/>). Production values are provisioned via `wrangler pages secret put`. |
+| `GUEST_PUBLISH_QUOTA_MAX`, `GUEST_PUBLISH_QUOTA_WINDOW_SECONDS` | Optional. Operator overrides for the per-IP guest-publish quota (defaults: 5 per 24 h). Set e.g. `GUEST_PUBLISH_QUOTA_MAX=999` / `GUEST_PUBLISH_QUOTA_WINDOW_SECONDS=60` to raise the ceiling during iterative local testing. |
+
+`.dev.vars.example` in the repo root documents the full shape — copy it to `.dev.vars` as a starting point.
+
+During iterative Guest Quick Share testing you will quickly hit the per-IP
+quota. Reset the local quota window with:
+
+```
+npx wrangler d1 execute atomdojo-capsules --local --command "DELETE FROM guest_publish_quota_window"
+```
+
+(or raise the ceiling temporarily via the two `GUEST_PUBLISH_QUOTA_*` overrides
+above).
 
 #### Local dev modes
 
@@ -903,6 +925,17 @@ npm install
 ##### Auth in Vite dev
 
 `lab/js/runtime/auth-runtime.ts` contains a Vite dev-host guard: when it detects the Vite dev server host (no Pages Functions available), it short-circuits the popup OAuth flow and logs a console message pointing at `wrangler pages dev`. This is intentional — do not try to make the popup flow work under Vite. Switch to `npm run app:serve` (or `npm run build && npm run cf:dev`) when touching auth.
+
+##### Static-asset headers (`public/_headers`) only apply under Pages
+
+`public/_headers` (the Cloudflare Pages static-asset header file — currently
+scoping the Lab CSP that whitelists `challenges.cloudflare.com` for the
+Turnstile widget) is only honored under real Pages serving: `wrangler pages
+dev` (via `npm run app:serve` or `npm run cf:dev`) and production. Plain
+`vite` dev does **not** honor `_headers`, so Lab loaded under `npm run dev`
+runs without the document CSP. When iterating on anything that depends on
+the CSP (Turnstile, any future script-src allowlist entry), use
+`app:serve` — not `vite`.
 
 The OAuth flow is popup-primary (a `window.open()` against the provider's consent screen) with an explicit, user-opted-in same-tab fallback (never silent). The popup completes against `/auth/popup-complete`, which is served by the Pages Function at `functions/auth/popup-complete.ts` (static HTML response with a strict CSP). After completion it notifies the opener via `window.opener.postMessage` plus a same-origin `BroadcastChannel('atomdojo-auth')` fallback; the opener re-runs `hydrateAuthSession()` to refresh session state.
 
@@ -958,12 +991,12 @@ npm run test:e2e -- tests/e2e/topbar-right-layout.spec.ts
 | `tests/unit/session-endpoint.test.ts` | Backend — 200 contract for signed-in **and** signed-out, dev-cookie handling, user-missing recovery (Workers tsconfig) |
 | `tests/e2e/topbar-right-layout.spec.ts` | AccountControl + FPSDisplay flex-container geometry regression |
 
-The backend auth tests (`auth-middleware.test.ts`, `session-endpoint.test.ts`) compile under `tsconfig.functions.json` so they see the Workers runtime globals. They are listed in `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — same pattern as the capsule endpoint tests. Follow the same dual-listing rule when adding new backend-handler tests. The full `tsconfig.json` `exclude` list (28 entries as of this writing, and still growing — `tests/unit/account-capsules-backfill.test.ts` is the most recent addition) is the authoritative source for what lives under the Workers config.
+The backend auth tests (`auth-middleware.test.ts`, `session-endpoint.test.ts`) compile under `tsconfig.functions.json` so they see the Workers runtime globals. They are listed in `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — same pattern as the capsule endpoint tests. Follow the same dual-listing rule when adding new backend-handler tests. The full `tsconfig.json` `exclude` list (33 entries as of this writing, and still growing — the six Guest Quick Share tests `guest-publish-flag.test.ts`, `turnstile.test.ts`, `guest-publish-quota.test.ts`, `guest-publish-endpoint.test.ts`, `admin-guest-expires-endpoint.test.ts`, and `account-capsules-count.test.ts` are the most recent additions) is the authoritative source for what lives under the Workers config.
 
 #### Adding a new endpoint test
 
 - Place the test at `tests/unit/<name>-endpoint.test.ts` (or `<name>-middleware.test.ts` for middleware)
-- Add the filename to **both** `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — this prevents Workers globals from leaking into frontend compilation. There is a precedent block of 28 dual-listed files as of this writing (authoritative count: the exclude list in `tsconfig.json`, with `tests/unit/account-capsules-backfill.test.ts` as the most recent dual-listing); follow the existing ordering
+- Add the filename to **both** `tsconfig.functions.json` `include` **and** `tsconfig.json` `exclude` — this prevents Workers globals from leaking into frontend compilation. There is a precedent block of 33 dual-listed files as of this writing (authoritative count: the exclude list in `tsconfig.json`, with the six Guest Quick Share backend tests — `guest-publish-flag.test.ts`, `turnstile.test.ts`, `guest-publish-quota.test.ts`, `guest-publish-endpoint.test.ts`, `admin-guest-expires-endpoint.test.ts`, `account-capsules-count.test.ts` — as the most recent dual-listings); follow the existing ordering
 - Adding a new `.tsx` under `functions/` (e.g. another Satori OG renderer) does **not** require a config change: `tsconfig.functions.json` already includes `functions/**/*.tsx` with `jsx: "react-jsx"`, and `functions/**` is excluded from the frontend config by virtue of not appearing in its `include` globs
 - Use hoisted `vi.fn<(...args: unknown[]) => ...>()` for module mocks
 - See `tests/unit/publish-endpoint.test.ts`, `tests/unit/session-endpoint.test.ts`, and `tests/unit/owner-delete-endpoint.test.ts` for the canonical patterns (`minimalValidCapsule()`, `makePermissiveEnv()` helpers; owner-vs-other 404 contract)
@@ -974,7 +1007,7 @@ The backend auth tests (`auth-middleware.test.ts`, `session-endpoint.test.ts`) c
 - Code lives at `workers/cron-sweeper/` with its own `wrangler.toml` and `tsconfig.json`
 - Deploy: `npm run cron:deploy`
 - Tail production logs: `npm run cron:tail`
-- Manual invocation: `curl -X GET 'https://<worker-url>/?target=sessions' -H 'X-Cron-Secret: …'` — returns 404 if the secret is missing or wrong (intentional; see `workers/cron-sweeper/README.md`)
+- Manual invocation: `curl -X GET 'https://<worker-url>/?target=sessions' -H 'X-Cron-Secret: …'` — returns 404 if the secret is missing or wrong (intentional; see `workers/cron-sweeper/README.md`). Valid `?target` values are `sessions | orphans | audit-scrub | audit-delete | guest-expires`.
 
 #### OAuth redirect URIs
 

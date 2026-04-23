@@ -56,6 +56,7 @@ import {
   postCapsuleArtifact,
   type CapsuleArtifact,
 } from './runtime/publish-capsule-artifacts';
+import { postGuestCapsuleArtifact } from './runtime/publish-guest-artifact';
 import { buildCapsuleArtifact as buildCapsuleArtifactImpl } from './runtime/build-capsule-artifact';
 import type { CapsuleSelectionRange } from './runtime/timeline/capsule-publish-types';
 import { PublishOversizeError } from './runtime/publish-errors';
@@ -990,6 +991,16 @@ async function init() {
       const artifact = _buildCapsuleArtifactForPublish();
       if (!artifact) throw new Error('No recorded history to publish.');
       return postCapsuleArtifact(artifact);
+    },
+    publishGuestCapsule: async (turnstileToken: string) => {
+      // Anonymous Quick Share path. Same artifact construction as the
+      // account no-arg publish so oversize preflight, byte accounting,
+      // and validation stay aligned. Guest trim mode is out of scope
+      // in v1 — the dialog disables Continue as Guest above the size
+      // ceiling and surfaces the sign-in-to-trim upsell.
+      const artifact = _buildCapsuleArtifactForPublish();
+      if (!artifact) throw new Error('No recorded history to publish.');
+      return postGuestCapsuleArtifact(artifact, turnstileToken);
     },
     bondedGroupAppearance: _bondedGroupAppearance ?? undefined,
     prepareCapsulePublish: (range) => _capsulePublisher!.prepareCapsulePublish(range),

@@ -267,3 +267,103 @@ export async function prunePrivacyRequestQuota(
     .bind(oldestStart)
     .run();
 }
+
+// ── Guest publish per-IP rate limit (Quick Share) ─────────────────
+//
+// Anonymous publish flow has no user id, so the quota is keyed on a
+// hashed IP. Kept in a dedicated table (`guest_publish_quota_window`)
+// rather than sharing `privacy_request_quota_window` or
+// `publish_quota_window` — see the comment at the privacy-quota block
+// above. Recommended default is 5 per rolling 24 h in 1 h buckets; the
+// endpoint layer reads overrides from env (§Env in the plan).
+
+export type GuestPublishQuotaConfig = PublishQuotaConfig;
+
+export const DEFAULT_GUEST_PUBLISH_QUOTA: GuestPublishQuotaConfig = {
+  maxPerWindow: 5,
+  windowSeconds: 24 * 60 * 60,
+  bucketSeconds: 60 * 60,
+};
+
+export async function checkGuestPublishQuota(
+  db: D1Database,
+  ipHash: string,
+  config: GuestPublishQuotaConfig = DEFAULT_GUEST_PUBLISH_QUOTA,
+  now: Date = new Date(),
+): Promise<QuotaCheckResult> {
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  const keys = activeBuckets(nowSeconds, config).map((k) => k * config.bucketSeconds);
+  const oldestStart = keys[keys.length - 1];
+  const placeholders = keys.map(() => '?').join(',');
+  const row = await db
+    .prepare(
+      `SELECT COALESCE(SUM(count), 0) AS total
+         FROM guest_publish_quota_window
+        WHERE ip_hash = ? AND bucket_start IN (${placeholders})`,
+    )
+    .bind(ipHash, ...keys)
+    .first<{ total: number }>();
+  const currentCount = row?.total ?? 0;
+  return {
+    allowed: currentCount < config.maxPerWindow,
+    currentCount,
+    limit: config.maxPerWindow,
+    retryAtSeconds: oldestStart + config.windowSeconds,
+  };
+}
+
+export async function consumeGuestPublishQuota(
+  db: D1Database,
+  ipHash: string,
+  config: GuestPublishQuotaConfig = DEFAULT_GUEST_PUBLISH_QUOTA,
+  now: Date = new Date(),
+): Promise<void> {
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  const currentBucketStart = bucketKey(nowSeconds, config) * config.bucketSeconds;
+  await db
+    .prepare(
+      `INSERT INTO guest_publish_quota_window (ip_hash, bucket_start, count)
+       VALUES (?, ?, 1)
+       ON CONFLICT(ip_hash, bucket_start) DO UPDATE SET count = count + 1`,
+    )
+    .bind(ipHash, currentBucketStart)
+    .run();
+}
+
+export async function pruneExpiredGuestPublishQuotaBuckets(
+  db: D1Database,
+  config: GuestPublishQuotaConfig = DEFAULT_GUEST_PUBLISH_QUOTA,
+  now: Date = new Date(),
+): Promise<void> {
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  const oldestStart =
+    (bucketKey(nowSeconds, config) -
+      Math.ceil(config.windowSeconds / config.bucketSeconds)) *
+    config.bucketSeconds;
+  await db
+    .prepare('DELETE FROM guest_publish_quota_window WHERE bucket_start < ?')
+    .bind(oldestStart)
+    .run();
+}
+
+/** Resolve operator overrides for the guest publish quota. Only
+ *  numeric env values > 0 take effect; anything else falls back to
+ *  {@link DEFAULT_GUEST_PUBLISH_QUOTA}. */
+export function resolveGuestPublishQuota(env: {
+  GUEST_PUBLISH_QUOTA_MAX?: string;
+  GUEST_PUBLISH_QUOTA_WINDOW_SECONDS?: string;
+}): GuestPublishQuotaConfig {
+  const max = parsePositiveInt(env.GUEST_PUBLISH_QUOTA_MAX);
+  const windowSeconds = parsePositiveInt(env.GUEST_PUBLISH_QUOTA_WINDOW_SECONDS);
+  return {
+    maxPerWindow: max ?? DEFAULT_GUEST_PUBLISH_QUOTA.maxPerWindow,
+    windowSeconds: windowSeconds ?? DEFAULT_GUEST_PUBLISH_QUOTA.windowSeconds,
+    bucketSeconds: DEFAULT_GUEST_PUBLISH_QUOTA.bucketSeconds,
+  };
+}
+
+function parsePositiveInt(raw: string | undefined): number | null {
+  if (raw == null) return null;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}

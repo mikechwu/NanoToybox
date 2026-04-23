@@ -74,7 +74,7 @@ function makeRange(snapshotId: CapsuleSnapshotId, startIdx = 0, endIdx = 0): Cap
 describe('createPreparedCapsulePublisher', () => {
   it('caches the prepared JSON keyed by prepareId and returns summary', async () => {
     const build = vi.fn((_range: CapsuleSelectionRange) => makeArtifact('{"hello":"world"}'));
-    const post = vi.fn(async (_a: CapsuleArtifact) => ({ shareCode: 'abc', shareUrl: 'https://x' }));
+    const post = vi.fn(async (_a: CapsuleArtifact) => ({ mode: 'account' as const, shareCode: 'abc', shareUrl: 'https://x' }));
     const getVersion = vi.fn(() => 'v1:0:0:0');
     const publisher = createPreparedCapsulePublisher({
       buildCapsuleArtifact: build,
@@ -91,7 +91,7 @@ describe('createPreparedCapsulePublisher', () => {
 
   it('publishPreparedCapsule throws snapshot-stale when snapshot changed and never calls post', async () => {
     const build = vi.fn((_range: CapsuleSelectionRange) => makeArtifact('{"x":1}'));
-    const post = vi.fn(async (_a: CapsuleArtifact) => ({ shareCode: 'c', shareUrl: 'u' }));
+    const post = vi.fn(async (_a: CapsuleArtifact) => ({ mode: 'account' as const, shareCode: 'c', shareUrl: 'u' }));
     let version: CapsuleSnapshotId = 'v1:0:0:0';
     const publisher = createPreparedCapsulePublisher({
       buildCapsuleArtifact: build,
@@ -110,7 +110,7 @@ describe('createPreparedCapsulePublisher', () => {
 
   it('detects snapshot-stale across all three input families (frame / metadata / appearance)', async () => {
     const build = vi.fn((_range: CapsuleSelectionRange) => makeArtifact('{"y":1}'));
-    const post = vi.fn(async (_a: CapsuleArtifact) => ({ shareCode: 'c', shareUrl: 'u' }));
+    const post = vi.fn(async (_a: CapsuleArtifact) => ({ mode: 'account' as const, shareCode: 'c', shareUrl: 'u' }));
     const cases: CapsuleSnapshotId[] = ['2:0:0:0', '1:1:0:0', '1:0:1:0'];
     for (const next of cases) {
       let version: CapsuleSnapshotId = '1:0:0:0';
@@ -127,7 +127,7 @@ describe('createPreparedCapsulePublisher', () => {
   });
 
   it('publishPreparedCapsule posts cached artifact when snapshot matches and evicts on success', async () => {
-    const post = vi.fn(async (_a: CapsuleArtifact) => ({ shareCode: 'x', shareUrl: 'y' }));
+    const post = vi.fn(async (_a: CapsuleArtifact) => ({ mode: 'account' as const, shareCode: 'x', shareUrl: 'y' }));
     const publisher = createPreparedCapsulePublisher({
       buildCapsuleArtifact: (_range) => makeArtifact('{"same":true}'),
       getCapsuleExportInputVersion: () => 'v:0:0:0',
@@ -148,7 +148,7 @@ describe('createPreparedCapsulePublisher', () => {
     let captured: CapsuleArtifact | null = null;
     const post = vi.fn(async (artifact: CapsuleArtifact) => {
       captured = artifact;
-      return { shareCode: 'a', shareUrl: 'b' };
+      return { mode: 'account' as const, shareCode: 'a', shareUrl: 'b' };
     });
     const publisher = createPreparedCapsulePublisher({
       buildCapsuleArtifact: (_r) => makeArtifact(fixedJson),
@@ -182,7 +182,7 @@ describe('createPreparedCapsulePublisher', () => {
     const publisher = createPreparedCapsulePublisher({
       buildCapsuleArtifact: (_r) => makeArtifact(`{"n":${n}}`),
       getCapsuleExportInputVersion: () => 'v:0:0:0',
-      postCapsuleArtifact: async () => ({ shareCode: 'x', shareUrl: 'y' }),
+      postCapsuleArtifact: async () => ({ mode: 'account' as const, shareCode: 'x', shareUrl: 'y' }),
       maxCacheEntries: 2,
       generatePrepareId: () => `prep-${n++}`,
     });

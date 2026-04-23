@@ -6,7 +6,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  isAccessibleStatus,
+  isAccessibleShare,
   isDynamicPreviewFallbackEnabled,
   toMetadataResponse,
   type CapsuleShareRow,
@@ -14,25 +14,40 @@ import {
 } from '../../src/share/share-record';
 import { TEMPLATE_VERSION } from '../../src/share/capsule-preview';
 
-describe('isAccessibleStatus', () => {
-  it('returns true for ready', () => {
-    expect(isAccessibleStatus('ready')).toBe(true);
+describe('isAccessibleShare', () => {
+  const NOW = '2026-04-23T00:00:00.000Z';
+  const PAST = '2026-04-22T00:00:00.000Z';
+  const FUTURE = '2026-04-24T00:00:00.000Z';
+
+  it('returns true for ready with null expiry (account row)', () => {
+    expect(isAccessibleShare({ status: 'ready', expires_at: null }, NOW)).toBe(true);
   });
 
-  it('returns true for ready_pending_preview', () => {
-    expect(isAccessibleStatus('ready_pending_preview')).toBe(true);
+  it('returns true for ready_pending_preview with null expiry', () => {
+    expect(
+      isAccessibleShare({ status: 'ready_pending_preview', expires_at: null }, NOW),
+    ).toBe(true);
+  });
+
+  it('returns true for ready with future expiry (live guest row)', () => {
+    expect(isAccessibleShare({ status: 'ready', expires_at: FUTURE }, NOW)).toBe(true);
+  });
+
+  it('returns false for ready with past expiry (expired guest row)', () => {
+    expect(isAccessibleShare({ status: 'ready', expires_at: PAST }, NOW)).toBe(false);
+  });
+
+  it('returns false for rejected regardless of expiry', () => {
+    expect(isAccessibleShare({ status: 'rejected', expires_at: null }, NOW)).toBe(false);
+    expect(isAccessibleShare({ status: 'rejected', expires_at: FUTURE }, NOW)).toBe(false);
+  });
+
+  it('returns false for deleted even when expiry is in the future', () => {
+    expect(isAccessibleShare({ status: 'deleted', expires_at: FUTURE }, NOW)).toBe(false);
   });
 
   it('returns false for pending_upload', () => {
-    expect(isAccessibleStatus('pending_upload')).toBe(false);
-  });
-
-  it('returns false for rejected', () => {
-    expect(isAccessibleStatus('rejected')).toBe(false);
-  });
-
-  it('returns false for deleted', () => {
-    expect(isAccessibleStatus('deleted')).toBe(false);
+    expect(isAccessibleShare({ status: 'pending_upload', expires_at: null }, NOW)).toBe(false);
   });
 });
 
@@ -65,6 +80,8 @@ function makeRow(overrides: Partial<CapsuleShareRow> = {}): CapsuleShareRow {
     last_accessed_at: null,
     rejection_reason: null,
     preview_scene_v1: null,
+    share_mode: 'account',
+    expires_at: null,
     ...overrides,
   };
 }

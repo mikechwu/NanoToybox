@@ -92,14 +92,53 @@ export class AgeConfirmationRequiredError extends Error {
 /** Shapes returned by GET /api/auth/session. The endpoint always returns
  *  200 with a status discriminator; we branch on that field instead of
  *  HTTP status so "signed out" doesn't appear as a red network error in
- *  devtools for every Lab page load. */
+ *  devtools for every Lab page load.
+ *
+ *  `publicConfig` is optional in the wire type for forward/backward
+ *  compatibility: older server builds won't emit it, and a newer server
+ *  sending extra fields must not break the Lab. When missing we fall
+ *  back to the default "guest publish disabled" config so the UI
+ *  continues to show only the OAuth path. */
 type SessionPayload =
-  | { status: 'signed-in'; userId: string; displayName: string | null; createdAt?: string }
-  | { status: 'signed-out' };
+  | {
+      status: 'signed-in';
+      userId: string;
+      displayName: string | null;
+      createdAt?: string;
+      publicConfig?: SessionPublicConfig;
+    }
+  | { status: 'signed-out'; publicConfig?: SessionPublicConfig };
+
+export interface SessionPublicConfig {
+  guestPublish: {
+    enabled: boolean;
+    turnstileSiteKey: string | null;
+  };
+}
+
+export const DEFAULT_PUBLIC_CONFIG: SessionPublicConfig = {
+  guestPublish: { enabled: false, turnstileSiteKey: null },
+};
+
+function isSessionPublicConfig(v: unknown): v is SessionPublicConfig {
+  if (!v || typeof v !== 'object') return false;
+  const r = v as Record<string, unknown>;
+  const gp = r.guestPublish as Record<string, unknown> | undefined;
+  if (!gp || typeof gp !== 'object') return false;
+  return (
+    typeof gp.enabled === 'boolean'
+    && (gp.turnstileSiteKey === null || typeof gp.turnstileSiteKey === 'string')
+  );
+}
 
 function isSessionPayload(v: unknown): v is SessionPayload {
   if (!v || typeof v !== 'object') return false;
   const r = v as Record<string, unknown>;
+  // publicConfig is optional — when present we type-guard it; when
+  // absent the server is on an older build or the field was trimmed.
+  if (r.publicConfig !== undefined && !isSessionPublicConfig(r.publicConfig)) {
+    return false;
+  }
   if (r.status === 'signed-out') return true;
   return (
     r.status === 'signed-in'
@@ -204,6 +243,15 @@ export async function hydrateAuthSession(): Promise<AuthState> {
   }
   if (!isSessionPayload(payload)) {
     return resolveIndeterminate('returned unexpected shape');
+  }
+
+  // `publicConfig` is a state-discovery payload — apply it on every
+  // successful session response, regardless of signed-in/out branch, so
+  // the Lab picks up a flag flip without waiting for a sign-in state
+  // change. Missing (older server) → keep whatever the store already
+  // has, which is initialized to the "disabled" default at boot.
+  if (payload.publicConfig && isLatest()) {
+    useAppStore.getState().setPublicConfig(payload.publicConfig);
   }
 
   if (payload.status === 'signed-out') {

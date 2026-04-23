@@ -116,6 +116,7 @@ describe('GET /api/auth/session — response contract', () => {
       userId: 'u1',
       displayName: 'Alice',
       createdAt: '2026-01-01T00:00:00Z',
+      publicConfig: { guestPublish: { enabled: false, turnstileSiteKey: null } },
     });
     expect(clearCookieHeaders(res)).toEqual([]);
   });
@@ -126,7 +127,7 @@ describe('GET /api/auth/session — response contract', () => {
       makeContext(makeRequest('__Host-atomdojo_session=stale-sid'), makeEnv(null)),
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'signed-out' });
+    expect(await res.json()).toEqual({ status: 'signed-out', publicConfig: { guestPublish: { enabled: false, turnstileSiteKey: null } } });
     const setCookies = clearCookieHeaders(res);
     expect(setCookies.length).toBe(1);
     const cookie = setCookies[0];
@@ -139,7 +140,7 @@ describe('GET /api/auth/session — response contract', () => {
     authMock.mockResolvedValue(null);
     const res = await onRequestGet(makeContext(makeRequest(), makeEnv(null)));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'signed-out' });
+    expect(await res.json()).toEqual({ status: 'signed-out', publicConfig: { guestPublish: { enabled: false, turnstileSiteKey: null } } });
     expect(clearCookieHeaders(res)).toEqual([]);
   });
 
@@ -159,7 +160,7 @@ describe('GET /api/auth/session — response contract', () => {
       makeContext(makeRequest('__Host-atomdojo_session=live'), makeEnv(null)),
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'signed-out' });
+    expect(await res.json()).toEqual({ status: 'signed-out', publicConfig: { guestPublish: { enabled: false, turnstileSiteKey: null } } });
     expect(clearCookieHeaders(res).length).toBe(1);
   });
 
@@ -191,7 +192,7 @@ describe('GET /api/auth/session — response contract', () => {
       makeContext(makeDevHttpRequest('atomdojo_session_dev=stale-dev-sid'), makeEnv(null)),
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'signed-out' });
+    expect(await res.json()).toEqual({ status: 'signed-out', publicConfig: { guestPublish: { enabled: false, turnstileSiteKey: null } } });
     const setCookies = clearCookieHeaders(res);
     expect(setCookies.length).toBe(1);
     const cookie = setCookies[0];
@@ -217,7 +218,79 @@ describe('GET /api/auth/session — response contract', () => {
       ),
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'signed-out' });
+    expect(await res.json()).toEqual({ status: 'signed-out', publicConfig: { guestPublish: { enabled: false, turnstileSiteKey: null } } });
     expect(clearCookieHeaders(res)).toEqual([]);
+  });
+
+  // ── publicConfig.guestPublish matrix ────────────────────────────
+  //
+  // Pin the feature-flag semantics at the response boundary so a
+  // regression anywhere in buildPublicConfig / isGuestPublishEnabled
+  // cannot quietly ship the wrong thing. Covers:
+  //   - flag unset / explicit off → disabled, no site key
+  //   - flag true/1/on → enabled, site key surfaced
+  //   - flag on + missing site key → enabled:true but key null
+  //     (defense in depth — UI hides Quick Share)
+  //   - garbage values → disabled
+  function makeEnvWithGuestPublish(
+    flag: string | undefined,
+    siteKey: string | undefined,
+  ): Env {
+    return {
+      DB: makeFakeD1(null) as unknown as Env['DB'],
+      R2_BUCKET: undefined as unknown as Env['R2_BUCKET'],
+      ...(flag !== undefined ? { GUEST_PUBLISH_ENABLED: flag } : {}),
+      ...(siteKey !== undefined ? { TURNSTILE_SITE_KEY: siteKey } : {}),
+    } as Env;
+  }
+
+  it('publicConfig: flag unset → disabled, null site key (even if key is set)', async () => {
+    authMock.mockResolvedValue(null);
+    const res = await onRequestGet(makeContext(
+      makeRequest(),
+      makeEnvWithGuestPublish(undefined, 'SITE-KEY-X'),
+    ));
+    const body = await res.json() as { publicConfig: { guestPublish: { enabled: boolean; turnstileSiteKey: string | null } } };
+    expect(body.publicConfig.guestPublish).toEqual({ enabled: false, turnstileSiteKey: null });
+  });
+
+  it('publicConfig: flag "off" → disabled, site key nulled', async () => {
+    authMock.mockResolvedValue(null);
+    const res = await onRequestGet(makeContext(
+      makeRequest(),
+      makeEnvWithGuestPublish('off', 'SITE-KEY-X'),
+    ));
+    const body = await res.json() as { publicConfig: { guestPublish: { enabled: boolean; turnstileSiteKey: string | null } } };
+    expect(body.publicConfig.guestPublish).toEqual({ enabled: false, turnstileSiteKey: null });
+  });
+
+  it.each(['on', 'true', '1', 'ON', '  True  '])('publicConfig: flag "%s" → enabled with site key surfaced', async (flag) => {
+    authMock.mockResolvedValue(null);
+    const res = await onRequestGet(makeContext(
+      makeRequest(),
+      makeEnvWithGuestPublish(flag, 'SITE-KEY-Y'),
+    ));
+    const body = await res.json() as { publicConfig: { guestPublish: { enabled: boolean; turnstileSiteKey: string | null } } };
+    expect(body.publicConfig.guestPublish).toEqual({ enabled: true, turnstileSiteKey: 'SITE-KEY-Y' });
+  });
+
+  it('publicConfig: flag "on" WITHOUT site key → enabled:true but key null', async () => {
+    authMock.mockResolvedValue(null);
+    const res = await onRequestGet(makeContext(
+      makeRequest(),
+      makeEnvWithGuestPublish('on', undefined),
+    ));
+    const body = await res.json() as { publicConfig: { guestPublish: { enabled: boolean; turnstileSiteKey: string | null } } };
+    expect(body.publicConfig.guestPublish).toEqual({ enabled: true, turnstileSiteKey: null });
+  });
+
+  it.each(['enabled', 'yes', 'disabled', 'no', ''])('publicConfig: garbage value "%s" → disabled', async (flag) => {
+    authMock.mockResolvedValue(null);
+    const res = await onRequestGet(makeContext(
+      makeRequest(),
+      makeEnvWithGuestPublish(flag, 'SITE-KEY-Z'),
+    ));
+    const body = await res.json() as { publicConfig: { guestPublish: { enabled: boolean; turnstileSiteKey: string | null } } };
+    expect(body.publicConfig.guestPublish).toEqual({ enabled: false, turnstileSiteKey: null });
   });
 });

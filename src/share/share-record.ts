@@ -19,10 +19,32 @@ export type ShareRecordStatus =
 
 export type PreviewStatus = 'pending' | 'ready' | 'none';
 
-/** Returns true if the record is publicly accessible (metadata + blob endpoints return 200). */
-export function isAccessibleStatus(status: ShareRecordStatus): boolean {
-  return status === 'ready' || status === 'ready_pending_preview';
+/** Publish mode — 'account' = authenticated permanent share, 'guest' =
+ *  anonymous Quick Share with a 72h TTL (§Guest Publish Row Semantics). */
+export type ShareMode = 'account' | 'guest';
+
+/**
+ * Returns true if the record is publicly accessible — status is a live one
+ * AND, for guest rows, the expiry window has not elapsed. `now` is an ISO
+ * timestamp; lexical comparison is safe because every writer goes through
+ * `new Date().toISOString()` (fixed-width `YYYY-MM-DDTHH:mm:ss.sssZ`, UTC).
+ *
+ * Replaces the pre-guest `isAccessibleStatus(status)` predicate. Callers
+ * must widen their SELECT to include `expires_at` before calling.
+ */
+export function isAccessibleShare(
+  row: Pick<CapsuleShareRow, 'status' | 'expires_at'>,
+  now: string,
+): boolean {
+  return (row.status === 'ready' || row.status === 'ready_pending_preview')
+    && (row.expires_at === null || row.expires_at > now);
 }
+
+/** SQL predicate matching {@link isAccessibleShare}. Bind one ISO-timestamp
+ *  parameter (the current time) at the `?` placeholder. Exported so
+ *  account-list/public-read queries cannot drift from the TS predicate. */
+export const accessibleShareSqlFragment =
+  "status IN ('ready','ready_pending_preview') AND (expires_at IS NULL OR expires_at > ?)";
 
 /**
  * D1 row shape for capsule_share table.
@@ -32,7 +54,9 @@ export interface CapsuleShareRow {
   id: string;
   share_code: string;
   status: ShareRecordStatus;
-  owner_user_id: string;
+  /** NULL for guest rows (share_mode='guest'). CHECK constraint enforces
+   *  the invariant: account ⇒ owner id present; guest ⇒ owner id null. */
+  owner_user_id: string | null;
   object_key: string;
   format: string;
   version: number;
@@ -61,6 +85,13 @@ export interface CapsuleShareRow {
    *  rendered under V2 yet (account list endpoint emits previewThumb: null
    *  for those rows, driving the placeholder thumbnail). */
   preview_scene_v1: string | null;
+  /** 'account' for the existing authenticated publish path, 'guest' for
+   *  the Quick Share path. Default 'account' at migration time for
+   *  backfilled rows. */
+  share_mode: ShareMode;
+  /** ISO timestamp (UTC) after which a guest row is no longer accessible.
+   *  NULL for account rows (permanent). */
+  expires_at: string | null;
 }
 
 import { TEMPLATE_VERSION, fnv1a32Hex } from './capsule-preview';
@@ -142,7 +173,7 @@ export function toMetadataResponse(
   };
 
   const hasStored = row.preview_status === 'ready' && !!row.preview_poster_key;
-  const accessible = isAccessibleStatus(row.status);
+  const accessible = isAccessibleShare(row, new Date().toISOString());
 
   if (hasStored) {
     response.preview = {

@@ -14,7 +14,7 @@
 import type { Env } from '../env';
 import { normalizeShareInput } from '../../src/share/share-code';
 import {
-  isAccessibleStatus,
+  isAccessibleShare,
   isDynamicPreviewFallbackEnabled,
   toMetadataResponse,
 } from '../../src/share/share-record';
@@ -41,7 +41,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     .bind(code)
     .first<CapsuleShareRow>();
 
-  if (!row || !isAccessibleStatus(row.status)) {
+  if (!row || !isAccessibleShare(row, new Date().toISOString())) {
     return new Response('Not found', { status: 404 });
   }
 

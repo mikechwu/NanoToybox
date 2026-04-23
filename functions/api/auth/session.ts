@@ -36,6 +36,24 @@
 
 import type { Env } from '../../env';
 import { authenticateRequest, clearSessionCookie, hasSessionCookie } from '../../auth-middleware';
+import { isGuestPublishEnabled } from '../../../src/share/guest-publish-flag';
+
+/** Public, non-sensitive config bridged to the Lab SPA at boot. See
+ *  implementation plan §Runtime Client-Config Bridge for the contract.
+ *  Additive field on every session response; legacy clients ignore it.
+ *
+ *  `turnstileSiteKey` is forced to null when `enabled=false` so the UI
+ *  cannot render a Turnstile widget against a disabled endpoint. */
+function buildPublicConfig(env: Env) {
+  const enabled = isGuestPublishEnabled(env);
+  const siteKey = env.TURNSTILE_SITE_KEY ?? null;
+  return {
+    guestPublish: {
+      enabled,
+      turnstileSiteKey: enabled && siteKey ? siteKey : null,
+    },
+  };
+}
 
 const NO_CACHE_HEADERS: Readonly<Record<string, string>> = {
   'Cache-Control': 'no-store, private',
@@ -52,7 +70,7 @@ function makeHeaders(): Headers {
   return headers;
 }
 
-function signedOutResponse(request: Request): Response {
+function signedOutResponse(request: Request, env: Env): Response {
   const headers = makeHeaders();
   // Opportunistic cookie cleanup: if the request carried a session
   // cookie we've now determined is not authoritative (orphan / expired /
@@ -61,13 +79,16 @@ function signedOutResponse(request: Request): Response {
   if (hasSessionCookie(request)) {
     clearSessionCookie(headers, request);
   }
-  return Response.json({ status: 'signed-out' }, { headers });
+  return Response.json(
+    { status: 'signed-out', publicConfig: buildPublicConfig(env) },
+    { headers },
+  );
 }
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const userId = await authenticateRequest(context.request, context.env);
   if (!userId) {
-    return signedOutResponse(context.request);
+    return signedOutResponse(context.request, context.env);
   }
 
   const user = await context.env.DB.prepare(
@@ -91,7 +112,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
       `[auth.session.user-missing] authenticated userId prefix=${idPrefix}… ` +
       'returned null from users SELECT — race or regression?',
     );
-    return signedOutResponse(context.request);
+    return signedOutResponse(context.request, context.env);
   }
 
   return Response.json(
@@ -100,6 +121,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
       userId: user.id,
       displayName: user.display_name,
       createdAt: user.created_at,
+      publicConfig: buildPublicConfig(context.env),
     },
     { headers: makeHeaders() },
   );

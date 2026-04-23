@@ -65,7 +65,17 @@ export type AuditEventType =
   // pathological failures — per-row detail stays in [backfill] logs):
   //   { dryRun, force, pageSize, currentThumbRev,
   //     scanned, updated, skipped, failedCount }
-  | 'preview_backfill_run';
+  | 'preview_backfill_run'
+  // Guest Quick Share audit stream — kept distinct from the auth-path
+  // publish events so abuse dashboards don't conflate guest and auth
+  // signals. Actor is the literal 'guest' for all of these.
+  | 'guest_publish_success'
+  | 'guest_publish_age_attested'
+  | 'guest_publish_rejected_turnstile'
+  | 'guest_publish_rejected_quota'
+  | 'guest_publish_rejected_size'
+  | 'guest_publish_rejected_invalid'
+  | 'guest_publish_expired';
 
 export type AuditSeverity = 'info' | 'warning' | 'critical';
 

@@ -8,10 +8,12 @@
  *     (actor='owner', audit event_type='owner_delete')
  *   - account-wide cascade: `POST /api/account/delete`
  *     (actor='owner', reason='account_delete_cascade')
+ *   - guest-expiry sweep: `POST /api/admin/sweep/guest-expires`
+ *     (actor='cron', audit event_type='guest_publish_expired')
  *
  * Ordering contract (identical across all callers):
  *   1. Flip `capsule_share.status` to 'deleted' (public endpoints start
- *      returning 404 immediately via `isAccessibleStatus`).
+ *      returning 404 immediately via `isAccessibleShare`).
  *   2. NULL content-identifying columns (sha256, preview_poster_key,
  *      preview_motion_key).
  *   3. Delete the R2 blob.
@@ -41,9 +43,10 @@ export interface CapsuleDeleteEnv {
 }
 
 export interface DeleteCapsuleOptions {
-  actor: 'admin' | 'owner';
-  /** Opaque user id string emitted as the audit `actor` when owner-initiated. */
-  userId?: string;
+  actor: 'admin' | 'owner' | 'cron';
+  /** Opaque user id string emitted as the audit `actor` when owner-initiated.
+   *  Must be null/undefined when actor='cron'. */
+  userId?: string | null;
   /** Free-form moderation / cascade reason; truncated inside audit helpers. */
   reason?: string;
   /** Optional User-Agent string to record on the audit event. */
@@ -148,10 +151,22 @@ export async function deleteCapsule(
       .run();
   }
 
-  // Step 5: audit. Severity escalates on R2 failure.
+  // Step 5: audit. Severity escalates on R2 failure. Cron-actor deletes
+  // (guest-expiry sweep) land under a distinct event type so dashboards
+  // don't conflate operator/user-initiated deletes with automated
+  // expiries.
   const eventType: AuditEventType =
-    opts.actor === 'admin' ? 'moderation_delete' : 'owner_delete';
-  const auditActor = opts.actor === 'admin' ? 'admin' : (opts.userId ?? 'owner');
+    opts.actor === 'admin'
+      ? 'moderation_delete'
+      : opts.actor === 'cron'
+        ? 'guest_publish_expired'
+        : 'owner_delete';
+  const auditActor =
+    opts.actor === 'admin'
+      ? 'admin'
+      : opts.actor === 'cron'
+        ? 'cron'
+        : (opts.userId ?? 'owner');
 
   await recordAuditEvent(env.DB, {
     shareId: row.id,

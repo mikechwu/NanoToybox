@@ -1128,7 +1128,7 @@ describe('TimelineBar unified shell', () => {
   function installWithPublish(opts: {
     mode?: 'off' | 'ready' | 'active';
     caps?: { full: boolean; capsule: boolean };
-    onPublish?: () => Promise<{ shareCode: string; shareUrl: string }>;
+    onPublish?: () => Promise<{ mode: "account"; shareCode: string; shareUrl: string }>;
     onPause?: () => boolean;
     onResume?: () => void;
     /** Phase 6 Auth UX: the Share tab shows a sign-in prompt when auth is
@@ -1137,7 +1137,7 @@ describe('TimelineBar unified shell', () => {
     signedIn?: boolean;
   } = {}) {
     const mode = opts.mode ?? 'active';
-    const onPublish = opts.onPublish ?? vi.fn(async () => ({ shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' }));
+    const onPublish = opts.onPublish ?? vi.fn(async () => ({ mode: 'account' as const, shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' }));
     const onPause = opts.onPause ?? vi.fn(() => true);
     const onResume = opts.onResume ?? vi.fn();
     useAppStore.getState().installTimelineUI(
@@ -1209,6 +1209,7 @@ describe('TimelineBar unified shell', () => {
 
   it('successful publish shows share URL and code', async () => {
     const onPublish = vi.fn(async () => ({
+      mode: 'account' as const,
       shareCode: 'TEST12345678',
       shareUrl: 'https://atomdojo.pages.dev/c/TEST12345678',
     }));
@@ -1229,8 +1230,14 @@ describe('TimelineBar unified shell', () => {
     expect(urlInput).not.toBeNull();
     expect(urlInput.value).toBe('https://atomdojo.pages.dev/c/TEST12345678');
 
-    // Should show share code
-    expect(document.querySelector('.timeline-transfer-dialog__code-badge')?.textContent).toContain('TEST12345678');
+    // Should show share code — the 2026-04-23 redesign replaced the
+    // standalone `.__code-badge` with the code inlined into the
+    // unified link card (visible in the URL input) and embedded in the
+    // Open-in-Watch href. Both surfaces are asserted here.
+    const openLink = document.querySelector('[data-testid="transfer-open-in-watch"]') as HTMLAnchorElement | null;
+    expect(openLink).not.toBeNull();
+    expect(openLink?.getAttribute('href')).toContain('TEST12345678');
+    expect(urlInput.value).toContain('TEST12345678');
 
     // No warnings in the response → no warning note rendered
     expect(document.querySelector('[data-testid="transfer-dialog-warning"]')).toBeNull();
@@ -1242,6 +1249,7 @@ describe('TimelineBar unified shell', () => {
     // emphasis note so operators/support can see the reconciliation
     // signal without confusing normal users.
     const onPublish = vi.fn(async () => ({
+      mode: 'account' as const,
       shareCode: 'WARN12345678',
       shareUrl: 'https://atomdojo.pages.dev/c/WARN12345678',
       warnings: ['quota_accounting_failed'],
@@ -1271,6 +1279,7 @@ describe('TimelineBar unified shell', () => {
 
   it('unknown warning code still renders a note with the code visible', async () => {
     const onPublish = vi.fn(async () => ({
+      mode: 'account' as const,
       shareCode: 'UNKN12345678',
       shareUrl: 'https://atomdojo.pages.dev/c/UNKN12345678',
       warnings: ['some_future_warning'],
@@ -1351,8 +1360,8 @@ describe('TimelineBar unified shell', () => {
 
   it('in-flight share disables tab switching and cancel', async () => {
     // Return a promise that we control — share stays "in flight" until we resolve.
-    let resolveShare: (v: { shareCode: string; shareUrl: string }) => void;
-    const sharePromise = new Promise<{ shareCode: string; shareUrl: string }>((r) => { resolveShare = r; });
+    let resolveShare: (v: { mode: "account"; shareCode: string; shareUrl: string }) => void;
+    const sharePromise = new Promise<{ mode: "account"; shareCode: string; shareUrl: string }>((r) => { resolveShare = r; });
     const onPublish = vi.fn(() => sharePromise);
 
     act(() => { installWithPublish({ onPublish }); setActiveRange(); });
@@ -1378,12 +1387,12 @@ describe('TimelineBar unified shell', () => {
     expect(dialog.getAttribute('aria-busy')).toBe('true');
 
     // Resolve so the component unmounts cleanly
-    await act(async () => { resolveShare!({ shareCode: 'OK0000000000', shareUrl: 'https://x/c/OK0000000000' }); });
+    await act(async () => { resolveShare!({ mode: 'account', shareCode: 'OK0000000000', shareUrl: 'https://x/c/OK0000000000' }); });
   });
 
   it('in-flight share ignores Escape so the flow cannot be hidden', async () => {
-    let resolveShare: (v: { shareCode: string; shareUrl: string }) => void;
-    const sharePromise = new Promise<{ shareCode: string; shareUrl: string }>((r) => { resolveShare = r; });
+    let resolveShare: (v: { mode: "account"; shareCode: string; shareUrl: string }) => void;
+    const sharePromise = new Promise<{ mode: "account"; shareCode: string; shareUrl: string }>((r) => { resolveShare = r; });
     const onPublish = vi.fn(() => sharePromise);
 
     act(() => { installWithPublish({ onPublish }); setActiveRange(); });
@@ -1402,7 +1411,7 @@ describe('TimelineBar unified shell', () => {
     });
     expect(document.querySelector('.timeline-transfer-dialog')).not.toBeNull();
 
-    await act(async () => { resolveShare!({ shareCode: 'OK0000000000', shareUrl: 'https://x/c/OK0000000000' }); });
+    await act(async () => { resolveShare!({ mode: 'account', shareCode: 'OK0000000000', shareUrl: 'https://x/c/OK0000000000' }); });
   });
 
   it('tab bar is hidden when only one destination is available (share only)', () => {
@@ -1411,7 +1420,7 @@ describe('TimelineBar unified shell', () => {
       useAppStore.getState().installTimelineUI(
         {
           ...defaultCallbacks,
-          onPublishCapsule: vi.fn(async () => ({ shareCode: 'AB1234567890', shareUrl: 'https://x/c/AB1234567890' })),
+          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'AB1234567890', shareUrl: 'https://x/c/AB1234567890' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
         },
@@ -1459,6 +1468,7 @@ describe('TimelineBar unified shell', () => {
   // handler, and prevents a dead Download tab from rendering.
   it('caps present but onExportHistory missing → transfer opens to Share only, no Download tab', () => {
     const onPublish = vi.fn(async () => ({
+      mode: 'account' as const,
       shareCode: 'CAPONLY00000',
       shareUrl: 'https://atomdojo.pages.dev/c/CAPONLY00000',
     }));
@@ -1502,6 +1512,7 @@ describe('TimelineBar unified shell', () => {
   it('getExportEstimates is NOT called when only Share is actionable', async () => {
     const getExportEstimates = vi.fn(() => ({ capsule: '100 KB', full: '1 MB' }));
     const onPublish = vi.fn(async () => ({
+      mode: 'account' as const,
       shareCode: 'SHAREONLY111',
       shareUrl: 'https://atomdojo.pages.dev/c/SHAREONLY111',
     }));
@@ -1540,7 +1551,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates,
@@ -1586,7 +1597,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates,
@@ -1620,7 +1631,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates,
@@ -1668,7 +1679,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates,
@@ -1714,7 +1725,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates,
@@ -1940,7 +1951,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates,
@@ -2011,7 +2022,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' })),
+          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' })),
           onPauseForExport: onPause,
           onResumeFromExport: vi.fn(),
         },
@@ -2055,7 +2066,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' })),
+          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' })),
           onPauseForExport: onPause,
           onResumeFromExport: vi.fn(),
         },

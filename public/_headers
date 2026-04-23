@@ -1,0 +1,30 @@
+# Cloudflare Pages static-asset headers.
+# https://developers.cloudflare.com/pages/configuration/headers/
+#
+# Scope: the Lab SPA (served at /lab/). CSP delivery is required so
+# the Turnstile explicit-render widget can load
+# challenges.cloudflare.com scripts + iframe and reach its
+# siteverify/challenge endpoints from the document response. CSP on
+# JS/CSS asset responses is explicitly NOT part of the contract — the
+# document CSP is what governs script execution.
+#
+# Two path patterns intentionally — `/lab` covers the no-trailing-
+# slash form a few unfurlers/copy-pasted URLs use, `/lab/*` covers
+# both `/lab/` (splat matches empty) and nested paths. Shipping both
+# closes the "Turnstile blocked on the entry doc only" hole that the
+# splat-only form left exposed when the route is served with a
+# different canonicalization.
+#
+# Keep the popup-complete CSP in functions/auth/popup-complete.ts
+# untouched: that CSP is scoped to the OAuth callback page and has no
+# Turnstile dependency.
+
+/lab
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' https://challenges.cloudflare.com; font-src 'self' data:
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+
+/lab/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' https://challenges.cloudflare.com; font-src 'self' data:
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin

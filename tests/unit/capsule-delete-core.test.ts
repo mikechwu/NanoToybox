@@ -139,4 +139,47 @@ describe('deleteCapsule', () => {
     const details = (recordMock.mock.calls[0][1] as { details: Record<string, unknown> }).details;
     expect(details.alreadyDeleted).toBe(true);
   });
+
+  it("cron fresh delete: audit event_type='guest_publish_expired' with actor='cron'", async () => {
+    const env = makeEnv({
+      id: 's1',
+      share_code: 'GUEST1234XYZ',
+      status: 'ready',
+      object_key: 'capsules/s1/c.atomdojo',
+    });
+    const result = await deleteCapsule(env, 'GUEST1234XYZ', {
+      actor: 'cron',
+      userId: null,
+      reason: 'guest_expired',
+      extraDetails: { expiresAt: '2026-04-20T00:00:00.000Z' },
+    });
+    expect(result?.r2Deleted).toBe(true);
+    const input = recordMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(input.eventType).toBe('guest_publish_expired');
+    expect(input.actor).toBe('cron');
+    expect(input.reason).toBe('guest_expired');
+    const details = input.details as Record<string, unknown>;
+    expect(details.expiresAt).toBe('2026-04-20T00:00:00.000Z');
+  });
+
+  it('cron delete escalates to critical severity on R2 failure (parity with admin/owner)', async () => {
+    const env = makeEnv(
+      {
+        id: 's1',
+        share_code: 'GUEST1234XYZ',
+        status: 'ready',
+        object_key: 'capsules/s1/c.atomdojo',
+      },
+      true,
+    );
+    const result = await deleteCapsule(env, 'GUEST1234XYZ', {
+      actor: 'cron',
+      userId: null,
+      reason: 'guest_expired',
+    });
+    expect(result?.r2Deleted).toBe(false);
+    const input = recordMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(input.severity).toBe('critical');
+    expect(input.eventType).toBe('guest_publish_expired');
+  });
 });

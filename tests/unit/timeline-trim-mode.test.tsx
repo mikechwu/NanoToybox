@@ -55,7 +55,7 @@ interface InstallOpts {
   /** Replace the publisher-behaviour stubs to inject snapshot-stale or
    *  nothing-fits scenarios. */
   onPrepareCapsulePublish?: (range: CapsuleSelectionRange) => Promise<PreparedCapsuleSummary>;
-  onPublishPreparedCapsule?: (prepareId: string) => Promise<{ shareCode: string; shareUrl: string; warnings?: string[] }>;
+  onPublishPreparedCapsule?: (prepareId: string) => Promise<{ mode: "account"; shareCode: string; shareUrl: string; warnings?: string[] }>;
   onCancelPreparedPublish?: (prepareId: string) => void;
   /** Override the frame-index returned to the trim entry path. */
   frameCount?: number;
@@ -95,6 +95,7 @@ function installForTrim(opts: InstallOpts = {}) {
   });
 
   const onPublishPreparedCapsule = opts.onPublishPreparedCapsule ?? vi.fn(async (_prepareId: string) => ({
+    mode: 'account' as const,
     shareCode: 'TEST12345678',
     shareUrl: 'https://atomdojo.pages.dev/c/TEST12345678',
   }));
@@ -518,6 +519,7 @@ describe('TimelineBar trim mode', () => {
       resolvePrepare = resolve;
     }));
     const onPublishPreparedCapsule = vi.fn(async (_id: string) => ({
+      mode: 'account' as const,
       shareCode: 'CODE12345678',
       shareUrl: 'https://x/CODE12345678',
     }));
@@ -775,6 +777,7 @@ describe('TimelineBar trim mode', () => {
         frameCount: range.endFrameIndex - range.startFrameIndex + 1,
       })),
       onPublishPreparedCapsule: vi.fn(async (_id) => ({
+        mode: 'account' as const,
         shareCode: 'C1234567',
         shareUrl: 'https://x/C1234567',
       })),

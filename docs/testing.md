@@ -126,12 +126,12 @@ Phase 5 introduced the Cloudflare-backed share/publish stack (Pages Functions + 
 
 | Area | File(s) | Purpose |
 |------|---------|---------|
-| Share pure modules | `share-code.test.ts`, `share-record.test.ts`, `publish-core.test.ts` | Share-code encoding/decoding, publish-record preparation, and the pure publish-core pipeline. No mocks — uses real `crypto.subtle` / `crypto.randomUUID`. |
+| Share pure modules | `share-code.test.ts`, `share-record.test.ts`, `publish-core.test.ts` | Share-code encoding/decoding, publish-record preparation, and the pure publish-core pipeline. No mocks — uses real `crypto.subtle` / `crypto.randomUUID`. Guest Quick Share: `share-record.test.ts` replaced the old `isAccessibleStatus` suite with an `isAccessibleShare(row, now)` status × `expires_at` matrix (ready+future, ready+past, ready+null, ready_pending_preview variants, rejected, deleted); `publish-core.test.ts` now asserts the `ShareResult` discriminated-union shape and the new `PublishInput` fields (`shareMode`, `expiresAt`). |
 | Rate limit | `rate-limit.test.ts` | Covers the split quota API (`checkPublishQuota` + `consumePublishQuota`) plus an inline legacy `checkAndConsume` helper to guard the previous single-call shape. |
 | Audit | `audit.test.ts` | Day-keyed counters, `hashIp` properties, and the `MAX_AUDIT_REASON_LENGTH` defensive-truncation path. |
 | Pages Functions handlers | `admin-gate.test.ts`, `publish-endpoint.test.ts`, `report-endpoint.test.ts`, `admin-delete-endpoint.test.ts`, `admin-orphans-endpoint.test.ts`, `admin-sessions-endpoint.test.ts` | Handler-level tests for `functions/**`. Need Cloudflare Workers globals (`PagesFunction`, `R2Bucket`, `D1Database`) — typechecked under `tsconfig.functions.json`. |
 | Cron Worker | `cron-sweeper.test.ts` | The scheduled Worker that sweeps expired/orphaned records. Shares the functions tsconfig for Workers types. |
-| Lab publish UI | `timeline-bar-lifecycle.test.tsx` | Transfer dialog, tab availability, busy-guard, warnings pill — plus the Transfer-dialog performance contract (Share-default no-estimate, Download-tab JIT compute, tab-switch cancellation, one-compute-per-session cache, OAuth-resume pause, `scheduleAfterNextPaint` mock pattern) for the lab-side publish UX attached to the timeline bar. |
+| Lab publish UI | `timeline-bar-lifecycle.test.tsx` | Transfer dialog, tab availability, busy-guard, warnings pill — plus the Transfer-dialog performance contract (Share-default no-estimate, Download-tab JIT compute, tab-switch cancellation, one-compute-per-session cache, OAuth-resume pause, `scheduleAfterNextPaint` mock pattern) for the lab-side publish UX attached to the timeline bar. Updated for Guest Quick Share: assertions track the new `ShareResult` discriminated union and the `shareMode` / `expiresAt` fields on `PublishInput`. |
 | Lab layout regression | `timeline-layout.spec.ts` (E2E) | Bounding-box checks for the restart anchor vs. action-zone geometry. Playwright, not Vitest. |
 
 #### Share Stack E2E Tests (`tests/e2e/`)
@@ -151,10 +151,10 @@ Phase 5 tests ship across three tsconfigs because the frontend and the Pages Fun
 | Config | What it covers | Why |
 |--------|---------------|-----|
 | `tsconfig.json` (frontend) | `lab/`, `watch/`, `account/**`, `src/**`, `tests/unit/**/*.{ts,tsx}`, `vite.config.ts` | DOM + React + Three.js. `account/**` is included under the frontend gate so the inline `CapsulePreviewThumb` component typechecks alongside the rest of the React surface. Excludes the Workers-typed backend-handler/middleware tests (the exclude list in `tsconfig.json` is authoritative) — including the new `poster-endpoint.test.ts` and `share-page-og.test.ts`, which import from `functions/**` and live under the functions tsconfig — because they import Workers-typed symbols that would fail the DOM-only typecheck. |
-| `tsconfig.functions.json` (Workers) | `functions/**`, `functions/**/*.tsx`, `src/share/**`, `src/share/__fixtures__/*.json`, selected `src/history/*-v1.ts`, the Workers-typed test files (Phase 5/6 core: `admin-gate`, `publish-endpoint`, `report-endpoint`, `admin-delete-endpoint`, `admin-orphans-endpoint`, `admin-sessions-endpoint`, `auth-middleware`, `session-endpoint`, `cron-sweeper`; Phase 7 additions: `signed-intents`, `age-confirmation-endpoint`, `audit-sweep-endpoint`, `auth-start-age-intent`, `owner-delete-endpoint`, `publish-age-gate`, `account-delete-cascade`, `account-capsules-pagination`, `privacy-request-endpoint`; Capsule Preview additions: `poster-endpoint`, `share-page-og`, `account-api-preview-thumb`), `workers/cron-sweeper/src/**` | `strict: true`, `types: ["@cloudflare/workers-types"]`, plus Capsule Preview: `jsx: "react-jsx"`, `jsxImportSource: "react"`, `resolveJsonModule: true` (so the Satori-driven poster route under `functions/**/*.tsx` and the shared `src/share/__fixtures__/capsule-preview-frames.json` fixture compile under this config). Gives the handlers and the auth middleware real `PagesFunction`, `R2Bucket`, `D1Database`, `ExecutionContext` types. |
+| `tsconfig.functions.json` (Workers) | `functions/**`, `functions/**/*.tsx`, `src/share/**`, `src/share/__fixtures__/*.json`, selected `src/history/*-v1.ts`, the Workers-typed test files (Phase 5/6 core: `admin-gate`, `publish-endpoint`, `report-endpoint`, `admin-delete-endpoint`, `admin-orphans-endpoint`, `admin-sessions-endpoint`, `auth-middleware`, `session-endpoint`, `cron-sweeper`; Phase 7 additions: `signed-intents`, `age-confirmation-endpoint`, `audit-sweep-endpoint`, `auth-start-age-intent`, `owner-delete-endpoint`, `publish-age-gate`, `account-delete-cascade`, `account-capsules-pagination`, `privacy-request-endpoint`; Capsule Preview additions: `poster-endpoint`, `share-page-og`, `account-api-preview-thumb`; Guest Quick Share additions: `guest-publish-flag`, `turnstile`, `guest-publish-quota`, `guest-publish-endpoint`, `admin-guest-expires-endpoint`, `account-capsules-count`), `workers/cron-sweeper/src/**` | `strict: true`, `types: ["@cloudflare/workers-types"]`, plus Capsule Preview: `jsx: "react-jsx"`, `jsxImportSource: "react"`, `resolveJsonModule: true` (so the Satori-driven poster route under `functions/**/*.tsx` and the shared `src/share/__fixtures__/capsule-preview-frames.json` fixture compile under this config). Gives the handlers and the auth middleware real `PagesFunction`, `R2Bucket`, `D1Database`, `ExecutionContext` types. |
 | `workers/cron-sweeper/tsconfig.json` | The cron Worker package itself | Worker has its own `wrangler.toml`/deploy pipeline; its tsconfig keeps deploy-time typechecking independent of the Pages build. |
 
-The partitioning is enforced by `tsconfig.json`'s explicit `exclude` list — the Workers-typed tests are owned by the functions config, so they compile exactly once, under the lib set they actually need. The exclude list grew from 8 entries (Phase 5) → 10 (Phase 6, adding `auth-middleware` + `session-endpoint`) → 18 (Phase 7, adding the nine account-erasure / age-gate / signed-intent backend tests enumerated above), and has since grown further as Capsule Preview V2 + ADR D138 Lane A introduced more Workers-typed tests (`poster-endpoint`, `share-page-og`, `account-api-preview-thumb`, `admin-backfill-preview-scenes`, `backfill-stale-row-integration`, `policy-acceptance`, `oauth-state`, `auth-error-route`, `auth-callback-acceptance`). `tsconfig.json` is the authoritative source if this count drifts. Keep the list in sync whenever a new backend-handler test is introduced: the symptom of forgetting is a DOM-lib typecheck failure on Workers-typed symbols under `npm run typecheck:frontend`. Vitest still discovers and runs every file in `tests/unit/`; the split only affects `tsc`. `npm run typecheck` fans out across all three configs (frontend → functions → cron) so a Workers-typed test file will be typechecked even though `tsconfig.json` excludes it.
+The partitioning is enforced by `tsconfig.json`'s explicit `exclude` list — the Workers-typed tests are owned by the functions config, so they compile exactly once, under the lib set they actually need. The exclude list grew from 8 entries (Phase 5) → 10 (Phase 6, adding `auth-middleware` + `session-endpoint`) → 18 (Phase 7, adding the nine account-erasure / age-gate / signed-intent backend tests enumerated above), and has since grown further as Capsule Preview V2 + ADR D138 Lane A introduced more Workers-typed tests (`poster-endpoint`, `share-page-og`, `account-api-preview-thumb`, `admin-backfill-preview-scenes`, `backfill-stale-row-integration`, `policy-acceptance`, `oauth-state`, `auth-error-route`, `auth-callback-acceptance`), and again with Guest Quick Share (`guest-publish-flag`, `turnstile`, `guest-publish-quota`, `guest-publish-endpoint`, `admin-guest-expires-endpoint`, `account-capsules-count`). `tsconfig.json` is the authoritative source if this count drifts. Keep the list in sync whenever a new backend-handler test is introduced: the symptom of forgetting is a DOM-lib typecheck failure on Workers-typed symbols under `npm run typecheck:frontend`. Vitest still discovers and runs every file in `tests/unit/`; the split only affects `tsc`. `npm run typecheck` fans out across all three configs (frontend → functions → cron) so a Workers-typed test file will be typechecked even though `tsconfig.json` excludes it.
 
 ### Script Reference
 
@@ -247,7 +247,7 @@ Phase 6 layered a popup-first Google/GitHub OAuth flow, an account chip in the t
 
 | File | Purpose |
 |------|---------|
-| `auth-ux.test.tsx` | ~100+ tests exercising the transfer dialog, `AccountControl`, `hydrateAuthSession`, `auth-runtime` popup flow, resume-publish intent, kind-tagged `shareError`, and `resetTransientState`. Runs under the frontend tsconfig (jsdom + React). |
+| `auth-ux.test.tsx` | ~100+ tests exercising the transfer dialog, `AccountControl`, `hydrateAuthSession`, `auth-runtime` popup flow, resume-publish intent, kind-tagged `shareError`, and `resetTransientState`. Runs under the frontend tsconfig (jsdom + React). Updated for Guest Quick Share: transfer-dialog assertions track the new `ShareResult` discriminated union and surface the `shareMode` / `expiresAt` fields on the publish path. |
 
 Grouped by describe block:
 
@@ -291,6 +291,7 @@ Grouped by describe block:
 - **Response contract** — always sets no-cache headers; signed-in returns 200 with user fields and NO `Set-Cookie`; signed-out with a stale session cookie returns 200 + `Set-Cookie` that clears it; signed-out WITHOUT any session cookie returns 200 and NO `Set-Cookie`; signed-out with a non-session cookie only returns 200 and NO `Set-Cookie`.
 - **User-row-missing race guard** — authenticated userId but missing user row returns 200 signed-out + cookie-clear; the branch logs with the `[auth.session.user-missing]` prefix (M1).
 - **Dev-cookie variant** — HTTP + stale `atomdojo_session_dev` cookie: signed-out + `Set-Cookie` clears the dev cookie; HTTP + only `__Host-` cookie (wrong protocol for it): no self-heal fires.
+- **Guest Quick Share `publicConfig.guestPublish` matrix** — the full flag matrix: `GUEST_PUBLISH_ENABLED` unset / `off` / `on` / `true` / `1` / `ON` / garbage × `TURNSTILE_SITE_KEY` set / unset. Pins the rule that `publicConfig.guestPublish` is only exposed when the feature is enabled AND a site key is configured.
 
 #### Top-Right Layout E2E (`tests/e2e/topbar-right-layout.spec.ts`)
 
@@ -312,7 +313,7 @@ Phase 7 added the account-lifecycle / account-erasure surface: signed intents (H
 | File | Purpose |
 |------|---------|
 | `signed-intents.test.ts` | HMAC signing + freshness window + kind-mismatch rejection for the signed-intent helper used by age-gate and privacy flows. Typechecked under functions tsconfig. |
-| `capsule-delete-core.test.ts` | Shared delete core: admin-actor vs owner-actor branches, R2-failure rollback, idempotent retry semantics, `object_key` set to NULL on success. |
+| `capsule-delete-core.test.ts` | Shared delete core: admin-actor vs owner-actor branches, R2-failure rollback, idempotent retry semantics, `object_key` set to NULL on success. Guest Quick Share extension: adds an `actor: 'cron'` branch (event type `guest_publish_expired`, critical severity on R2 failure) used by the expires-sweep cron. |
 | `owner-delete-endpoint.test.ts` | Owner `DELETE /api/account/capsules/:code` returns 404 on cross-user access (no existence disclosure). Typechecked under functions tsconfig. |
 | `age-confirmation-endpoint.test.ts` | `POST /api/account/age-confirmation` UPSERT idempotency and the body-`user_id` vs session-`user_id` contract. Typechecked under functions tsconfig. |
 | `audit-sweep-endpoint.test.ts` | `audit-sweep` scrub mode vs delete-abuse-reports mode. Typechecked under functions tsconfig. |
@@ -337,7 +338,7 @@ Existing fixtures updated for Phase 7 (called out because a fresh contributor wi
 | File | Lane | Purpose |
 |------|------|---------|
 | `policy-routes.spec.ts` | static (default `vite preview`) | 5 tests + 1 skipped over the static policy routes served under `/legal/**` / privacy / terms. Does not need Pages Functions. |
-| `pages-dev-flows.spec.ts` | **Pages-dev-only** | Account-erasure happy paths that need real Pages Functions: age-gate bootstrap, signed-intent round-trip, delete-all loop against the dev backend. Self-skipped outside the `pages-dev` Playwright project (see below). |
+| `pages-dev-flows.spec.ts` | **Pages-dev-only** | Account-erasure happy paths that need real Pages Functions: age-gate bootstrap, signed-intent round-trip, delete-all loop against the dev backend. Also exercises the Guest Quick Share integration flows end-to-end (Turnstile stub, per-IP quota, 72h expiry envelope, cron sweep). Self-skipped outside the `pages-dev` Playwright project (see below). |
 
 #### Pages-dev E2E Lane {#pages-dev-e2e-lane}
 
@@ -361,9 +362,28 @@ That means `pages-dev-flows.spec.ts` and `poster-smoke.spec.ts` are harmless to 
 
 **When to run it.**
 
-- Before merging any change that touches `functions/auth/**`, `functions/account/**`, `functions/privacy-request/**`, the signed-intent helper, or the shared capsule-delete core.
+- Before merging any change that touches `functions/auth/**`, `functions/account/**`, `functions/privacy-request/**`, `functions/api/capsules/guest-publish*`, `functions/api/admin/guest-expires*`, the signed-intent helper, or the shared capsule-delete core.
 - Before merging changes to age-gate UX that depend on real `/api/account/age-confirmation` responses (mocked `page.route()` is not sufficient — the signed-nonce round-trip must hit the real endpoint).
 - Not required for pure lab/watch UI changes; the default lane remains the fast feedback loop for those.
+
+### Guest Quick Share Test Layout
+
+Guest Quick Share added a flagged, Turnstile-gated, per-IP-quota-limited publish path that writes rows with `share_mode = 'guest'` and a 72-hour `expires_at`, swept daily by a cron. The surface follows the Phase 5/6/7 backend-handler conventions (hoisted `vi.fn`, SQL-dialect D1 mock, real `Request` objects, hand-built minimal context) and is typechecked under `tsconfig.functions.json`. The flag / Turnstile / quota helpers are pure modules under `src/share/` and sit on the functions tsconfig alongside the handler tests.
+
+#### Guest Quick Share Unit Tests (`tests/unit/`)
+
+| File | Purpose |
+|------|---------|
+| `guest-publish-flag.test.ts` | Pins `isGuestPublishEnabled` allow-list semantics: `"on"` / `"true"` / `"1"` (case-insensitive) enable the feature; every other value disables. Typechecked under functions tsconfig. |
+| `turnstile.test.ts` | `verifyTurnstileToken` — success path, explicit siteverify rejection, network failure, `AbortController` timeout surfacing as `siteverify_timeout` reason, and the fail-closed short-circuits when `TURNSTILE_SECRET_KEY` or the caller's token is missing. Typechecked under functions tsconfig. |
+| `guest-publish-quota.test.ts` | Per-IP quota helpers: allow before cap, block at cap, independence across IP hashes, pruning of old buckets, env-override resolution. Typechecked under functions tsconfig. |
+| `guest-publish-endpoint.test.ts` | Handler-level: 404 when flag off, 400 on missing `X-Age-Attested`, 400 on missing `X-Turnstile-Token`, 500 on missing `TURNSTILE_SECRET_KEY`, 500 on missing `SESSION_SECRET` (fail-closed), 500 on missing `CF-Connecting-IP` (fail-closed), 429 with `Retry-After`, 503 on siteverify timeout, 400 on siteverify rejection, 413 envelope parity with the auth path, byte-identity (POST body == persisted R2 bytes), 201 success with `expiresAt = now + 72h`. Typechecked under functions tsconfig. |
+| `admin-guest-expires-endpoint.test.ts` | Cron sweep: 404 on wrong cron secret, empty scan returns the ok envelope, per-row routing through `deleteCapsule({ actor: 'cron' })`, partial R2-failure reported in the summary, flag-off state still returns a summary (must NOT 404). Typechecked under functions tsconfig. |
+| `account-capsules-count.test.ts` | 401 when unauthenticated, correct `COUNT(*)`, `share_mode = 'account'` filter (hides guest rows), `status != 'deleted'` filter, no-store headers, null-row fallback. Typechecked under functions tsconfig. |
+
+#### Guest Quick Share E2E
+
+Guest Quick Share integration flows are exercised by `tests/e2e/pages-dev-flows.spec.ts` (documented under [Account-Erasure E2E Specs](#account-erasure-e2e-specs-testse2e)) — the spec self-skips outside the `pages-dev` Playwright project, so run `npm run test:e2e:pages-dev` to include it. Real Pages Functions are required because the Turnstile siteverify shim, per-IP quota D1 writes, and cron sweep all sit in `functions/**`.
 
 ### Capsule Preview V2 Test Layout
 
@@ -669,7 +689,7 @@ Tests cover connected-component projection, stable tie ordering, merge/split rec
 
 **End-to-end pipeline:** load → import → playback → groups.
 
-*As of Capsule Preview V2, the unit suite (Vitest — ~2960 tests across 187 files under `tests/unit/`) plus the Playwright default lane (13 spec files under `tests/e2e/`, of which two — `poster-smoke.spec.ts` and `pages-dev-flows.spec.ts` — self-skip outside the pages-dev lane; 79 E2E currently passing across both lanes) pass across the lab + watch + share + auth + account-erasure + handoff + capsule-preview surfaces. Run `npx vitest run` for the authoritative live unit total, `npm run test:e2e` for the default E2E lane, and `npm run test:e2e:pages-dev` for the pages-dev lane.*
+*As of Guest Quick Share, the unit suite (Vitest — ~3146 tests across 201 files under `tests/unit/`) plus the Playwright E2E (86 specs; 9 conditional skips outside the `pages-dev` Playwright project — `poster-smoke.spec.ts` and the Guest-Quick-Share-aware `pages-dev-flows.spec.ts` among them) pass across the lab + watch + share + auth + account-erasure + handoff + capsule-preview + guest-publish surfaces. Run `npx vitest run` for the authoritative live unit total, `npm run test:e2e` for the default E2E lane, and `npm run test:e2e:pages-dev` for the pages-dev lane.*
 
 ### Bond Topology Parity (23 tests)
 

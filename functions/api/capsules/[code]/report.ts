@@ -15,7 +15,7 @@
 
 import type { Env } from '../../../env';
 import { normalizeShareInput } from '../../../../src/share/share-code';
-import { isAccessibleStatus } from '../../../../src/share/share-record';
+import { isAccessibleShare } from '../../../../src/share/share-record';
 import type { ShareRecordStatus } from '../../../../src/share/share-record';
 import {
   recordAuditEvent,
@@ -39,12 +39,12 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 
   // Same accessibility check as metadata/blob — deleted/rejected return 404
   const row = await env.DB.prepare(
-    'SELECT id, status FROM capsule_share WHERE share_code = ?',
+    'SELECT id, status, expires_at FROM capsule_share WHERE share_code = ?',
   )
     .bind(code)
-    .first<{ id: string; status: ShareRecordStatus }>();
+    .first<{ id: string; status: ShareRecordStatus; expires_at: string | null }>();
 
-  if (!row || !isAccessibleStatus(row.status)) {
+  if (!row || !isAccessibleShare(row, new Date().toISOString())) {
     return new Response('Not found', { status: 404 });
   }
 

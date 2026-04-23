@@ -33,7 +33,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   const BATCH_LIMIT = 200;
   const rows = await env.DB.prepare(
     `SELECT share_code FROM capsule_share
-       WHERE owner_user_id = ? AND status != 'deleted'
+       WHERE owner_user_id = ? AND share_mode = 'account' AND status != 'deleted'
        ORDER BY created_at ASC
        LIMIT ?`,
   )

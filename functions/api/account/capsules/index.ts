@@ -324,6 +324,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
                 preview_scene_v1, object_key, preview_rebake_claimed_at
            FROM capsule_share
           WHERE owner_user_id = ?
+            AND share_mode = 'account'
             AND status != 'deleted'
             AND (created_at < ? OR (created_at = ? AND share_code < ?))
           ORDER BY created_at DESC, share_code DESC
@@ -335,6 +336,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
                 preview_scene_v1, object_key, preview_rebake_claimed_at
            FROM capsule_share
           WHERE owner_user_id = ?
+            AND share_mode = 'account'
             AND status != 'deleted'
           ORDER BY created_at DESC, share_code DESC
           LIMIT ?`,

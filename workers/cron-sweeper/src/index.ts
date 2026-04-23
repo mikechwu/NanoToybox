@@ -15,6 +15,7 @@
  *
  * Schedule routing (cron pattern → target endpoint):
  *   "0 *\/6 * * *"  → /api/admin/sweep/sessions
+ *   "10 *\/6 * * *" → /api/admin/sweep/guest-expires (offset from sessions)
  *   "30 3 * * *"    → /api/admin/sweep/orphans
  *   "15 4 * * 0"    → /api/admin/sweep/audit?mode=scrub (weekly, Sunday)
  *   "45 4 * * 0"    → /api/admin/sweep/audit?mode=delete-abuse-reports
@@ -34,6 +35,10 @@ export interface Env {
  *  table in the code, not spread across config. */
 const CRON_ROUTES: Record<string, string> = {
   '0 */6 * * *': '/api/admin/sweep/sessions',
+  // Guest Quick Share expiry sweep. 10-minute offset from the sessions
+  // sweep so the two 6-hourly ticks never fire simultaneously against
+  // the same D1 database, keeping per-isolate D1 bursts predictable.
+  '10 */6 * * *': '/api/admin/sweep/guest-expires',
   '30 3 * * *': '/api/admin/sweep/orphans',
   // Weekly audit retention — scrub sensitive fields, then delete the
   // narrow abuse_report class that offers no forensics value past 180d.
@@ -76,9 +81,12 @@ export default {
     // (2) Operator input parse — only reachable after auth succeeds.
     const url = new URL(request.url);
     const target = url.searchParams.get('target');
-    if (!target || !['sessions', 'orphans', 'audit-scrub', 'audit-delete'].includes(target)) {
+    if (
+      !target
+      || !['sessions', 'orphans', 'audit-scrub', 'audit-delete', 'guest-expires'].includes(target)
+    ) {
       return new Response(
-        'Usage: GET /?target=sessions|orphans|audit-scrub|audit-delete',
+        'Usage: GET /?target=sessions|orphans|audit-scrub|audit-delete|guest-expires',
         { status: 400 },
       );
     }
@@ -88,6 +96,7 @@ export default {
       orphans: '/api/admin/sweep/orphans',
       'audit-scrub': '/api/admin/sweep/audit?mode=scrub',
       'audit-delete': '/api/admin/sweep/audit?mode=delete-abuse-reports',
+      'guest-expires': '/api/admin/sweep/guest-expires',
     };
     const result = await invokeSweep(pathByTarget[target], env);
     return Response.json(result, { status: result.ok ? 200 : 502 });

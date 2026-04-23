@@ -1275,3 +1275,119 @@ When the guard fails (balanced collision/reactant pair, water-style fragmentatio
 **Evidence:** `src/share/capsule-preview-cluster-select.ts` (selector + dominance guard + defensive duplicate-atomId branch); `tests/unit/capsule-preview-cluster-select.test.ts` (11 cases including close-approach proximity-fusion contract); `src/share/publish-core.ts` (integration before sampling/projection + `[publish] cluster-select:` log line); `preview-audit/main.tsx` (shared selector call + §3 diagnostics + §2 Subject row); `src/share/__fixtures__/capsule-preview-structures.ts` — three new fixtures: `makeFragmentedCapsule`, `makeTwoEqualFragmentsCapsule`, `makeCloseApproachCapsule`.
 
 **Related ADRs:** D135 (V2 preview pipeline), D136 (shared poster/thumb extraction).
+
+## D139: Guest Quick Share Uses a Separate `/api/capsules/guest-publish` Endpoint
+
+**Status:** Accepted, 2026-04-23.
+
+**Decision:** Guest Quick Share lives at `POST /api/capsules/guest-publish`, not as a branch inside `POST /api/capsules/publish`. The two endpoints share the underlying validate-then-write core (D88) but keep their request handlers, auth middleware, and response shapes fully separate.
+
+**Rationale:** Every cross-cutting concern differs between the two paths: auth (Turnstile token vs. session cookie), quota key (salted IP hash vs. `owner_user_id`), lifecycle (72h tombstoning via cron vs. permanent owned row), account ownership (none vs. `owner_user_id` populated), trim-mode support (disabled vs. enabled — D88 oversize-trim), and success-UI semantics (expiry chip vs. saved-to-account chip). Retrofitting a single handler would leak guest semantics up into the authenticated code path — every quota check, audit call, and owner-resolution would need a `if (isGuest)` branch — and would make the 72h lifecycle invariant hard to audit from one place.
+
+**Alternatives rejected:** Extend `/api/capsules/publish` with a `guest` mode flag (couples two lifecycles through a single handler and pollutes auth middleware); a third `/api/capsules/share-anonymous` alias that funnels into the authenticated handler (same coupling, worse discoverability).
+
+**Related ADRs:** D86 (share-link architecture), D88 (validate-then-write), D90 (two-phase quota), D94 (cron sweeper).
+
+## D140: Default `GUEST_PUBLISH_ENABLED="off"` With Two-Step Rollout
+
+**Status:** Accepted, 2026-04-23.
+
+**Decision:** The guest-publish feature ships dark. Production deploys land with `GUEST_PUBLISH_ENABLED="off"` in `wrangler.toml`; code, D1 migration, `_headers` CSP updates, and Turnstile configuration all go out under the flag. A second follow-up deploy flips the flag to `"on"` after CSP, WAF rules, and Turnstile have been verified live on preview. Emergency rollback is a flag flip back to `"off"` plus redeploy — no migration rollback required.
+
+**Rationale:** The feature touches CSP (Turnstile `challenges.cloudflare.com` script), WAF (new rate-limit rule on the anonymous route), and a third-party dependency (Turnstile widget). Any of those landing misconfigured on production would either 4xx legitimate guest traffic or open an unrate-limited anonymous publish lane. Splitting "ship the code" from "turn on the feature" lets each risk be verified in isolation against a real edge environment. Tombstoning continues to work for any rows created while the flag was temporarily on: the cron sweeper (D94) walks `guest_expires_at` regardless of the current flag state.
+
+**Alternatives rejected:** Single-step deploy with flag on by default (conflates CSP/WAF verification with feature launch); client-side feature gate only (server path must enforce the flag — a client-only gate is not enforcement, same reasoning as D108).
+
+**Related ADRs:** D94 (cron sweeper), D139 (separate endpoint).
+
+## D141: Raw Capsule JSON as the Guest Request Body (No Envelope)
+
+**Status:** Accepted, 2026-04-23.
+
+**Decision:** `POST /api/capsules/guest-publish` accepts the raw capsule JSON file as its request body — byte-identical to the authenticated publish path. Turnstile token and age attestation ride in request headers: `X-Turnstile-Token: <token>` and `X-Age-Attested: 1`.
+
+**Rationale:** The authenticated path's `artifact.bytes === POST-body bytes` invariant (see D88's validate-then-write model) lets the `MAX_PUBLISH_BYTES` preflight be an exact `Content-Length` check, and lets 413 responses be generated before any JSON parse. Wrapping the capsule in a `{ capsule, turnstileToken, ageAttested }` envelope would force a full JSON parse before any size check, drift 413 semantics (inner-capsule size ≠ envelope size), and fork the shared validator between two input shapes. Headers carry the auth/consent metadata without touching the body — CDNs, proxies, and Cloudflare's Turnstile middleware all treat headers as the conventional channel for such tokens.
+
+**Alternatives rejected:** JSON envelope (breaks byte-identity with authenticated path, drifts 413); multipart/form-data (forces a second parser, no benefit for a single file part); query-string token (logged by edge infrastructure, unacceptable for attestation).
+
+**Related ADRs:** D88 (validate-then-write), D139 (separate endpoint).
+
+## D142: Guest Age Attestation Recorded Per-Publish in Audit, Not in `user_policy_acceptance`
+
+**Status:** Accepted, 2026-04-23.
+
+**Decision:** A guest's 13+ attestation is recorded as an audit-log row with `event_type='guest_publish_age_attested'`, carrying the salted IP hash, share code, and policy version. It is NOT written to `user_policy_acceptance` — that table's invariant (one durable row per account) does not apply to guests.
+
+**Rationale:** `user_policy_acceptance` is foreign-keyed to `users.id`; guests have no `users` row to anchor against, and inventing a synthetic "guest user" row would pollute the acceptance table's durable-per-account semantics and complicate D111 tombstoning and D115 retention scrubbing. Product copy also deliberately does NOT claim guest share is COPPA-compliant or that the guest attestation equals the account-creation attestation. The per-publish audit event is the correct grain: each anonymous publish is the event being attested to, and the audit stream is already the durable chain-of-custody record (D115).
+
+**Alternatives rejected:** Synthetic guest rows in `users` with acceptance rows hanging off them (pollutes core account tables and tombstoning semantics); no attestation record at all (removes the forensic trail for a policy-sensitive action).
+
+**Related ADRs:** D108 (server-authoritative age gate), D115 (audit retention), D120 (age clickwrap).
+
+## D143: Turnstile `appearance: 'interaction-only'` With No Reserved Visible Slot
+
+**Status:** Accepted, 2026-04-23.
+
+**Decision:** The Turnstile widget mounts with `appearance: 'interaction-only'` and its container renders at zero footprint by default. No "Verifying you're human…" placeholder is drawn ahead of Cloudflare's own decision. If Cloudflare elects to present a visible challenge, the container is expanded at that moment.
+
+**Rationale:** In `interaction-only` mode Turnstile is invisible for legitimate traffic and only renders a visible challenge for requests Cloudflare scores as suspicious. An earlier iteration reserved a permanent visible slot with a placeholder string; users with clean traffic never saw the placeholder resolve (because no challenge was ever raised) and interpreted the frozen "Verifying…" label as a broken CTA. Zero-footprint by default inverts the signal — a visible challenge now means Cloudflare actually wants one — and the CTA itself stays responsive for the happy path.
+
+**Alternatives rejected:** Permanent reserved slot with placeholder copy (confused legitimate users into thinking the form was broken); `appearance: 'always'` (defeats the invisible-for-legitimate-traffic contract).
+
+## D144: Turnstile Widget-Load Failure Surfaces as "Verification Unavailable"
+
+**Status:** Accepted, 2026-04-23.
+
+**Decision:** If the Turnstile script fails to load (ad blocker, restrictive proxy, offline, CSP mismatch), the Quick Share CTA label switches to "Verification unavailable" and a message points the user to the OAuth sign-in path as an alternative. The button is disabled until the widget either loads or the user navigates to the account path.
+
+**Rationale:** Prior behaviour silently stuck the button in the "Preparing…" state forever, producing a dead CTA with no recovery affordance. Users with ad blockers installed (a non-trivial fraction) would universally hit this. Surfacing the failure with an alternate path preserves product access for those users without weakening the verification requirement — they route to OAuth, which does not depend on Turnstile.
+
+**Alternatives rejected:** Retry loop on widget load (compounds the problem for persistent blockers, and blocks give no retriable signal); silently enable the CTA after a timeout (ships unverified requests to the endpoint, which will 403 anyway — worse UX).
+
+**Related ADRs:** D143 (interaction-only mode).
+
+## D145: Fail-Closed on Missing `SESSION_SECRET` or `CF-Connecting-IP`
+
+**Status:** Accepted, 2026-04-23.
+
+**Decision:** If `SESSION_SECRET` (used to salt the IP hash for quota keying) is unset, or if `CF-Connecting-IP` is missing on the inbound request, `/api/capsules/guest-publish` returns `500 server_not_configured` and writes a `critical` audit event. The request is refused; no capsule is written and no quota is consumed.
+
+**Rationale:** An earlier iteration degraded gracefully — missing secret → skip quota enforcement + loud log. That path is an open anonymous publish lane under a misconfiguration the operator may not notice immediately (loud logs still require someone to be reading them). An unrate-limited anonymous write endpoint is a take-down-the-service class of risk, so the policy inverts: misconfiguration → refuse all guest publishes until the operator fixes it. The critical audit event is the out-of-band signal, and guest rollout is flag-gated (D140) so the outage is bounded to the guest path.
+
+**Alternatives rejected:** Degrade to no-quota with a log (open anonymous lane under misconfiguration — unacceptable); fall back to unhashed IP (leaks client IP into D1 quota rows, violates D93 mandatory-salt policy).
+
+**Related ADRs:** D93 (IP hashing with mandatory salt), D97 (WAF per-IP + in-code per-user quotas).
+
+## D146: Guest-Success UI Ends at the Expiry Chip — No Upsell Footer
+
+**Status:** Accepted, 2026-04-23.
+
+**Decision:** The guest-publish success panel shows the share link, a copy button, and the 72h expiry chip. It does NOT show an "Upgrade to permanent sharing — sign in" footer below the chip.
+
+**Rationale:** The original copy read "Need permanent share links? Sign in to save future shares." Rhetorical dead-end questions at the end of a success flow violate conversational-UX norms — the user has already succeeded, and the question implies they have failed at something. The account path is already presented in the pre-publish signed-out panel (adjacent to the Quick Share CTA via the shared clickwrap — D147), so the upsell message lives at the moment of choice, not after the choice has been made. Post-success is for confirmation, not re-sell.
+
+**Alternatives rejected:** Upsell footer (conversational dead-end, redundant with pre-publish surface); link to account settings without copy (icon-only affordances at the bottom of a success panel test poorly — users read them as generic "close").
+
+## D147: Shared Clickwrap Paragraph With Multiple `aria-describedby` References
+
+**Status:** Accepted, 2026-04-23.
+
+**Decision:** The Transfer dialog's signed-out Share panel renders ONE `<AgeClickwrapNotice>` paragraph with a stable `id`, and each CTA (Quick Share, Google OAuth, GitHub OAuth) references it via `aria-describedby`. The paragraph is not duplicated per button.
+
+**Rationale:** All three CTAs consent to the identical 13+ attestation, so duplicating the paragraph per button (the original plan) produced three identical blocks of consent copy in a short panel. Collapsing to a single paragraph reduces visual noise and matches the actual semantic — there is one consent, referenced by three buttons. Multiple `aria-describedby` pointers to the same element are a standard ARIA idiom and are announced correctly by screen readers per button.
+
+**Alternatives rejected:** One paragraph per CTA (visual noise, implies three distinct consents); paragraph below the buttons with no ARIA linkage (screen-reader users miss the consent when focused on a button).
+
+**Related ADRs:** D120 (age clickwrap).
+
+## D148: `isAccessibleShare(row, now)` Replaces `isAccessibleStatus(status)` at All Public-Read Callsites
+
+**Status:** Accepted, 2026-04-23.
+
+**Decision:** The public-read predicate is renamed from `isAccessibleStatus(status)` to `isAccessibleShare(row, now)`, taking the full row plus a `now` timestamp so it can evaluate guest-lifecycle expiry (`guest_expires_at > now`) alongside the status field. All five public-read callsites (view route, preview route, poster route, thumb route, share-page resolver) are updated in the same change; the old predicate is removed, not shadowed. A companion SQL fragment is exported from the same module so TypeScript and D1 query predicates share the same definition.
+
+**Rationale:** Shadowing the old predicate (keeping `isAccessibleStatus` for some callers, adding `isAccessibleShare` for others) would leave a silent correctness gap — any callsite still using the old predicate would serve expired guest capsules. Atomic rename forces every public-read path to be audited in one review. The shared SQL fragment closes the TS-vs-SQL drift risk: if the predicate changes, both the in-memory check and the D1 WHERE clause update together.
+
+**Alternatives rejected:** Keep `isAccessibleStatus` and add `isAccessibleShare` as an optional stricter check (silent drift — callers forget to opt in); duplicate the expiry check at each callsite inline (guaranteed to drift); put the expiry check in a database trigger (invisible to the TS type system, hides the rule from reviewers).
+
+**Related ADRs:** D86 (share-link architecture), D94 (cron sweeper), D139 (separate endpoint).

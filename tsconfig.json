@@ -58,7 +58,13 @@
     "tests/unit/poster-endpoint.test.ts",
     "tests/unit/share-page-og.test.ts",
     "tests/unit/account-api-preview-thumb.test.ts",
-    "tests/unit/account-capsules-backfill.test.ts"
+    "tests/unit/account-capsules-backfill.test.ts",
+    "tests/unit/guest-publish-endpoint.test.ts",
+    "tests/unit/guest-publish-quota.test.ts",
+    "tests/unit/turnstile.test.ts",
+    "tests/unit/guest-publish-flag.test.ts",
+    "tests/unit/admin-guest-expires-endpoint.test.ts",
+    "tests/unit/account-capsules-count.test.ts"
   ]
   // Coverage: all extracted app/bench source modules are .ts/.tsx and type-checked.
   // Inline <script type="module"> in HTML entrypoints are sanctioned exceptions.
