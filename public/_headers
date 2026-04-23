@@ -43,6 +43,31 @@
 #     script load is CSP-blocked and surfaces as a console warning
 #     on every page load.
 #
+# ── Permissions-Policy ──
+#
+# xr-spatial-tracking=(self "https://challenges.cloudflare.com")
+#   Turnstile's iframe probes the WebXR API as a bot-detection
+#   fingerprint. Cross-origin iframes default-deny WebXR, so the
+#   probe fails and the browser logs a `[Violation] Permissions
+#   policy violation: xr-spatial-tracking is not allowed in this
+#   document` warning on every Turnstile mount. Granting the
+#   permission to Turnstile's origin lets the probe resolve cleanly
+#   ("no XR device present"), silencing the console noise. The site
+#   itself has no WebXR surface, so the grant has no practical
+#   privacy cost — users are never prompted; there's nothing WebXR
+#   to consent to.
+#
+# Other Turnstile-origin console noise we CANNOT suppress from the
+# parent document:
+#   • `Failed to parse audio contentType: audio/mp4; codecs=ac-3`
+#     (and similar video codec probes) — the Turnstile bundle calls
+#     `MediaSource.isTypeSupported()` with intentionally malformed
+#     strings as part of fingerprinting; browsers log parse
+#     failures. Entirely inside Cloudflare's bundle.
+#   • `The resource challenge-platform/h/b/cmg/1 was preloaded using
+#     link preload but not used...` — Turnstile preloads challenge
+#     assets eagerly and doesn't always consume them in time.
+#
 # ── connect-src inventory ──
 #
 #   'self'
@@ -59,10 +84,12 @@
 
 /lab
   Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com https://static.cloudflareinsights.com; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' https://challenges.cloudflare.com https://cloudflareinsights.com; font-src 'self' data:; worker-src 'self' blob:
+  Permissions-Policy: xr-spatial-tracking=(self "https://challenges.cloudflare.com")
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 
 /lab/*
   Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com https://static.cloudflareinsights.com; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' https://challenges.cloudflare.com https://cloudflareinsights.com; font-src 'self' data:; worker-src 'self' blob:
+  Permissions-Policy: xr-spatial-tracking=(self "https://challenges.cloudflare.com")
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
