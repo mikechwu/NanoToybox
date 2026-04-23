@@ -46,19 +46,30 @@
 # ── Permissions-Policy ──
 #
 # xr-spatial-tracking=(self "https://challenges.cloudflare.com")
-#   Turnstile's iframe probes the WebXR API as a bot-detection
-#   fingerprint. Cross-origin iframes default-deny WebXR, so the
-#   probe fails and the browser logs a `[Violation] Permissions
-#   policy violation: xr-spatial-tracking is not allowed in this
-#   document` warning on every Turnstile mount. Granting the
-#   permission to Turnstile's origin lets the probe resolve cleanly
-#   ("no XR device present"), silencing the console noise. The site
-#   itself has no WebXR surface, so the grant has no practical
-#   privacy cost — users are never prompted; there's nothing WebXR
-#   to consent to.
+#   Conditional grant — load-bearing ONLY when Cloudflare updates
+#   Turnstile's iframe `allow` attribute. Today, browser cross-
+#   origin policy requires BOTH (a) the parent document's
+#   Permissions-Policy to allow the feature for that origin AND
+#   (b) the iframe element's own `allow` attribute to explicitly
+#   list it. We control (a); Cloudflare controls (b), and their
+#   current Turnstile bundle does not include `xr-spatial-tracking`
+#   in the iframe's `allow`. So the `[Violation] Permissions policy
+#   violation: xr-spatial-tracking is not allowed in this document`
+#   warning on every Turnstile mount STILL LOGS today.
 #
-# Other Turnstile-origin console noise we CANNOT suppress from the
-# parent document:
+#   We keep our grant anyway: if Cloudflare ever adds the feature
+#   to their iframe `allow` attribute, this header is already in
+#   place and the warning stops automatically with zero code change
+#   on our side. The grant costs us nothing — a browser that
+#   doesn't receive a matching iframe `allow` attribute simply
+#   ignores the parent-header entry for that feature.
+#
+# Known Turnstile-origin console noise we CANNOT suppress from the
+# parent document at all:
+#   • `[Violation] Permissions policy violation: xr-spatial-tracking`
+#     — not suppressible without Cloudflare updating their iframe
+#     (see above). Benign fingerprinting probe failure; does not
+#     break Turnstile functionality.
 #   • `Failed to parse audio contentType: audio/mp4; codecs=ac-3`
 #     (and similar video codec probes) — the Turnstile bundle calls
 #     `MediaSource.isTypeSupported()` with intentionally malformed
@@ -67,6 +78,11 @@
 #   • `The resource challenge-platform/h/b/cmg/1 was preloaded using
 #     link preload but not used...` — Turnstile preloads challenge
 #     assets eagerly and doesn't always consume them in time.
+#
+# If the DevTools noise becomes a productivity drag, the practical
+# workaround is a user-side filter: Chrome DevTools → Console
+# filter box → `-challenges.cloudflare.com -normal?lang=auto`. All
+# three warning classes above are emitted from those sources.
 #
 # ── connect-src inventory ──
 #
