@@ -141,6 +141,11 @@ export const CONFIG = {
     atomVisualRadius: VIEWER_DEFAULTS.atomVisualRadius,  // [0.2–0.8] Ang — added to bounding sphere for rendered mesh
     defaultOrbitDistance: 15,        // [8–30] Ang — fallback pivot distance for Esc-to-Orbit
     followLongPressMs: 500,         // [300–800] ms — long-press threshold for ⊕ follow mode
+    // Initial scene-fit framing distance: dist = maxR * fitDistanceRadiusScale + fitDistanceBaseOffset.
+    // Drives both the initial camera placement and the Reset view baseline (_defaultCamPos).
+    fitDistanceRadiusScale: 2.5,    // [1.5–4] multiplier on bounding radius
+    fitDistanceBaseOffset: 5,       // [0–10] Ang — additive floor so tiny scenes still frame nicely
+    mobileFitDistanceMultiplier: 1.2, // [1.0–1.5] extra zoom-out on phone/tablet (UI chrome reserves more screen)
   },
 
   placementFraming: {

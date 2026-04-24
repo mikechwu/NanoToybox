@@ -1587,7 +1587,16 @@ export class Renderer {
         if (r > maxR) maxR = r;
       }
     }
-    const dist = maxR * 2.5 + 5;
+    const baseDist =
+      maxR * CONFIG.camera.fitDistanceRadiusScale +
+      CONFIG.camera.fitDistanceBaseOffset;
+    // Phone/tablet need a slightly farther initial framing — UI chrome (dock,
+    // panels) reserves more of the viewport on small screens. Reset view
+    // inherits this via _defaultCamPos below, so it stays consistent.
+    const mode = document.documentElement.dataset.deviceMode;
+    const dist = (mode === 'phone' || mode === 'tablet')
+      ? baseDist * CONFIG.camera.mobileFitDistanceMultiplier
+      : baseDist;
     this.camera.position.set(cx, cy, cz + dist);
     this.camera.up.set(0, 1, 0); // Level the camera on fit
     this.controls.target.set(cx, cy, cz);

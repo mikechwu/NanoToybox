@@ -13,6 +13,7 @@
 
 import { create } from 'zustand';
 import { CONFIG, DEFAULT_THEME } from '../config';
+import type { DeviceMode } from '../../../src/ui/device-mode';
 import type {
   ShareResultAccount,
   ShareResultGuest,
@@ -375,11 +376,15 @@ export interface AppStore {
   //   - Renderer authority: tracked atoms first, hover second, else none
   //   - Tracked highlight fields retained for future re-enablement or full removal
   bondedGroups: BondedGroupSummary[];
-  /** Whether the bonded-groups panel is expanded. Defaults to true.
+  /** Whether the bonded-groups panel is expanded. Defaults to true on desktop and
+   *  false on phone/tablet (set once at boot via initializeResponsiveUiDefaults).
    *  Preserved across resetTransientState — user's collapse/expand choice survives resets. */
   bondedGroupsExpanded: boolean;
   bondedSmallGroupsExpanded: boolean;
   bondedGroupsSide: 'left' | 'right';
+  /** One-shot guard for initializeResponsiveUiDefaults — prevents resize/orientation
+   *  changes from re-running responsive defaults and overwriting user choices. */
+  responsiveDefaultsInitialized: boolean;
   /** Legacy-hidden: persistent selection (feature-gated off — see highlight contract above). */
   selectedBondedGroupId: string | null;
   hoveredBondedGroupId: string | null;
@@ -396,6 +401,12 @@ export interface AppStore {
   setSelectedBondedGroup: (id: string | null) => void;
   setHoveredBondedGroup: (id: string | null) => void;
   setColorEditorOpenForGroupId: (id: string | null) => void;
+  /** Apply device-mode-dependent UI defaults exactly once at boot.
+   *  - phone/tablet → bondedGroupsExpanded = false
+   *  - desktop      → leave current default (true)
+   *  Idempotent: subsequent calls (e.g. on resize) are no-ops, so the user's
+   *  manual collapse/expand choice survives orientation/viewport changes. */
+  initializeResponsiveUiDefaults: (deviceMode: DeviceMode) => void;
   // hasTrackedBondedHighlight is read-only from the public interface.
   // Only bonded-group-highlight-runtime may write highlight state (via useAppStore.setState).
   // No public clear action — use highlight runtime's clearHighlight() instead.
@@ -626,6 +637,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   bondedGroupsExpanded: true,
   bondedSmallGroupsExpanded: false,
   bondedGroupsSide: 'right',
+  responsiveDefaultsInitialized: false,
   selectedBondedGroupId: null,
   hoveredBondedGroupId: null,
   hasTrackedBondedHighlight: false,
@@ -723,6 +735,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
     };
   }),
   toggleBondedGroupsExpanded: () => set((s) => ({ bondedGroupsExpanded: !s.bondedGroupsExpanded })),
+  initializeResponsiveUiDefaults: (deviceMode) => {
+    if (get().responsiveDefaultsInitialized) return;
+    const isMobile = deviceMode === 'phone' || deviceMode === 'tablet';
+    set(isMobile
+      ? { responsiveDefaultsInitialized: true, bondedGroupsExpanded: false }
+      : { responsiveDefaultsInitialized: true });
+  },
   toggleBondedSmallGroupsExpanded: () => set((s) => ({ bondedSmallGroupsExpanded: !s.bondedSmallGroupsExpanded })),
   setBondedGroupsSide: (side) => set({ bondedGroupsSide: side }),
   setSelectedBondedGroup: (id) => set({ selectedBondedGroupId: id }),

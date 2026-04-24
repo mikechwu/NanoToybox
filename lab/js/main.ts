@@ -415,6 +415,10 @@ async function init() {
     document.documentElement.dataset.deviceMode = mode;
   }
   updateDeviceMode();
+  // One-shot responsive UI defaults — keyed off the boot device-mode so phone/tablet
+  // start with the bonded-groups panel collapsed. The action self-guards, so resize
+  // listeners below cannot re-trigger it and overwrite a manual user toggle.
+  useAppStore.getState().initializeResponsiveUiDefaults(getDeviceMode());
   addGlobalListener(window, 'resize', updateDeviceMode);
   addGlobalListener(window, 'orientationchange', updateDeviceMode);
 
