@@ -218,8 +218,8 @@ describe('GET /api/capsules/:code — route regressions', () => {
 
     await Promise.all(waitUntilPromises);
     const matchingErrors = errorSpy.mock.calls
-      .map((c) => String(c[0]))
-      .filter((m) => m.startsWith('[capsule-meta] last_accessed_at update failed'));
+      .map((c: unknown[]) => String(c[0]))
+      .filter((m: string) => m.startsWith('[capsule-meta] last_accessed_at update failed'));
     expect(matchingErrors).toHaveLength(1);
     expect(matchingErrors[0]).toContain(SHARE_ID);
     expect(matchingErrors[0]).toContain('D1 unavailable');

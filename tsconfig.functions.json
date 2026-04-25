@@ -18,6 +18,7 @@
     "src/share/__fixtures__/*.json",
     "tests/unit/poster-endpoint.test.ts",
     "tests/unit/share-page-og.test.ts",
+    "tests/unit/api-capsules-code-endpoint.test.ts",
     "src/history/history-file-v1.ts",
     "src/history/bond-policy-v1.ts",
     "tests/unit/admin-gate.test.ts",

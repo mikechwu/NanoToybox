@@ -57,6 +57,7 @@
     "tests/unit/auth-callback-acceptance.test.ts",
     "tests/unit/poster-endpoint.test.ts",
     "tests/unit/share-page-og.test.ts",
+    "tests/unit/api-capsules-code-endpoint.test.ts",
     "tests/unit/account-api-preview-thumb.test.ts",
     "tests/unit/account-capsules-backfill.test.ts",
     "tests/unit/guest-publish-endpoint.test.ts",
