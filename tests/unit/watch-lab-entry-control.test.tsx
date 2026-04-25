@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import React from 'react';
+import React, { act } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 
@@ -289,5 +289,97 @@ describe('WatchLabEntryControl — primary pill + caret menu', () => {
     const primary = screen.getByLabelText(new RegExp(LAB_ENTRY_PRIMARY_LABEL, 'i')).closest('button')!;
     fireEvent.pointerEnter(primary);
     expect(onContinueIntent).not.toHaveBeenCalled();
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+//   Auto-cue (timeline halfway / end milestones)
+// ──────────────────────────────────────────────────────────────────────
+//
+// `primaryAutoCueToken` flows from `WatchApp.tsx` → `useTimedCue` →
+// `data-auto-cue` on the tooltip. Mobile visibility relies entirely
+// on this attribute (see `watch/css/watch.css`'s coarse-pointer
+// rule). These tests pin the DOM-state contract; CSS visibility on
+// real devices is exercised by the Playwright spec.
+
+describe('WatchLabEntryControl — auto-cue DOM state', () => {
+  // Tooltip carries `role="tooltip"` (from JSX); accessing via role is
+  // the idiomatic Testing-Library accessor and avoids a class-string cast.
+  const getTooltip = () => screen.getByRole('tooltip');
+
+  it('tooltip exists with role="tooltip" once the primary is enabled (idle = no data-auto-cue)', () => {
+    render(
+      <WatchLabEntryControl
+        {...makeProps({
+          currentFrameAvailable: true,
+          currentFrameLabHref: '/lab/?x=1',
+          primaryAutoCueToken: 0,
+        })}
+      />,
+    );
+    // `getByRole('tooltip')` proves both presence and the role attribute.
+    expect(getTooltip().hasAttribute('data-auto-cue')).toBe(false);
+  });
+
+  it('bumping primaryAutoCueToken sets data-auto-cue="true"; clears after the cue window', () => {
+    vi.useFakeTimers();
+    try {
+      const props = makeProps({
+        currentFrameAvailable: true,
+        currentFrameLabHref: '/lab/?x=1',
+        primaryAutoCueToken: 0,
+      });
+      const { rerender } = render(<WatchLabEntryControl {...props} />);
+      expect(getTooltip().getAttribute('data-auto-cue')).toBeNull();
+
+      // Distinct token → cue fires.
+      act(() => {
+        rerender(<WatchLabEntryControl {...props} primaryAutoCueToken={1} />);
+      });
+      expect(getTooltip().getAttribute('data-auto-cue')).toBe('true');
+
+      // Window closes after the 5 s duration. Advance past it.
+      act(() => { vi.advanceTimersByTime(6000); });
+      expect(getTooltip().hasAttribute('data-auto-cue')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('opening the caret menu during a cue suppresses data-auto-cue (one-popover-at-a-time)', () => {
+    vi.useFakeTimers();
+    try {
+      const props = makeProps({
+        currentFrameAvailable: true,
+        currentFrameLabHref: '/lab/?x=1',
+        primaryAutoCueToken: 0,
+      });
+      const { rerender } = render(<WatchLabEntryControl {...props} />);
+      act(() => {
+        rerender(<WatchLabEntryControl {...props} primaryAutoCueToken={1} />);
+      });
+      expect(getTooltip().getAttribute('data-auto-cue')).toBe('true');
+
+      // Open the menu — same single instance the cue lives on, no
+      // second WatchLabEntryControl rendered. The cue MUST be
+      // suppressed so the tooltip and the menu cannot both show.
+      act(() => { openMenu(); });
+      expect(getTooltip().hasAttribute('data-auto-cue')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not fire on mount even when token is non-zero (parents may default-initialize)', () => {
+    render(
+      <WatchLabEntryControl
+        {...makeProps({
+          currentFrameAvailable: true,
+          currentFrameLabHref: '/lab/?x=1',
+          primaryAutoCueToken: 7,
+        })}
+      />,
+    );
+    expect(getTooltip().hasAttribute('data-auto-cue')).toBe(false);
   });
 });

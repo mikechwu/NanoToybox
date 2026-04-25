@@ -635,3 +635,109 @@ test.describe('Watch → Lab hydrate path (integration seam)', () => {
     expect(status).not.toMatch(/internal subsystems/i);
   });
 });
+
+// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// Touch-interaction auto-cue visibility for the Watch \u2192 Lab primary
+// hint. Touch contexts previously hid the tooltip unconditionally; the
+// CSS now allows the timed cue (`data-auto-cue="true"`) through while
+// still suppressing hover/focus discoverability. Gate mirrors
+// `isTouchInteraction()` at src/ui/device-mode.ts:46 (coarse primary
+// pointer + no hover) using `not (hover: hover)` for exact parity with
+// the JS predicate.
+// Fixture timeline: 0.001 \u2192 100 ps; halfway milestone at ~50.0005.
+// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+test.describe('Watch → Lab primary hint — mobile auto-cue visibility', () => {
+  const TOOLTIP_SELECTOR = '.watch-lab-entry__tooltip';
+
+  // Touch-emulating context applied to every case in this describe.
+  // Mirrors the pattern at tests/e2e/timeline-layout.spec.ts:154.
+  test.use({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 375, height: 812 },
+  });
+
+  async function scrubWatch(page: Page, ps: number): Promise<void> {
+    await page.evaluate((target) => {
+      const hook = (window as unknown as { _watchScrub?: (ps: number) => void })._watchScrub;
+      if (!hook) throw new Error('_watchScrub test hook not installed');
+      hook(target);
+    }, ps);
+    // Yield once to React so the snapshot from this scrub commits
+    // before the next call. `useTimelineMilestoneTokens` is
+    // arm-then-fire — the halfway milestone only fires after the
+    // effect has *observed* a snapshot with `currentTimePs < midPs`.
+    // Without this barrier, two back-to-back scrubs could be batched
+    // and the hook would only see the second value, missing the arm
+    // step.
+    await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
+  }
+
+  test('coarse-pointer + idle → tooltip is display:none (no hover-discoverability path on touch)', async ({ page, baseURL }) => {
+    await page.goto(`${baseURL}/watch/?e2e=1`);
+    await page.waitForSelector('.watch-workspace', { timeout: 8000 });
+    await loadWatchFixture(page);
+
+    // Pin BOTH halves of the touch-interaction predicate the CSS gate
+    // depends on. `noHover` mirrors the JS predicate exactly:
+    // `!matchMedia('(hover: hover)').matches` (src/ui/device-mode.ts:46).
+    // If a future browser emulation decouples the two features, the
+    // visibility assertion below would be meaningless without this pin.
+    const media = await page.evaluate(() => ({
+      coarse: window.matchMedia('(pointer: coarse)').matches,
+      noHover: !window.matchMedia('(hover: hover)').matches,
+    }));
+    expect(media.coarse).toBe(true);
+    expect(media.noHover).toBe(true);
+
+    // Tooltip is in the DOM (rendered by WatchLabEntryControl) but the
+    // touch-context rule hides it when `data-auto-cue` is absent.
+    const tooltip = page.locator(TOOLTIP_SELECTOR).first();
+    await expect(tooltip).toBeAttached({ timeout: 4000 });
+    const display = await tooltip.evaluate((el) => getComputedStyle(el).display);
+    expect(display).toBe('none');
+  });
+
+  test('coarse-pointer + timeline halfway milestone → tooltip becomes visible during cue, then hides', async ({ page, baseURL }) => {
+    await page.goto(`${baseURL}/watch/?e2e=1`);
+    await page.waitForSelector('.watch-workspace', { timeout: 8000 });
+    await loadWatchFixture(page);
+
+    // Arm halfway (currentTimePs < midPs), then fire (currentTimePs
+    // ≥ midPs). Fixture span is 0.001..100, midPs = 50.0005. The
+    // 1-ps slack on the fire scrub absorbs any future float-precision
+    // drift in the player so the comparison cannot silently miss.
+    await scrubWatch(page, 5);
+    await scrubWatch(page, 61);
+
+    const tooltip = page.locator(TOOLTIP_SELECTOR).first();
+    await expect(tooltip).toBeAttached();
+    await expect(tooltip).toHaveAttribute('data-auto-cue', 'true', { timeout: 4000 });
+    const visibleDisplay = await tooltip.evaluate((el) => getComputedStyle(el).display);
+    expect(visibleDisplay).not.toBe('none');
+
+    // 5 s cue window expires → React clears the attribute → CSS hides.
+    await expect(tooltip).not.toHaveAttribute('data-auto-cue', 'true', { timeout: 8000 });
+    const hiddenDisplay = await tooltip.evaluate((el) => getComputedStyle(el).display);
+    expect(hiddenDisplay).toBe('none');
+  });
+
+  test('coarse-pointer + cue active + caret menu open → tooltip is suppressed (one-popover-at-a-time)', async ({ page, baseURL }) => {
+    await page.goto(`${baseURL}/watch/?e2e=1`);
+    await page.waitForSelector('.watch-workspace', { timeout: 8000 });
+    await loadWatchFixture(page);
+
+    await scrubWatch(page, 5);
+    await scrubWatch(page, 61);
+
+    const tooltip = page.locator(TOOLTIP_SELECTOR).first();
+    await expect(tooltip).toHaveAttribute('data-auto-cue', 'true', { timeout: 4000 });
+
+    // Opening the menu strips data-auto-cue (React-layer suppression).
+    await page.locator('.watch-lab-entry__caret').click();
+    await expect(tooltip).not.toHaveAttribute('data-auto-cue', 'true', { timeout: 2000 });
+    const display = await tooltip.evaluate((el) => getComputedStyle(el).display);
+    expect(display).toBe('none');
+  });
+});

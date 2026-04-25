@@ -831,6 +831,9 @@ body {
    the desktop geometry so focus rings remain tight; hit area expands
    via padding and min dims applied here. */
 @media (pointer: coarse) {
+  /* WCAG 2.5.8: hit-area sizing applies to ANY coarse pointer
+     (phones, tablets, stylus-capable laptops). Stays on the broad
+     gate — it is purely a sizing concern. */
   .watch-lab-entry {
     min-height: 44px;
   }
@@ -838,13 +841,24 @@ body {
     min-height: 44px;
     padding: 0 14px;
   }
-  /* Coarse pointer = no reliable hover. The tooltip is a sighted
-     hint for mouse / keyboard users; on touch it would get stuck
-     "showing" after a tap (no hover-off event). Hide entirely. The
-     button's aria-label still conveys the full action name to
-     assistive tech. */
+}
+
+/* Tooltip-visibility policy on touch contexts. Gated to mirror
+   `isTouchInteraction()` (src/ui/device-mode.ts:46) — coarse
+   primary pointer with no hover capability. `not (hover: hover)`
+   is used instead of `(hover: none)` so the CSS exactly tracks the
+   JS predicate (`!matchMedia('(hover: hover)').matches`). Stylus
+   tablets / touch-capable laptops with a precise pointer keep the
+   desktop hover/focus path.
+   Default-hide because touch has no hover-off; the timed auto-cue
+   (`data-auto-cue="true"`, set by useTimedCue) is the only
+   exception — strict parity with desktop timing. */
+@media (pointer: coarse) and (not (hover: hover)) {
   .watch-lab-entry__tooltip {
     display: none;
+  }
+  .watch-lab-entry__tooltip[data-auto-cue="true"] {
+    display: block;
   }
 }
 

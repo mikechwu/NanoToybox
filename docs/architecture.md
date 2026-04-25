@@ -301,7 +301,7 @@ The transactional shape is what makes this flow worth describing as a flow. A na
 
 The user clicks **Interact From Here** in Watch and the current frame continues as a live Lab session.
 
-1. `watch/js/components/WatchLabEntryControl.tsx` captures the click and enforces the primary-pill contract (single pill, caret-toggled disclosure; tooltip auto-cues at the 50% and 100% timeline milestones, once per file).
+1. `watch/js/components/WatchLabEntryControl.tsx` captures the click and enforces the primary-pill contract (single pill, caret-toggled disclosure; tooltip auto-cues at the 50% and 100% timeline milestone tokens, once per file). The tooltip's mobile visibility gate is `@media (pointer: coarse) and (not (hover: hover))` in `watch/css/watch.css` — a CSS mirror of the `isTouchInteraction()` predicate at `src/ui/device-mode.ts:46` — so no-hover touch contexts get the timed-auto-cue-only behavior while stylus tablets and touch-capable laptops keep the desktop hover/focus path; the broader `@media (pointer: coarse)` gate carries WCAG 44×44 hit-area sizing, which is a sizing concern rather than an interaction-mode one.
 2. `watch/js/handoff/watch-lab-seed.ts` builds a seed (atoms, velocities, bonds, camera pose, authored colors) from the current playback frame, using shape types from `src/watch-lab-handoff/`.
 3. `watch/js/handoff/watch-lab-handoff.ts` writes the seed to `localStorage` under a handoff token and opens a `/lab/?from=watch&handoff=…` URL (built by `watch-lab-href.ts`) in a new tab.
 4. Lab boot checks the URL flag **before** the default auto-load (`lab/js/main.ts` → `lab/js/runtime/handoff/watch-handoff.ts`) and suppresses the default scene.

@@ -1465,3 +1465,23 @@ The route hoists a single `nowIso` (`functions/api/capsules/[code].ts:31`) and t
 **Evidence:** `src/share/share-access.ts` (`LAST_ACCESSED_WRITE_WINDOW_MS:43`, `computeShareAccessStaleBeforeIso:76`, `shouldRecordShareAccess:98`, `recordShareAccessIfStale:137`, `_recordShareAccessIfStaleForTesting:161`, `d1ShapeUnknownWarned:52`); `src/share/d1-types.ts`; `functions/api/capsules/[code].ts:31, 39, 50–52`; pattern reference `src/share/capsule-preview-heal.ts:164`; convention reference `src/share/share-record.ts:46`.
 
 **Related ADRs:** D86 (share-link architecture), D135 (capsule preview V2 + lazy-heal patterns), D148 (`isAccessibleShare(row, now)` predicate that consumes the same hoisted `nowIso`).
+
+## D152: Watch → Lab Primary-Hint Tooltip Gated on Touch-Interaction Predicate, not Raw Coarse Pointer
+
+**Status:** Accepted.
+
+**Decision:** The Watch → Lab primary hint tooltip's mobile visibility policy is gated by `@media (pointer: coarse) and (not (hover: hover))` in `watch/css/watch.css`, which mirrors the canonical `isTouchInteraction()` JS predicate at `src/ui/device-mode.ts:46`. The CSS rule hides the tooltip by default and only shows it when `data-auto-cue="true"` is set by the timed auto-cue pipeline (`primaryAutoCueToken` → `useTimedCue` → `data-auto-cue` at `watch/js/components/WatchLabEntryControl.tsx:171`). WCAG 44×44 hit-area sizing rules stay on the broader `@media (pointer: coarse)` gate — sizing is not an interaction-mode concern, and a stylus user on a coarse-pointer tablet still benefits from the larger target.
+
+**Rationale:** The Watch app already routes touch-vs-pointer behavior through `isTouchInteraction()` (coarse + no-hover) so that stylus tablets and touch-capable laptops with a precise pointer keep the desktop hover/focus path. Gating the tooltip's CSS visibility on raw `(pointer: coarse)` would diverge from that JS-side touch-interaction policy: a stylus tablet would suppress the hover tooltip in CSS while still binding pointer-event handlers in JS that expect the hover path to work. The two predicates have to agree, and the cheapest way to keep them aligned is for the CSS to be a syntactic mirror of the JS predicate. Choosing `not (hover: hover)` over `(hover: none)` produces byte-equivalence with the JS-side `!window.matchMedia('(hover: hover)').matches` on edge UAs that don't recognize the `hover` media feature: both forms collapse to false, whereas `(hover: none)` and `(hover: hover)` could diverge on a non-compliant UA.
+
+The split into two `@media` blocks (sizing on `(pointer: coarse)`, visibility on `(pointer: coarse) and (not (hover: hover))`) keeps the two concerns independently auditable. A future change to hit-area sizing only touches the sizing block; a future change to tooltip policy only touches the visibility block.
+
+**Alternatives rejected:**
+
+- Raw `@media (pointer: coarse)` gate for visibility — diverges from `isTouchInteraction()` parity on stylus tablets and touch-capable laptops; the JS would still expect the hover/focus tooltip path while CSS suppressed it.
+- `@media (pointer: coarse) and (hover: none)` — small but real divergence from the JS predicate on non-compliant UAs that don't recognize the `hover` media feature; `not (hover: hover)` is byte-equivalent to the JS-side `!matchMedia('(hover: hover)').matches`.
+- JS-driven class toggle (e.g., a `useTouchInteraction` hook writing a `data-touch-interaction` attribute) — unnecessary indirection for a pure visibility policy. CSS is the right layer when the only output is a `display`/`visibility` change; pulling it into JS adds a render-cycle dependency without changing semantics.
+
+**Evidence:** `watch/css/watch.css` coarse-pointer sizing block and the paired `(pointer: coarse) and (not (hover: hover))` visibility block; `src/ui/device-mode.ts:46–48` (`isTouchInteraction()` definition); `watch/js/components/WatchLabEntryControl.tsx:171` (`primaryAutoCueToken` → `useTimedCue` → `data-auto-cue` pipeline, unchanged); `tests/unit/watch-lab-entry-control.test.tsx` (auto-cue DOM state); `tests/e2e/watch-lab-entry.spec.ts` (mobile auto-cue visibility).
+
+**Related ADRs:** D149 (mobile-only responsive UI defaults — same `device-mode` system).

@@ -121,6 +121,8 @@ Design tokens and structural CSS are shared via `src/ui/`. Both apps import thes
 
 Do not duplicate shared CSS in app-local files. When adding a new shared CSS primitive (e.g., a new component class or design token), add it to the appropriate file in `src/ui/`.
 
+**`isTouchInteraction()` parity for CSS media queries.** The canonical JS predicate for touch interaction is `isTouchInteraction()` at `src/ui/device-mode.ts:46` — `coarse && !matchMedia('(hover: hover)').matches`. CSS rules that must track the same intent (e.g., visibility of a hover-only affordance like the Watch → Lab primary hint) MUST use `@media (pointer: coarse) and (not (hover: hover))`, NOT `@media (hover: none)` — the latter has a small divergence on non-compliant UAs where the `hover` media feature is unrecognized and would silently desync from the JS branch. Rules that should apply to ANY coarse pointer regardless of hover capability (hit-area sizing for stylus tablets, touch-capable laptops with a precise pointer, etc.) stay on the broader `@media (pointer: coarse)`. Precedent: `watch/css/watch.css` — the Watch → Lab primary tooltip splits the visibility branch (`pointer: coarse` and `not (hover: hover)`) from the WCAG 2.5.8 hit-area branch (`pointer: coarse` alone).
+
 ### Icons
 
 Shared icons live in `lab/js/components/Icons.tsx`. Both lab and watch import from there. (This will move to `src/ui/` in a future round.)

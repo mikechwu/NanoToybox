@@ -729,7 +729,9 @@ A hover/focus tooltip (class `.watch-lab-entry__tooltip`) accompanies the primar
 
 Two sentences, no em-dash. Renders via `:hover` / `:focus-visible` on the primary anchor, detected through a `:has()` selector on the outer `.watch-lab-entry`.
 
-**Mutual exclusion with the popover.** While the popover is open, React writes `data-menu-open="true"` on `.watch-lab-entry`; a CSS `:has(…)` rule suppresses the tooltip so users don't see both surfaces stacked. Hover + popover-open is unreachable by design.
+**Mutual exclusion with the popover.** While the popover is open, React writes `data-menu-open="true"` on `.watch-lab-entry`; a CSS `:has(…)` rule suppresses the tooltip so users don't see both surfaces stacked. Hover + popover-open is unreachable by design. The caret menu opening also clears `data-auto-cue` on the primary anchor (`watch/js/components/WatchLabEntryControl.tsx`) so an in-flight timed auto-cue is dismissed under the same one-popover-at-a-time invariant.
+
+**Touch-context visibility.** On touch contexts the Watch → Lab primary hint is hidden by default — there is no reliable hover-off event, so a hover/tap reveal would strand the tooltip on screen. `watch/css/watch.css` splits the coarse-pointer rules in two: a sizing block under `@media (pointer: coarse)` preserves the WCAG 44×44 hit area, and a visibility block under `@media (pointer: coarse) and (not (hover: hover))` hides the tooltip unless `data-auto-cue="true"` is set. The React `useTimedCue` hook (`src/ui/use-timed-cue.ts`) flips that attribute for the 5-second window of each timed auto-cue firing, so touch users still see the hint at the timeline halfway and end milestone tokens. The CSS query mirrors the touch-interaction predicate `isTouchInteraction()` at `src/ui/device-mode.ts:46`, so stylus tablets and touch laptops with a precise pointer keep the desktop hover/focus path. See [architecture.md](architecture.md) for the broader device-mode story.
 
 **Auto-cue timing (1-3-1).** The tooltip also auto-fires on two timeline milestones, at most once per loaded file:
 
