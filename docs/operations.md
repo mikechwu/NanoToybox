@@ -269,6 +269,9 @@ canaries.
 | `[account.capsules] heal-not-persisted share=<code>` | `functions/api/account/capsules/index.ts` | In-memory rebake succeeded but the D1 UPDATE did not commit (paired with a `[preview-heal] write-failed` line on the same row). The user will see the healed row on a subsequent request only after the write succeeds. One-off is benign; sustained volume = D1 write pressure. |
 | `[preview-heal] write-failed: <msg>` | `src/share/capsule-preview-heal.ts` | D1 UPDATE after a successful in-memory rebake failed. The render/return is already computed from the freshly projected scene, so the current request succeeds; the next request retries the write. Persistent volume = D1 write pressure on `capsule_share.preview_scene_v1`. |
 | `[<tag>] background-rejected: <msg>` | `functions/_lib/wait-until.ts` | Detached promise scheduled via `scheduleBackground` rejected. Current `<tag>` values: `publish` (publish-audit and success-counter writes from `functions/api/capsules/publish.ts`), `account.capsules` (background bondless heals from `functions/api/account/capsules/index.ts`). Systematic volume for one tag = the corresponding background path (audit write / heal / counter) is failing at the edge. Without this wrapper the rejection would vanish into a silent `.catch` — presence of the log is a reliability floor, not itself an incident unless sustained. |
+| `[capsule-meta] last_accessed_at update failed for <shareId>: <err>` | `functions/api/capsules/[code].ts` | Background `UPDATE capsule_share SET last_accessed_at` (scheduled via `context.waitUntil` from the share-metadata route) threw or rejected. Two-layer freshness defense in front of this write: a route-level freshness gate (`shouldRecordShareAccess` in `src/share/share-access.ts`) skips the `waitUntil` entirely when the SELECTed `last_accessed_at` is fresh inside the `LAST_ACCESSED_WRITE_WINDOW_MS = 60 * 60 * 1000` (1-hour) window, and the helper-level stale-threshold UPDATE re-checks the threshold in SQL for race-safety against concurrent readers passing the gate from the same snapshot. One-offs are benign (transient D1 blip, the next cache-bypassing read retries naturally); sustained volume = D1 write availability issue on `capsule_share`. **`meta.changes === 0` is normal steady-state** on repeat reads — the conditional `WHERE` clause matched no row because another request already refreshed the column inside the window. That is NOT a write failure and does NOT emit this log. |
+| `[share-access] d1-shape-unknown — result missing .meta; written counter will report false` | `src/share/share-access.ts` | The D1 binding returned a `run()` result with no `.meta` property, so the helper cannot tell whether the stale-threshold UPDATE matched a row. **Rate-limited**: emits at most once per worker isolate. One-offs suggest a mocked binding leaked into a branch (test infrastructure bug). Sustained single-occurrence logs across many isolates suggest a platform/binding regression (older Workers runtime) — file a platform ticket. Same shape and rationale as the `[preview-heal] d1-shape-unknown` line above. |
+| `[share-access] invalid nowIso: <value>` | `src/share/share-access.ts` | A malformed timestamp string was passed to the share-access helper. Defensive only — currently unreachable in production (callers pass `new Date().toISOString()`). Presence indicates a regression in the route wiring; investigate before the route starts skipping the `waitUntil` against an unparseable snapshot. |
 | `[scene-store] thumb-malformed: <reason>` | `src/share/capsule-preview-scene-store.ts` | Parsed `preview_scene_v1` storage carried an invalid `thumb` field; scene is still returned, thumb is dropped (read path falls back to live sampling). Reasons: `invalid-rev`, `no-atoms`, `atom-not-an-object`, `atom-nonfinite-or-malformed`, `bond-not-an-object`, `bond-nonint-indices`. One-offs are a single bad historical row; a sustained rate means the writer is emitting malformed thumbs and needs investigation. |
 | `[scene-store] thumb-rev-stale count=<N> stored=<X> current=<Y> — re-bake via backfill to restore full-fidelity bonds` | `src/share/capsule-preview-scene-store.ts` | Stored thumb is at an older revision than `CURRENT_THUMB_REV`; read path falls back to live sampling. **Rate-limited**: `warnStaleRevOnce` emits at milestones (1, 10, 100, 1000, …) per distinct stored rev per worker isolate — one stray row logs once, a stuck backfill over 100k rows also stays readable. `count=N` reads as "Nth time this isolate has seen rev=X"; comparing counts across isolates after a deploy gives the lag shape. Rate should drop to zero once the post-rev-bump backfill completes (see *Rollout procedure for a thumb-algorithm change* below). |
 | `[scene-store] derive-threw: <msg>` | `src/share/capsule-preview-scene-store.ts` | Entry-level catch in `derivePreviewThumbV1`. The account list endpoint no longer 500s on one bad row — it returns `null` and the client renders a placeholder. Persistent volume indicates a projection bug, not a data issue. |
@@ -1575,6 +1578,28 @@ wrangler pages deployment tail | grep '\[capsule-poster\]'
   sweep + `removeWatchToLabHandoff`) before surfacing the error banner
   — if users still see "Browser storage is full…" after that sweep, a
   non-atomdojo writer on the same origin is consuming quota.
+- **`capsule_share.last_accessed_at` is coarse — accurate to within ~1 hour.**
+  The share-metadata route (`functions/api/capsules/[code].ts`) no longer
+  issues an unconditional `UPDATE capsule_share SET last_accessed_at` on
+  every read. A two-layer freshness defense gates the write: the
+  route-level freshness gate in `src/share/share-access.ts`
+  (`shouldRecordShareAccess`) skips `context.waitUntil` entirely when the
+  SELECTed row is fresh inside `LAST_ACCESSED_WRITE_WINDOW_MS = 60 * 60 *
+  1000` (1 hour); the helper-level stale-threshold UPDATE provides
+  race-safety for concurrent readers passing the gate from the same
+  snapshot. **The route-level gate is what removes load from D1 primary
+  on repeat metadata reads** — D1 forwards every UPDATE to primary
+  regardless of whether it mutates a row, so skipping the `waitUntil`
+  before SQL is the load-shedding step. The 1-hour threshold dominates
+  the route's `Cache-Control: public, max-age=60` window, so the two
+  protections compose without overlap; the gate's targets are the
+  cache-bypassing callers (bots, unfurlers, internal callers,
+  `Cache-Control: no-cache`). Operator-visible consequence: queries like
+  "shares accessed in the last N minutes" against `last_accessed_at` are
+  accurate to within ~1 hour. For minute-resolution traffic, prefer the
+  `wrangler pages deployment tail` access logs. No schema migration was
+  required for this change — `git diff migrations/` is empty; the
+  underlying column is unchanged.
 - **Removed flags (watch out for stale URLs / bookmarks).** The
   `REMIX_CURRENT_FRAME_UI_ENABLED` build-time gate has been removed,
   and the `?e2eEnableRemixCurrentFrame=1` URL override no longer does

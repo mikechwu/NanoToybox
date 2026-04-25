@@ -1391,3 +1391,77 @@ When the guard fails (balanced collision/reactant pair, water-style fragmentatio
 **Alternatives rejected:** Keep `isAccessibleStatus` and add `isAccessibleShare` as an optional stricter check (silent drift — callers forget to opt in); duplicate the expiry check at each callsite inline (guaranteed to drift); put the expiry check in a database trigger (invisible to the TS type system, hides the rule from reviewers).
 
 **Related ADRs:** D86 (share-link architecture), D94 (cron sweeper), D139 (separate endpoint).
+
+## D149: Mobile-Only Responsive UI Defaults Initialized Once at Boot
+
+**Status:** Accepted.
+
+**Decision:** Lab seeds a small set of UI defaults that differ between desktop and mobile (currently only `bondedGroupsExpanded`, false on phone/tablet, true on desktop) through a single `initializeResponsiveUiDefaults(deviceMode)` action on the Zustand store. The action is invoked exactly once from `lab/js/main.ts:421` after the first `updateDeviceMode()` call, and is gated by a `responsiveDefaultsInitialized` boot flag on the store (`lab/js/store/app-store.ts:387`, set inside the action at `:738–743`). The flag is intentionally NOT cleared by `resetTransientState` (`lab/js/store/app-store.ts:884`), so the initial mobile-only override never re-fires on resize, orientation change, or scene reset.
+
+**Rationale:** The bonded-groups panel is useful at desktop widths but pushes content off-screen on phone/tablet, so the shipped default differs by device class. The hard requirement is that any explicit user toggle survives subsequent layout events: a user who opens the panel on a phone and rotates the device must not see it slammed shut by a re-application of the responsive default. The cleanest way to encode "shipped default differs by device class, but user choice wins forever after" is an idempotent boot guard rather than a recurring effect — a one-shot setter run from the boot composition root cannot fight the user, by construction.
+
+The action being on the store (rather than computed inline at boot) keeps a single source of truth for "what the responsive default is for this preference" so future preferences (e.g., a phone-only collapse for a different panel) plug into the same idempotent seam.
+
+**Alternatives rejected:**
+
+- React `useEffect` on a `deviceMode` derived selector (would re-fire on every device-mode transition — a tablet rotation flipping width thresholds would clobber user toggles).
+- Branching defaults at store-creation time only (works for first paint but desktop-only initial defaults cannot be overridden once the store is already initialized — wrong shape for a value that depends on a runtime probe).
+- Including `responsiveDefaultsInitialized` in `resetTransientState` (would let "Reset playground" re-stomp the user's panel choice, which is exactly the bug the guard is here to prevent).
+
+**Out of scope:** Persisting the user's panel choice across page loads (the guard scopes to the page lifetime — cross-load persistence is a separate decision); per-orientation defaults within mobile (phone-portrait vs. phone-landscape distinctions); generalizing the action to a multi-preference responsive-defaults map (only one preference currently needs it; broaden when a second appears).
+
+**Evidence:** `lab/js/store/app-store.ts:380–409, 637–640, 737–744, 884`; `lab/js/main.ts:421`.
+
+## D150: Mobile-Only Initial Camera Distance Multiplier
+
+**Status:** Accepted.
+
+**Decision:** The initial scene-fit framing distance is parameterized in `lab/js/config.ts:144–148` as `CONFIG.camera.fitDistanceRadiusScale = 2.5`, `fitDistanceBaseOffset = 5`, and `mobileFitDistanceMultiplier = 1.2`. The fit math in `lab/js/renderer.ts:_fitCamera` (`:1550`) computes `baseDist = maxR * fitDistanceRadiusScale + fitDistanceBaseOffset`, then reads `document.documentElement.dataset.deviceMode` (`:1596`) and multiplies by `mobileFitDistanceMultiplier` when the mode is `phone` or `tablet`. The adjusted distance is written to BOTH `camera.position` and `_defaultCamPos` (`:1606`) so a later Reset view (`:1836`) restores the same mobile-aware framing rather than reverting to a desktop-tuned baseline.
+
+**Rationale:** Mobile devices reserve a larger fraction of the viewport for UI chrome (top bar, dock, status bar), so a camera distance tuned to fill a desktop canvas crops the scene against the chrome on phone/tablet. The fix is a small multiplicative bump on initial fit distance, gated by the same `data-device-mode` attribute that the rest of the responsive system reads. Centralizing the multiplier as a named config constant keeps the tuning surface visible to reviewers — a single grep on `mobileFitDistanceMultiplier` reaches every reader.
+
+The `_defaultCamPos` inheritance is the load-bearing detail: without writing the mobile-adjusted distance into the Reset baseline, the first Reset on a phone would teleport to a desktop-tuned framing and re-trigger the original chrome-clipping problem. The fix has to update both stores together to keep the framing consistent across the scene's full lifetime.
+
+**Alternatives rejected:**
+
+- Branch on `deviceMode` in component-tree CSS (chrome-overlap fix would be a function of CSS layout rather than camera framing — fragile against future chrome changes).
+- Different `fitDistanceRadiusScale` values per device-mode (couples the semantic "how much padding around the bounding sphere" to the device, making future tuning ambiguous; the multiplier is a separate, additive concern).
+- Apply the multiplier only at first fit but not in `_defaultCamPos` (Reset view would silently regress to desktop framing — caught immediately in manual testing).
+
+**Out of scope:** Continuous-DPI tuning (the current step is binary phone/tablet vs. desktop; richer tuning waits for evidence); landscape-vs-portrait differentiation; dynamic re-fit on rotation (intentionally one-shot — repeat fits would fight user-driven zoom).
+
+**Evidence:** `lab/js/config.ts:144–148`; `lab/js/renderer.ts:1550–1612, 1836`.
+
+## D151: Two-Layer Freshness Defense for Capsule `last_accessed_at` Writes
+
+**Status:** Accepted.
+
+**Decision:** The capsule-read route (`functions/api/capsules/[code].ts`) refreshes `capsule_share.last_accessed_at` through a **two-layer freshness defense**, with both layers owned by a new shared module `src/share/share-access.ts`:
+
+1. **Route-level freshness gate.** Before `context.waitUntil` is called, the route consults `shouldRecordShareAccess(row.last_accessed_at, nowIso)` (`src/share/share-access.ts:98`). When the existing timestamp is within `LAST_ACCESSED_WRITE_WINDOW_MS = 60 * 60 * 1000` of `nowIso` (computed via `computeShareAccessStaleBeforeIso`, `:76`), the gate returns false and **no write query of any kind is issued** for that read. This is the primary write-reduction mechanism.
+2. **Stale-threshold UPDATE.** When the gate passes, the route schedules `recordShareAccessIfStale(env.DB, row.id, nowIso)` (`:137`) inside `waitUntil`. The helper issues a single `UPDATE … WHERE id = ? AND (last_accessed_at IS NULL OR last_accessed_at < ?)` against D1, with the same `staleBeforeIso` the gate consulted. This second layer exists for race-safety: two concurrent readers can both pass the gate from the same snapshot of `last_accessed_at`, and the conditional `WHERE` lets the second writer's UPDATE be a no-op (`meta.changes === 0`) instead of a redundant primary-region write.
+
+The route hoists a single `nowIso` (`functions/api/capsules/[code].ts:31`) and threads it through `isAccessibleShare` (`:39`), the gate (`:50`), and the helper (`:52`) so the three checks see one consistent timestamp.
+
+**Rationale (route gate beats helper-only):** D1 routes every `UPDATE` to the primary region regardless of whether `meta.changes` ends up being 0, so a helper-only design — relying solely on the conditional `WHERE` — would still send one write query per read across the wire. For a heavily-read share code, that is the dominant cost. Pulling the freshness check into JS at the route boundary collapses repeat reads to zero write traffic, while the helper-level conditional `WHERE` continues to protect the rare case where two readers both pass the gate. Helper-only is correct but expensive; route-only is cheap but racy; both layers together are cheap AND correct.
+
+**Other choices worth recording:**
+
+- **Lexical ISO comparison over `unixepoch()`.** `last_accessed_at` is a TEXT column carrying ISO-8601 timestamps, and the codebase already uses lexical string comparison for share timestamps (`src/share/share-record.ts:46`). Reusing that convention keeps the new helper consistent with sibling modules and avoids introducing a SQLite-flavored time function on a path that is deliberately portable across the Workers/Vitest seams.
+- **Local structural cast over widening `D1Database`.** The helper reads `meta.changes` through the structural cast `(result as { meta?: { changes?: number } })?.meta` (`src/share/share-access.ts:200`) — same pattern as `src/share/capsule-preview-heal.ts:164` — rather than widening the local `./d1-types` shim. The shim's job is to keep `src/share/*` compilable from both the backend and frontend tsconfigs, NOT to be a complete D1 surface; broadening it for one read would invite type leak from `@cloudflare/workers-types` into the frontend bundle. A missing `meta` returns `{ written: false }` and emits a one-time `[share-access] d1-shape-unknown` warning per isolate (gated by the `d1ShapeUnknownWarned` flag, with a `_resetD1ShapeUnknownWarnedForTesting` reset hook for tests).
+- **Module isolation from `@cloudflare/workers-types`.** `share-access.ts` imports `D1Database` ONLY from local `./d1-types`. `src/share/*` is compiled by both backend and frontend tsconfigs; importing the workers-types declaration directly would push edge-runtime types into Lab/Watch bundles.
+- **Synchronous `nowIso` validation.** A malformed `nowIso` throws `[share-access] invalid nowIso` synchronously, surfacing the bug at the call site rather than through a swallowed `.catch(console.error)` on `waitUntil`.
+
+**Alternatives rejected:**
+
+- Helper-only (every read still issues an UPDATE; D1 routes them all to primary; defeats the goal).
+- Route-gate-only (concurrent readers passing the same snapshot both write; primary-region write traffic spikes under cache-miss bursts).
+- Triggers in D1 (invisible to the TS type system, hides the rule from reviewers — same reasoning as D148's rejection of database triggers).
+- Widening the `D1Database` shim to expose `meta` (leaks workers-types into the frontend tsconfig).
+- Numeric (`unixepoch()`) comparison (introduces a SQLite-specific time function on a code path that is meant to remain portable across the test and worker compile boundaries).
+
+**Out of scope:** Persisting per-IP read counters; an analytics-grade access log (this column is for tombstoning/heal heuristics, not analytics); generalizing the helper to a per-table "throttled timestamp UPDATE" utility (one caller currently — generalize when a second appears).
+
+**Evidence:** `src/share/share-access.ts` (`LAST_ACCESSED_WRITE_WINDOW_MS:43`, `computeShareAccessStaleBeforeIso:76`, `shouldRecordShareAccess:98`, `recordShareAccessIfStale:137`, `_recordShareAccessIfStaleForTesting:161`, `d1ShapeUnknownWarned:52`); `src/share/d1-types.ts`; `functions/api/capsules/[code].ts:31, 39, 50–52`; pattern reference `src/share/capsule-preview-heal.ts:164`; convention reference `src/share/share-record.ts:46`.
+
+**Related ADRs:** D86 (share-link architecture), D135 (capsule preview V2 + lazy-heal patterns), D148 (`isAccessibleShare(row, now)` predicate that consumes the same hoisted `nowIso`).

@@ -77,6 +77,11 @@ Path fragments such as `lab/`, `watch/`, and `viewer/` refer to directories, not
 - **dynamic fallback poster** — the PNG returned by `GET /api/capsules/:code/preview/poster` when no stored asset exists, rendered from `preview_scene_v1`. Cache key `?v=t<TEMPLATE_VERSION>`; ETag `"v<TEMPLATE_VERSION>-<8hex>"` bound to `[TEMPLATE_VERSION, scene.hash, sanitizedTitle, shareCode]`. Gated by `CAPSULE_PREVIEW_DYNAMIC_FALLBACK`.
 - **terminal fallback** — the static `public/og-fallback.png` returned when dynamic rendering fails. Distinct from "dynamic fallback poster," which is the scene-projected path itself.
 
+## Responsive UI (common nouns — lowercase in prose)
+
+- **responsive UI defaults** — boot-time UI state Lab applies once based on `deviceMode` (`phone | tablet | desktop`). On phone/tablet the bonded-groups panel boots collapsed; desktop is unchanged. Implemented by `initializeResponsiveUiDefaults` in `lab/js/store/app-store.ts` (called from `lab/js/main.ts` right after the first `updateDeviceMode()`), guarded by the one-shot `responsiveDefaultsInitialized` flag so subsequent resize/orientation events do not re-stomp user choice. The user's collapse/expand toggle is preserved across `resetTransientState`.
+- **mobile-only initial camera distance** — the phone/tablet zoom-out applied by `_fitCamera` in `lab/js/renderer.ts` so UI chrome doesn't crop the scene. Distance formula `dist = maxR · CONFIG.camera.fitDistanceRadiusScale + CONFIG.camera.fitDistanceBaseOffset`, multiplied by `CONFIG.camera.mobileFitDistanceMultiplier` when `document.documentElement.dataset.deviceMode` is `phone` or `tablet`. Reset View inherits the adjusted distance via `_defaultCamPos`; desktop is unchanged.
+
 ## Backend (common nouns — lowercase in prose)
 
 - **signed intent** — a short-lived signed payload `{ action, payload, exp }` minted by a Function and consumed by a follow-up Function. Replaces session tokens for authenticated mutations.
@@ -88,6 +93,10 @@ Path fragments such as `lab/`, `watch/`, and `viewer/` refer to directories, not
 - **Turnstile** — Cloudflare's captcha, used in `interaction-only` mode on the Quick Share path. Server-verified via Siteverify with an 8-second timeout. Referenced by `env.TURNSTILE_SITE_KEY` (public) and `env.TURNSTILE_SECRET_KEY` (secret).
 - **erasure** — user-initiated account-and-data deletion flow routed through `/privacy-request`. Backed by a tombstone on the `users` row (not hard-delete) plus an ordered capsule-delete cascade.
 - **primary-pill contract** — the UI contract enforced by `WatchLabEntryControl`: a single primary pill ("Interact From Here") with a caret-toggled disclosure popover revealing secondary actions; tooltip auto-cues at the 50% and 100% timeline milestones, once per file.
+- **share-access window** — the `LAST_ACCESSED_WRITE_WINDOW_MS` constant (1 hour) in `src/share/share-access.ts` that bounds how often `capsule_share.last_accessed_at` is rewritten on read. Anchors the freshness comparison shared by the route-level gate and the conditional UPDATE.
+- **two-layer freshness defense** — the share-access write-on-read pattern that pairs a route-level freshness gate with a stale-threshold UPDATE. Layer 1 (`shouldRecordShareAccess` / `computeShareAccessStaleBeforeIso`) skips scheduling `waitUntil` when the row was touched inside the share-access window; layer 2 (`recordShareAccessIfStale`) re-checks the same threshold inside the SQL `WHERE` clause for race-safety. Live in `src/share/share-access.ts`; called from `functions/api/capsules/[code].ts`.
+- **route-level freshness gate** — layer 1 of the two-layer freshness defense: the in-route check that decides whether to schedule the access-time UPDATE at all. Cheap path: skip `ctx.waitUntil` when `last_accessed_at` is fresher than `computeShareAccessStaleBeforeIso(nowIso)`.
+- **stale-threshold UPDATE** — layer 2 of the two-layer freshness defense: the conditional D1 UPDATE that only writes when `last_accessed_at IS NULL OR last_accessed_at < ?`, where `?` is the same threshold the route-level gate used. Race-safe because two concurrent requests that both pass layer 1 still produce one effective write.
 
 ## File-extension brand
 

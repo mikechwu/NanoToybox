@@ -35,6 +35,7 @@ It is not a replacement for production MD codes. It is an interactive front door
 - **Velocity Verlet integrator** — symplectic, time-reversible, second-order accurate. Approximates NVE (energy-conserving) when damping is off; an adjustable slider lets you dissipate energy from zero to heavy.
 - **Three.js rendering with InstancedMesh** — thousands of atoms drawn in two GPU draw calls with PBR materials and camera-relative lighting.
 - **Direct manipulation** — drag single atoms, translate molecules, or apply torque to spin structures; full touch support on mobile.
+- **Responsive UI defaults on phone/tablet** — boot-time defaults collapse the bonded-groups panel and pull the camera back slightly so mobile chrome doesn't crop the scene; user toggles survive scene resets. Desktop is unchanged.
 - **15 pre-relaxed geometries** — C60 / C180 / C540 / C720 buckyballs, armchair / zigzag / chiral nanotubes, graphene sheets, diamond.
 - **Containment boundary** — soft harmonic wall you can resize or remove, with live atom count and auto-scaling radius.
 - **Bonded-group color editing** — paint groups from a swatch popover; color intents persist when bonds break and reform.

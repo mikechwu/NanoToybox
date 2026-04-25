@@ -196,6 +196,8 @@ Handler tests share a small but consistent recipe. The goal is to exercise the r
 3. **Minimal handler context constructed by hand** — tests build `context = { request, env, params }` directly (see the `makeContext()` helper pattern in `publish-endpoint.test.ts`) rather than reaching for a full `EventContext`. Handlers only read `.request` and `.env`, so the minimal shape is cast via `as unknown as Parameters<typeof onRequestPost>[0]`.
 4. **Real `Request` objects** — `new Request('http://localhost/api/capsules/publish', { method, headers, body })` exercises the real Web Fetch API surface, avoiding header/method-parsing mocks.
 5. **Workers types required** — because the handler signatures reference `PagesFunction`, `R2Bucket`, and `D1Database`, these files only typecheck under `tsconfig.functions.json` (see [Split tsconfig Model](#split-tsconfig-model)).
+6. **Stateful fake D1 for write-on-read paths** — when a route conditionally mutates a row through a SQL predicate (e.g., the route-level freshness gate + stale-threshold UPDATE in `src/share/share-access.ts`), the fake D1 must carry the row by reference and apply the predicate in JS so the second SELECT in a sequence sees the post-UPDATE state. Canonical example: `tests/unit/api-capsules-code-endpoint.test.ts:77` — the `makeStatefulDb()` helper holds a single mutable row, the SELECT returns it by reference, the UPDATE re-checks `last_accessed_at IS NULL OR last_accessed_at < ?` against the bind, and an `executedUpdateCount` increments only when `meta.changes === 1`. This catches contract drift between the JS gate predicate and the SQL `WHERE` that a method-surface stub (`vi.fn().mockResolvedValue(...)`) would mask. The companion helper-level coverage at `tests/unit/share-access.test.ts` uses a simpler fake D1 returning `{ success: true, meta: { changes: N } }` to pin the helper's missing-`meta` fallback, warn-once invariant, and bind order in isolation.
+7. **`waitUntil` collector for detached writes** — routes that schedule background work via `context.waitUntil(...)` need the collector pattern so tests can assert post-response side effects deterministically. Pin the synchronous capture + `await Promise.all(...)` shape established at `tests/unit/poster-endpoint.test.ts:120` and reused in `tests/unit/api-capsules-code-endpoint.test.ts:158` (`waitUntilPromises: Promise<unknown>[]; waitUntil: (p) => { waitUntilPromises.push(p); }`). The test awaits the response first, then `await Promise.all(waitUntilPromises)` before asserting on D1 state — otherwise the conditional UPDATE has not landed when the test inspects the row.
 
 #### Reference Fixture Helpers (`publish-endpoint.test.ts`)
 
@@ -551,6 +553,15 @@ Architecture extractions should be guarded at the extracted owner, not only thro
 |------|---------|
 | `frame-runtime.test.ts` | Per-frame pipeline ordering (worker-mode sequencing proof, review-mode gating, drag-refresh gating, sync-mode fallback, placement framing integration: framing runs during placement, orbit-follow suppressed, idle shrink allowed, drag framing + reprojection, drag reprojection not called when idle) |
 | `app-lifecycle.test.ts` | Teardown sequence ordering (exact dependency-ordered call sequence, subscription cleanup, partial-init safety) |
+
+### Mobile Responsive UI (boot-time defaults + camera fit)
+
+Two patterns recur for mobile-only initial behavior that the renderer applies but cannot easily expose for direct assertion:
+
+| File | Purpose |
+|------|---------|
+| `responsive-ui-defaults.test.ts` | Pins the `initializeResponsiveUiDefaults` action's boot-time default for the bonded-groups panel: desktop leaves `bondedGroupsExpanded` at `true`, phone/tablet collapses to `false`, and an idempotent guard (`responsiveDefaultsInitialized`) prevents resize / orientation events from overwriting a manual user toggle. `resetTransientState()` preserves the user's manual choice. Use this shape for any new boot-once-per-load default that must respect later user input. |
+| `mobile-fit-camera.test.ts` | Pins the camera fit-distance config (`CONFIG.camera.fitDistanceRadiusScale = 2.5`, `fitDistanceBaseOffset = 5`, `mobileFitDistanceMultiplier = 1.2`) plus a **static-source pin** — the test reads `lab/js/renderer.ts` via `fs.readFileSync` and asserts the `_fitCamera` body still references `CONFIG.camera.fitDistanceRadiusScale` (and the other two constants) by name. The replica formula in the test mirrors the renderer's; the static-source check is what prevents either side from drifting silently when WebGL setup makes a direct render-path assertion impractical. Reuse this pattern when a behavior depends on a renderer/canvas surface that the unit harness cannot stand up. |
 
 ### UI Components (58 tests across 2 files)
 

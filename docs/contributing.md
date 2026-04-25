@@ -52,6 +52,8 @@ Measured limits (see [scaling-research.md](scaling-research.md)):
 6. **Keep the two implementations in sync.** Any physics change must be made in both files.
 7. **Use the library CLI** to add structures — never hand-place atoms in XYZ files.
 8. **Explicit Euler is forbidden.** Use velocity Verlet only.
+9. **Logging is bare `console.error` / `console.warn` with a bracketed module prefix.** No `logError` / Sentry abstraction exists. Match the in-tree convention: `[capsule-meta]`, `[share-access]`, `[preview-heal]`, `[auth.session.user-missing]`, `[auth.orphan-delete-failed]`, `[lab.boot]`. New diagnostics get a new prefix; do not introduce a wrapping logger.
+10. **Validate ISO-string inputs at the synchronous boundary.** When a function consumes an ISO timestamp and is called outside a `.catch(...)` chain (e.g., a route gate computing a threshold before scheduling `waitUntil`), check `Number.isFinite(Date.parse(input))` and throw a named error like `[share-access] invalid nowIso: …`. Precedent: `src/share/share-access.ts:76` — `computeShareAccessStaleBeforeIso`. Silent `RangeError: Invalid time value` would otherwise surface as an unlogged 500.
 
 ### Architecture
 9. **Don't restart ML work** unless >1000 atoms are needed or a GNN framework is available.
@@ -873,6 +875,33 @@ Already pinned in `package.json` — a fresh `npm install` is all you need:
 - `wrangler` (devDep) — Cloudflare CLI (pages dev, D1 migrations, worker deploy)
 - `@cloudflare/workers-types` (devDep) — Workers runtime type globals, consumed by `tsconfig.functions.json` and `workers/cron-sweeper/tsconfig.json`
 - `@cloudflare/pages-plugin-vercel-og` (runtime dep) — Satori-based OG image renderer used by `functions/api/capsules/[code]/preview/poster.ts`. Adds ~1–2 MB to the Pages Functions bundle. Do not import it from `lab/` or `watch/` — it is functions-only.
+
+#### `src/share/*` cross-tsconfig contract
+
+`src/share/*` is compiled under **both** the backend tsconfig
+(`tsconfig.functions.json`, has `@cloudflare/workers-types`) and the
+frontend tsconfig (`tsconfig.json`, no Workers types). Code in this
+directory MUST import `D1Database` (and any other D1 surface it
+touches) from the local shim `./d1-types`, NEVER from
+`@cloudflare/workers-types` — the latter resolves under functions but
+fails the frontend typecheck. Precedents: `src/share/publish-core.ts:24`,
+`src/share/capsule-delete.ts:31`, `src/share/share-access.ts:35`. The
+shim is a structural subset, so the real workerd `D1Database` remains
+assignable to it everywhere.
+
+`./d1-types` deliberately does **not** declare `meta.changes` on
+`D1Result`. To read `meta.changes` from a `run()` result, use a local
+structural cast at the call site:
+
+```
+const meta = (result as { meta?: { changes?: number } })?.meta;
+```
+
+Precedent: `src/share/capsule-preview-heal.ts:164`. Do not widen the
+shim unless multiple new call sites need the same field — the cast is
+the cheaper seam. See `docs/architecture.md` for the
+`src/share/share-access.ts` two-layer freshness defense, which is the
+exemplar consumer of both rules above.
 
 #### First-time setup
 
