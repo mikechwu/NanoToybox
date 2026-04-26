@@ -3,15 +3,37 @@
  *
  * Calls `assertPreparedCapsuleFresh(prepareId)` on the prepared-capsule
  * service BEFORE network I/O, then POSTs the cached bytes via the
- * shared `postAccountCapsuleArtifact`. After any outcome (success or
- * failure) it evicts the cache entry so a retry-with-different-
- * selection cannot accidentally re-POST the same bytes.
+ * shared `postAccountCapsuleArtifact`.
  *
  * Mode-isolated by design: this module imports neither
  * `ShareResultGuest` nor any guest error type. Submit-target
  * resolution is the publish layer's responsibility (see
  * `trim-submit-coordinator.ts`); this executor never branches on auth
  * status, public config, or Turnstile state.
+ *
+ * ## Cache eviction policy (success-only)
+ *
+ * The Phase 1 auth-transition contract (architecture report §G) is
+ * that mid-trim auth/config transitions preserve the prepared
+ * artifact. A 401/AuthRequiredError, 428/AgeConfirmationRequiredError,
+ * transient 5xx, or network blip MUST leave the cached prepareId in
+ * place so the user can retry the same trimmed selection after
+ * re-auth without rebuilding the capsule.
+ *
+ * The executor therefore evicts ONLY on the success path. Other
+ * eviction sources, by ownership:
+ *
+ *   - **Snapshot-stale** — `assertPreparedCapsuleFresh` (called above
+ *     the POST, before any network I/O) evicts internally and throws
+ *     `CapsuleSnapshotStaleError` when the recording moved. The
+ *     cached bytes are no longer safe to POST against the current
+ *     scene, so eviction is correct there.
+ *   - **Explicit cancel / reset / dialog close / new selection** —
+ *     `TimelineBar` calls `onCancelPreparedCapsule` from its
+ *     teardown paths.
+ *   - **Cache LRU bound** — `prepared-capsule-service` evicts the
+ *     oldest entry when `maxCacheEntries` is exceeded; bounds any
+ *     pathological retry loop without changing the per-error policy.
  */
 
 import type { ShareResultAccount } from '../../../src/share/share-result';
@@ -36,16 +58,11 @@ export function createPublishPreparedAccountCapsule(
     // the entry. Executors never inline-compare snapshotIds.
     deps.service.assertPreparedCapsuleFresh(prepareId);
     const artifact = deps.service.getPreparedCapsuleArtifact(prepareId);
-    try {
-      const result = await post(artifact);
-      deps.service.cancelPreparedPublish(prepareId);
-      return result;
-    } catch (err) {
-      // Evict on any error so a retry cannot accidentally re-POST the
-      // same (failed) bytes. Idempotent — a snapshot-stale eviction
-      // earlier in the flow is harmless.
-      deps.service.cancelPreparedPublish(prepareId);
-      throw err;
-    }
+    // Recoverable POST errors propagate to the caller WITHOUT
+    // evicting — the user may retry the same prepareId after
+    // re-auth / age-confirmation / network recovery.
+    const result = await post(artifact);
+    deps.service.cancelPreparedPublish(prepareId);
+    return result;
   };
 }

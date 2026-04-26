@@ -135,9 +135,23 @@ export interface TimelineCallbacks {
     prepareId: string,
     turnstileToken: string,
   ) => Promise<ShareResultGuest>;
-  /** Evict the cached JSON for this prepareId. Idempotent. Must be
-   *  called on Cancel, Reset, dialog close, snapshot invalidation, and
-   *  after any publish attempt completes. */
+  /** Evict the cached JSON for this prepareId. Idempotent.
+   *  Mirrors the Phase 1 §G eviction policy on the runtime
+   *  `PreparedCapsuleService.cancelPreparedPublish` interface (see
+   *  `lab/js/runtime/prepared-capsule-service.ts`):
+   *
+   *    - explicit user/UI invalidation — Cancel, Reset, dialog
+   *      close, new-selection edit (`TimelineBar` teardown / drag-end);
+   *    - successful prepared publish (the executor evicts on success);
+   *    - snapshot-stale detection (the service evicts internally
+   *      before throwing `CapsuleSnapshotStaleError`);
+   *    - service LRU bound when `maxCacheEntries` is exceeded.
+   *
+   *  NOT called for recoverable POST failures
+   *  (`AuthRequiredError`, `AgeConfirmationRequiredError`,
+   *  `GuestTurnstileError`, guest quota / disabled / age-attestation,
+   *  transient 5xx / network blip). Retry with the same `prepareId`
+   *  is a supported Phase 1 behavior. */
   onCancelPreparedCapsule?: (prepareId: string) => void;
 }
 

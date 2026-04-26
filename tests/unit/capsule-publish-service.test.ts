@@ -30,6 +30,7 @@ import {
   GuestTurnstileError,
   GuestQuotaExceededError,
   GuestPublishDisabledError,
+  GuestAgeAttestationError,
 } from '../../lab/js/runtime/post-guest-capsule';
 import { createPublishPreparedAccountCapsule } from '../../lab/js/runtime/publish-prepared-account-capsule';
 import { createPublishPreparedGuestCapsule } from '../../lab/js/runtime/publish-prepared-guest-capsule';
@@ -218,7 +219,52 @@ describe('createPublishPreparedAccountCapsule', () => {
     expect(captured!.bytes).toBe(summary.bytes);
   });
 
-  it('evicts cache entry on POST failure', async () => {
+  it('preserves cache entry on AuthRequiredError so the user can retry the same prepareId after re-auth (Phase 1 §G)', async () => {
+    // When the POST fails with a recoverable auth error, the prepared
+    // bytes MUST stay cached. The user signs in (or completes age
+    // confirmation) and re-clicks Submit; the same prepareId is
+    // re-validated by `assertPreparedCapsuleFresh` and re-POSTed.
+    const post = vi.fn(async (_a: CapsuleArtifact) => {
+      throw new AuthRequiredError('Your session expired. Sign in to publish again.');
+    });
+    const service = createPreparedCapsuleService({
+      buildCapsuleArtifact: (_r) => makeArtifact('{"x":1}'),
+      getCapsuleExportInputVersion: () => 'v:0:0:0',
+    });
+    const exec = createPublishPreparedAccountCapsule({ service, postAccount: post });
+    const summary = await service.prepareCapsulePublish(makeRange('v:0:0:0'));
+    await expect(exec(summary.prepareId)).rejects.toBeInstanceOf(AuthRequiredError);
+    expect(cacheSize(service)).toBe(1);
+    // Retry path: with the same prepareId still cached, a successful
+    // POST evicts cleanly.
+    const successPost = vi.fn(async (_a: CapsuleArtifact) => ({
+      mode: 'account' as const, shareCode: 'r', shareUrl: 's',
+    }));
+    const retryExec = createPublishPreparedAccountCapsule({ service, postAccount: successPost });
+    const result = await retryExec(summary.prepareId);
+    expect(result.shareCode).toBe('r');
+    expect(cacheSize(service)).toBe(0);
+  });
+
+  it('preserves cache entry on AgeConfirmationRequiredError', async () => {
+    const post = vi.fn(async (_a: CapsuleArtifact) => {
+      throw new AgeConfirmationRequiredError('Please confirm.', null);
+    });
+    const service = createPreparedCapsuleService({
+      buildCapsuleArtifact: (_r) => makeArtifact('{}'),
+      getCapsuleExportInputVersion: () => 'v:0:0:0',
+    });
+    const exec = createPublishPreparedAccountCapsule({ service, postAccount: post });
+    const summary = await service.prepareCapsulePublish(makeRange('v:0:0:0'));
+    await expect(exec(summary.prepareId)).rejects.toBeInstanceOf(AgeConfirmationRequiredError);
+    expect(cacheSize(service)).toBe(1);
+  });
+
+  it('preserves cache entry on transient errors (5xx / network blip / unknown)', async () => {
+    // Generic `Error` from the POST helper covers transient 5xx
+    // ("Publish failed: status 503"), network failures, and any
+    // unexpected throw. None of these signal the bytes are stale, so
+    // the cache stays warm for retry.
     const post = vi.fn(async (_a: CapsuleArtifact) => { throw new Error('boom'); });
     const service = createPreparedCapsuleService({
       buildCapsuleArtifact: (_r) => makeArtifact('{}'),
@@ -227,7 +273,7 @@ describe('createPublishPreparedAccountCapsule', () => {
     const exec = createPublishPreparedAccountCapsule({ service, postAccount: post });
     const summary = await service.prepareCapsulePublish(makeRange('v:0:0:0'));
     await expect(exec(summary.prepareId)).rejects.toThrow('boom');
-    expect(cacheSize(service)).toBe(0);
+    expect(cacheSize(service)).toBe(1);
   });
 });
 
@@ -286,6 +332,53 @@ describe('createPublishPreparedGuestCapsule', () => {
     await expect(exec(summary.prepareId, 'tok')).rejects.toBeInstanceOf(CapsuleSnapshotStaleError);
     expect(post).not.toHaveBeenCalled();
     expect(cacheSize(service)).toBe(0);
+  });
+
+  it('preserves cache entry on GuestTurnstileError so the user can retry after solving a fresh challenge', async () => {
+    const post = vi.fn(async (_a: CapsuleArtifact, _t: string) => {
+      throw new GuestTurnstileError('failed', 'Verification failed. Please try again.');
+    });
+    const service = createPreparedCapsuleService({
+      buildCapsuleArtifact: (_r) => makeArtifact('{"g":1}'),
+      getCapsuleExportInputVersion: () => 'v:0:0:0',
+    });
+    const exec = createPublishPreparedGuestCapsule({ service, postGuest: post });
+    const summary = await service.prepareCapsulePublish(makeRange('v:0:0:0'));
+    await expect(exec(summary.prepareId, 'stale-tok')).rejects.toBeInstanceOf(GuestTurnstileError);
+    expect(cacheSize(service)).toBe(1);
+  });
+
+  it('preserves cache entry on GuestQuotaExceededError, GuestPublishDisabledError, and GuestAgeAttestationError', async () => {
+    const errors: Array<() => Error> = [
+      () => new GuestQuotaExceededError(60),
+      () => new GuestPublishDisabledError(),
+      () => new GuestAgeAttestationError(),
+    ];
+    for (const makeErr of errors) {
+      const post = vi.fn(async (_a: CapsuleArtifact, _t: string) => { throw makeErr(); });
+      const service = createPreparedCapsuleService({
+        buildCapsuleArtifact: (_r) => makeArtifact('{}'),
+        getCapsuleExportInputVersion: () => 'v:0:0:0',
+      });
+      const exec = createPublishPreparedGuestCapsule({ service, postGuest: post });
+      const summary = await service.prepareCapsulePublish(makeRange('v:0:0:0'));
+      await expect(exec(summary.prepareId, 'tok')).rejects.toThrow();
+      expect(cacheSize(service)).toBe(1);
+    }
+  });
+
+  it('preserves cache entry on transient errors (5xx / network blip)', async () => {
+    const post = vi.fn(async (_a: CapsuleArtifact, _t: string) => {
+      throw new Error('Publish is temporarily unavailable. Please try again in a minute.');
+    });
+    const service = createPreparedCapsuleService({
+      buildCapsuleArtifact: (_r) => makeArtifact('{}'),
+      getCapsuleExportInputVersion: () => 'v:0:0:0',
+    });
+    const exec = createPublishPreparedGuestCapsule({ service, postGuest: post });
+    const summary = await service.prepareCapsulePublish(makeRange('v:0:0:0'));
+    await expect(exec(summary.prepareId, 'tok')).rejects.toThrow(/temporarily unavailable/);
+    expect(cacheSize(service)).toBe(1);
   });
 });
 

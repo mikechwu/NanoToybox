@@ -98,9 +98,34 @@ export interface PreparedCapsuleService {
    *  matching executor will POST — byte-identity is enforced by
    *  construction (no rebuild on publish). */
   prepareCapsulePublish(range: CapsuleSelectionRange): Promise<PreparedCapsuleSummary>;
-  /** Evict the cached bytes for `prepareId`. Idempotent. Must be
-   *  called on Cancel, Reset, dialog close, snapshot invalidation, and
-   *  after any publish attempt completes (success OR failure). */
+  /**
+   * Evict the cached bytes for `prepareId`. Idempotent.
+   *
+   * Eviction policy (load-bearing — Phase 1 §G auth-transition contract):
+   *
+   *   - **Explicit user/UI invalidation** — Cancel, Reset, dialog
+   *     close, new-selection edit. `TimelineBar` calls this from its
+   *     teardown / drag-end paths.
+   *   - **Successful prepared publish** — the executor calls this on
+   *     the success path so the consumed bytes do not linger.
+   *   - **Snapshot-stale detection** — `assertPreparedCapsuleFresh`
+   *     calls this internally before throwing
+   *     `CapsuleSnapshotStaleError`; the cached bytes are no longer
+   *     safe to POST.
+   *   - **Service LRU bound** — `prepareCapsulePublish` evicts the
+   *     oldest entry when `maxCacheEntries` is exceeded; bounds any
+   *     pathological retry loop without changing per-error policy.
+   *
+   * NOT called for recoverable POST failures (`AuthRequiredError`,
+   * `AgeConfirmationRequiredError`, `GuestTurnstileError`, guest
+   * quota / disabled / age-attestation, transient 5xx / network
+   * blip). Retry with the same `prepareId` after re-auth / fresh
+   * Turnstile challenge / quota window / network recovery is a
+   * supported Phase 1 behavior — the executors must not invoke
+   * `cancelPreparedPublish` from a catch block, and a future
+   * "cleanup" that reintroduces such an evict-on-error path would
+   * regress the auth-transition contract.
+   */
   cancelPreparedPublish(prepareId: string): void;
   /**
    * Throws `CapsuleSnapshotStaleError` if any capsule input has changed
