@@ -20,6 +20,8 @@ import { useAppStore } from '../../store/app-store';
 import type { AuthStatus } from '../../store/app-store';
 import { hydrateAuthSession } from '../../runtime/auth-runtime';
 import { AgeClickwrapNotice } from '../AgeClickwrapNotice';
+import type { TrimEntryKind } from '../../runtime/timeline/capsule-publish-types';
+import type { ShareDestination, ShareScope } from './TimelineBar';
 
 /** Canonical wording for the Transfer trigger's tooltip.
  *  Considered:
@@ -232,9 +234,30 @@ interface TimelineTransferDialogProps {
   // ── Share (publish) ──
   /** Whether the Share tab is selectable/useable at all. */
   shareTabAvailable: boolean;
-  /** Confirm-button enablement for Share (callback wired + range present). */
-  shareConfirmEnabled: boolean;
-  onConfirmShare: () => void;
+  /** Phase 2 — destination-keyed enablement predicate. The dialog reads
+   *  `shareConfirmEnabled[wholeTimelineDestination]` to enable/disable
+   *  the active CTA. The Turnstile-token presence is NOT in this
+   *  predicate — it's a runtime preflight handled by the coordinator. */
+  shareConfirmEnabled: { account: boolean; guest: boolean };
+  /** Phase 2 — single destination-driven whole-history submit callback.
+   *  Replaces the auth-shaped pair `onConfirmShare` (account) and
+   *  `onSubmitGuestShare` (guest). The dialog is presentation-only for
+   *  the whole-history CTA: it renders destination-specific copy/label
+   *  and calls this on click; `TimelineBar` owns dispatch through
+   *  `dispatchShareSubmit`. */
+  onSubmitWholeTimelineShare: (destination: ShareDestination) => void;
+  /** Phase 2 — destination chosen by the user for the whole-timeline
+   *  share state. Defaults: 'account' for signed-in, 'guest' for
+   *  signed-out. */
+  wholeTimelineDestination: ShareDestination;
+  /** Phase 2 — destination selector write helper. */
+  onSelectWholeTimelineDestination: (destination: ShareDestination) => void;
+  /** Phase 2 — current scope: whole-timeline or trim-selection. The
+   *  scope selector is always visible above the panel body. */
+  shareScope: ShareScope;
+  /** Phase 2 — scope toggle to enter manual trim. The host calls
+   *  `enterTrimMode({ kind: 'manual', destination })` and flips scope. */
+  onEnterManualTrim: () => void;
   shareSubmitting: boolean;
   /** Red in-branch error rendered only in the signed-in panel (above the
    *  Publish button). For 429 rate-limit, generic publish failures, etc. —
@@ -310,6 +333,17 @@ interface TimelineTransferDialogProps {
   shareMeasuring: boolean;
   onResetShareTrim: () => void;
   onConfirmShareTrim: () => void;
+  /** Phase 2 — write-helper for the trim-state destination. The
+   *  destination selector remains visible above the trim panel; flipping
+   *  it preserves the selection AND the prepared `prepareId`. */
+  onSelectTrimDestination: (destination: ShareDestination) => void;
+  /** Phase 2 — exit trim back to the whole-timeline scope. Dialog
+   *  stays open; destination preserved. Distinct from dialog Cancel. */
+  onCancelTrim: () => void;
+  /** Phase 2 — sign-in trigger from inside the trim panel. Persists
+   *  selection via sessionStorage before falling through to the
+   *  same `onSignIn(provider, { resumePublish: true })` flow. */
+  onTrimSignIn: (provider: 'google' | 'github') => void;
   /** Dedicated entry for the "Nothing fits" Download Capsule action.
    *  Distinct from onConfirmDownload because that one closes over
    *  downloadKind — a setDownloadKind('capsule')-then-onConfirmDownload
@@ -334,9 +368,6 @@ interface TimelineTransferDialogProps {
   guestTurnstileControllerRef: React.MutableRefObject<
     import('./TimelineBar').GuestTurnstileController | null
   >;
-  /** Host invokes the guest share flow (reads the live Turnstile token
-   *  from the controller, awaits the store callback, sets shareResult). */
-  onSubmitGuestShare: () => void;
   /** Structured share result, including `mode` for UI branching. The
    *  existing `shareUrl`/`shareCode`/`shareWarnings` props are kept as
    *  a compatibility view; `shareResult` is authoritative and carries
@@ -345,7 +376,18 @@ interface TimelineTransferDialogProps {
 }
 
 export interface TrimDialogState {
-  status: 'measuring' | 'within-target' | 'close-to-limit' | 'over-limit' | 'unavailable';
+  status: 'idle' | 'measuring' | 'within-target' | 'close-to-limit' | 'over-limit' | 'unavailable';
+  /** Phase 2 — manual trim entry seed (`'manual'`) drives the
+   *  content-first copy + deferred-measurement no-status-row UI;
+   *  oversize entry seed (`'oversize'`) drives the recovery-first copy
+   *  with the status row visible from the first paint. */
+  entryKind: TrimEntryKind;
+  /** Phase 2 — destination chosen by the user; survives destination
+   *  flips and dispatch. The trim panel renders the active
+   *  destination's verification controls (account auth prompt or
+   *  Quick Share Turnstile) inline so the user can complete a submit
+   *  without leaving trim mode. */
+  trimDestination: ShareDestination;
   /** Differentiates the two sources of `status === 'measuring'`:
    *    'search'  — initial entry-time chunked bisect. Copy:
    *                "Finding the best fit…".
@@ -396,6 +438,11 @@ const STATUS_PILL_LABEL: Record<'within-target' | 'close-to-limit' | 'over-limit
  *  a color-coded status pill with text (never color-only), and an
  *  optional caption for trust/remediation. */
 function TrimStatusRow({ trim, shareMeasuring }: { trim: TrimDialogState; shareMeasuring: boolean }) {
+  // 'idle' is the manual-trim seed — the dialog gates this row out
+  // before reaching here, but defensively render nothing if a future
+  // call site forgets the gate (Acceptance #4 keeps the within-limit
+  // path silent).
+  if (trim.status === 'idle') return null;
   if (trim.status === 'measuring') {
     // Three distinct copies for three intent signals, in priority order:
     //   · shareMeasuring → publish-click Phase-1 prepare in flight.
@@ -516,18 +563,512 @@ function ShareActions({
   );
 }
 
+/** Phase 2 — destination selector (always visible above the panel
+ *  body). Signed-in users see a `Publish to account` / `Quick Share`
+ *  segmented control; signed-out users see a `Quick Share` (primary)
+ *  badge with the `Sign in for permanent share` upsell rendered
+ *  externally (in the signed-out auth-prompt branch). */
+function ShareDestinationSelector({
+  destination,
+  onSelect,
+  authMode,
+  disabled,
+}: {
+  destination: ShareDestination;
+  onSelect: (destination: ShareDestination) => void;
+  authMode: 'signed-in' | 'signed-out';
+  disabled?: boolean;
+}) {
+  if (authMode === 'signed-out') {
+    // Signed-out users only have Quick Share as a writable destination
+    // here. The "Sign in for permanent share" link is rendered in the
+    // signed-out auth-prompt branch, not as a destination radio.
+    return null;
+  }
+  return (
+    <div
+      className="timeline-transfer-dialog__destination-selector"
+      role="radiogroup"
+      aria-label="Share destination"
+      data-testid="transfer-destination-selector"
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-checked={destination === 'account'}
+        className={`timeline-transfer-dialog__destination-option${
+          destination === 'account' ? ' timeline-transfer-dialog__destination-option--active' : ''
+        }`}
+        onClick={() => onSelect('account')}
+        disabled={disabled}
+        data-testid="transfer-destination-account"
+      >
+        Publish to account
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={destination === 'guest'}
+        className={`timeline-transfer-dialog__destination-option${
+          destination === 'guest' ? ' timeline-transfer-dialog__destination-option--active' : ''
+        }`}
+        onClick={() => onSelect('guest')}
+        disabled={disabled}
+        data-testid="transfer-destination-guest"
+      >
+        Quick Share
+      </button>
+    </div>
+  );
+}
+
+/** Phase 2 — scope selector (always visible above the panel body).
+ *  Toggles between `Whole timeline` (default) and `Trim selection`. */
+function ShareScopeSelector({
+  scope,
+  hasGuestSurface,
+  destination,
+  onEnterTrim,
+  onExitTrim,
+  disabled,
+  wholeDisabled,
+}: {
+  scope: ShareScope;
+  hasGuestSurface: boolean;
+  destination: ShareDestination;
+  onEnterTrim: () => void;
+  onExitTrim: () => void;
+  disabled?: boolean;
+  /** Phase 2 — when the user reached trim from a publish-time
+   *  oversize error, the whole-timeline submit is provably going to
+   *  fail with the same error. Lock the toggle to `Trim selection`
+   *  so the user doesn't loop through a dead path that also
+   *  silently discards the oversize recovery context (originalActualBytes,
+   *  maxBytes, maxSource). The control stays visible (no disable
+   *  flicker) but the Whole-timeline button is disabled and
+   *  aria-disabled with an explanatory label. */
+  wholeDisabled?: boolean;
+}) {
+  // Manual trim entry is allowed for both account and guest
+  // destinations as long as the destination's preparation path is
+  // wired. Today the trim path requires `onPrepareCapsuleTrim`; it
+  // is wired uniformly. For guest target we additionally need the
+  // Turnstile surface to be available so the user can complete the
+  // trimmed submit — `hasGuestSurface` expresses that.
+  const trimDisabledForDestination = destination === 'guest' && !hasGuestSurface;
+  return (
+    <div
+      className="timeline-transfer-dialog__scope-selector"
+      role="radiogroup"
+      aria-label="Share scope"
+      data-testid="transfer-scope-selector"
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-checked={scope === 'whole-timeline'}
+        aria-label={
+          wholeDisabled
+            ? 'Whole timeline (unavailable — capsule exceeds the publish limit)'
+            : 'Whole timeline'
+        }
+        className={`timeline-transfer-dialog__scope-option${
+          scope === 'whole-timeline' ? ' timeline-transfer-dialog__scope-option--active' : ''
+        }`}
+        onClick={() => { if (scope !== 'whole-timeline') onExitTrim(); }}
+        disabled={disabled || wholeDisabled}
+        data-testid="transfer-scope-whole"
+      >
+        Whole timeline
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={scope === 'trim-selection'}
+        className={`timeline-transfer-dialog__scope-option${
+          scope === 'trim-selection' ? ' timeline-transfer-dialog__scope-option--active' : ''
+        }`}
+        onClick={() => { if (scope !== 'trim-selection') onEnterTrim(); }}
+        disabled={disabled || trimDisabledForDestination}
+        data-testid="transfer-scope-trim"
+      >
+        Trim selection
+      </button>
+    </div>
+  );
+}
+
+/** Phase 2 — trim panel body, extracted so it can be hoisted ABOVE
+ *  the authStatus cascade in the dialog. Acceptance #7 + #9 require
+ *  signed-out users to reach the trim panel; if the cascade hits
+ *  `authStatus === 'signed-out'` first, the whole-history auth prompt
+ *  replaces the trim UI and the signed-out trim flow becomes
+ *  unreachable. */
+const CLICKWRAP_TRIM_ID = 'age-clickwrap-share';
+const TRIM_DESCRIPTION_ID = 'timeline-transfer-dialog-trim-description';
+
+interface TrimPanelProps {
+  trim: TrimDialogState;
+  authStatus: AuthStatus;
+  shareMeasuring: boolean;
+  shareSubmitting: boolean;
+  shareError: string | null;
+  shareFallbackDownloadError: string | null;
+  downloadSubmitting: boolean;
+  transferBusy: boolean;
+  guestPublishConfig: { enabled: boolean; turnstileSiteKey: string | null };
+  guestTurnstileControllerRef: React.MutableRefObject<
+    import('./TimelineBar').GuestTurnstileController | null
+  >;
+  onResetShareTrim: () => void;
+  onConfirmShareTrim: () => void;
+  onSelectTrimDestination: (destination: ShareDestination) => void;
+  onCancelTrim: () => void;
+  onTrimSignIn: (provider: 'google' | 'github') => void;
+  onDownloadCapsuleFromShareFallback: () => void;
+  handleCancel: () => void;
+}
+
+function TrimPanel({
+  trim,
+  authStatus,
+  shareMeasuring,
+  shareSubmitting,
+  shareError,
+  shareFallbackDownloadError,
+  downloadSubmitting,
+  transferBusy,
+  guestPublishConfig,
+  guestTurnstileControllerRef,
+  onResetShareTrim,
+  onConfirmShareTrim,
+  onSelectTrimDestination,
+  onCancelTrim,
+  onTrimSignIn,
+  onDownloadCapsuleFromShareFallback,
+  handleCancel,
+}: TrimPanelProps) {
+  const showStatusRow =
+    trim.entryKind === 'oversize'
+    || trim.status === 'measuring'
+    || trim.status === 'over-limit'
+    || trim.status === 'unavailable'
+    || trim.snapshotStale
+    || trim.nothingFits;
+  return (
+    <div
+      className="timeline-transfer-dialog__trim"
+      data-testid="transfer-share-trim"
+      data-entry-kind={trim.entryKind}
+      data-trim-destination={trim.trimDestination}
+    >
+      {authStatus === 'signed-in' && (
+        <ShareDestinationSelector
+          destination={trim.trimDestination}
+          onSelect={onSelectTrimDestination}
+          authMode="signed-in"
+          disabled={transferBusy || shareMeasuring}
+        />
+      )}
+      <ShareScopeSelector
+        scope="trim-selection"
+        hasGuestSurface={Boolean(
+          guestPublishConfig.enabled
+            && guestPublishConfig.turnstileSiteKey,
+        )}
+        destination={trim.trimDestination}
+        onEnterTrim={() => { /* already in trim */ }}
+        onExitTrim={onCancelTrim}
+        disabled={transferBusy || shareMeasuring}
+        // Phase 2 — capsule-too-large entry locks the toggle to trim.
+        // The whole-timeline submit would just re-throw the same
+        // oversize error, AND toggling resets shareTrimState which
+        // would silently discard the originalActualBytes / maxBytes
+        // recovery context the user needs to see while shortening
+        // the selection.
+        wholeDisabled={trim.entryKind === 'oversize'}
+      />
+      {/* Phase 2 — the explicit trim heading + description block was
+          removed in favor of the destination-panel-owned description.
+          For account trim, SignedInPublishPanel.description renders
+          the manual or oversize-recovery framing. For guest trim,
+          QuickShareDestinationPanel renders the Quick Share card with
+          its own heading + helper. The status row above carries size
+          context whenever the panel is in a recovery state. This
+          mirrors the whole-timeline Image #9 pattern: identity →
+          description → CTA → Cancel. */}
+      {trim.entryKind === 'oversize' && trim.trimDestination === 'guest' ? (
+        /* Guest oversize gets a small framing line above the Quick
+           Share card because QuickShareDestinationPanel's helper
+           ("One-tap temporary link. No sign-in required.") is
+           misleading in a recovery context. Account oversize is
+           handled by SignedInPublishPanel.description below. */
+        <p
+          id={TRIM_DESCRIPTION_ID}
+          className="timeline-transfer-dialog__description"
+        >
+          This capture is too large to Quick Share as-is. Shorten the selection and try again.
+        </p>
+      ) : (
+        /* All other trim paths — render a visually-hidden paragraph
+           with the same id so the dialog's `aria-describedby` always
+           resolves to an existing element. Without this fallback the
+           dialog's aria-describedby would dangle in account-trim,
+           guest-manual-trim, etc. The visible description copy lives
+           inside SignedInPublishPanel (account) or
+           QuickShareDestinationPanel (guest); this sr-only line is a
+           short summary for assistive tech that hits the dialog
+           landmark before the panel-internal content is announced. */
+        <p
+          id={TRIM_DESCRIPTION_ID}
+          className="timeline-transfer-dialog__sr-only"
+        >
+          {trim.entryKind === 'oversize'
+            ? 'This capture is too large to publish as-is. Shorten the selection and try again.'
+            : 'Choose the part of the timeline you want to share.'}
+        </p>
+      )}
+      {trim.snapshotStale ? (
+        <p
+          className="timeline-transfer-dialog__error"
+          role="status"
+          aria-live="polite"
+          data-testid="transfer-share-trim-stale"
+        >
+          The recording changed. Close this dialog and try again.
+        </p>
+      ) : showStatusRow ? (
+        <div
+          className="timeline-transfer-dialog__trim-status"
+          role="status"
+          aria-live="polite"
+          data-testid="transfer-share-trim-status"
+        >
+          <TrimStatusRow trim={trim} shareMeasuring={shareMeasuring} />
+        </div>
+      ) : null}
+      {trim.previewingOutsideKept && !trim.snapshotStale && (
+        <p
+          className="timeline-transfer-dialog__preview-note"
+          role="status"
+          aria-live="polite"
+          data-testid="transfer-share-trim-preview-note"
+        >
+          You{'’'}re previewing a frame outside your selection. It won{'’'}t be shared.
+        </p>
+      )}
+      {trim.nothingFits && (
+        <p
+          className="timeline-transfer-dialog__help"
+          data-testid="transfer-share-trim-nothing-fits"
+        >
+          Even a single frame is over the limit. Simplify the scene or record a shorter clip — or download this capsule locally.
+        </p>
+      )}
+      {shareError && <p className="timeline-transfer-dialog__error">{shareError}</p>}
+      {trim.nothingFits && shareFallbackDownloadError && (
+        <p
+          className="timeline-transfer-dialog__error"
+          role="status"
+          aria-live="polite"
+          data-testid="transfer-share-trim-fallback-error"
+        >
+          {shareFallbackDownloadError}
+        </p>
+      )}
+      {trim.nothingFits ? (
+        <ShareActions onCancel={handleCancel} transferBusy={transferBusy}>
+          <button
+            className="timeline-transfer-dialog__confirm"
+            onClick={onDownloadCapsuleFromShareFallback}
+            disabled={transferBusy || downloadSubmitting}
+            data-testid="transfer-share-trim-download"
+          >
+            {downloadSubmitting ? 'Saving…' : 'Download capsule'}
+          </button>
+        </ShareActions>
+      ) : trim.trimDestination === 'guest'
+          && guestPublishConfig.enabled
+          && guestPublishConfig.turnstileSiteKey ? (
+        /* Phase 2 — Guest trim mirrors the Whole-timeline signed-out
+           panel (Image #2): full Quick Share card with heading +
+           meta + helper, plus the OR · SIGN IN TO SAVE upsell when
+           signed-out. The only difference is the trim CTA wording.
+           Age clickwrap: a SINGLE shared <AgeClickwrapNotice> sits
+           directly below the OAuth provider buttons (Image #6
+           placement). Both the Quick Share CTA above and the OAuth
+           buttons below reference the same `CLICKWRAP_TRIM_ID` via
+           `aria-describedby`, so screen-reader users hear the
+           consent associated with whichever submit path they take.
+           Rendering the paragraph twice would be redundant noise. */
+        <>
+          <QuickShareDestinationPanel
+            turnstileSiteKey={guestPublishConfig.turnstileSiteKey!}
+            controllerRef={guestTurnstileControllerRef}
+            onSubmit={onConfirmShareTrim}
+            ctaLabel="Quick Share trimmed timeline"
+            authMode={authStatus === 'signed-in' ? 'signed-in' : 'signed-out'}
+            shareSubmitting={shareSubmitting}
+            shareError={null}
+            transferBusy={transferBusy || shareMeasuring || trim.publishDisabled || trim.snapshotStale}
+            clickwrapId={CLICKWRAP_TRIM_ID}
+          />
+
+          {authStatus === 'signed-out' && (
+            <>
+              <div
+                className="timeline-transfer-dialog__section-rule"
+                role="separator"
+                aria-label="Or sign in to save"
+              >
+                <span>or · sign in to save</span>
+              </div>
+              <section
+                className="timeline-transfer-dialog__account-tier"
+                aria-labelledby="transfer-trim-account-heading"
+              >
+                <h3
+                  id="transfer-trim-account-heading"
+                  className="timeline-transfer-dialog__sr-only"
+                >
+                  Save to your account
+                </h3>
+                <p className="timeline-transfer-dialog__account-subtitle">
+                  Permanent links, managed in Account.
+                </p>
+                <div className="timeline-transfer-dialog__auth-buttons">
+                  <button
+                    className="timeline-transfer-dialog__auth-button timeline-transfer-dialog__auth-button--provider"
+                    onClick={() => onTrimSignIn('google')}
+                    disabled={transferBusy || shareMeasuring}
+                    aria-describedby={CLICKWRAP_TRIM_ID}
+                    data-testid="transfer-share-trim-sign-in-google"
+                  >
+                    <ProviderGlyph provider="google" />
+                    <span>Continue with Google</span>
+                  </button>
+                  <button
+                    className="timeline-transfer-dialog__auth-button timeline-transfer-dialog__auth-button--provider"
+                    onClick={() => onTrimSignIn('github')}
+                    disabled={transferBusy || shareMeasuring}
+                    aria-describedby={CLICKWRAP_TRIM_ID}
+                    data-testid="transfer-share-trim-sign-in-github"
+                  >
+                    <ProviderGlyph provider="github" />
+                    <span>Continue with GitHub</span>
+                  </button>
+                </div>
+                {/* Phase 2 — age clickwrap. Sits directly under the
+                    OAuth buttons (Image #6 placement) so screen-reader
+                    users hit the consent immediately after the action
+                    via aria-describedby. The Quick Share CTA above
+                    also references this id, so the consent covers
+                    BOTH submit affordances with a single paragraph. */}
+                <AgeClickwrapNotice id={CLICKWRAP_TRIM_ID} action="continue" />
+              </section>
+            </>
+          )}
+
+          <div
+            className="timeline-transfer-dialog__minor-actions"
+            data-testid="transfer-share-trim-minor-actions"
+          >
+            <button
+              type="button"
+              className="timeline-transfer-dialog__reset-link"
+              onClick={onResetShareTrim}
+              disabled={transferBusy || shareMeasuring || !trim.canReset}
+              data-testid="transfer-share-trim-reset"
+            >
+              Reset selection
+            </button>
+            <button
+              type="button"
+              className="timeline-transfer-dialog__text-dismiss"
+              onClick={onCancelTrim}
+              disabled={transferBusy || shareMeasuring}
+              data-testid="transfer-share-trim-cancel"
+            >
+              Cancel trim
+            </button>
+          </div>
+        </>
+      ) : (
+        /* Phase 2 — account trim, signed-in. Reuses
+           SignedInPublishPanel so the layout matches the
+           whole-timeline panel (Image #9): identity chip → single
+           description sentence → optional Reset selection link
+           directly above the dominant Publish pill → centered
+           Cancel trim text-link below. Trim-specific overrides:
+             - description tells the user this is a trimmed publish
+             - ctaLabel narrates the prepare/submit phases
+             - cancelLabel renames Cancel → Cancel trim, with
+               handleCancel wired to onCancelTrim so the dialog
+               stays open and scope returns to whole-timeline (or
+               closes outright in oversize mode per the lockout
+               policy, transparently to this component) */
+        <SignedInPublishPanel
+          onSubmit={onConfirmShareTrim}
+          shareConfirmEnabled={!trim.publishDisabled && !trim.snapshotStale}
+          shareSubmitting={shareSubmitting}
+          shareError={shareError}
+          transferBusy={transferBusy || shareMeasuring}
+          handleCancel={onCancelTrim}
+          description={
+            trim.entryKind === 'manual'
+              ? 'Publish a trimmed selection as a permanent share link — opens in Watch for anyone with it.'
+              : (trim.trimDestination === 'guest'
+                  ? 'This capture is too large to Quick Share as-is. Shorten the selection and try again.'
+                  : 'This capture is too large to publish as-is. Shorten the selection and try again.')
+          }
+          ctaLabel={(() => {
+            if (shareSubmitting) return 'Publishing…';
+            if (shareMeasuring) return 'Preparing…';
+            return 'Publish trimmed timeline';
+          })()}
+          hideCtaArrow={shareMeasuring}
+          cancelLabel="Cancel trim"
+          ctaTestId="transfer-share-trim-publish"
+          cancelTestId="transfer-share-trim-cancel"
+          leadingAction={
+            <button
+              type="button"
+              className="timeline-transfer-dialog__reset-link"
+              onClick={onResetShareTrim}
+              disabled={transferBusy || shareMeasuring || !trim.canReset}
+              aria-label={
+                !trim.canReset
+                  ? 'Already using the suggested selection'
+                  : trim.entryKind === 'manual'
+                    ? 'Reset selection to the full timeline'
+                    : 'Reset to the suggested trim (newest history that fits the publish limit)'
+              }
+              data-testid="transfer-share-trim-reset"
+            >
+              Reset selection
+            </button>
+          }
+        />
+      )}
+    </div>
+  );
+}
+
 export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
   const {
     open, tab, onTabChange, onCancel,
     downloadTabAvailable, availableKinds, downloadKind, onSelectDownloadKind, onConfirmDownload,
     downloadSubmitting, downloadError, downloadConfirmEnabled, fullEstimate, capsuleEstimate,
-    shareTabAvailable, shareConfirmEnabled, onConfirmShare,
+    shareTabAvailable, shareConfirmEnabled, onSubmitWholeTimelineShare,
+    wholeTimelineDestination, onSelectWholeTimelineDestination,
+    shareScope, onEnterManualTrim,
     shareSubmitting, shareError, authNote, shareUrl, shareCode, shareWarnings,
     authStatus, onSignIn, popupBlocked, onRetryPopup, onSignInSameTab, onDismissPopupBlocked,
     ageConfirmationRequired, onAgeConfirmationAck,
     shareTrim, shareMeasuring, onResetShareTrim, onConfirmShareTrim,
+    onSelectTrimDestination, onCancelTrim, onTrimSignIn,
     onDownloadCapsuleFromShareFallback, shareFallbackDownloadError,
-    guestPublishConfig, guestTurnstileControllerRef, onSubmitGuestShare,
+    guestPublishConfig, guestTurnstileControllerRef,
     shareResult,
   } = props;
   const [retryingAuth, setRetryingAuth] = useState(false);
@@ -721,6 +1262,94 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
     return () => document.removeEventListener('keydown', handleKey);
   }, [open, onCancel, transferBusy, isTrimMode]);
 
+  // Phase 2 — playground-click dismiss for trim mode.
+  //
+  // Whole-timeline mode renders a full-screen `.timeline-dialog-backdrop`
+  // that catches "click outside the dialog" and calls onCancel. Trim
+  // mode intentionally omits that backdrop so the trim handles on
+  // the main timeline stay reachable (a backdrop with pointer-events
+  // would silently steal those clicks). Without a backdrop there's
+  // also nothing catching playground clicks, so the dialog used to
+  // be dismiss-only via Cancel/Cancel trim/Esc.
+  //
+  // This listener restores parity with whole-timeline: a click that
+  // lands OUTSIDE both the dialog and the timeline shell is treated
+  // as a backdrop click — onCancel fires, the dialog closes, the
+  // simulation resumes (closeTransferSession runs onResumeFromExport).
+  // Clicks on the trim handles, scrubber, dock, etc. inside
+  // `.timeline-bar` are explicitly preserved so the user can still
+  // drag the selection with the dialog open.
+  // Hold `onCancel` in a ref so the playground-click listener
+  // below depends only on stable inputs. `onCancel` is a useCallback
+  // in the parent that depends on `pendingTrimSuccessRestore`; if
+  // the listener depended on it directly, every state mutation in
+  // the parent would tear down + re-arm the listener (a setTimeout
+  // round-trip during which playground clicks would be unhandled).
+  // The ref keeps the listener stable across the trim session.
+  const onCancelRef = useRef(onCancel);
+  useEffect(() => { onCancelRef.current = onCancel; }, [onCancel]);
+
+  useEffect(() => {
+    if (!open || !isTrimMode || transferBusy) return;
+    // Defer arming until the next MACROTASK (setTimeout(0)) so the
+    // click that CAUSED us to enter trim mode (e.g., the Publish
+    // click that raised PublishOversizeError) doesn't re-fire here.
+    // By the time it bubbles to document, React has already
+    // re-rendered and detached the original button — without the
+    // gate, the detached target would fail the `contains` checks
+    // and trigger a spurious dismiss.
+    //
+    // Critical: do NOT "fix" this to `queueMicrotask`. Microtasks
+    // run between the click handler and the document-level bubble
+    // listener (within the same task), so a microtask-armed gate
+    // would set `armed = true` BEFORE the opening click reaches
+    // this listener — exactly the race we are avoiding. The
+    // macrotask boundary guarantees the original click event has
+    // fully propagated and been discarded before the listener
+    // becomes active.
+    let armed = false;
+    const armHandle = setTimeout(() => { armed = true; }, 0);
+    const handleDocumentClick = (e: MouseEvent) => {
+      if (!armed) return;
+      const target = e.target as Node | null;
+      if (!target) return;
+      // Click target was detached from the document by a
+      // re-render in the same task. Treat as "not outside the
+      // dialog" — the click landed on something React owned, the
+      // user did not gesture at the playground.
+      if (!document.contains(target)) return;
+      // Click landed inside the dialog itself — let the dialog's
+      // own buttons handle it.
+      if (dialogRef.current?.contains(target)) return;
+      // Click landed inside the bottom-region (timeline + dock).
+      // Preserve trim handle drags, scrubber clicks, mode rail
+      // taps, AND dock controls. The dialog's own layout uses
+      // `.bottom-region` as its trim-dock anchor (see the
+      // measure() effect above); reusing it here keeps the
+      // pointer-region contract symmetric — anything the dialog
+      // visibly avoids overlapping is also exempt from
+      // outside-click dismiss. Falls back to `.timeline-bar` for
+      // hosts that mount TimelineBar without a bottom-region
+      // wrapper, so the listener remains functional in tests and
+      // alternate embeddings.
+      const interactiveRegion =
+        document.querySelector('.bottom-region')
+        ?? document.querySelector('.timeline-bar');
+      if (interactiveRegion?.contains(target)) return;
+      // Click anywhere else (the playground / 3D viewer / top
+      // bar / ambient surface) — same effect as a whole-timeline
+      // backdrop click: close the dialog. Read through the ref so
+      // a parent state change that re-defines `onCancel` does not
+      // tear down + re-arm this listener mid-session.
+      onCancelRef.current();
+    };
+    document.addEventListener('click', handleDocumentClick);
+    return () => {
+      clearTimeout(armHandle);
+      document.removeEventListener('click', handleDocumentClick);
+    };
+  }, [open, isTrimMode, transferBusy]);
+
   const handleCopy = useCallback(async () => {
     if (!shareUrl) return;
     try {
@@ -752,8 +1381,6 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
   // Backdrop click only cancels when we are not mid-submission.
   const handleBackdropClick = transferBusy ? undefined : onCancel;
 
-  const TRIM_DESCRIPTION_ID = 'timeline-transfer-dialog-trim-description';
-
   return createPortal(
     <>
       {/* Backdrop is omitted in trim mode so the user can still reach
@@ -770,6 +1397,13 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
         role="dialog"
         aria-modal={isTrimMode ? false : true}
         aria-label={isTrimMode ? 'Capsule trim controls' : 'Transfer history'}
+        // The dialog's accessible name is `aria-label`; the
+        // accessible description points at TRIM_DESCRIPTION_ID,
+        // which TrimPanel renders unconditionally in trim mode
+        // (visible for guest oversize, sr-only for the other paths
+        // where the destination panel owns the visible copy). The
+        // referenced id is therefore always present when isTrimMode
+        // is true, so this aria reference cannot dangle.
         aria-describedby={isTrimMode ? TRIM_DESCRIPTION_ID : undefined}
         aria-busy={transferBusy}
         // Custom properties drive the transform-based enter/exit
@@ -1087,6 +1721,30 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                   </div>
                 )}
               </div>
+            ) : shareTrim ? (
+              /* Phase 2 — trim panel hoisted ABOVE the authStatus
+                 cascade so signed-out users (Acceptance #7, #9) and
+                 background-401 mid-trim cases (Edge-Case UX #2) see
+                 the trim UI instead of the whole-history auth prompt. */
+              <TrimPanel
+                trim={shareTrim}
+                authStatus={authStatus}
+                shareMeasuring={shareMeasuring}
+                shareSubmitting={shareSubmitting}
+                shareError={shareError}
+                shareFallbackDownloadError={shareFallbackDownloadError}
+                downloadSubmitting={downloadSubmitting}
+                transferBusy={transferBusy}
+                guestPublishConfig={guestPublishConfig}
+                guestTurnstileControllerRef={guestTurnstileControllerRef}
+                onResetShareTrim={onResetShareTrim}
+                onConfirmShareTrim={onConfirmShareTrim}
+                onSelectTrimDestination={onSelectTrimDestination}
+                onCancelTrim={onCancelTrim}
+                onTrimSignIn={onTrimSignIn}
+                onDownloadCapsuleFromShareFallback={onDownloadCapsuleFromShareFallback}
+                handleCancel={handleCancel}
+              />
             ) : authStatus === 'loading' ? (
               <div className="timeline-transfer-dialog__auth-checking" aria-live="polite">
                 <p className="timeline-transfer-dialog__description">Checking sign-in…</p>
@@ -1141,10 +1799,20 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                     <p className="timeline-transfer-dialog__description timeline-transfer-dialog__lede">
                       Pick a link type — both open in Watch.
                     </p>
-                    <GuestQuickShareBlock
+                    <ShareScopeSelector
+                      scope={shareScope}
+                      hasGuestSurface={hasGuestTier}
+                      destination="guest"
+                      onEnterTrim={onEnterManualTrim}
+                      onExitTrim={onCancelTrim}
+                      disabled={transferBusy || shareMeasuring}
+                    />
+                    <QuickShareDestinationPanel
                       turnstileSiteKey={guestPublishConfig.turnstileSiteKey!}
                       controllerRef={guestTurnstileControllerRef}
-                      onSubmitGuestShare={onSubmitGuestShare}
+                      onSubmit={() => onSubmitWholeTimelineShare('guest')}
+                      ctaLabel="Continue as Guest"
+                      authMode="signed-out"
                       shareSubmitting={shareSubmitting}
                       shareError={shareError}
                       transferBusy={transferBusy}
@@ -1344,121 +2012,6 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                   </button>
                 </ShareActions>
               </>
-            ) : shareTrim ? (
-              /* Capsule Too Large \u2014 trim mode. Renders inside the
-                 existing signed-in Share branch so the Transfer dialog
-                 and Share tab stay the single surface. */
-              <div
-                className="timeline-transfer-dialog__trim"
-                data-testid="transfer-share-trim"
-              >
-                <p
-                  id={TRIM_DESCRIPTION_ID}
-                  className="timeline-transfer-dialog__description"
-                >
-                  Too large to publish. Drag the green selection on the timeline below, or grab either end, to trim it under the limit.
-                </p>
-                {shareTrim.snapshotStale ? (
-                  <p
-                    className="timeline-transfer-dialog__error"
-                    role="status"
-                    aria-live="polite"
-                    data-testid="transfer-share-trim-stale"
-                  >
-                    The recording changed. Close this dialog and try again.
-                  </p>
-                ) : (
-                  <div
-                    className="timeline-transfer-dialog__trim-status"
-                    role="status"
-                    aria-live="polite"
-                    data-testid="transfer-share-trim-status"
-                  >
-                    <TrimStatusRow trim={shareTrim} shareMeasuring={shareMeasuring} />
-                  </div>
-                )}
-                {shareTrim.previewingOutsideKept && !shareTrim.snapshotStale && (
-                  <p
-                    className="timeline-transfer-dialog__preview-note"
-                    role="status"
-                    aria-live="polite"
-                    data-testid="transfer-share-trim-preview-note"
-                  >
-                    You{'\u2019'}re previewing a frame outside your selection. It won{'\u2019'}t be shared.
-                  </p>
-                )}
-                {shareTrim.nothingFits && (
-                  <p
-                    className="timeline-transfer-dialog__help"
-                    data-testid="transfer-share-trim-nothing-fits"
-                  >
-                    Even a single frame is over the limit. Simplify the scene or record a shorter clip \u2014 or download this capsule locally.
-                  </p>
-                )}
-                {shareError && <p className="timeline-transfer-dialog__error">{shareError}</p>}
-                {shareTrim.nothingFits && shareFallbackDownloadError && (
-                  <p
-                    className="timeline-transfer-dialog__error"
-                    role="status"
-                    aria-live="polite"
-                    data-testid="transfer-share-trim-fallback-error"
-                  >
-                    {shareFallbackDownloadError}
-                  </p>
-                )}
-                {shareTrim.nothingFits ? (
-                  <ShareActions onCancel={handleCancel} transferBusy={transferBusy}>
-                    <button
-                      className="timeline-transfer-dialog__confirm"
-                      onClick={onDownloadCapsuleFromShareFallback}
-                      disabled={transferBusy || downloadSubmitting}
-                      data-testid="transfer-share-trim-download"
-                    >
-                      {downloadSubmitting ? 'Saving\u2026' : 'Download capsule'}
-                    </button>
-                  </ShareActions>
-                ) : (
-                  <ShareActions
-                    onCancel={handleCancel}
-                    transferBusy={transferBusy}
-                    leadingLink={
-                      <button
-                        type="button"
-                        className="timeline-transfer-dialog__reset-link"
-                        onClick={onResetShareTrim}
-                        disabled={transferBusy || shareMeasuring || !shareTrim.canReset}
-                        aria-label={
-                          shareTrim.canReset
-                            ? 'Reset to the suggested trim (newest history that fits the publish limit)'
-                            : 'Already using the suggested selection'
-                        }
-                        data-testid="transfer-share-trim-reset"
-                      >
-                        Reset selection
-                      </button>
-                    }
-                  >
-                    <button
-                      className="timeline-transfer-dialog__confirm timeline-transfer-dialog__confirm--publish-trim"
-                      onClick={onConfirmShareTrim}
-                      disabled={
-                        transferBusy ||
-                        shareMeasuring ||
-                        shareTrim.publishDisabled ||
-                        shareTrim.snapshotStale
-                      }
-                      data-testid="transfer-share-trim-publish"
-                    >
-                      {(() => {
-                        // Priority: active POST > Phase-1 prepare > idle.
-                        if (shareSubmitting) return 'Publishing\u2026';
-                        if (shareMeasuring) return 'Preparing\u2026';
-                        return 'Publish';
-                      })()}
-                    </button>
-                  </ShareActions>
-                )}
-              </div>
             ) : (
               /* signed-in \u2014 redesigned 2026-04-23 v5.
                *
@@ -1484,14 +2037,69 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                * fetch lifecycle is tied to the signed-in render
                * branch (no fetch while signed-out, no stale count
                * when the dialog re-opens). */
-              <SignedInPublishPanel
-                onConfirmShare={onConfirmShare}
-                shareConfirmEnabled={shareConfirmEnabled}
-                shareSubmitting={shareSubmitting}
-                shareError={shareError}
-                transferBusy={transferBusy}
-                handleCancel={handleCancel}
-              />
+              /* Phase 2 — signed-in branch with always-visible
+                 destination + scope selectors. The user can:
+                   · pick `Publish to account` (default) → SignedInPublishPanel
+                   · pick `Quick Share` → QuickShareDestinationPanel(authMode=signed-in)
+                   · toggle scope to `Trim selection` → enter manual trim
+                 The panel composition is keyed off (destination, scope),
+                 not auth status. */
+              <>
+                <ShareDestinationSelector
+                  destination={wholeTimelineDestination}
+                  onSelect={onSelectWholeTimelineDestination}
+                  authMode="signed-in"
+                  disabled={transferBusy || shareMeasuring}
+                />
+                <ShareScopeSelector
+                  scope={shareScope}
+                  hasGuestSurface={Boolean(
+                    guestPublishConfig.enabled
+                      && guestPublishConfig.turnstileSiteKey,
+                  )}
+                  destination={wholeTimelineDestination}
+                  onEnterTrim={onEnterManualTrim}
+                  onExitTrim={onCancelTrim}
+                  disabled={transferBusy || shareMeasuring}
+                />
+                {wholeTimelineDestination === 'guest'
+                && guestPublishConfig.enabled
+                && guestPublishConfig.turnstileSiteKey ? (
+                  <>
+                    <QuickShareDestinationPanel
+                      turnstileSiteKey={guestPublishConfig.turnstileSiteKey!}
+                      controllerRef={guestTurnstileControllerRef}
+                      onSubmit={() => onSubmitWholeTimelineShare('guest')}
+                      ctaLabel="Create temporary link"
+                      authMode="signed-in"
+                      shareSubmitting={shareSubmitting}
+                      shareError={shareError}
+                      transferBusy={transferBusy}
+                      clickwrapId={CLICKWRAP_SHARE_ID}
+                    />
+                    <AgeClickwrapNotice id={CLICKWRAP_SHARE_ID} action="continue" />
+                    <div className="timeline-transfer-dialog__minor-actions">
+                      <button
+                        type="button"
+                        className="timeline-transfer-dialog__text-dismiss timeline-transfer-dialog__cancel"
+                        onClick={handleCancel}
+                        disabled={transferBusy}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <SignedInPublishPanel
+                    onSubmit={() => onSubmitWholeTimelineShare('account')}
+                    shareConfirmEnabled={shareConfirmEnabled.account}
+                    shareSubmitting={shareSubmitting}
+                    shareError={shareError}
+                    transferBusy={transferBusy}
+                    handleCancel={handleCancel}
+                  />
+                )}
+              </>
             )}
           </div>
         )}
@@ -1501,14 +2109,38 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
   );
 }
 
-// ── Guest Quick Share helpers ────────────────────────────────────────
+// ── Quick Share destination panel ────────────────────────────────────
+//
+// Phase 2 — auth-mode-agnostic, presentation-only. The panel does NOT
+// know whether it is rendering in whole-history or trim context, and
+// does NOT own a guest-specific submit callback. The parent supplies
+// a generic `onSubmit` and a destination-specific `ctaLabel`. This is
+// the single Quick Share verification surface used in three render
+// contexts:
+//   1. Whole-timeline + signed-out (existing call site).
+//   2. Whole-timeline + signed-in + destination = guest (NEW).
+//   3. Trim panel + trimDestination = guest (NEW; both auth states).
 
-interface GuestQuickShareBlockProps {
+interface QuickShareDestinationPanelProps {
   turnstileSiteKey: string;
   controllerRef: React.MutableRefObject<
     import('./TimelineBar').GuestTurnstileController | null
   >;
-  onSubmitGuestShare: () => void;
+  /** Generic click callback supplied by the parent. The parent binds
+   *  the right destination/scope (whole-history or trim) before
+   *  passing it down. */
+  onSubmit: () => void;
+  /** Destination-centered CTA text supplied by the parent from the
+   *  auth-mode-keyed table. */
+  ctaLabel: string;
+  /** Auth mode of the surrounding render — drives the framing copy
+   *  (signed-out gets the "no sign-in required" lede; signed-in gets
+   *  "not saved to your account"). The OAuth provider buttons and
+   *  sign-in upsell are rendered OUTSIDE this panel. */
+  authMode: 'signed-in' | 'signed-out';
+  // (variant removed — the prior 'trim' value omitted the Quick
+  //  Share header but all three call sites now render the full
+  //  branding, so the union became dead code.)
   shareSubmitting: boolean;
   shareError: string | null;
   transferBusy: boolean;
@@ -1535,21 +2167,47 @@ interface GuestQuickShareBlockProps {
  *  the user can still publish. No retry button — a count
  *  hiccup shouldn't nag the user. */
 interface SignedInPublishPanelProps {
-  onConfirmShare: () => void;
+  /** Phase 2 — generic submit callback for the account destination. */
+  onSubmit: () => void;
+  /** Phase 2 — destination-keyed enablement (account predicate). */
   shareConfirmEnabled: boolean;
   shareSubmitting: boolean;
   shareError: string | null;
   transferBusy: boolean;
   handleCancel: () => void;
+  /** Phase 2 — trim-mode reuse overrides. The default copy is the
+   *  whole-timeline panel's "Publish to get a permanent share link…"
+   *  framing. Trim mode passes a trim-specific description, CTA
+   *  label, cancel label, and an optional leading action (e.g. the
+   *  Reset selection text-link rendered above the CTA). The CTA's
+   *  right-arrow icon is suppressed via `hideCtaArrow` for the
+   *  trim "Preparing…" state where a moving arrow would imply a
+   *  different action than the in-flight prepare. */
+  description?: string;
+  ctaLabel?: string;
+  cancelLabel?: string;
+  leadingAction?: React.ReactNode;
+  hideCtaArrow?: boolean;
+  /** Phase 2 — destination-specific test-id so trim and whole-timeline
+   *  Publish CTAs are individually selectable in regression tests. */
+  ctaTestId?: string;
+  cancelTestId?: string;
 }
 
 function SignedInPublishPanel({
-  onConfirmShare,
+  onSubmit,
   shareConfirmEnabled,
   shareSubmitting,
   shareError,
   transferBusy,
   handleCancel,
+  description,
+  ctaLabel,
+  cancelLabel,
+  leadingAction,
+  hideCtaArrow,
+  ctaTestId,
+  cancelTestId,
 }: SignedInPublishPanelProps) {
   const session = useAppStore((s) => s.auth.session);
   const displayName = session?.displayName ?? null;
@@ -1673,19 +2331,29 @@ function SignedInPublishPanel({
       </div>
 
       <p className="timeline-transfer-dialog__description timeline-transfer-dialog__lede">
-        Publish to get a permanent share link — opens in Watch for anyone with it.
+        {description ?? 'Publish to get a permanent share link — opens in Watch for anyone with it.'}
       </p>
 
       {shareError && <p className="timeline-transfer-dialog__error">{shareError}</p>}
 
+      {/* Phase 2 — leading action slot. Trim mode renders the
+          Reset selection text-link here so it sits as a quiet
+          modifier directly above the dominant Publish pill —
+          replacing the prior cluttered 4-button footer. */}
+      {leadingAction && (
+        <div className="timeline-transfer-dialog__leading-action">
+          {leadingAction}
+        </div>
+      )}
+
       <button
         className="timeline-transfer-dialog__confirm timeline-transfer-dialog__confirm--primary-pill"
-        onClick={onConfirmShare}
+        onClick={onSubmit}
         disabled={transferBusy || !shareConfirmEnabled}
-        data-testid="transfer-publish-confirm"
+        data-testid={ctaTestId ?? 'transfer-publish-confirm'}
       >
-        {shareSubmitting ? 'Publishing…' : 'Publish'}
-        {!shareSubmitting && (
+        {ctaLabel ?? (shareSubmitting ? 'Publishing…' : 'Publish')}
+        {!shareSubmitting && !hideCtaArrow && (
           <svg
             className="timeline-transfer-dialog__confirm-arrow"
             width="14"
@@ -1710,8 +2378,9 @@ function SignedInPublishPanel({
           className="timeline-transfer-dialog__text-dismiss timeline-transfer-dialog__cancel"
           onClick={handleCancel}
           disabled={transferBusy}
+          data-testid={cancelTestId ?? 'transfer-publish-cancel'}
         >
-          Cancel
+          {cancelLabel ?? 'Cancel'}
         </button>
       </div>
     </>
@@ -1779,15 +2448,17 @@ function ProviderGlyph({ provider }: { provider: 'google' | 'github' }) {
  * Consent is handled by the single shared clickwrap rendered OUTSIDE
  * this block at the bottom of the signed-out panel; this block only
  * wires `aria-describedby` onto the CTA via `clickwrapId`. */
-function GuestQuickShareBlock({
+function QuickShareDestinationPanel({
   turnstileSiteKey,
   controllerRef,
-  onSubmitGuestShare,
+  onSubmit,
+  ctaLabel,
+  authMode,
   shareSubmitting,
   shareError,
   transferBusy,
   clickwrapId,
-}: GuestQuickShareBlockProps) {
+}: QuickShareDestinationPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [token, setToken] = useState<string | null>(null);
   const [widgetReady, setWidgetReady] = useState(false);
@@ -1964,36 +2635,39 @@ function GuestQuickShareBlock({
 
   const ctaDisabled = transferBusy || shareSubmitting || widgetLoadFailed || !widgetReady || !token;
 
-  // The CTA label narrates the security handshake so the user always
-  // knows what's happening — replacing the prior dashed "Verifying
-  // you're human…" slot. Five states, in order:
+  // CTA label narrates the security handshake so the user always
+  // knows what's happening. Five states, in order:
   //   1. widget failed to load                    → "Verification unavailable"
-  //      (permanent until reload; fallback message below points to OAuth)
   //   2. script + widget still mounting           → "Preparing…"
-  //   3. widget ready, silent solve in flight     → "Continue as Guest"
-  //      (disabled, no implication that anything is pending on the user)
-  //   4. token acquired                           → "Continue as Guest →"
-  //      (enabled)
+  //   3. widget ready, silent solve in flight     → ctaLabel (parent-supplied)
+  //   4. token acquired                           → ctaLabel (parent-supplied)
   //   5. submit in flight                         → "Publishing…"
-  const ctaLabel = shareSubmitting
+  // The parent supplies a destination-centered label
+  // ('Continue as Guest', 'Create temporary link', or
+  // 'Quick Share trimmed timeline') so the same panel works in three
+  // render contexts (Phase 2 §"Destination Panels").
+  const effectiveCtaLabel = shareSubmitting
     ? 'Publishing…'
     : widgetLoadFailed
       ? 'Verification unavailable'
       : !widgetReady
         ? 'Preparing…'
-        : 'Continue as Guest';
+        : ctaLabel;
+
+  // Auth-mode-keyed framing copy. Signed-out gets the "no sign-in
+  // required" lede; signed-in gets the "not saved to your account"
+  // framing.
+  const lede = authMode === 'signed-in'
+    ? 'Create a temporary 72-hour link. This share is not saved to your account.'
+    : 'One-tap temporary link. No sign-in required.';
 
   return (
     <section
       className="timeline-transfer-dialog__quick-share"
       data-testid="transfer-guest-block"
+      data-auth-mode={authMode}
       aria-labelledby="transfer-guest-heading"
     >
-      {/* Header row — the heading owns the visual weight; the two
-       *  differentiators sit to the right as a tiny hairline meta
-       *  string. Merging the old two-pill badge bar into one inline
-       *  meta line reclaims ~20 px of vertical rhythm and keeps the
-       *  first thing the user reads as a clean product name. */}
       <header className="timeline-transfer-dialog__qs-header">
         <h3
           id="transfer-guest-heading"
@@ -2006,7 +2680,7 @@ function GuestQuickShareBlock({
         </span>
       </header>
       <p className="timeline-transfer-dialog__helper">
-        One-tap temporary link. No sign-in required.
+        {lede}
       </p>
 
       {/* Turnstile in `interaction-only` mode is an invisible captcha
@@ -2053,12 +2727,12 @@ function GuestQuickShareBlock({
 
       <button
         className="timeline-transfer-dialog__confirm timeline-transfer-dialog__confirm--guest"
-        onClick={onSubmitGuestShare}
+        onClick={onSubmit}
         disabled={ctaDisabled}
         aria-describedby={clickwrapId}
         data-testid="transfer-guest-continue"
       >
-        {ctaLabel}
+        {effectiveCtaLabel}
         {!shareSubmitting && widgetReady && !widgetLoadFailed && (
           <svg
             className="timeline-transfer-dialog__confirm-arrow"

@@ -1957,6 +1957,65 @@ canvas { display: block; touch-action: none; }
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
 }
+/* Phase 2 — destination + scope segmented selectors. Always visible
+   above the panel body so destination switching and scope toggling
+   are one click away. Pill-shape segmented controls so they read as
+   "pick one" without competing with the primary CTA below. */
+.timeline-transfer-dialog__destination-selector,
+.timeline-transfer-dialog__scope-selector {
+  display: flex;
+  gap: 0;
+  margin-bottom: 10px;
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--color-text) 4%, transparent);
+  border: 1px solid var(--color-border);
+}
+.timeline-transfer-dialog__destination-option,
+.timeline-transfer-dialog__scope-option {
+  flex: 1;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  border-radius: 999px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+  font-weight: 500;
+  transition: background 0.12s, color 0.12s;
+}
+.timeline-transfer-dialog__destination-option:hover:not(:disabled),
+.timeline-transfer-dialog__scope-option:hover:not(:disabled) {
+  color: var(--color-text);
+}
+.timeline-transfer-dialog__destination-option:disabled,
+.timeline-transfer-dialog__scope-option:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.timeline-transfer-dialog__destination-option--active,
+.timeline-transfer-dialog__scope-option--active {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-weight: 600;
+  box-shadow: 0 1px 2px color-mix(in oklab, black 14%, transparent);
+}
+/* Phase 2 — leading action slot above the primary Publish pill in
+   SignedInPublishPanel. Used by trim mode to tuck "Reset selection"
+   in as a quiet modifier directly above the dominant CTA — replaces
+   the prior cluttered 4-button trim footer. Right-aligned so the
+   action sits at the trailing edge of the panel's text column,
+   visually paired with the pill below it but not competing for
+   weight. */
+.timeline-transfer-dialog__leading-action {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 6px;
+}
+.timeline-transfer-dialog__leading-action .timeline-transfer-dialog__reset-link {
+  margin: 0;
+}
 /* Tab bar */
 .timeline-transfer-dialog__tabs {
   display: flex; gap: 4px; margin-bottom: 14px;

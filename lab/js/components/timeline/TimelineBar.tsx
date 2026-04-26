@@ -53,8 +53,38 @@ import {
 import {
   resolveTrimSubmitTarget,
   type TrimSubmitAction,
+  type TrimSubmitTarget,
   type TrimSubmitUnavailableReason,
 } from '../../runtime/trim-submit-coordinator';
+import type {
+  TrimEntryKind,
+  TrimMeasurementPolicy,
+} from '../../runtime/timeline/capsule-publish-types';
+
+/** Phase 2 — share state UI types. The dialog is destination-driven,
+ *  not auth-driven; auth is only an input to the default destination. */
+export type ShareDestination = 'account' | 'guest';
+export type ShareScope = 'whole-timeline' | 'trim-selection';
+
+/** sessionStorage key for the OAuth round-trip trim-resume payload.
+ *
+ *  Shipped contract — selection-only, narrowed:
+ *    - Producer stores: `snapshotId`, `startFrameIndex`,
+ *      `endFrameIndex`, `prevReviewState`, `iat`.
+ *    - Consumer always restores as MANUAL trim, ACCOUNT destination.
+ *    - The prepared `prepareId` is NOT preserved — the publish
+ *      service cache is reconstructed fresh on page reload.
+ *    - `entryKind` and `trimDestination` are NOT preserved — an
+ *      earlier shape carried both but the consumer ignored them;
+ *      that drift was removed because the click that triggers a
+ *      resume ("Sign in for permanent share") unambiguously
+ *      expresses the user intent of upgrading the current
+ *      selection to a permanent (account) link. */
+export const TRIM_RESUME_SESSION_STORAGE_KEY = 'atomdojo.trimResume';
+/** Resume payload TTL — 10 minutes. Older payloads are dropped on
+ *  consume (the OAuth round-trip is fast; a stale payload usually
+ *  means the user abandoned the flow and came back later). */
+export const TRIM_RESUME_TTL_SECONDS = 10 * 60;
 
 /** Minimal Turnstile widget handle the dialog owns and hands back to
  *  TimelineBar via a mutable ref. Keeps the widget lifecycle local to
@@ -338,6 +368,27 @@ function TimelineBarActive() {
   const [shareResult, setShareResult] = useState<ShareResult | null>(null);
   const transferDidPause = useRef(false);
 
+  // Phase 2 — Whole-timeline Share UI state. The parent owns destination
+  // + scope for the normal Share state; the dialog is presentation-only
+  // and reads through to dispatch via `onSubmitWholeTimelineShare`.
+  // Defaults: `account` for signed-in, `guest` for signed-out;
+  // `scope = 'whole-timeline'`. Survives auth flips while the dialog is
+  // open so a 401 mid-session does not silently flip the user's
+  // chosen destination back to `account` and lock them out.
+  const [wholeTimelineDestination, setWholeTimelineDestination] = useState<ShareDestination>(
+    () => authStatus === 'signed-in' ? 'account' : 'guest',
+  );
+  const [shareScope, setShareScope] = useState<ShareScope>('whole-timeline');
+  // Sync the destination default when authStatus moves between
+  // signed-in / signed-out at the boundary of opening the dialog.
+  // `wholeTimelineDestinationTouchedRef` flips true on the first user
+  // selection so an authStatus change does not stomp an explicit choice.
+  const wholeTimelineDestinationTouchedRef = useRef(false);
+  useEffect(() => {
+    if (wholeTimelineDestinationTouchedRef.current) return;
+    setWholeTimelineDestination(authStatus === 'signed-in' ? 'account' : 'guest');
+  }, [authStatus]);
+
   // ── Trim mode state ──
   //
   // Local to the Transfer session so the persistent timeline state
@@ -358,7 +409,20 @@ function TimelineBarActive() {
     previewingOutsideKept: boolean;
     preparedArtifact: HeldPreparedCapsule | null;
     measuredBytes: number | null;
-    safeStatus: 'measuring' | 'within-target' | 'close-to-limit' | 'over-limit' | 'unavailable';
+    /** Phase 2 — `'idle'` is the seed for manual trim entry. The
+     *  classifier never moves a manual within-limit submit out of
+     *  `'idle'`; that's the load-bearing rule that keeps the status
+     *  row hidden on the within-limit path (Acceptance #4). */
+    safeStatus: 'idle' | 'measuring' | 'within-target' | 'close-to-limit' | 'over-limit' | 'unavailable';
+    /** Phase 2 — manual vs. oversize distinguishes the two trim entry
+     *  seams. Manual seeds a deferred-measurement state with full-range
+     *  default; oversize seeds the existing chunked-search behavior. */
+    entryKind: TrimEntryKind;
+    measurementPolicy: TrimMeasurementPolicy;
+    /** Phase 2 — destination chosen by the user; survives destination
+     *  flips and dispatch. The trimmed-submit handler reads this to
+     *  pick the action ('share-account' vs. 'quick-share'). */
+    trimDestination: ShareDestination;
     /** Differentiates the two sources of `safeStatus: 'measuring'`:
      *    'search'  — initial entry-time chunked bisect (up to 16
      *                serializations). User-facing copy: "Finding the
@@ -394,8 +458,11 @@ function TimelineBarActive() {
     previewingOutsideKept: false,
     preparedArtifact: null,
     measuredBytes: null,
-    safeStatus: 'measuring',
+    safeStatus: 'idle',
     measuringKind: 'search',
+    entryKind: 'manual',
+    measurementPolicy: 'deferred',
+    trimDestination: 'account',
     originalActualBytes: null,
     maxBytes: null,
     maxSource: 'unknown',
@@ -435,6 +502,12 @@ function TimelineBarActive() {
   // after every await — any mismatch drops the result AND evicts the
   // cache entry via onCancelPreparedCapsule.
   const trimRunIdRef = useRef(0);
+  // Tracks whether the current oversize trim session was reached
+  // via auto-promotion from a manual entry probe (vs. the original
+  // PublishOversizeError path). Diagnostic-only — surfaces in the
+  // chunked-search failure log so the rare half-promoted state is
+  // observable in telemetry.
+  const promotedFromManualRunIdRef = useRef<number | null>(null);
   // Best prepared artifact held during the default-selection search.
   // Wrapped as HeldPreparedCapsule so we can always prove range
   // identity; the bare PreparedCapsuleSummary never escapes.
@@ -710,6 +783,13 @@ function TimelineBarActive() {
     setShareResult(null);
     transferDidPause.current = pauseForTransfer();
     transferDialog.request('share');
+    // Phase 2 — OAuth-round-trip trim resume. After the OAuth return
+    // re-opens the dialog, consume the persisted selection and re-enter
+    // trim with the stored range. The prepareId is NOT preserved across
+    // the round-trip — the publish service cache is reconstructed fresh
+    // on page reload — so the user's first Submit click will re-prepare
+    // for the same range and POST.
+    consumeTrimResumeIfPresent();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareTabOpenRequested, canOpenShareSurface]);
 
@@ -827,6 +907,37 @@ function TimelineBarActive() {
    *  AND, at runtime, surfaces a generic error + diagnostic id rather
    *  than silently no-op'ing the click. */
   const surfaceUnavailable = useCallback((reason: TrimSubmitUnavailableReason) => {
+    // Phase 2 — when an active trim session surfaces an unavailability
+    // reason, the message is trim-specific. Otherwise the message is
+    // share-tab-generic (signed-out auth note, etc.). The trim panel
+    // preserves shareTrimState across recoverable unavailability per
+    // Phase 1 §G.
+    const trimActive = shareTrimStateRef.current.active;
+    if (trimActive) {
+      switch (reason) {
+        case 'auth-required':
+          setShareError({ kind: 'other', message: 'Sign in to publish to your account, or switch to Quick Share.' });
+          return;
+        case 'unverified':
+          setShareError({ kind: 'other', message: 'Account status is unknown. Try again in a moment, or switch to Quick Share.' });
+          return;
+        case 'guest-disabled':
+          setShareError({ kind: 'other', message: 'Quick Share is unavailable right now. Sign in to publish to your account.' });
+          return;
+        case 'config-missing':
+          setShareError({ kind: 'other', message: 'Quick Share verification is unavailable. Try again in a minute, or sign in to publish to your account.' });
+          return;
+        case 'verification-required':
+          setShareError({ kind: 'other', message: 'Solve the verification challenge above to Quick Share this trimmed selection.' });
+          return;
+        default: {
+          const _exhaustive: never = reason;
+          console.error('[TimelineBar] SHARE_UNAVAILABLE_UNHANDLED:', _exhaustive);
+          setShareError({ kind: 'other', message: 'Share is unavailable.' });
+          return;
+        }
+      }
+    }
     switch (reason) {
       case 'auth-required':
         setShareError({ kind: 'auth', message: 'Sign in to publish to your account.' });
@@ -949,16 +1060,85 @@ function TimelineBarActive() {
     return true;
   }, [surfaceUnavailable]);
 
-  const handleConfirmGuestShare = useCallback(async () => {
+  // Forward-reference ref — `enterTrimMode` is defined later in the
+  // file (after the trim-mode machinery helpers it depends on), but
+  // `handleWholeTimelineSubmit` needs to invoke it on oversize. The
+  // ref breaks the static dependency cycle without reordering the
+  // entire trim section.
+  type EnterTrimArgsForward =
+    | { kind: 'manual'; destination: ShareDestination }
+    | { kind: 'oversize'; error: PublishOversizeError; destination: ShareDestination };
+  const enterTrimModeRef = useRef<((args: EnterTrimArgsForward) => boolean) | null>(null);
+
+  /**
+   * Phase 2 — single destination-driven whole-history submit handler.
+   *
+   * Replaces the auth-shaped trio (`handleShareConfirm` for account,
+   * `handleConfirmGuestShare` for guest, separate dialog props). The
+   * dialog is presentation-only for the whole-history CTA; this handler
+   * routes through the same `dispatchShareSubmit` seam already used by
+   * trim. The structural single-call-site rule from Phase 1 §H still
+   * holds — `dispatchShareSubmit` is the only place the four executor
+   * callbacks are invoked.
+   *
+   * Mode-specific error mapping moves inside the post-dispatch catch:
+   * the resolved target (account vs. guest) decides which error class
+   * the catch handles, NOT `authStatus` directly.
+   */
+  const handleWholeTimelineSubmit = useCallback(async (destination: ShareDestination) => {
     const runId = ++shareRunIdRef.current;
     setShareSubmitting(true);
     setShareError(null);
+    const action: TrimSubmitAction = destination === 'guest' ? 'quick-share' : 'share-account';
     let outcome: ShareDispatchOutcome;
     try {
-      outcome = await dispatchShareSubmit({ action: 'quick-share', trim: null });
+      outcome = await dispatchShareSubmit({ action, trim: null });
     } catch (e) {
       if (!mountedRef.current || shareRunIdRef.current !== runId) return;
-      // Guest-specific error mapping — see §TimelineBar Ownership.
+      // Mode-specific error mapping — keyed off the action the user
+      // invoked (which determines the resolved target). Account
+      // errors and guest errors are partitioned by class, so we route
+      // by class identity inside each branch rather than re-resolving
+      // the target post-hoc.
+      if (destination === 'account') {
+        if (isPublishOversizeError(e)) {
+          // Account oversize — enter trim mode preserving destination.
+          const entered = enterTrimModeRef.current
+            ? enterTrimModeRef.current({ kind: 'oversize', error: e, destination: 'account' })
+            : false;
+          setShareSubmitting(false);
+          if (!entered) {
+            setShareError({
+              kind: 'other',
+              message: e instanceof Error ? e.message : 'Share failed.',
+            });
+          }
+          return;
+        }
+        if (e instanceof AuthRequiredError) {
+          useAppStore.getState().setAuthSignedOut();
+          setShareError({ kind: 'auth', message: e.message });
+          setShareSubmitting(false);
+          return;
+        }
+        if (e instanceof AgeConfirmationRequiredError) {
+          setShareError({
+            kind: 'age-confirmation',
+            message: e.message,
+            policyVersion: e.policyVersion,
+          });
+          setShareSubmitting(false);
+          return;
+        }
+        console.error('[TimelineBar] share failed:', e);
+        setShareError({
+          kind: 'other',
+          message: e instanceof Error ? e.message : 'Share failed.',
+        });
+        setShareSubmitting(false);
+        return;
+      }
+      // Guest target.
       if (e instanceof GuestTurnstileError) {
         // Invalidate the token on failed/unavailable Siteverify so the
         // user is not allowed to resubmit with the same stale bytes.
@@ -967,61 +1147,22 @@ function TimelineBarActive() {
         setShareSubmitting(false);
         return;
       }
-      if (e instanceof GuestAgeAttestationError) {
-        setShareError({ kind: 'other', message: e.message });
-        setShareSubmitting(false);
-        return;
-      }
-      if (e instanceof GuestQuotaExceededError) {
-        setShareError({ kind: 'other', message: e.message });
-        setShareSubmitting(false);
-        return;
-      }
-      if (e instanceof GuestPublishDisabledError) {
+      if (e instanceof GuestAgeAttestationError
+          || e instanceof GuestQuotaExceededError
+          || e instanceof GuestPublishDisabledError) {
         setShareError({ kind: 'other', message: e.message });
         setShareSubmitting(false);
         return;
       }
       if (isPublishOversizeError(e)) {
-        // Guest path does not support trim in v1 — surface the sign-in
-        // upsell helper copy rather than routing into trim mode.
-        setShareError({
-          kind: 'other',
-          message: 'Capture exceeds 20 MB. Trim is available after sign-in.',
-        });
-        setShareSubmitting(false);
-        return;
-      }
-      console.error('[TimelineBar] guest share failed:', e);
-      setShareError({
-        kind: 'other',
-        message: e instanceof Error ? e.message : 'Share failed.',
-      });
-      setShareSubmitting(false);
-      return;
-    }
-    finalizeFullShareOutcome(runId, outcome);
-  }, [dispatchShareSubmit, finalizeFullShareOutcome]);
-
-  const handleShareConfirm = useCallback(async () => {
-    // Capture the generation at submit time. If closeTransferSession
-    // runs while this await is pending, the generation moves and we
-    // drop the late result — the dialog has been torn down.
-    const runId = ++shareRunIdRef.current;
-    setShareSubmitting(true);
-    setShareError(null);
-    let outcome: ShareDispatchOutcome;
-    try {
-      outcome = await dispatchShareSubmit({ action: 'share-account', trim: null });
-    } catch (e) {
-      if (!mountedRef.current || shareRunIdRef.current !== runId) return;
-      if (isPublishOversizeError(e)) {
-        // Capsule too large — enter trim mode. Frames are captured
-        // from getCapsuleFrameIndex at entry; failure to capture (no
-        // frames or capsule gated off) falls through to the generic
-        // error branch so the user isn't stranded in a half-rendered
-        // trim UI with no data.
-        const entered = enterTrimMode(e);
+        // Phase 2 — guest oversize routes into trim mode (replaces
+        // the previous "Trim is available after sign-in" dead end).
+        // The trim panel surfaces the trim-context Quick Share
+        // verification so the user can complete the trimmed submit
+        // without leaving guest mode.
+        const entered = enterTrimModeRef.current
+          ? enterTrimModeRef.current({ kind: 'oversize', error: e, destination: 'guest' })
+          : false;
         setShareSubmitting(false);
         if (!entered) {
           setShareError({
@@ -1031,31 +1172,7 @@ function TimelineBarActive() {
         }
         return;
       }
-      if (e instanceof AuthRequiredError) {
-        // 401 from publish is an authoritative signed-out answer — flip
-        // the store so the Share panel re-renders the in-context prompt.
-        // The message is tagged as 'auth' so the dialog routes it into the
-        // signed-out auth-note slot (not the red-error slot).
-        useAppStore.getState().setAuthSignedOut();
-        setShareError({ kind: 'auth', message: e.message });
-        setShareSubmitting(false);
-        return;
-      }
-      if (e instanceof AgeConfirmationRequiredError) {
-        // 428 — user is signed in but has no age_13_plus acceptance row
-        // (legacy / pre-D120 account). Surface the publish-clickwrap
-        // fallback inline; the dialog's single Publish button POSTs to
-        // /api/account/age-confirmation (shared helper) and triggers a
-        // re-publish via the passed-through retryShare callback.
-        setShareError({
-          kind: 'age-confirmation',
-          message: e.message,
-          policyVersion: e.policyVersion,
-        });
-        setShareSubmitting(false);
-        return;
-      }
-      console.error('[TimelineBar] share failed:', e);
+      console.error('[TimelineBar] guest share failed:', e);
       setShareError({
         kind: 'other',
         message: e instanceof Error ? e.message : 'Share failed.',
@@ -1259,6 +1376,19 @@ function TimelineBarActive() {
             cancelPrepared(bestPreparedRef.current.prepareId);
             bestPreparedRef.current = null;
           }
+          // Diagnostic for the half-promoted manual-trim case: the
+          // probe just promoted the session to oversize, then the
+          // chunked search failed before producing a usable
+          // default span. The user is not stranded (drag-end
+          // prepare's recovery branch can clear 'unavailable' on a
+          // successful retry; Cancel trim closes the dialog) but
+          // the path warrants telemetry visibility.
+          if (promotedFromManualRunIdRef.current === runId) {
+            console.error(
+              '[TimelineBar] TRIM_PROMOTED_SEARCH_FAILED:',
+              { phase: 'bisect-loop', err: err instanceof Error ? err.message : String(err) },
+            );
+          }
           patchActiveTrim(runId, { safeStatus: 'unavailable' });
           // Distinguish "prepare call threw" from "measurement
           // yielded no fit" — the status row's `'unavailable'` copy
@@ -1279,7 +1409,21 @@ function TimelineBarActive() {
           return;
         }
         const held: HeldPreparedCapsule = { ...summary, range: candidateRange };
-        if (held.bytes <= TRIM_TARGET_BYTES) {
+        // Phase 2 — bisect threshold honors the server cap when it
+        // is tighter than the local soft target. Without this clamp,
+        // under deploy skew (server.maxBytes < MAX_PUBLISH_BYTES *
+        // 0.95 = TRIM_TARGET_BYTES) the search would land on a span
+        // that fits TRIM_TARGET_BYTES but exceeds the server's cap,
+        // and the subsequent submit would 413. Read the cap from
+        // the trim state's promoted/oversize maxBytes (set by
+        // `enterTrimMode` for oversize entry, or
+        // `runManualTrimSizeProbe` for the promotion path); fall
+        // back to MAX_PUBLISH_BYTES when no tighter cap is known.
+        const stateForCap = shareTrimStateRef.current;
+        const stateMaxBytes = stateForCap.maxBytes ?? MAX_PUBLISH_BYTES;
+        const searchHardCap = Math.min(stateMaxBytes, MAX_PUBLISH_BYTES);
+        const searchTarget = Math.min(TRIM_TARGET_BYTES, searchHardCap);
+        if (held.bytes <= searchTarget) {
           // Fits — this is a new best; try earlier (wider suffix).
           const prev = bestPreparedRef.current;
           bestPreparedRef.current = held;
@@ -1319,7 +1463,16 @@ function TimelineBarActive() {
               return;
             }
             const held: HeldPreparedCapsule = { ...summary, range: singleRange };
-            const status = classifySafeStatus(held.bytes, MAX_PUBLISH_BYTES);
+            // Same effective-cap rule as the bisect — under deploy
+            // skew the single-frame fallback must classify against
+            // the server cap, otherwise nothing-fits is misreported
+            // as a fit and submit will 413.
+            const stateAtFinalize = shareTrimStateRef.current;
+            const finalizeHardCap = Math.min(
+              stateAtFinalize.maxBytes ?? MAX_PUBLISH_BYTES,
+              MAX_PUBLISH_BYTES,
+            );
+            const status = classifySafeStatus(held.bytes, finalizeHardCap);
             const nothingFits = status === 'over-limit';
             // If even the single-frame case exceeds the cap, we still
             // keep a prepared artifact so the user can inspect the
@@ -1347,6 +1500,19 @@ function TimelineBarActive() {
               return;
             }
             console.warn('[trim] nothing-fits fallback prepare failed:', err);
+            // Symmetric with the bisect-loop failure path:
+            // structured diagnostic when the user reached this
+            // failure via auto-promotion from a manual probe. The
+            // earlier audit caught that the bisect-loop log fired
+            // here was missing, leaving the most diagnostically
+            // informative case (single-frame too big post-promotion)
+            // silent.
+            if (promotedFromManualRunIdRef.current === runId) {
+              console.error(
+                '[TimelineBar] TRIM_PROMOTED_SEARCH_FAILED:',
+                { phase: 'nothing-fits-fallback', err: err instanceof Error ? err.message : String(err) },
+              );
+            }
             patchActiveTrim(runId, { safeStatus: 'unavailable' });
             setShareError({
               kind: 'other',
@@ -1363,6 +1529,15 @@ function TimelineBarActive() {
       setShareTrimState((prev) => {
         if (!prev.active || prev.runId !== runId) return prev;
         const spanPs = frames[endFrameIndex].timePs - frames[startIdx].timePs;
+        // Effective cap mirrors the bisect threshold so a span that
+        // squeaked past TRIM_TARGET_BYTES (95% of MAX) but exceeds
+        // the server cap is correctly classified as 'over-limit'
+        // here. Without this, the user would see "Within limit"
+        // for a span the publish service is about to reject.
+        const commitHardCap = Math.min(
+          prev.maxBytes ?? MAX_PUBLISH_BYTES,
+          MAX_PUBLISH_BYTES,
+        );
         return {
           ...prev,
           startFrameIndex: startIdx,
@@ -1372,7 +1547,7 @@ function TimelineBarActive() {
           maxSelectableSpanPs: spanPs,
           measuredBytes: best.bytes,
           preparedArtifact: best,
-          safeStatus: classifySafeStatus(best.bytes, MAX_PUBLISH_BYTES),
+          safeStatus: classifySafeStatus(best.bytes, commitHardCap),
           cachedDefaultStartFrameIndex: startIdx,
           nothingFits: false,
         };
@@ -1385,7 +1560,185 @@ function TimelineBarActive() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callbacks, abortSearchSnapshotStale, cancelPrepared, classifySafeStatus]);
 
-  const enterTrimMode = useCallback((error: PublishOversizeError) => {
+  /** Phase 2 — full-range size probe for manual trim entry / reset.
+   *
+   *  Manual trim is content-first by default: user toggles "Trim
+   *  selection" expecting to choose a part of the timeline, no
+   *  measuring spinner up front. But when the FULL capsule already
+   *  exceeds the publish cap, the user needs the same size readout
+   *  + handle constraint they would get if they had reached trim via
+   *  a publish-time oversize error. Otherwise the entry path
+   *  silently strips the recovery context.
+   *
+   *  This probe runs a single prepare for the FULL range (start=0,
+   *  end=last). Three outcomes:
+   *    - bytes ≤ cap → silently populate `measuredBytes` /
+   *      `preparedArtifact` for retry semantics. `safeStatus` stays
+   *      `'idle'`, no status row appears (deferred contract preserved).
+   *    - bytes > cap → promote the trim session to oversize
+   *      semantics: set `entryKind: 'oversize'`, `measurementPolicy:
+   *      'required'`, populate `originalActualBytes` / `maxBytes` /
+   *      `maxSource`, then run the chunked search to find a
+   *      fits-under-cap default span. From that point the dialog
+   *      renders the over-limit recovery copy + the size row + the
+   *      constrained handles, exactly as if the user had reached
+   *      trim via a publish-time oversize error.
+   *    - prepare throws → silent (manual is content-first; transient
+   *      probe failures must not surface a red banner that the user
+   *      didn't ask for). The submit-time prepare is the
+   *      authoritative size check. */
+  const runManualTrimSizeProbe = useCallback(async (
+    runId: number,
+    snapshotId: CapsuleSnapshotId,
+    frames: ReadonlyArray<{ frameId: number; timePs: number }>,
+  ) => {
+    const prepare = callbacks?.onPrepareCapsuleTrim;
+    if (!prepare || frames.length === 0) return;
+    const endFrameIndex = frames.length - 1;
+    const fullRange: CapsuleSelectionRange = {
+      snapshotId,
+      startFrameIndex: 0,
+      endFrameIndex,
+    };
+    let summary: PreparedCapsuleSummary;
+    try {
+      summary = await prepare(fullRange);
+    } catch (err) {
+      if (isCapsuleSnapshotStaleError(err)) {
+        abortSearchSnapshotStale(runId);
+        return;
+      }
+      // Silent on transient failures — manual trim is content-first.
+      return;
+    }
+    // Defensive: a misbehaving callback (or test fixture) may resolve
+    // with undefined / a non-shape value. Manual trim is content-first
+    // so a probe that can't measure must not crash; just return and
+    // let submit-time prepare provide the authoritative measurement.
+    if (!summary || typeof summary.bytes !== 'number') return;
+    if (runId !== trimRunIdRef.current) {
+      cancelPrepared(summary.prepareId);
+      return;
+    }
+    // Phase 2 — honor the SERVER cap when the prepare returns one.
+    // `summary.maxBytes` is the authoritative limit the publish
+    // service will enforce; falling back to MAX_PUBLISH_BYTES is
+    // only correct when the prepare omits it. Under deploy skew
+    // (server cap < MAX_PUBLISH_BYTES) the previous unconditional
+    // MAX_PUBLISH_BYTES comparison would mis-classify a between-
+    // limits capsule as under-cap, then submit would fail with the
+    // same over-limit error this probe is designed to pre-empt.
+    // This mirrors the `effectiveHardCap` pattern already in use
+    // by `handleConfirmShareTrim` and the oversize entry seam.
+    const effectiveHardCap = Math.min(
+      summary.maxBytes ?? MAX_PUBLISH_BYTES,
+      MAX_PUBLISH_BYTES,
+    );
+    if (summary.bytes <= effectiveHardCap) {
+      // Under cap — populate measuredBytes silently for retry
+      // semantics; keep entryKind='manual' and safeStatus='idle' so
+      // the status row stays hidden (deferred contract).
+      setShareTrimState((prev) => {
+        if (!prev.active || prev.runId !== runId) {
+          cancelPrepared(summary.prepareId);
+          return prev;
+        }
+        // Only commit when the current selection still matches the
+        // probed range (defensive against a concurrent edit).
+        if (
+          prev.snapshotId !== fullRange.snapshotId
+          || prev.startFrameIndex !== fullRange.startFrameIndex
+          || prev.endFrameIndex !== fullRange.endFrameIndex
+        ) {
+          cancelPrepared(summary.prepareId);
+          return prev;
+        }
+        return {
+          ...prev,
+          measuredBytes: summary.bytes,
+          preparedArtifact: { ...summary, range: fullRange },
+        };
+      });
+      // Successful measurement is authoritative new state — clear
+      // any stale "Measurement failed: …" red banner from a prior
+      // drag-end failure. Matches the policy at the suffix-search
+      // success, drag-end success, and submit-prepare success paths.
+      clearMeasurementErrorIfPresent();
+      return;
+    }
+    // Over cap — promote to oversize entry. Drop the full-range
+    // artifact (the chunked search will produce the fits-under-cap
+    // best one). Preserve the prepare's `maxBytes` / `maxSource`
+    // so the trim status row reports the same denominator the
+    // submit-time enforcement would; honoring the server cap is
+    // load-bearing under deploy skew.
+    cancelPrepared(summary.prepareId);
+    // Pass `summary.maxBytes` / `maxSource` through verbatim so the
+    // status row honors the documented capsule-publish-types
+    // contract: `'unknown'` means "no trustworthy source — render
+    // no denominator." Collapsing 'unknown' to 'client-fallback'
+    // here would re-introduce the contradiction this audit caught
+    // — the dialog suppresses the denominator on `'unknown'` (see
+    // `showDenom` predicate in TrimStatusRow), so masking the
+    // unknown source as a known-but-fallback value would render
+    // a denominator the panel was trying to hide.
+    const promotedMaxBytes = summary.maxBytes ?? MAX_PUBLISH_BYTES;
+    const promotedMaxSource: 'server' | 'client-fallback' | 'unknown' =
+      summary.maxSource;
+    // Mark this runId as having reached oversize via promotion.
+    // The chunked-search failure paths in
+    // `scheduleDefaultSelectionSearch` log a structured diagnostic
+    // when this matches, so the operationally rare "promoted to
+    // oversize, then search couldn't find a default" half-state
+    // is observable in telemetry. The user is not stranded — they
+    // can drag handles to re-measure (deferred-mode recovery
+    // branch flips 'unavailable' → 'over-limit' / 'idle') or
+    // Cancel trim to close the dialog. Logged for monitoring of
+    // post-promotion search reliability.
+    promotedFromManualRunIdRef.current = runId;
+    setShareTrimState((prev) => {
+      if (!prev.active || prev.runId !== runId) return prev;
+      return {
+        ...prev,
+        entryKind: 'oversize',
+        measurementPolicy: 'required',
+        originalActualBytes: summary.bytes,
+        maxBytes: promotedMaxBytes,
+        maxSource: promotedMaxSource,
+        safeStatus: 'measuring',
+        measuringKind: 'search',
+        measuredBytes: null,
+        preparedArtifact: null,
+      };
+    });
+    // Same authoritative-recovery rule as the under-cap branch.
+    // Cleared HERE rather than waiting for the chunked search to
+    // converge — the user shouldn't see a stale red banner during
+    // the search even though we already have a fresh measurement.
+    clearMeasurementErrorIfPresent();
+    // Kick off the chunked search to find a fits-under-cap span.
+    // This is the same routine the publish-time oversize entry uses,
+    // so the user reaches the identical state regardless of how
+    // they arrived at the over-cap recovery path.
+    scheduleDefaultSelectionSearch(runId, snapshotId, frames, endFrameIndex);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callbacks, cancelPrepared, abortSearchSnapshotStale, scheduleDefaultSelectionSearch, clearMeasurementErrorIfPresent]);
+
+  /** Phase 2 — discriminated entry seam for the trim mode.
+   *  Manual entry seeds a deferred-measurement state with the FULL
+   *  timeline as the default selection and skips the chunked search;
+   *  oversize entry preserves the existing recovery behavior (chunked
+   *  search runs, status row visible). The shared shape lets both
+   *  contexts reuse the same trim controls (Acceptance #16). */
+  type EnterTrimArgs =
+    | { kind: 'manual'; destination: ShareDestination; restore?: {
+          startFrameIndex: number;
+          endFrameIndex: number;
+          snapshotId: CapsuleSnapshotId;
+        } }
+    | { kind: 'oversize'; error: PublishOversizeError; destination: ShareDestination };
+
+  const enterTrimMode = useCallback((args: EnterTrimArgs) => {
     const frameIndex = callbacks?.getCapsuleFrameIndex?.();
     if (!frameIndex || frameIndex.frames.length === 0) {
       // Not viable for trim mode — fall through to generic error.
@@ -1405,7 +1758,73 @@ function TimelineBarActive() {
     };
     const frames = frameIndex.frames;
     const endFrameIndex = frames.length - 1;
+
+    if (args.kind === 'manual') {
+      // Manual entry — full timeline by default; deferred measurement.
+      // No status row, no measuring spinner, no auto-search. The
+      // §"Status and Measurement Rules" contract requires safeStatus
+      // start at 'idle' and stay there until the user crosses into a
+      // recovery state.
+      let startIdx = 0;
+      let endIdx = endFrameIndex;
+      if (args.restore && args.restore.snapshotId === frameIndex.snapshotId) {
+        // Resume payload restored from sessionStorage — clamp to the
+        // currently available frame range (recording may have grown
+        // between the OAuth round-trip producer write and the consumer
+        // re-mount).
+        startIdx = Math.max(0, Math.min(args.restore.startFrameIndex, endFrameIndex));
+        endIdx = Math.max(startIdx, Math.min(args.restore.endFrameIndex, endFrameIndex));
+      }
+      const next: ShareTrimStateLocal = {
+        active: true,
+        snapshotId: frameIndex.snapshotId,
+        frames,
+        startFrameIndex: startIdx,
+        endFrameIndex: endIdx,
+        rangeStartPs: frames[startIdx].timePs,
+        rangeEndPs: frames[endIdx].timePs,
+        maxSelectableSpanPs: frames[endIdx].timePs - frames[startIdx].timePs,
+        dragMode: null,
+        previewTarget: null,
+        previewingOutsideKept: false,
+        preparedArtifact: null,
+        measuredBytes: null,
+        safeStatus: 'idle',
+        measuringKind: 'search',
+        entryKind: 'manual',
+        measurementPolicy: 'deferred',
+        trimDestination: args.destination,
+        originalActualBytes: null,
+        maxBytes: null,
+        maxSource: 'unknown',
+        prevReviewState,
+        cachedDefaultStartFrameIndex: null,
+        runId,
+        snapshotStale: false,
+        nothingFits: false,
+      };
+      setShareTrimState(next);
+      // Manual entry skips `scheduleDefaultSelectionSearch` (the
+      // chunked bisect that drives oversize recovery), but still
+      // runs a single full-range size probe. The probe stays silent
+      // while bytes ≤ cap — measuredBytes/preparedArtifact populate
+      // for retry semantics, safeStatus stays 'idle', no status row.
+      // If bytes > cap the probe promotes the session to oversize
+      // semantics so the user gets the same size readout + handle
+      // constraint they would have gotten from a publish-time
+      // oversize error. Skip the probe on a `restore` (post-OAuth
+      // resume): the user's selection isn't necessarily the full
+      // range, and the deferred contract still applies — the
+      // first drag-end / submit will provide the measurement.
+      if (!args.restore) {
+        queueMicrotask(() => runManualTrimSizeProbe(runId, frameIndex.snapshotId, frames));
+      }
+      return true;
+    }
+
+    // Oversize recovery entry — existing behavior.
     const fallbackStart = Math.max(0, endFrameIndex - (FRAME_FALLBACK_SUFFIX - 1));
+    const error = args.error;
     // Derive maxSource from the error's provenance, not just whether
     // maxBytes is non-null:
     //   · preflight: the client already decided to reject against
@@ -1447,6 +1866,9 @@ function TimelineBarActive() {
       measuredBytes: null,
       safeStatus: 'measuring',
       measuringKind: 'search',
+      entryKind: 'oversize',
+      measurementPolicy: 'required',
+      trimDestination: args.destination,
       originalActualBytes: error.actualBytes,
       maxBytes,
       maxSource,
@@ -1460,7 +1882,11 @@ function TimelineBarActive() {
     // Kick off the chunked suffix search off the click path.
     scheduleDefaultSelectionSearch(runId, frameIndex.snapshotId, frames, endFrameIndex);
     return true;
-  }, [callbacks, cancelInFlightTrimSearch, cancelInFlightTrimDragPrepare, scheduleDefaultSelectionSearch]);
+  }, [callbacks, cancelInFlightTrimSearch, cancelInFlightTrimDragPrepare, scheduleDefaultSelectionSearch, runManualTrimSizeProbe]);
+
+  // Wire the forward-reference ref so handleWholeTimelineSubmit (defined
+  // earlier) can call enterTrimMode on oversize.
+  enterTrimModeRef.current = enterTrimMode;
 
   // Trim teardown lives in two places intentionally:
   //   · `closeTransferSession` (above) owns the inline teardown —
@@ -1497,7 +1923,19 @@ function TimelineBarActive() {
     if (!pre.active || pre.frames.length === 0) return;
     const frames = pre.frames;
     const endIdx = frames.length - 1;
-    const startIdx = pre.cachedDefaultStartFrameIndex ?? Math.max(0, endIdx - (FRAME_FALLBACK_SUFFIX - 1));
+    // Phase 2 — reset target depends on entry mode.
+    //   manual (deferred): full timeline (start=0, end=last). Manual
+    //     trim has no size constraint — Reset must clear any drag-time
+    //     handle constraint and return to the full default. The
+    //     status row stays hidden because deferred-mode keeps
+    //     safeStatus at `'idle'`.
+    //   oversize (required): the cached chunked-search default span.
+    //     Status row briefly shows "Checking selection…" while the
+    //     single re-measurement runs.
+    const isDeferred = pre.measurementPolicy === 'deferred';
+    const startIdx = isDeferred
+      ? 0
+      : pre.cachedDefaultStartFrameIndex ?? Math.max(0, endIdx - (FRAME_FALLBACK_SUFFIX - 1));
 
     // Bump the runId + cancel in-flight drag prepare so any concurrent
     // drag-end completion with the pre-reset runId is dropped by its
@@ -1524,11 +1962,12 @@ function TimelineBarActive() {
         rangeStartPs: f[startIdx].timePs,
         rangeEndPs: f[endIdx].timePs,
         maxSelectableSpanPs: f[endIdx].timePs - f[startIdx].timePs,
-        safeStatus: 'measuring',
-        // Reset fires a single prepare against the cached default,
-        // not the entry-time chunked bisect. The status row renders
-        // "Checking selection…" instead of "Finding the best fit…"
-        // so users don't assume the app is redoing the full search.
+        // Manual reset stays at `'idle'` (deferred contract: no
+        // status row flash on Reset). Oversize reset goes through
+        // the existing measuring/recheck cycle so the status row
+        // accurately reflects the re-measurement of the cached
+        // default.
+        safeStatus: isDeferred ? 'idle' : 'measuring',
         measuringKind: 'recheck',
         preparedArtifact: null,
         measuredBytes: null,
@@ -1540,19 +1979,20 @@ function TimelineBarActive() {
     });
 
     // Visible feedback: scrub the molecule view to the restored end
-    // edge so the click has an immediate on-screen effect. Without
-    // this the user may not notice anything happened when the reset
-    // size matches what's already displayed — the status row just
-    // flips to a brief "Checking selection…" which is easy to miss.
-    // `endIdx` is the right-anchored edge (plan §Default Selection),
-    // and matches the preview contract for whole-region and end-drag
-    // moves (plan §Live Preview Rule).
+    // edge so the click has an immediate on-screen effect.
     previewAtTimePs(frames[endIdx].timePs);
 
-    // Issue the prepare after the setter commits. `debouncedPrepareAfterEdit`
-    // is resolved at call time (TDZ-safe) since this only runs on user
-    // action, after all other top-level bindings are defined.
-    queueMicrotask(() => debouncedPrepareAfterEdit(runId, { startFrameIndex: startIdx, endFrameIndex: endIdx }));
+    if (isDeferred) {
+      // Manual reset — fire the size probe so a capsule that exceeds
+      // the cap (after the user ranged outwards then reset back to
+      // full) is detected and the panel promotes to oversize
+      // semantics. Under cap → silently populates measuredBytes
+      // without flipping safeStatus out of 'idle'.
+      queueMicrotask(() => runManualTrimSizeProbe(runId, pre.snapshotId, frames));
+    } else {
+      // Oversize reset — single re-measurement of the cached default.
+      queueMicrotask(() => debouncedPrepareAfterEdit(runId, { startFrameIndex: startIdx, endFrameIndex: endIdx }));
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cancelPrepared, cancelInFlightTrimDragPrepare]);
 
@@ -1649,11 +2089,60 @@ function TimelineBarActive() {
         if (prev.preparedArtifact && prev.preparedArtifact.prepareId !== held.prepareId) {
           cancelPrepared(prev.preparedArtifact.prepareId);
         }
+        // Phase 2 — manual trim safeStatus rules for drag-end /
+        // keyboard-edit prepares. Three competing requirements:
+        //   1. (Acceptance #5) From `'idle'`, a within-limit edit
+        //      must NOT flash a status pill. The status row stays
+        //      hidden until the user crosses into recovery.
+        //   2. From `'over-limit'` (user submitted and got bounced),
+        //      a successful edit prepare with bytes back under cap
+        //      must clear the recovery flag so Publish re-enables.
+        //   3. From `'unavailable'` (a prior prepare threw), a
+        //      LATER successful prepare is authoritative new state
+        //      and must clear the stale flag — same recovery
+        //      semantics as #2.
+        // Combined rule for deferred mode:
+        //   - currently `'idle'` → stay `'idle'` (don't flash pills).
+        //   - currently `'over-limit'` OR `'unavailable'` →
+        //       a successful prepare is authoritative; recompute
+        //       against the effective hard cap. Bytes > cap →
+        //       `'over-limit'` (still in recovery). Bytes ≤ cap →
+        //       `'idle'` (recovery cleared).
+        // For oversize mode the original classifier still runs.
+        const effectiveHardCap = Math.min(
+          prev.maxBytes ?? MAX_PUBLISH_BYTES,
+          MAX_PUBLISH_BYTES,
+        );
+        let nextSafeStatus: ShareTrimStateLocal['safeStatus'];
+        if (prev.measurementPolicy !== 'deferred') {
+          nextSafeStatus = classifySafeStatus(held.bytes, effectiveHardCap);
+        } else if (prev.safeStatus === 'idle') {
+          nextSafeStatus = 'idle';
+        } else if (
+          prev.safeStatus === 'over-limit'
+          || prev.safeStatus === 'unavailable'
+        ) {
+          nextSafeStatus = held.bytes > effectiveHardCap ? 'over-limit' : 'idle';
+        } else {
+          // Defensive: any other safeStatus in deferred mode would
+          // be a code-path bug (deferred enters only 'idle',
+          // 'over-limit', or 'unavailable' today). Preserve the
+          // prior value rather than synthesizing one — but log so
+          // a future state-machine regression doesn't silently
+          // freeze the panel. The diagnostic id is greppable from
+          // support tickets and surfaces in the console / Sentry
+          // breadcrumb stream without disrupting the user.
+          console.error(
+            '[TimelineBar] TRIM_DEFERRED_UNEXPECTED_SAFE_STATUS:',
+            { prev: prev.safeStatus, bytesUnderCap: held.bytes <= effectiveHardCap },
+          );
+          nextSafeStatus = prev.safeStatus;
+        }
         return {
           ...prev,
           preparedArtifact: held,
           measuredBytes: held.bytes,
-          safeStatus: classifySafeStatus(held.bytes, MAX_PUBLISH_BYTES),
+          safeStatus: nextSafeStatus,
         };
       });
       clearMeasurementErrorIfPresent();
@@ -1790,10 +2279,16 @@ function TimelineBarActive() {
     setShareMeasuring(false);
     setShareSubmitting(true);
     setShareError(null);
+    // Phase 2 — destination-driven action. Reads from the captured
+    // shareTrimState.trimDestination (account or guest) so the submit
+    // dispatches to the matching prepared executor. Replaces the
+    // previous hardcoded `action: 'share-account'`.
+    const trimAction: TrimSubmitAction =
+      captured.trimDestination === 'guest' ? 'quick-share' : 'share-account';
     let outcome: ShareDispatchOutcome;
     try {
       outcome = await dispatchShareSubmit({
-        action: 'share-account',
+        action: trimAction,
         trim: { prepareId: held.prepareId },
       });
     } catch (e) {
@@ -1812,13 +2307,31 @@ function TimelineBarActive() {
         // cleared between Prepare and Submit) we must surface the
         // oversize error ourselves; otherwise the user just sees
         // the Submit button re-enable with no explanation.
-        const entered = enterTrimMode(e);
+        const entered = enterTrimMode({
+          kind: 'oversize',
+          error: e,
+          destination: captured.trimDestination,
+        });
         if (!entered) {
           setShareError({
             kind: 'other',
             message: e instanceof Error ? e.message : 'Share failed.',
           });
         }
+        return;
+      }
+      // Guest-target trim errors — these only surface for
+      // `trimAction === 'quick-share'` but are class-keyed, so
+      // pattern-matching on instance type is sufficient.
+      if (e instanceof GuestTurnstileError) {
+        guestTurnstileControllerRef.current?.reset?.();
+        setShareError({ kind: 'other', message: e.message });
+        return;
+      }
+      if (e instanceof GuestAgeAttestationError
+          || e instanceof GuestQuotaExceededError
+          || e instanceof GuestPublishDisabledError) {
+        setShareError({ kind: 'other', message: e.message });
         return;
       }
       if (e instanceof AuthRequiredError) {
@@ -1866,6 +2379,264 @@ function TimelineBarActive() {
     setShareTrimState(initialShareTrim);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callbacks, shareMeasuring, shareSubmitting, cancelPrepared, abortSearchSnapshotStale, cancelInFlightTrimSearch, cancelInFlightTrimDragPrepare, enterTrimMode, dispatchShareSubmit, surfaceUnavailable]);
+
+  /** Phase 2 — write-helper for trimDestination. The destination
+   *  selector remains visible above the trim panel, so the user can
+   *  flip destination mid-trim. The selected range and any cached
+   *  prepared `prepareId` survive the flip by construction (Phase 1
+   *  mode-neutral preparation). */
+  const handleSelectTrimDestination = useCallback((destination: ShareDestination) => {
+    setShareTrimState((prev) => {
+      if (!prev.active) return prev;
+      if (prev.trimDestination === destination) return prev;
+      return { ...prev, trimDestination: destination };
+    });
+  }, []);
+
+  /** Phase 2 — write-helper for the whole-timeline destination. Marks
+   *  the touched ref so the auth-derived default does not stomp the
+   *  user's explicit selection. */
+  const handleSelectWholeTimelineDestination = useCallback((destination: ShareDestination) => {
+    wholeTimelineDestinationTouchedRef.current = true;
+    setWholeTimelineDestination(destination);
+  }, []);
+
+  /** Phase 2 — manual trim entry from the scope toggle. Seeds full-
+   *  timeline default with deferred measurement; does NOT call the
+   *  chunked search. The destination is read from the whole-timeline
+   *  state so the trim flow stays mode-neutral. */
+  const handleEnterManualTrim = useCallback(() => {
+    enterTrimMode({ kind: 'manual', destination: wholeTimelineDestination });
+    setShareScope('trim-selection');
+  }, [enterTrimMode, wholeTimelineDestination]);
+
+  /** Phase 2 — exit trim back to the whole-timeline scope. Distinct
+   *  from `closeTransfer` (which closes the dialog entirely): scope
+   *  returns to 'whole-timeline', the dialog stays open, the
+   *  destination is preserved. Restores the prior review/live frame
+   *  so the molecule view does not stay parked on a trim-preview frame
+   *  after the user backs out.
+   *
+   *  Pause invariant: the dialog's transfer-pause must remain active
+   *  the whole time the dialog is open. `coordinator.returnToLive`
+   *  contains a side-effect that calls `deps.resume()` when
+   *  `_wasPausedBeforeReview === false` (i.e., the pause did NOT
+   *  originate inside `enterReview`). Calling `onReturnToLive` when
+   *  the timeline is ALREADY in 'live' mode would therefore wake
+   *  physics back up while the dialog is still on screen — exactly
+   *  the regression a user-toggle between Whole timeline / Trim
+   *  selection would otherwise reproduce when no handle was dragged.
+   *  Gate the restore on the CURRENT timeline mode: a 'live' →
+   *  'live' restore is a no-op for state and we must not invoke it. */
+  const handleCancelTrim = useCallback(() => {
+    const trim = shareTrimStateRef.current;
+    const currentTimelineMode = useAppStore.getState().timelineMode;
+    if (trim.active) {
+      if (trim.prevReviewState.mode === 'live') {
+        // Only step back to 'live' if a trim-handle scrub or
+        // similar interaction actually pushed the timeline into
+        // 'review'. Skip when already 'live' to preserve the
+        // export-pause invariant.
+        if (currentTimelineMode === 'review') {
+          callbacks?.onReturnToLive();
+        }
+      } else if (trim.prevReviewState.reviewTimePs !== null) {
+        // Scrub-back to the user's pre-trim review frame. Scrub is
+        // pause-neutral inside `coordinator.handleScrub` (it enters
+        // review or moves the existing review pointer; it never
+        // resumes physics), so this is safe even with the dialog
+        // still open.
+        callbacks?.onScrub(trim.prevReviewState.reviewTimePs);
+      }
+    }
+    // Phase 2 — oversize entry locks the user into trim; the only
+    // valid escapes are (a) shorten the selection and submit, or
+    // (b) abandon the share entirely. Toggling back to whole-timeline
+    // would route through a dead path (the same oversize error
+    // reproduces) AND would discard the recovery context the user
+    // needs (originalActualBytes / maxBytes). Close the dialog
+    // entirely instead of resetting scope to 'whole-timeline'.
+    if (trim.active && trim.entryKind === 'oversize') {
+      closeTransfer();
+      return;
+    }
+    cancelInFlightTrimSearch();
+    cancelInFlightTrimDragPrepare();
+    if (trim.preparedArtifact) {
+      // Route through cancelPrepared so the once-only
+      // PREPARED_CAPSULE_CANCEL_NOT_WIRED diagnostic fires when the
+      // host hasn't wired onCancelPreparedCapsule. The previous
+      // direct-callback path silently no-op'd in that case.
+      cancelPrepared(trim.preparedArtifact.prepareId);
+    }
+    // Phase 2 — destination preservation across scope changes. If
+    // the user flipped the trim destination (account → guest or
+    // vice versa) and now backs out to whole-timeline, the
+    // whole-history destination must reflect that last choice; an
+    // implicit snap-back to the pre-trim default would silently
+    // discard a real user selection. Mark the touched ref so the
+    // authStatus-driven default no longer stomps the value.
+    if (trim.active) {
+      wholeTimelineDestinationTouchedRef.current = true;
+      setWholeTimelineDestination(trim.trimDestination);
+    }
+    trimRunIdRef.current++;
+    setShareTrimState(initialShareTrim);
+    setShareMeasuring(false);
+    setShareError(null);
+    setShareScope('whole-timeline');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callbacks, cancelInFlightTrimSearch, cancelInFlightTrimDragPrepare, cancelPrepared, closeTransfer]);
+
+  /** Phase 2 — OAuth round-trip producer. Persist trim selection (NOT
+   *  prepared bytes) into sessionStorage before the popup-based sign-in
+   *  navigates the user away.
+   *
+   *  Contract — selection-only, narrowed:
+   *    - Stores `snapshotId`, `startFrameIndex`, `endFrameIndex`,
+   *      `prevReviewState`, `iat`.
+   *    - Does NOT store `entryKind`: the consumer always restores as
+   *      manual trim. The user has already adjusted their selection
+   *      before clicking the sign-in upsell, so re-running the
+   *      oversize-recovery chunked search would be both unnecessary
+   *      and disorienting (it would reframe their explicit selection
+   *      as a recovery problem).
+   *    - Does NOT store `trimDestination`: the sign-in upsell only
+   *      makes sense on the account target; restoring with any other
+   *      destination would contradict the action the user took.
+   *
+   *  Returns true on successful persist, false on storage failure
+   *  (Safari Private Browsing, partitioned-storage iframes, quota
+   *  pressure). Callers MUST honor the false return — proceeding
+   *  with the OAuth navigation when the payload didn't persist
+   *  silently destroys the user's selection. */
+  const writeTrimResumePayload = useCallback((): boolean => {
+    const trim = shareTrimStateRef.current;
+    if (!trim.active) return false;
+    try {
+      const payload = {
+        snapshotId: trim.snapshotId,
+        startFrameIndex: trim.startFrameIndex,
+        endFrameIndex: trim.endFrameIndex,
+        prevReviewState: trim.prevReviewState,
+        iat: Math.floor(Date.now() / 1000),
+      };
+      window.sessionStorage.setItem(
+        TRIM_RESUME_SESSION_STORAGE_KEY,
+        JSON.stringify(payload),
+      );
+      return true;
+    } catch (err) {
+      console.error('[TimelineBar] TRIM_RESUME_PERSIST_FAILED:', err);
+      return false;
+    }
+  }, []);
+
+  /** Phase 2 — sign-in trigger from inside the trim panel. Persists the
+   *  selection via sessionStorage, then falls through to the same
+   *  `onSignIn(provider, { resumePublish: true })` flow used by the
+   *  signed-out auth prompt.
+   *
+   *  If the sessionStorage write fails (Safari Private Browsing,
+   *  partitioned-storage iframes, quota pressure) we ABORT the OAuth
+   *  navigation and surface a user-visible error rather than silently
+   *  losing the user's trim selection across the round-trip. The
+   *  user can re-attempt — the post-OAuth dialog re-open would
+   *  otherwise restore an empty / full-range selection with no
+   *  indication anything went wrong. */
+  const handleTrimSignIn = useCallback((provider: 'google' | 'github') => {
+    const persisted = writeTrimResumePayload();
+    if (!persisted) {
+      setShareError({
+        kind: 'other',
+        message: 'Couldn’t preserve your selection across sign-in. Please try again or note your range first.',
+      });
+      return;
+    }
+    authCallbacks?.onSignIn(provider, { resumePublish: true });
+  }, [authCallbacks, writeTrimResumePayload]);
+
+  /** Phase 2 — consumer for the OAuth round-trip resume payload.
+   *  Reads + clears `atomdojo.trimResume` after `consumeShareTabOpen()`
+   *  rehydrates the dialog. Drops the payload on TTL expiry,
+   *  snapshot mismatch, or shape failures. */
+  const consumeTrimResumeIfPresent = useCallback(() => {
+    let raw: string | null = null;
+    try {
+      raw = window.sessionStorage.getItem(TRIM_RESUME_SESSION_STORAGE_KEY);
+    } catch (err) {
+      console.error('[TimelineBar] TRIM_RESUME_READ_FAILED:', err);
+      return false;
+    }
+    if (!raw) return false;
+    try {
+      window.sessionStorage.removeItem(TRIM_RESUME_SESSION_STORAGE_KEY);
+    } catch (err) {
+      // removeItem failures rare but real (Safari Private Browsing
+      // can fail removeItem after a successful getItem). Logged as
+      // a debug warning rather than an error — the TTL check below
+      // bounds the staleness even if the item lingers.
+      console.warn('[TimelineBar] TRIM_RESUME_REMOVE_FAILED:', err);
+    }
+
+    let parsed: {
+      snapshotId?: unknown;
+      startFrameIndex?: unknown;
+      endFrameIndex?: unknown;
+      prevReviewState?: { mode?: unknown; reviewTimePs?: unknown };
+      iat?: unknown;
+    };
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      // Corrupted payload — log explicitly so a regression in the
+      // producer's serializer doesn't blend with "no payload" or
+      // "TTL expired" silent drops at the telemetry level.
+      console.error('[TimelineBar] TRIM_RESUME_PARSE_FAILED:', err);
+      return false;
+    }
+    const iat = typeof parsed.iat === 'number' ? parsed.iat : null;
+    if (iat === null) {
+      console.error('[TimelineBar] TRIM_RESUME_SHAPE_INVALID: iat missing/non-number');
+      return false;
+    }
+    if ((Date.now() / 1000) - iat > TRIM_RESUME_TTL_SECONDS) return false;
+    const snapshotId = typeof parsed.snapshotId === 'string' ? parsed.snapshotId : null;
+    const startFrameIndex = typeof parsed.startFrameIndex === 'number' ? parsed.startFrameIndex : null;
+    const endFrameIndex = typeof parsed.endFrameIndex === 'number' ? parsed.endFrameIndex : null;
+    if (!snapshotId || startFrameIndex === null || endFrameIndex === null) {
+      console.error('[TimelineBar] TRIM_RESUME_SHAPE_INVALID: required field missing/wrong type', {
+        hasSnapshot: !!snapshotId,
+        hasStart: startFrameIndex !== null,
+        hasEnd: endFrameIndex !== null,
+      });
+      return false;
+    }
+
+    // Snapshot mismatch (recording moved during sign-in) → drop and
+    // surface the equivalent of snapshot-stale copy.
+    const frameIndex = callbacks?.getCapsuleFrameIndex?.();
+    if (!frameIndex || frameIndex.snapshotId !== snapshotId) {
+      setShareError({
+        kind: 'other',
+        message: 'The recording changed during sign-in. Review the selection and try again.',
+      });
+      return false;
+    }
+
+    // Re-enter trim mode in manual entry — the resume always targets
+    // the account destination since that's the only scope where
+    // sign-in upsell makes sense from inside trim.
+    const entered = enterTrimMode({
+      kind: 'manual',
+      destination: 'account',
+      restore: { startFrameIndex, endFrameIndex, snapshotId },
+    });
+    if (entered) {
+      setShareScope('trim-selection');
+    }
+    return entered;
+  }, [callbacks, enterTrimMode]);
 
   const handleDownloadCapsuleFromShareFallback = useCallback(async () => {
     if (!callbacks?.onExportHistory) {
@@ -2594,22 +3365,29 @@ function TimelineBarActive() {
         capsuleEstimate={estimates.capsule}
 
         shareTabAvailable={canOpenShareSurface}
-        // The "Publish" confirm specifically dispatches the account
-        // full-publish executor — the broader surface gate
-        // (`canOpenShareSurface`) lets the panel render even when
-        // only guest is wired, but the account-confirm button must
-        // still require the account callback to be wired AND a
-        // signed-in user. Quick Share has its own confirm inside the
-        // panel.
-        shareConfirmEnabled={
-          !!callbacks?.onPublishFullAccountCapsule
-          && hasRange
-          && authStatus === 'signed-in'
-        }
-        onConfirmShare={handleShareConfirm}
+        // Phase 2 — destination-keyed enablement predicate. The
+        // dialog reads `shareConfirmEnabled[wholeTimelineDestination]`
+        // to enable/disable the active CTA. Splitting `account` and
+        // `guest` lets the dialog enable Quick Share for signed-in
+        // users without flipping the auth-shaped global predicate.
+        // The Turnstile-token presence is NOT in this predicate —
+        // it's a runtime preflight handled by the coordinator.
+        shareConfirmEnabled={{
+          account: !!callbacks?.onPublishFullAccountCapsule
+            && hasRange
+            && authStatus === 'signed-in',
+          guest: !!callbacks?.onPublishFullGuestCapsule
+            && hasRange
+            && publicConfig.guestPublish.enabled
+            && publicConfig.guestPublish.turnstileSiteKey !== null,
+        }}
+        onSubmitWholeTimelineShare={handleWholeTimelineSubmit}
+        wholeTimelineDestination={wholeTimelineDestination}
+        onSelectWholeTimelineDestination={handleSelectWholeTimelineDestination}
+        shareScope={shareScope}
+        onEnterManualTrim={handleEnterManualTrim}
         guestPublishConfig={guestPublishConfig}
         guestTurnstileControllerRef={guestTurnstileControllerRef}
-        onSubmitGuestShare={handleConfirmGuestShare}
         shareResult={shareResult}
         shareSubmitting={shareSubmitting}
         shareError={shareError?.kind === 'other' ? shareError.message : null}
@@ -2629,7 +3407,7 @@ function TimelineBarActive() {
               return;
             }
             setShareError(null);
-            await handleShareConfirm();
+            await handleWholeTimelineSubmit('account');
           } catch (err) {
             setShareError({
               kind: 'other',
@@ -2663,6 +3441,8 @@ function TimelineBarActive() {
                   && shareTrimState.endFrameIndex === lastFrameIdx;
                 return {
                   status: shareTrimState.safeStatus,
+                  entryKind: shareTrimState.entryKind,
+                  trimDestination: shareTrimState.trimDestination,
                   measuringKind: shareTrimState.measuringKind,
                   measuredBytes: shareTrimState.measuredBytes,
                   maxBytes: shareTrimState.maxBytes,
@@ -2671,6 +3451,10 @@ function TimelineBarActive() {
                   previewingOutsideKept: shareTrimState.previewingOutsideKept,
                   snapshotStale: shareTrimState.snapshotStale,
                   publishDisabled:
+                    // 'idle' is the manual-entry seed; submit is
+                    // ALLOWED there (it's the within-limit happy
+                    // path). 'measuring', 'over-limit', 'unavailable'
+                    // disable submit, as do nothingFits + snapshot-stale.
                     shareTrimState.safeStatus === 'over-limit' ||
                     shareTrimState.safeStatus === 'measuring' ||
                     shareTrimState.safeStatus === 'unavailable' ||
@@ -2692,6 +3476,9 @@ function TimelineBarActive() {
         shareMeasuring={shareMeasuring}
         onResetShareTrim={handleResetShareTrim}
         onConfirmShareTrim={handleConfirmShareTrim}
+        onSelectTrimDestination={handleSelectTrimDestination}
+        onCancelTrim={handleCancelTrim}
+        onTrimSignIn={handleTrimSignIn}
         onDownloadCapsuleFromShareFallback={handleDownloadCapsuleFromShareFallback}
         shareFallbackDownloadError={shareFallbackDownloadError}
       />
