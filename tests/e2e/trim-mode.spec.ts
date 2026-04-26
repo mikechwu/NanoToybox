@@ -74,7 +74,7 @@ async function installTrimHarness(page: Page) {
         onTurnRecordingOff: () => log.push('turn-off'),
         onPauseForExport: () => { log.push('pause'); return true },
         onResumeFromExport: () => log.push('resume'),
-        onPublishCapsule: async () => {
+        onPublishFullAccountCapsule: async () => {
           throw new PublishOversizeError({
             actualBytes: 25 * 1024 * 1024,
             maxBytes: 20 * 1024 * 1024,
@@ -84,7 +84,7 @@ async function installTrimHarness(page: Page) {
         },
         onExportHistory: async () => 'saved',
         getCapsuleFrameIndex: () => ({ snapshotId: 'v:0:0:0', frames }),
-        onPrepareCapsulePublish: async (range: { startFrameIndex: number; endFrameIndex: number }) => {
+        onPrepareCapsuleTrim: async (range: { startFrameIndex: number; endFrameIndex: number }) => {
           prepareCounter += 1
           return {
             prepareId: `p-${prepareCounter}`,
@@ -94,11 +94,12 @@ async function installTrimHarness(page: Page) {
             frameCount: range.endFrameIndex - range.startFrameIndex + 1,
           }
         },
-        onPublishPreparedCapsule: async () => ({
+        onPublishPreparedAccountCapsule: async () => ({
+          mode: 'account' as const,
           shareCode: 'TEST1234ABCD',
           shareUrl: 'https://example.com/c/TEST1234ABCD',
         }),
-        onCancelPreparedPublish: () => log.push('cancel-prepared'),
+        onCancelPreparedCapsule: () => log.push('cancel-prepared'),
       },
       'active',
       { full: true, capsule: true },

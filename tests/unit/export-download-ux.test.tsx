@@ -380,7 +380,7 @@ describe('TimelineBar export pause lifecycle', () => {
   });
 
   it('computes and displays estimates after dialog opens', async () => {
-    // Invariant: NO onPublishCapsule — dialog opens directly to
+    // Invariant: NO onPublishFullAccountCapsule — dialog opens directly to
     // Download. If a future refactor adds a default publish callback
     // and flips this to Share-default, the Download-panel precondition
     // assertion below will fail first with a clear signal instead of
@@ -452,7 +452,7 @@ describe('TimelineBar export pause lifecycle', () => {
   });
 
   it('shows "Unavailable" when getExportEstimates returns null for a kind', async () => {
-    // Invariant: Download-only setup (no onPublishCapsule).
+    // Invariant: Download-only setup (no onPublishFullAccountCapsule).
     const cbs = makeCallbacks({
       onPauseForExport: () => true,
       onResumeFromExport: noop,
@@ -496,7 +496,7 @@ describe('TimelineBar export pause lifecycle', () => {
   });
 
   it('shows "Unavailable" when getExportEstimates throws', async () => {
-    // Invariant: Download-only setup (no onPublishCapsule). The try/catch
+    // Invariant: Download-only setup (no onPublishFullAccountCapsule). The try/catch
     // in the estimate effect catches the throw synchronously under the
     // mocked scheduler and falls back to { capsule: null, full: null },
     // which EstimateSlot renders as "Unavailable".

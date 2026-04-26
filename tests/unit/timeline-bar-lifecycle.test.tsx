@@ -1056,7 +1056,7 @@ describe('TimelineBar unified shell', () => {
   it('transfer trigger hidden when caps exist but neither callback is wired', () => {
     // Under the action-availability contract, stored capabilities alone are
     // not enough — the corresponding callback must also be wired. If neither
-    // onExportHistory nor onPublishCapsule is provided, the transfer trigger
+    // onExportHistory nor onPublishFullAccountCapsule is provided, the transfer trigger
     // must not render at all (the old "disabled confirm inside an empty
     // dialog" UX is gone, because the dialog can no longer open).
     act(() => {
@@ -1144,7 +1144,7 @@ describe('TimelineBar unified shell', () => {
       {
         ...defaultCallbacks,
         onExportHistory: vi.fn(async () => 'saved' as const),
-        onPublishCapsule: onPublish,
+        onPublishFullAccountCapsule: onPublish,
         onPauseForExport: onPause,
         onResumeFromExport: onResume,
       },
@@ -1164,7 +1164,7 @@ describe('TimelineBar unified shell', () => {
     });
   }
 
-  it('publish trigger visible when onPublishCapsule and range exist', () => {
+  it('publish trigger visible when onPublishFullAccountCapsule and range exist', () => {
     act(() => { installWithPublish(); setActiveRange(); });
     const { container } = render(<TimelineBar />);
     expect(container.querySelector('.timeline-transfer-trigger')).not.toBeNull();
@@ -1420,7 +1420,7 @@ describe('TimelineBar unified shell', () => {
       useAppStore.getState().installTimelineUI(
         {
           ...defaultCallbacks,
-          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'AB1234567890', shareUrl: 'https://x/c/AB1234567890' })),
+          onPublishFullAccountCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'AB1234567890', shareUrl: 'https://x/c/AB1234567890' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
         },
@@ -1478,7 +1478,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           // onExportHistory intentionally omitted
-          onPublishCapsule: onPublish,
+          onPublishFullAccountCapsule: onPublish,
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
         },
@@ -1521,7 +1521,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           // onExportHistory intentionally omitted — Download is not actionable
-          onPublishCapsule: onPublish,
+          onPublishFullAccountCapsule: onPublish,
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates, // wired but must not be invoked
@@ -1545,13 +1545,13 @@ describe('TimelineBar unified shell', () => {
   it('getExportEstimates IS called when Download tab is selected', async () => {
     const getExportEstimates = vi.fn(() => ({ capsule: '100 KB', full: '1 MB' }));
     act(() => {
-      installWithPublish({}); // provides both onExportHistory and onPublishCapsule
+      installWithPublish({}); // provides both onExportHistory and onPublishFullAccountCapsule
       // Overwrite the callbacks to add the estimate spy
       useAppStore.getState().installTimelineUI(
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPublishFullAccountCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates,
@@ -1597,7 +1597,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPublishFullAccountCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates,
@@ -1631,7 +1631,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPublishFullAccountCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates,
@@ -1679,7 +1679,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPublishFullAccountCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates,
@@ -1725,7 +1725,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPublishFullAccountCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates,
@@ -1773,7 +1773,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          // NO onPublishCapsule — dialog opens directly to Download.
+          // NO onPublishFullAccountCapsule — dialog opens directly to Download.
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates,
@@ -1951,7 +1951,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
+          onPublishFullAccountCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'X', shareUrl: 'https://x/c/X' })),
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
           getExportEstimates,
@@ -2022,7 +2022,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' })),
+          onPublishFullAccountCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' })),
           onPauseForExport: onPause,
           onResumeFromExport: vi.fn(),
         },
@@ -2066,7 +2066,7 @@ describe('TimelineBar unified shell', () => {
         {
           ...defaultCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' })),
+          onPublishFullAccountCapsule: vi.fn(async () => ({ mode: 'account' as const, shareCode: 'ABC123DEF456', shareUrl: 'https://atomdojo.pages.dev/c/ABC123DEF456' })),
           onPauseForExport: onPause,
           onResumeFromExport: vi.fn(),
         },

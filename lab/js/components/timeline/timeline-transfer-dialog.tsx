@@ -3,7 +3,7 @@
  *
  * One entry point (cloud up/down icon) opens a single dialog with two tabs:
  *   - Download: local file save (capsule or full) — delegates to onExportHistory
- *   - Share:    publish to cloud + get share link — delegates to onPublishCapsule
+ *   - Share:    publish to cloud + get share link — delegated through the submit-coordinator seam (account / guest target resolved at submit time)
  *
  * This replaces the previous stacked PublishTrigger + ExportTrigger pair so the
  * action lane has one compact, discoverable control instead of two tiny ones.

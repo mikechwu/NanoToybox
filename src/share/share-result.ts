@@ -4,12 +4,12 @@
  * UI layer nor the runtime can re-declare its own slightly-different
  * shape and drift.
  *
- * Scope guardrail (§Frontend Result Contract in the implementation
- * plan): v1 keeps the prepared publisher strictly account-mode and uses
- * `ShareResultAccount` for its return type. `ShareResultGuest` is
- * produced only by the new `onConfirmGuestShare` store callback and
- * consumed by `TimelineBar.shareResult: ShareResult | null` for UI
- * branching.
+ * Scope: after the Phase 1 architecture trim, the prepared-capsule
+ * service is mode-neutral. `ShareResultAccount` is produced by the
+ * `publishPreparedAccountCapsule` / full-account callbacks;
+ * `ShareResultGuest` is produced by the `publishPreparedGuestCapsule` /
+ * full-guest callbacks. `TimelineBar.shareResult: ShareResult | null`
+ * branches the success UI on the discriminator.
  */
 
 export type ShareResultAccount = {

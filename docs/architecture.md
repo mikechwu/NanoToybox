@@ -100,7 +100,7 @@ This split is the main load-bearing decision in the frontend. It lets the test s
 
 Lab is the authoring surface. Users pick a structure from the library, place it on the canvas, drag and rotate to assemble a scene, run the simulation, record a timeline, and export. Every one of those actions touches the store, which renders the UI, and issues commands into the runtime, which mutates the scene and physics.
 
-The composition root is the top-level entry script under `lab/js/` (`lab/js/main.ts`). It wires a worker, a renderer, a store, and every feature runtime module together in a fixed boot order, then hands control to the per-frame pipeline. Each runtime subfolder owns one subsystem; a small set of top-level seams live at the runtime root on purpose (auth, scene, onboarding, UI bindings, publish-size heuristics, prepared-capsule publisher).
+The composition root is the top-level entry script under `lab/js/` (`lab/js/main.ts`). It wires a worker, a renderer, a store, and every feature runtime module together in a fixed boot order, then hands control to the per-frame pipeline. Each runtime subfolder owns one subsystem; a small set of top-level seams live at the runtime root on purpose (auth, scene, onboarding, UI bindings, publish-size heuristics, prepared-capsule service).
 
 | Folder | Owns |
 |---|---|
@@ -113,7 +113,7 @@ The composition root is the top-level entry script under `lab/js/` (`lab/js/main
 | `lab/js/runtime/placement/` | Placement solver + camera framing |
 | `lab/js/runtime/timeline/` | Simulation timeline, recording orchestrator, context capture, atom identity, history export, restart-state adapter |
 | `lab/js/runtime/worker/` | Worker lifecycle, snapshot reconciler, reconciled steps |
-| `lab/js/runtime/` (root) | Top-level seams kept at root by design: auth-runtime, scene-runtime, onboarding, ui-bindings, publish-size, publish-capsule-artifacts (`PreparedCapsulePublisher` — shared prepare/publish seam used by both the publish button and the oversize trim-mode flow), build-capsule-artifact, physics-config-store-sync, publish-errors |
+| `lab/js/runtime/` (root) | Top-level seams kept at root by design: auth-runtime, scene-runtime, onboarding, ui-bindings, publish-size, build-capsule-artifact, physics-config-store-sync, publish-errors, share-auth-types (dependency-free `AuthStatus` + `PublicConfig` home; the store re-exports for back-compat), prepared-capsule-service (mode-neutral preparation: prepare/cache/cancel + `assertPreparedCapsuleFresh` + `getPreparedCapsuleArtifact`), per-mode POST helpers (post-account-capsule, post-guest-capsule), per-mode prepared executors (publish-prepared-account-capsule, publish-prepared-guest-capsule — each calls `assertPreparedCapsuleFresh` then the matching POST helper), trim-submit-coordinator (pure `resolveTrimSubmitTarget(action, authStatus, publicConfig, turnstileToken)` → `ok | unavailable` with reasons `auth-required` / `unverified` / `guest-disabled` / `config-missing` / `verification-required`) |
 | `lab/js/components/` | React UI: dock, settings sheet, structure chooser, status bar, review-locked controls |
 | `lab/js/components/timeline/` | Timeline UI family: TimelineBar, clear/export/transfer dialogs, format, hints, mode switch, performance, after-paint |
 | `lab/js/store/` | Zustand store + selectors |
@@ -123,6 +123,16 @@ Lab is **React-authoritative** for UI: every surface is a React component backed
 Where to add code → see [contributing.md#extension-points](contributing.md#extension-points).
 
 The surface area looks broad, but most features land in exactly one subfolder. The hard calls are when a feature spans subsystems (a new bonded-group highlight that also needs a camera target, for example); those cases are covered in the contributing doc.
+
+#### Capsule publish architecture
+
+The Lab share/trim flow is split into three layers so the mode decision (account vs guest) lives at the submit boundary, not in preparation:
+
+- **Selection / UI layer** — `lab/js/components/timeline/TimelineBar.tsx` owns surface gating and submit dispatch. The Share entry surface gate is `canOpenShareSurface = hasRange && (onPublishFullAccountCapsule || onPublishFullGuestCapsule)`. All four executor callbacks (`onPublishFullAccountCapsule`, `onPublishFullGuestCapsule`, `onPublishPreparedAccountCapsule`, `onPublishPreparedGuestCapsule`) are invoked exactly once each, all inside a single `dispatchShareSubmit` switch keyed off `resolveTrimSubmitTarget`; a `surfaceUnavailable(reason)` helper maps coordinator unavailability to in-context UI copy.
+- **Preparation layer** — `lab/js/runtime/prepared-capsule-service.ts` is the mode-neutral preparation seam (prepare / cache / cancel) and the **sole owner** of `assertPreparedCapsuleFresh` and `getPreparedCapsuleArtifact`. Preparation does not know whether the eventual write is an account POST or a guest POST.
+- **Publish layer** — per-mode POST helpers (`post-account-capsule.ts`, `post-guest-capsule.ts`) and per-mode prepared executors (`publish-prepared-account-capsule.ts`, `publish-prepared-guest-capsule.ts`, each composing `assertPreparedCapsuleFresh` with the matching POST helper). The `trim-submit-coordinator.ts` resolves the `TrimSubmitTarget` from `(action, authStatus, publicConfig, turnstileToken)` at submit time, so the mode decision is computed once at the seam where the user actually commits.
+
+TimelineCallbacks names mirror the layer split: `onPublishFullAccountCapsule` / `onPublishFullGuestCapsule` (full publish, mode-tagged), `onPrepareCapsuleTrim` (mode-neutral preparation), `onPublishPreparedAccountCapsule` / `onPublishPreparedGuestCapsule` (prepared executors), and `onCancelPreparedCapsule` (cancel). The store re-exports `AuthStatus` and `PublicConfig` from `share-auth-types.ts` for back-compat. See [decisions.md](decisions.md) D153 (three-layer mode-neutral publish architecture).
 
 ### Watch <a id="watch"></a>
 

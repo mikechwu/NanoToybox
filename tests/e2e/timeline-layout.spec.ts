@@ -39,7 +39,7 @@ async function waitForUIState(page: import('@playwright/test').Page) {
  * near the right edge. Uses the useAppStore test surface that the existing
  * timeline-bar-lifecycle tests rely on for the timeline state update API.
  *
- * Also installs a minimal onPublishCapsule callback so the stacked share
+ * Also installs a minimal onPublishFullAccountCapsule callback so the stacked share
  * slot renders (which is the collision regression we are guarding).
  */
 async function driveToReviewWithRestartNearEdge(page: import('@playwright/test').Page) {
@@ -60,7 +60,7 @@ async function driveToReviewWithRestartNearEdge(page: import('@playwright/test')
         onRestartFromHere: () => {},
         onStartRecordingNow: () => {},
         onTurnRecordingOff: () => {},
-        onPublishCapsule: async () => ({ shareCode: 'TEST12345678', shareUrl: 'https://atomdojo.pages.dev/c/TEST12345678' }),
+        onPublishFullAccountCapsule: async () => ({ mode: 'account' as const, shareCode: 'TEST12345678', shareUrl: 'https://atomdojo.pages.dev/c/TEST12345678' }),
         onExportHistory: async () => 'saved' as const,
         onPauseForExport: () => true,
         onResumeFromExport: () => {},

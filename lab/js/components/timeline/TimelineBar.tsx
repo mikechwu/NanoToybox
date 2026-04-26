@@ -49,7 +49,12 @@ import {
   GuestAgeAttestationError,
   GuestQuotaExceededError,
   GuestPublishDisabledError,
-} from '../../runtime/publish-guest-artifact';
+} from '../../runtime/post-guest-capsule';
+import {
+  resolveTrimSubmitTarget,
+  type TrimSubmitAction,
+  type TrimSubmitUnavailableReason,
+} from '../../runtime/trim-submit-coordinator';
 
 /** Minimal Turnstile widget handle the dialog owns and hands back to
  *  TimelineBar via a mutable ref. Keeps the widget lifecycle local to
@@ -230,7 +235,8 @@ function TimelineBarActive() {
   const authStatus = useAppStore((s) => s.auth.status);
   const authCallbacks = useAppStore((s) => s.authCallbacks);
   const authPopupBlocked = useAppStore((s) => s.authPopupBlocked);
-  const guestPublishConfig = useAppStore((s) => s.publicConfig.guestPublish);
+  const publicConfig = useAppStore((s) => s.publicConfig);
+  const guestPublishConfig = publicConfig.guestPublish;
   const shareTabOpenRequested = useAppStore((s) => s.shareTabOpenRequested);
 
   const trackRef = useRef<HTMLDivElement>(null);
@@ -427,7 +433,7 @@ function TimelineBarActive() {
   // Monotonic run id used by the async default-selection search and by
   // the drag-end measurement. Both compare captured runId vs. current
   // after every await — any mismatch drops the result AND evicts the
-  // cache entry via onCancelPreparedPublish.
+  // cache entry via onCancelPreparedCapsule.
   const trimRunIdRef = useRef(0);
   // Best prepared artifact held during the default-selection search.
   // Wrapped as HeldPreparedCapsule so we can always prove range
@@ -492,8 +498,30 @@ function TimelineBarActive() {
   // This keeps the dialog honest during callback-wiring transitions and
   // prevents dead tabs (stored artifact exists but no runtime handler).
   const downloadActionAvailable = !!callbacks?.onExportHistory && exportAvailable;
-  const shareAvailable = !!callbacks?.onPublishCapsule && hasRange;
-  const showTransfer = hasRange && (downloadActionAvailable || shareAvailable);
+  /**
+   * Should the Share *entry surface* (Transfer dialog Share tab) be
+   * reachable?
+   *
+   * Mode-neutral by construction: the surface opens whenever there is
+   * a range to share AND at least one full-publish executor is wired —
+   * account, guest, or both. The submit-coordinator seam
+   * (`resolveTrimSubmitTarget` + `dispatchShareSubmit`) decides which
+   * target a click resolves to at submit time, including signed-out →
+   * auth-prompt and Quick-Share-with-no-token → verification-required.
+   *
+   * Why surface-shaped, not account-shaped: the architecture below
+   * this gate already supports either target. A configuration that
+   * intentionally disables the account full-publish callback while
+   * keeping guest enabled (or vice versa) must still light up the
+   * share surface — otherwise the wired guest path becomes
+   * unreachable from the UI. This predicate is the one remaining
+   * place where that mode-neutrality has to be expressed.
+   */
+  const canOpenShareSurface = hasRange && (
+    !!callbacks?.onPublishFullAccountCapsule
+    || !!callbacks?.onPublishFullGuestCapsule
+  );
+  const showTransfer = hasRange && (downloadActionAvailable || canOpenShareSurface);
 
   // Mounted ref for safe async state updates after dialog close or unmount
   const mountedRef = useRef(true);
@@ -503,7 +531,7 @@ function TimelineBarActive() {
   //
   // Problem without this: the `showTransfer` auto-close guard (see
   // `useEffect` below) can invoke `closeTransferSession` while a publish
-  // is still awaiting `onPublishCapsule`. When the publish resolves, it
+  // is still awaiting the publish executor. When the publish resolves, it
   // would land `setShareResult(result)` after state was cleared, leaving
   // a stale shareUrl/warnings visible the next time the dialog opens.
   //
@@ -536,7 +564,7 @@ function TimelineBarActive() {
     if (trimSearchCancelRef.current) { trimSearchCancelRef.current(); trimSearchCancelRef.current = null; }
     if (trimDragPrepareCancelRef.current) { trimDragPrepareCancelRef.current(); trimDragPrepareCancelRef.current = null; }
     const trim = shareTrimStateRef.current;
-    const evictCb = callbacks?.onCancelPreparedPublish;
+    const evictCb = callbacks?.onCancelPreparedCapsule;
     if (evictCb) {
       if (trim.preparedArtifact) evictCb(trim.preparedArtifact.prepareId);
       if (bestPreparedRef.current) evictCb(bestPreparedRef.current.prepareId);
@@ -604,9 +632,9 @@ function TimelineBarActive() {
     transferDidPause.current = pauseForTransfer();
     // Default to Share tab (Phase 6 Auth UX contract) — the cross-session,
     // higher-value path. Fall back to Download only when Share is not
-    // actionable (no publishCapsule callback or no recorded range).
-    transferDialog.request(shareAvailable ? 'share' : 'download');
-  }, [clear, preferredKind, pauseForTransfer, transferDialog, shareAvailable]);
+    // actionable (no full-account publish callback or no recorded range).
+    transferDialog.request(canOpenShareSurface ? 'share' : 'download');
+  }, [clear, preferredKind, pauseForTransfer, transferDialog, canOpenShareSurface]);
 
   const openClear = useCallback(() => {
     // Route through closeTransfer so a trim-active Cancel path
@@ -671,7 +699,7 @@ function TimelineBarActive() {
   // consumer's first effect run. The store-side consume is idempotent
   // across remounts — the flag stays set until explicitly consumed.
   useEffect(() => {
-    if (!shareTabOpenRequested || !shareAvailable) return;
+    if (!shareTabOpenRequested || !canOpenShareSurface) return;
     if (!useAppStore.getState().consumeShareTabOpen()) return;
     setDownloadKind(preferredKind);
     setDownloadSubmitting(false);
@@ -683,7 +711,7 @@ function TimelineBarActive() {
     transferDidPause.current = pauseForTransfer();
     transferDialog.request('share');
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shareTabOpenRequested, shareAvailable]);
+  }, [shareTabOpenRequested, canOpenShareSurface]);
 
   // Async estimate computation — the artifact build + JSON.stringify
   // cost lives behind three guards to keep it off the Transfer-click
@@ -785,30 +813,149 @@ function TimelineBarActive() {
   // Share panel only — rendered when `publicConfig.guestPublish.enabled`
   // + a non-null `turnstileSiteKey`). The dialog owns the widget
   // lifecycle and surfaces a controller ref that TimelineBar reads
-  // from at submit time.
+  // from at submit time. The submit-coordinator seam (§H) snapshots
+  // the token once per submit click.
   const guestTurnstileControllerRef = useRef<GuestTurnstileController | null>(null);
 
+  /** In-context copy for each unavailability reason returned by
+   *  `resolveTrimSubmitTarget`. Replaces the previous "if guest and no
+   *  token then early-return" branch in `handleConfirmGuestShare` — the
+   *  coordinator now classifies these uniformly.
+   *
+   *  Exhaustiveness: the `default` arm uses a `never`-typed binding so a
+   *  future `TrimSubmitUnavailableReason` variant fails the typecheck
+   *  AND, at runtime, surfaces a generic error + diagnostic id rather
+   *  than silently no-op'ing the click. */
+  const surfaceUnavailable = useCallback((reason: TrimSubmitUnavailableReason) => {
+    switch (reason) {
+      case 'auth-required':
+        setShareError({ kind: 'auth', message: 'Sign in to publish to your account.' });
+        return;
+      case 'unverified':
+        setShareError({ kind: 'other', message: 'Account status is unknown. Try again in a moment.' });
+        return;
+      case 'guest-disabled':
+        setShareError({ kind: 'other', message: 'Quick Share is not currently available. Please sign in to publish.' });
+        return;
+      case 'config-missing':
+        setShareError({ kind: 'other', message: 'Quick Share is temporarily unavailable. Please try again in a minute or sign in to publish.' });
+        return;
+      case 'verification-required':
+        setShareError({ kind: 'other', message: 'Verification required. Please solve the challenge above.' });
+        return;
+      default: {
+        const _exhaustive: never = reason;
+        console.error('[TimelineBar] SHARE_UNAVAILABLE_UNHANDLED:', _exhaustive);
+        setShareError({ kind: 'other', message: 'Share is unavailable.' });
+        return;
+      }
+    }
+  }, []);
+
+  /**
+   * Single submit-coordinator dispatch (§H). Resolves the
+   * `TrimSubmitTarget` once from the action + current auth + current
+   * public config + current Turnstile token snapshot, then dispatches
+   * to the matching prepared/full executor callback. The four executor
+   * callback names appear in this function and nowhere else in
+   * `TimelineBar` — the structural rule the audit asserts.
+   */
+  type ShareDispatchOutcome =
+    | { kind: 'ok'; result: ShareResult }
+    | { kind: 'unavailable'; reason: TrimSubmitUnavailableReason };
+  const dispatchShareSubmit = useCallback(async (input: {
+    action: TrimSubmitAction;
+    /** When non-null, dispatches to the prepared (trim) executor for
+     *  the resolved target; when null, dispatches to the full-history
+     *  executor. */
+    trim: { prepareId: string } | null;
+  }): Promise<ShareDispatchOutcome> => {
+    const resolved = resolveTrimSubmitTarget({
+      action: input.action,
+      authStatus,
+      publicConfig,
+      turnstileToken: guestTurnstileControllerRef.current?.getToken?.() ?? null,
+    });
+    if (resolved.kind === 'unavailable') {
+      return { kind: 'unavailable', reason: resolved.reason };
+    }
+    // Missing-callback diagnostic: throws a user-visible message, but
+    // also logs `SHARE_DISPATCH_NO_CALLBACK:<name>` so a wiring bug
+    // (e.g. main.ts factory regression that drops an executor) is
+    // visible in support tickets / Sentry rather than masquerading as
+    // a generic "share failed" string.
+    const SHARE_UNAVAILABLE = 'Share is not available right now.';
+    const QUICK_SHARE_UNAVAILABLE = 'Quick Share is not available right now.';
+    const missingCallback = (name: string, message: string): Error => {
+      console.error(`[TimelineBar] SHARE_DISPATCH_NO_CALLBACK:${name}`);
+      return new Error(message);
+    };
+    // Single coordinator-dispatch switch — the four executor
+    // callbacks (`onPublishFullAccountCapsule`,
+    // `onPublishFullGuestCapsule`, `onPublishPreparedAccountCapsule`,
+    // `onPublishPreparedGuestCapsule`) appear ONLY here.
+    if (input.trim) {
+      if (resolved.target === 'account') {
+        if (!callbacks?.onPublishPreparedAccountCapsule) {
+          throw missingCallback('onPublishPreparedAccountCapsule', SHARE_UNAVAILABLE);
+        }
+        const result = await callbacks.onPublishPreparedAccountCapsule(input.trim.prepareId);
+        return { kind: 'ok', result };
+      }
+      if (!callbacks?.onPublishPreparedGuestCapsule) {
+        throw missingCallback('onPublishPreparedGuestCapsule', QUICK_SHARE_UNAVAILABLE);
+      }
+      const result = await callbacks.onPublishPreparedGuestCapsule(
+        input.trim.prepareId,
+        resolved.turnstileToken,
+      );
+      return { kind: 'ok', result };
+    }
+    if (resolved.target === 'account') {
+      if (!callbacks?.onPublishFullAccountCapsule) {
+        throw missingCallback('onPublishFullAccountCapsule', SHARE_UNAVAILABLE);
+      }
+      const result = await callbacks.onPublishFullAccountCapsule();
+      return { kind: 'ok', result };
+    }
+    if (!callbacks?.onPublishFullGuestCapsule) {
+      throw missingCallback('onPublishFullGuestCapsule', QUICK_SHARE_UNAVAILABLE);
+    }
+    const result = await callbacks.onPublishFullGuestCapsule(resolved.turnstileToken);
+    return { kind: 'ok', result };
+  }, [callbacks, authStatus, publicConfig]);
+
+  /**
+   * Common post-`dispatchShareSubmit` finalize for the FULL-history
+   * handlers (`handleConfirmGuestShare`, `handleShareConfirm`).
+   *
+   * Gates on mount + run-id, surfaces unavailability via
+   * `surfaceUnavailable`, otherwise commits the result. Returns true
+   * when the success path ran (caller may extend with mode-specific
+   * post-success work; today neither full handler does, but the
+   * trim handler intentionally inlines its own finalize because the
+   * post-success work — restoring review state, clearing trim — is
+   * trim-specific).
+   */
+  const finalizeFullShareOutcome = useCallback((runId: number, outcome: ShareDispatchOutcome): boolean => {
+    if (!mountedRef.current || shareRunIdRef.current !== runId) return false;
+    if (outcome.kind === 'unavailable') {
+      surfaceUnavailable(outcome.reason);
+      setShareSubmitting(false);
+      return false;
+    }
+    setShareResult(outcome.result);
+    setShareSubmitting(false);
+    return true;
+  }, [surfaceUnavailable]);
+
   const handleConfirmGuestShare = useCallback(async () => {
-    if (!callbacks?.onConfirmGuestShare) {
-      setShareError({ kind: 'other', message: 'Quick Share is not available right now.' });
-      return;
-    }
-    const token = guestTurnstileControllerRef.current?.getToken?.() ?? null;
-    if (!token) {
-      setShareError({
-        kind: 'other',
-        message: 'Verification required. Please solve the challenge above.',
-      });
-      return;
-    }
     const runId = ++shareRunIdRef.current;
     setShareSubmitting(true);
     setShareError(null);
+    let outcome: ShareDispatchOutcome;
     try {
-      const result = await callbacks.onConfirmGuestShare(token);
-      if (!mountedRef.current || shareRunIdRef.current !== runId) return;
-      setShareResult(result);
-      setShareSubmitting(false);
+      outcome = await dispatchShareSubmit({ action: 'quick-share', trim: null });
     } catch (e) {
       if (!mountedRef.current || shareRunIdRef.current !== runId) return;
       // Guest-specific error mapping — see §TimelineBar Ownership.
@@ -851,25 +998,21 @@ function TimelineBarActive() {
         message: e instanceof Error ? e.message : 'Share failed.',
       });
       setShareSubmitting(false);
-    }
-  }, [callbacks]);
-
-  const handleShareConfirm = useCallback(async () => {
-    if (!callbacks?.onPublishCapsule) {
-      setShareError({ kind: 'other', message: 'Share is not available right now.' });
       return;
     }
+    finalizeFullShareOutcome(runId, outcome);
+  }, [dispatchShareSubmit, finalizeFullShareOutcome]);
+
+  const handleShareConfirm = useCallback(async () => {
     // Capture the generation at submit time. If closeTransferSession
     // runs while this await is pending, the generation moves and we
     // drop the late result — the dialog has been torn down.
     const runId = ++shareRunIdRef.current;
     setShareSubmitting(true);
     setShareError(null);
+    let outcome: ShareDispatchOutcome;
     try {
-      const result = await callbacks.onPublishCapsule();
-      if (!mountedRef.current || shareRunIdRef.current !== runId) return;
-      setShareResult(result);
-      setShareSubmitting(false);
+      outcome = await dispatchShareSubmit({ action: 'share-account', trim: null });
     } catch (e) {
       if (!mountedRef.current || shareRunIdRef.current !== runId) return;
       if (isPublishOversizeError(e)) {
@@ -918,14 +1061,16 @@ function TimelineBarActive() {
         message: e instanceof Error ? e.message : 'Share failed.',
       });
       setShareSubmitting(false);
+      return;
     }
-  }, [callbacks]);
+    finalizeFullShareOutcome(runId, outcome);
+  }, [dispatchShareSubmit, finalizeFullShareOutcome]);
 
   // ── Trim-mode machinery ──
 
   const cancelPreparedRef = useRef<((id: string) => void) | null>(null);
   useEffect(() => {
-    cancelPreparedRef.current = callbacks?.onCancelPreparedPublish ?? null;
+    cancelPreparedRef.current = callbacks?.onCancelPreparedCapsule ?? null;
   }, [callbacks]);
 
   const clampTrimRange = useCallback((
@@ -957,10 +1102,27 @@ function TimelineBarActive() {
     };
   }, []);
 
+  // Once-only diagnostic for missing `onCancelPreparedCapsule` wiring.
+  // A no-op cancel is unsafe in steady state — the prepared-capsule
+  // service cache fills toward `maxCacheEntries` before the bound
+  // evicts oldest, but no user-visible signal is emitted. Logging
+  // the first missing-cancel makes a wiring regression visible
+  // in support tickets / Sentry without spamming the console for
+  // every subsequent cancel.
+  const cancelPreparedMissingLoggedRef = useRef(false);
   const cancelPrepared = useCallback((prepareId: string | null | undefined) => {
     if (!prepareId) return;
     const cb = cancelPreparedRef.current;
-    if (cb) cb(prepareId);
+    if (cb) {
+      cb(prepareId);
+      return;
+    }
+    if (!cancelPreparedMissingLoggedRef.current) {
+      cancelPreparedMissingLoggedRef.current = true;
+      console.error(
+        '[TimelineBar] PREPARED_CAPSULE_CANCEL_NOT_WIRED — onCancelPreparedCapsule is missing; prepared-capsule cache will not be evicted until its size bound trips.',
+      );
+    }
   }, []);
 
   const cancelInFlightTrimSearch = useCallback(() => {
@@ -1053,7 +1215,7 @@ function TimelineBarActive() {
     endFrameIndex: number,
   ) => {
     const n = frames.length;
-    const prepare = callbacks?.onPrepareCapsulePublish;
+    const prepare = callbacks?.onPrepareCapsuleTrim;
     if (!prepare) {
       patchActiveTrim(runId, { safeStatus: 'unavailable' });
       return;
@@ -1402,7 +1564,7 @@ function TimelineBarActive() {
       trimDragPrepareCancelRef.current();
       trimDragPrepareCancelRef.current = null;
     }
-    const prepare = callbacks?.onPrepareCapsulePublish;
+    const prepare = callbacks?.onPrepareCapsuleTrim;
     if (!prepare) return;
     trimDragPrepareCancelRef.current = scheduleAfterNextPaint(async () => {
       if (runId !== trimRunIdRef.current) return;
@@ -1501,9 +1663,8 @@ function TimelineBarActive() {
 
   const handleConfirmShareTrim = useCallback(async () => {
     if (shareMeasuring || shareSubmitting) return; // no-op second click
-    const prepare = callbacks?.onPrepareCapsulePublish;
-    const publishPrepared = callbacks?.onPublishPreparedCapsule;
-    if (!prepare || !publishPrepared) {
+    const prepare = callbacks?.onPrepareCapsuleTrim;
+    if (!prepare) {
       setShareError({ kind: 'other', message: 'Share is not available right now.' });
       return;
     }
@@ -1619,25 +1780,22 @@ function TimelineBarActive() {
       return;
     }
 
-    // Phase 3 — Submit.
+    // Phase 3 — Submit. Routed through the submit-coordinator seam so
+    // the dispatch resolves the target (account vs. guest) at submit
+    // time from action + auth + config + Turnstile token. Trim today
+    // only exposes an account share button; the seam still classifies
+    // the submit so the structural rule (one call site per executor
+    // callback, all inside the dispatcher) holds uniformly across
+    // full-history and prepared submits.
     setShareMeasuring(false);
     setShareSubmitting(true);
     setShareError(null);
+    let outcome: ShareDispatchOutcome;
     try {
-      const result = await publishPrepared(held.prepareId);
-      if (!mountedRef.current || trimRunIdRef.current !== runId) return;
-      // Record pending-restore BEFORE clearing trim state so the
-      // close-after-success policy has what it needs.
-      setPendingTrimSuccessRestore({
-        prevReviewState: captured.prevReviewState,
-        userInteractedAfterSuccess: false,
+      outcome = await dispatchShareSubmit({
+        action: 'share-account',
+        trim: { prepareId: held.prepareId },
       });
-      setShareResult(result);
-      setShareSubmitting(false);
-      // Clear trim state so the success branch renders.
-      cancelInFlightTrimSearch();
-      cancelInFlightTrimDragPrepare();
-      setShareTrimState(initialShareTrim);
     } catch (e) {
       if (!mountedRef.current) return;
       setShareSubmitting(false);
@@ -1681,9 +1839,33 @@ function TimelineBarActive() {
         kind: 'other',
         message: e instanceof Error ? e.message : 'Share failed.',
       });
+      return;
     }
+    if (!mountedRef.current || trimRunIdRef.current !== runId) return;
+    if (outcome.kind === 'unavailable') {
+      // The trim path requires the matching target. Surface the
+      // reason (e.g. sign-out mid-trim → 'auth-required'); the
+      // prepared bytes remain in the service cache for the user to
+      // re-submit after signing back in (snapshot recheck still gates
+      // reuse).
+      surfaceUnavailable(outcome.reason);
+      setShareSubmitting(false);
+      return;
+    }
+    // Record pending-restore BEFORE clearing trim state so the
+    // close-after-success policy has what it needs.
+    setPendingTrimSuccessRestore({
+      prevReviewState: captured.prevReviewState,
+      userInteractedAfterSuccess: false,
+    });
+    setShareResult(outcome.result);
+    setShareSubmitting(false);
+    // Clear trim state so the success branch renders.
+    cancelInFlightTrimSearch();
+    cancelInFlightTrimDragPrepare();
+    setShareTrimState(initialShareTrim);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [callbacks, shareMeasuring, shareSubmitting, cancelPrepared, abortSearchSnapshotStale, cancelInFlightTrimSearch, cancelInFlightTrimDragPrepare, enterTrimMode]);
+  }, [callbacks, shareMeasuring, shareSubmitting, cancelPrepared, abortSearchSnapshotStale, cancelInFlightTrimSearch, cancelInFlightTrimDragPrepare, enterTrimMode, dispatchShareSubmit, surfaceUnavailable]);
 
   const handleDownloadCapsuleFromShareFallback = useCallback(async () => {
     if (!callbacks?.onExportHistory) {
@@ -2051,13 +2233,13 @@ function TimelineBarActive() {
   // the switch.
   useEffect(() => {
     if (!transferDialog.open) return;
-    if (transferDialog.tab === 'download' && !downloadActionAvailable && shareAvailable) {
+    if (transferDialog.tab === 'download' && !downloadActionAvailable && canOpenShareSurface) {
       transferDialog.setTab('share');
-    } else if (transferDialog.tab === 'share' && !shareAvailable && downloadActionAvailable) {
+    } else if (transferDialog.tab === 'share' && !canOpenShareSurface && downloadActionAvailable) {
       transferDialog.setTab('download');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transferDialog.open, transferDialog.tab, downloadActionAvailable, shareAvailable]);
+  }, [transferDialog.open, transferDialog.tab, downloadActionAvailable, canOpenShareSurface]);
 
   // Width-aware restart anchor clamp + pointer-offset compensation.
   //
@@ -2411,8 +2593,19 @@ function TimelineBarActive() {
         fullEstimate={estimates.full}
         capsuleEstimate={estimates.capsule}
 
-        shareTabAvailable={shareAvailable}
-        shareConfirmEnabled={shareAvailable && authStatus === 'signed-in'}
+        shareTabAvailable={canOpenShareSurface}
+        // The "Publish" confirm specifically dispatches the account
+        // full-publish executor — the broader surface gate
+        // (`canOpenShareSurface`) lets the panel render even when
+        // only guest is wired, but the account-confirm button must
+        // still require the account callback to be wired AND a
+        // signed-in user. Quick Share has its own confirm inside the
+        // panel.
+        shareConfirmEnabled={
+          !!callbacks?.onPublishFullAccountCapsule
+          && hasRange
+          && authStatus === 'signed-in'
+        }
         onConfirmShare={handleShareConfirm}
         guestPublishConfig={guestPublishConfig}
         guestTurnstileControllerRef={guestTurnstileControllerRef}

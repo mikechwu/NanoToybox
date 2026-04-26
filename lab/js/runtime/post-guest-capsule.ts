@@ -1,20 +1,26 @@
 /**
- * Guest Quick Share publisher (anonymous POST path).
+ * Guest Quick Share POST helper (anonymous POST path).
+ *
+ * Single owner of fetch + 4xx/5xx error mapping for
+ * `/api/capsules/guest-publish`. Both the full-history guest publish
+ * (in `main.ts`) and the prepared-publish executor
+ * (`publish-prepared-guest-capsule.ts`) call this function, so
+ * server-error semantics cannot drift between them.
  *
  * Mirrors the auth-path byte-identity invariant from
- * {@link ./publish-capsule-artifacts.ts}: the raw capsule JSON is the
- * POST body, and Turnstile/age attestation travel in headers. The
- * measured capsule bytes must equal the POSTed bytes, so we hand the
+ * {@link ./post-account-capsule.ts}: the raw capsule JSON is the POST
+ * body, and Turnstile/age attestation travel in headers. The measured
+ * capsule bytes must equal the POSTed bytes, so we hand the
  * CapsuleArtifact's `json` through unchanged.
  *
- * v1 does NOT support oversize trim (§Oversize Interaction). The
- * Transfer dialog disables `Continue as Guest` above MAX_PUBLISH_BYTES.
- * If the user's capture still makes it here at oversize, we throw the
- * same `PublishOversizeError` shape the auth path uses so the existing
- * error mapping keeps working.
+ * Mode-specific by design — guest error types (GuestTurnstileError,
+ * GuestQuotaExceededError, etc.) live in this module and never cross
+ * into the account POST helper. Trim entry through
+ * `publish-prepared-guest-capsule.ts` calls `assertPreparedCapsuleFresh`
+ * before invoking this helper.
  */
 
-import type { CapsuleArtifact } from './publish-capsule-artifacts';
+import type { CapsuleArtifact } from './prepared-capsule-service';
 import { PublishOversizeError } from './publish-errors';
 import type { ShareResultGuest } from '../../../src/share/share-result';
 import { MAX_PUBLISH_BYTES } from '../../../src/share/constants';
@@ -179,7 +185,14 @@ export async function postGuestCapsuleArtifact(
       throw new Error('Publish is temporarily unavailable. Please try again in a minute.');
     }
     let detail = `status ${res.status}`;
-    try { detail = (await res.text()) || detail; } catch { /* keep status */ }
+    try {
+      detail = (await res.text()) || detail;
+    } catch (err) {
+      // Text body unreadable on the generic non-ok branch — degrade
+      // to status-only. Logged so an unreadable body doesn't look
+      // identical to a clean status-only response in ops dashboards.
+      console.warn(`[guest-publish] POST_GUEST_${res.status}_BODY_READ_FAILED:`, err);
+    }
     throw new Error(`Publish failed: ${detail}`);
   }
 
@@ -221,7 +234,11 @@ async function readJsonOrNull(res: Response): Promise<Record<string, unknown> | 
   try {
     const body = await res.json();
     return body && typeof body === 'object' ? body as Record<string, unknown> : null;
-  } catch {
+  } catch (err) {
+    // Callers (4xx branches) render a sensible default message; this
+    // breadcrumb makes "server returned unparseable body" look
+    // different from "server returned no body" in support tickets.
+    console.warn(`[guest-publish] POST_GUEST_${res.status}_BODY_NOT_JSON:`, err);
     return null;
   }
 }

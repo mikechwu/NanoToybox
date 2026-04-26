@@ -85,7 +85,17 @@ export interface TimelineCallbacks {
   onPauseForExport?: () => boolean;
   onResumeFromExport?: () => void;
   getExportEstimates?: () => { capsule: string | null; full: string | null };
-  onPublishCapsule?: () => Promise<ShareResultAccount>;
+  /** Full-history account publish (no trim selection). POSTs the
+   *  current capsule artifact via the shared `postAccountCapsuleArtifact`
+   *  helper. May throw PublishOversizeError (preflight or 413),
+   *  AuthRequiredError, AgeConfirmationRequiredError. */
+  onPublishFullAccountCapsule?: () => Promise<ShareResultAccount>;
+  /** Full-history guest publish (no trim selection). Same artifact
+   *  construction as the account path so byte accounting and
+   *  validation stay aligned. The Turnstile token is supplied by the
+   *  submit coordinator (`trim-submit-coordinator.ts`) — callers must
+   *  never invoke without a live token. */
+  onPublishFullGuestCapsule?: (turnstileToken: string) => Promise<ShareResultGuest>;
   /** Read the timeline's dense-frame projection + capsule snapshot id.
    *  Returns null when the capsule publish path is not viable
    *  (identity stale, capsule capability gated off, no frames). Used
@@ -97,30 +107,38 @@ export interface TimelineCallbacks {
   /** Build + serialize the candidate capsule exactly once, cache the
    *  JSON, and return a summary that identifies it via `prepareId`.
    *  The bytes in the returned summary are the bytes that will be
-   *  POSTed by `onPublishPreparedCapsule` — no rebuild, byte-identical.
+   *  POSTed by `onPublishPreparedAccountCapsule` /
+   *  `onPublishPreparedGuestCapsule` — no rebuild, byte-identical.
+   *  Mode-neutral: the same prepared bytes can flow into either
+   *  account or guest publish.
    *  May reject with CapsuleSnapshotStaleError when the range's
    *  snapshotId no longer matches the current export input version. */
-  onPrepareCapsulePublish?: (
+  onPrepareCapsuleTrim?: (
     range: import('../runtime/timeline/capsule-publish-types').CapsuleSelectionRange,
   ) => Promise<import('../runtime/timeline/capsule-publish-types').PreparedCapsuleSummary>;
-  /** POST the cached JSON for the given prepareId. Passes cached bytes
-   *  through unchanged. May throw PublishOversizeError,
-   *  AuthRequiredError, AgeConfirmationRequiredError, or
-   *  CapsuleSnapshotStaleError (on pre-POST snapshot recheck). */
-  onPublishPreparedCapsule?: (
+  /** POST the cached JSON for the given prepareId via the auth-path
+   *  endpoint. The prepared-capsule service runs the snapshot recheck
+   *  before POST. May throw PublishOversizeError, AuthRequiredError,
+   *  AgeConfirmationRequiredError, or CapsuleSnapshotStaleError. */
+  onPublishPreparedAccountCapsule?: (
     prepareId: string,
   ) => Promise<ShareResultAccount>;
-  /** Anonymous Quick Share publish — POST /api/capsules/guest-publish.
-   *  Runtime callback only; returns a `ShareResultGuest` so the
-   *  TimelineBar can branch its success UI on `result.mode`.
-   *  TimelineBar reads the Turnstile token from the dialog-owned
-   *  controller and passes it in; a guest publish without a live token
-   *  must never be attempted. */
-  onConfirmGuestShare?: (turnstileToken: string) => Promise<ShareResultGuest>;
+  /** POST the cached JSON for the given prepareId via the guest
+   *  endpoint with the supplied Turnstile token. The submit
+   *  coordinator (`trim-submit-coordinator.ts`) is the sole source of
+   *  the token — callers must never invoke without a live token. The
+   *  prepared-capsule service runs the snapshot recheck before POST.
+   *  May throw GuestTurnstileError, GuestQuotaExceededError,
+   *  GuestPublishDisabledError, GuestAgeAttestationError,
+   *  PublishOversizeError, or CapsuleSnapshotStaleError. */
+  onPublishPreparedGuestCapsule?: (
+    prepareId: string,
+    turnstileToken: string,
+  ) => Promise<ShareResultGuest>;
   /** Evict the cached JSON for this prepareId. Idempotent. Must be
    *  called on Cancel, Reset, dialog close, snapshot invalidation, and
    *  after any publish attempt completes. */
-  onCancelPreparedPublish?: (prepareId: string) => void;
+  onCancelPreparedCapsule?: (prepareId: string) => void;
 }
 
 /** Authenticated user summary, or null when signed out.
@@ -131,31 +149,14 @@ export interface AuthSessionState {
   displayName: string | null;
 }
 
-/** Public, non-sensitive config surfaced by the session-endpoint bridge.
- *  Guests publish UI keys off `guestPublish.enabled` + a non-null
- *  `guestPublish.turnstileSiteKey` together; either falsy → hide the
- *  Quick Share block. */
-export interface PublicConfig {
-  guestPublish: {
-    enabled: boolean;
-    turnstileSiteKey: string | null;
-  };
-}
-
-/** Discriminator for the Lab-side auth-UX state machine.
- *
- *   - `loading`    — initial /api/auth/session fetch is in flight.
- *   - `signed-in`  — server returned 200 with a valid session payload.
- *   - `signed-out` — server returned 401 (authoritative "you are not
- *                    authenticated"). UI may prompt for OAuth sign-in.
- *   - `unverified` — we could NOT reach a definitive answer. Covers
- *                    network failure, 5xx, or malformed response with
- *                    no prior session to preserve. UI should render a
- *                    neutral retry affordance, NOT an OAuth prompt —
- *                    falsely asserting signed-out during a transport
- *                    blip would mislead the user.
- */
-export type AuthStatus = 'loading' | 'signed-in' | 'signed-out' | 'unverified';
+// `AuthStatus` and `PublicConfig` live in a dependency-free runtime
+// types module so the submit coordinator and other runtime layers can
+// consume the same shapes without importing from the store. Re-exported
+// here for backward compatibility — existing call sites that imported
+// these from `app-store` continue to work, and the store remains the
+// canonical entry point for store-related types.
+export type { AuthStatus, PublicConfig } from '../runtime/share-auth-types';
+import type { PublicConfig } from '../runtime/share-auth-types';
 
 /** Discriminated union — makes impossible states unrepresentable.
  *  Previously `AuthState = { status; session: AuthSessionState | null }`

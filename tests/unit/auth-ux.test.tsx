@@ -52,7 +52,7 @@ function installPublishableTimeline() {
     {
       ...baseTimelineCallbacks,
       onExportHistory: vi.fn(async () => 'saved' as const),
-      onPublishCapsule: vi.fn(async () => ({
+      onPublishFullAccountCapsule: vi.fn(async () => ({
         mode: 'account' as const,
         shareCode: 'AAAA1111BBBB',
         shareUrl: 'https://atomdojo.pages.dev/c/AAAA1111BBBB',
@@ -589,7 +589,7 @@ describe('Transfer dialog — kind-tagged shareError prevents 429-into-signed-ou
         {
           ...baseTimelineCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: onPublish,
+          onPublishFullAccountCapsule: onPublish,
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
         },
@@ -638,7 +638,7 @@ describe('Transfer dialog — kind-tagged shareError prevents 429-into-signed-ou
         {
           ...baseTimelineCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: onPublish,
+          onPublishFullAccountCapsule: onPublish,
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
         },
@@ -673,7 +673,7 @@ describe('Transfer dialog — shareError clears on transition to signed-in', () 
         {
           ...baseTimelineCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: onPublish,
+          onPublishFullAccountCapsule: onPublish,
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
         },
@@ -704,7 +704,7 @@ describe('Transfer dialog — shareError clears on transition to signed-in', () 
         {
           ...baseTimelineCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: vi.fn(async () => {
+          onPublishFullAccountCapsule: vi.fn(async () => {
             throw new AuthRequiredError('Your session expired.');
           }),
           onPauseForExport: vi.fn(() => true),
@@ -1307,7 +1307,7 @@ describe('Transfer dialog — 401 recovery flips Share back to auth prompt', () 
         {
           ...baseTimelineCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: onPublish,
+          onPublishFullAccountCapsule: onPublish,
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
         },
@@ -1345,7 +1345,7 @@ describe('Transfer dialog — 401 recovery flips Share back to auth prompt', () 
 // ── 413 payload-too-large integration: UI renders the size-specific copy ──
 //
 // Proves the full UI flow end-to-end:
-//   signed-in user → click Publish → onPublishCapsule throws the
+//   signed-in user → click Publish → onPublishFullAccountCapsule throws the
 //   413-formatted Error → handleShareConfirm sets shareError with
 //   kind:'other' → signed-in Share panel renders it as a red error.
 // Formatter + parser are covered in tests/unit/publish-client-413.test.ts;
@@ -1362,7 +1362,7 @@ describe('Transfer dialog — 413 payload-too-large renders in Share panel', () 
         {
           ...baseTimelineCallbacks,
           onExportHistory: vi.fn(async () => 'saved' as const),
-          onPublishCapsule: onPublish,
+          onPublishFullAccountCapsule: onPublish,
           onPauseForExport: vi.fn(() => true),
           onResumeFromExport: vi.fn(),
         },

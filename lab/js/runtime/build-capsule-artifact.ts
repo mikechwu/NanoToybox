@@ -29,7 +29,7 @@ import {
   type AtomDojoPlaybackCapsuleFileV1,
 } from '../../../src/history/history-file-v1';
 import { CapsuleSnapshotStaleError } from './publish-errors';
-import type { CapsuleArtifact } from './publish-capsule-artifacts';
+import type { CapsuleArtifact } from './prepared-capsule-service';
 import type {
   CapsuleSelectionRange,
   CapsuleSnapshotId,

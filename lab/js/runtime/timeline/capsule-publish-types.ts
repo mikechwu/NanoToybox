@@ -3,7 +3,7 @@
  *
  * Consumed by app-store (callback shapes), timeline-subsystem (subsystem
  * methods), TimelineBar (trim UI state), main.ts (artifact builder + cache),
- * and publish-capsule-artifacts (publisher factory).
+ * and prepared-capsule-service (preparation factory).
  *
  * This module is dependency-free (no React, no Zustand, no main-thread
  * side effects) so every layer imports the same canonical shapes without
@@ -60,10 +60,54 @@ export interface PreparedCapsuleSummary {
  * prepared for so the trim UI can prove identity before reuse.
  *
  * Scope: USED ONLY BY THE UI LAYER (TimelineBar). Defined here for
- * consistency, but publish-capsule-artifacts.ts, main.ts, and the
- * subsystem do NOT import it — the publisher's API surface is
+ * consistency, but prepared-capsule-service.ts, main.ts, and the
+ * subsystem do NOT import it — the service's API surface is
  * PreparedCapsuleSummary.
  */
 export type HeldPreparedCapsule = PreparedCapsuleSummary & {
   range: CapsuleSelectionRange;
 };
+
+/**
+ * Trim entry kind. Drives whether the preparation layer auto-prepares
+ * on entry (`oversize` → measurement is required up front) or sits in a
+ * deferred-measurement state until submit (`manual`).
+ */
+export type TrimEntryKind = 'manual' | 'oversize';
+
+/**
+ * Measurement policy. A stored value only — the preparation layer reads
+ * it to decide whether to fire a prepare on entry. Selection-layer code
+ * never calls prepare itself.
+ *
+ *   - `deferred` — manual trim. Range may exist with no prepared
+ *                  artifact and no measured bytes; that is a valid
+ *                  non-error state, not a half-broken loading case.
+ *   - `required` — oversize trim. Auto-prepare on entry; default
+ *                  selection search runs.
+ */
+export type TrimMeasurementPolicy = 'deferred' | 'required';
+
+/**
+ * UI/session state for an active trim. This is the canonical model the
+ * UI consumes; concrete React state (TimelineBar's `shareTrimState`)
+ * may carry additional view-only fields, but every load-bearing field
+ * here must be present and behave per this contract.
+ *
+ * `CapsuleTrimUiState` is distinct from the *preparation service* in
+ * `prepared-capsule-service.ts` — the two never share a module or a
+ * name. The UI never owns fetch behavior, prepared-cache policy, or
+ * submit-target pinning.
+ */
+export interface CapsuleTrimUiState {
+  entryKind: TrimEntryKind;
+  measurementPolicy: TrimMeasurementPolicy;
+  snapshotId: CapsuleSnapshotId;
+  frames: CapsuleFrameIndex['frames'];
+  selection: CapsuleSelectionRange;
+  /** Null is a first-class state under `measurementPolicy = 'deferred'`. */
+  preparedArtifact: HeldPreparedCapsule | null;
+  /** Null is a first-class state under `measurementPolicy = 'deferred'`. */
+  measuredBytes: number | null;
+  status: 'idle' | 'preparing' | 'ready' | 'over-limit' | 'unavailable';
+}

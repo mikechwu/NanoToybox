@@ -80,14 +80,14 @@ export interface TimelineSubsystemDeps {
   /** Estimate dependency — returns formatted size strings for both export kinds. */
   getExportEstimates?: () => { capsule: string | null; full: string | null };
   exportCapabilities?: { full: boolean; capsule: boolean };
-  /** Publish dependency — publishes a capsule to cloud storage and returns share info.
-   *  `warnings` carries non-fatal server-reported issues (e.g. quota-accounting
-   *  drift) that the UI should surface subtly without blocking the share. */
-  publishCapsule?: () => Promise<import('../../../../src/share/share-result').ShareResultAccount>;
-  /** Anonymous Quick Share publish — POST /api/capsules/guest-publish.
+  /** Full-history account publish — no trim selection. `warnings`
+   *  carries non-fatal server-reported issues (e.g. quota-accounting
+   *  drift) that the UI surfaces subtly without blocking the share. */
+  publishFullAccountCapsule?: () => Promise<import('../../../../src/share/share-result').ShareResultAccount>;
+  /** Full-history guest publish — POST /api/capsules/guest-publish.
    *  Takes the Turnstile token captured by the dialog's widget
    *  controller; callers must not invoke this without a live token. */
-  publishGuestCapsule?: (turnstileToken: string) => Promise<import('../../../../src/share/share-result').ShareResultGuest>;
+  publishFullGuestCapsule?: (turnstileToken: string) => Promise<import('../../../../src/share/share-result').ShareResultGuest>;
   /** Bonded-group appearance runtime. Owner of appearanceVersion bumps
    *  on color-assignment writes. Optional for back-compat with tests
    *  that construct the subsystem with a minimal dep set; when absent,
@@ -95,13 +95,22 @@ export interface TimelineSubsystemDeps {
    *  `0` and the post-rebuild cleanup falls back to the direct-setState
    *  path (with a diagnostic warn). */
   bondedGroupAppearance?: BondedGroupAppearanceRuntime;
-  /** Trim-mode publisher. When provided, the subsystem exposes
-   *  prepare/publish/cancel through the installed TimelineCallbacks so
-   *  TimelineBar can drive the two-phase submit. `main.ts` constructs
-   *  one publisher at boot and passes its three operations here. */
-  prepareCapsulePublish?: (range: CapsuleSelectionRange) => Promise<PreparedCapsuleSummary>;
-  publishPreparedCapsule?: (prepareId: string) => Promise<import('../../../../src/share/share-result').ShareResultAccount>;
-  cancelPreparedPublish?: (prepareId: string) => void;
+  /** Mode-neutral preparation seam. Builds + serializes the candidate
+   *  capsule once and returns a summary keyed by opaque prepareId.
+   *  Same prepared bytes flow into either prepared executor — submit
+   *  target is resolved at submit time, never inferred here. */
+  prepareCapsuleTrim?: (range: CapsuleSelectionRange) => Promise<PreparedCapsuleSummary>;
+  /** Account-mode prepared-publish executor. Runs
+   *  `assertPreparedCapsuleFresh` then POSTs via `postAccountCapsuleArtifact`. */
+  publishPreparedAccountCapsule?: (prepareId: string) => Promise<import('../../../../src/share/share-result').ShareResultAccount>;
+  /** Guest-mode prepared-publish executor. Runs
+   *  `assertPreparedCapsuleFresh` then POSTs via `postGuestCapsuleArtifact`. */
+  publishPreparedGuestCapsule?: (
+    prepareId: string,
+    turnstileToken: string,
+  ) => Promise<import('../../../../src/share/share-result').ShareResultGuest>;
+  /** Evict the cached JSON for this prepareId. Idempotent. */
+  cancelPreparedCapsule?: (prepareId: string) => void;
 }
 
 /** High-level subsystem handle — main.ts should only use these methods. */
@@ -457,19 +466,24 @@ export function createTimelineSubsystem(deps: TimelineSubsystemDeps): TimelineSu
         },
         onResumeFromExport: () => { deps.resume(); },
         ...(deps.getExportEstimates ? { getExportEstimates: () => deps.getExportEstimates!() } : {}),
-        ...(deps.publishCapsule ? { onPublishCapsule: () => deps.publishCapsule!() } : {}),
-        ...(deps.publishGuestCapsule
-          ? { onConfirmGuestShare: (token: string) => deps.publishGuestCapsule!(token) }
+        ...(deps.publishFullAccountCapsule
+          ? { onPublishFullAccountCapsule: () => deps.publishFullAccountCapsule!() }
+          : {}),
+        ...(deps.publishFullGuestCapsule
+          ? { onPublishFullGuestCapsule: (token: string) => deps.publishFullGuestCapsule!(token) }
           : {}),
         getCapsuleFrameIndex: () => getCapsuleFrameIndex(),
-        ...(deps.prepareCapsulePublish
-          ? { onPrepareCapsulePublish: (range: CapsuleSelectionRange) => deps.prepareCapsulePublish!(range) }
+        ...(deps.prepareCapsuleTrim
+          ? { onPrepareCapsuleTrim: (range: CapsuleSelectionRange) => deps.prepareCapsuleTrim!(range) }
           : {}),
-        ...(deps.publishPreparedCapsule
-          ? { onPublishPreparedCapsule: (prepareId: string) => deps.publishPreparedCapsule!(prepareId) }
+        ...(deps.publishPreparedAccountCapsule
+          ? { onPublishPreparedAccountCapsule: (prepareId: string) => deps.publishPreparedAccountCapsule!(prepareId) }
           : {}),
-        ...(deps.cancelPreparedPublish
-          ? { onCancelPreparedPublish: (prepareId: string) => deps.cancelPreparedPublish!(prepareId) }
+        ...(deps.publishPreparedGuestCapsule
+          ? { onPublishPreparedGuestCapsule: (prepareId: string, token: string) => deps.publishPreparedGuestCapsule!(prepareId, token) }
+          : {}),
+        ...(deps.cancelPreparedCapsule
+          ? { onCancelPreparedCapsule: (prepareId: string) => deps.cancelPreparedCapsule!(prepareId) }
           : {}),
       }, 'ready', currentExportCapability());
     },

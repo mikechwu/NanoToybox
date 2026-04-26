@@ -52,11 +52,13 @@ import { createTimelineSubsystem, type TimelineSubsystem } from './runtime/timel
 import { buildFullHistoryFile, validateFullHistoryFile, buildCapsuleHistoryFile, formatBytes, generateExportFileName, saveHistoryFile, type AtomDojoHistoryFileV1 } from './runtime/timeline/history-export';
 import { validateCapsuleFile, type AtomDojoPlaybackCapsuleFileV1 } from '../../src/history/history-file-v1';
 import {
-  createPreparedCapsulePublisher,
-  postCapsuleArtifact,
+  createPreparedCapsuleService,
   type CapsuleArtifact,
-} from './runtime/publish-capsule-artifacts';
-import { postGuestCapsuleArtifact } from './runtime/publish-guest-artifact';
+} from './runtime/prepared-capsule-service';
+import { postAccountCapsuleArtifact } from './runtime/post-account-capsule';
+import { postGuestCapsuleArtifact } from './runtime/post-guest-capsule';
+import { createPublishPreparedAccountCapsule } from './runtime/publish-prepared-account-capsule';
+import { createPublishPreparedGuestCapsule } from './runtime/publish-prepared-guest-capsule';
 import { buildCapsuleArtifact as buildCapsuleArtifactImpl } from './runtime/build-capsule-artifact';
 import type { CapsuleSelectionRange } from './runtime/timeline/capsule-publish-types';
 import { PublishOversizeError } from './runtime/publish-errors';
@@ -267,7 +269,9 @@ let _bondedGroupAppearance: BondedGroupAppearanceRuntime | null = null;
 
 // Simulation timeline subsystem
 let _timelineSub: TimelineSubsystem | null = null;
-let _capsulePublisher: ReturnType<typeof createPreparedCapsulePublisher> | null = null;
+let _capsuleService: ReturnType<typeof createPreparedCapsuleService> | null = null;
+let _publishPreparedAccount: ReturnType<typeof createPublishPreparedAccountCapsule> | null = null;
+let _publishPreparedGuest: ReturnType<typeof createPublishPreparedGuestCapsule> | null = null;
 /** Track the last reconciled snapshot version to avoid double-counting steps. */
 let _lastReconciledSnapshotVersion = -1;
 /** Frozen visible-anchor set for placement framing (captured at placement start). */
@@ -922,14 +926,20 @@ async function init() {
     return buildCapsuleArtifact(null);
   }
 
-  // Construct the publisher once the subsystem accessor is available.
-  // Deps are lazily read through closures so the publisher can outlive
-  // transient subsystem rebuilds (teardown + reinstall happens in a
-  // Watch→Lab handoff).
-  _capsulePublisher = createPreparedCapsulePublisher({
+  // Construct the prepared-capsule service once the subsystem accessor
+  // is available. Deps are lazily read through closures so the service
+  // can outlive transient subsystem rebuilds (teardown + reinstall
+  // happens in a Watch→Lab handoff). The service is mode-neutral; the
+  // mode-specific executors below wrap it for account / guest POSTs.
+  _capsuleService = createPreparedCapsuleService({
     buildCapsuleArtifact: (range) => buildCapsuleArtifact(range),
     getCapsuleExportInputVersion: () => _timelineSub!.getCapsuleExportInputVersion(),
-    postCapsuleArtifact,
+  });
+  _publishPreparedAccount = createPublishPreparedAccountCapsule({
+    service: _capsuleService,
+  });
+  _publishPreparedGuest = createPublishPreparedGuestCapsule({
+    service: _capsuleService,
   });
 
   // ── Simulation timeline subsystem ──
@@ -987,29 +997,29 @@ async function init() {
       return { capsule, full };
     },
     exportCapabilities: { full: true, capsule: true },
-    publishCapsule: async () => {
-      // No-arg publish path (non-trim). Builds a fresh artifact over
-      // the full current history and POSTs via the shared
-      // postCapsuleArtifact. Trim-mode callers go through the
-      // prepared-artifact publisher so measured == POSTed bytes.
+    publishFullAccountCapsule: async () => {
+      // Full-history account path (non-trim). Builds a fresh artifact
+      // over the current history and POSTs via the shared
+      // `postAccountCapsuleArtifact` helper. Trim-mode callers go
+      // through the prepared-capsule service so measured == POSTed
+      // bytes.
       const artifact = _buildCapsuleArtifactForPublish();
       if (!artifact) throw new Error('No recorded history to publish.');
-      return postCapsuleArtifact(artifact);
+      return postAccountCapsuleArtifact(artifact);
     },
-    publishGuestCapsule: async (turnstileToken: string) => {
-      // Anonymous Quick Share path. Same artifact construction as the
-      // account no-arg publish so oversize preflight, byte accounting,
-      // and validation stay aligned. Guest trim mode is out of scope
-      // in v1 — the dialog disables Continue as Guest above the size
-      // ceiling and surfaces the sign-in-to-trim upsell.
+    publishFullGuestCapsule: async (turnstileToken: string) => {
+      // Full-history guest path. Same artifact construction as the
+      // account full path so oversize preflight, byte accounting, and
+      // validation stay aligned.
       const artifact = _buildCapsuleArtifactForPublish();
       if (!artifact) throw new Error('No recorded history to publish.');
       return postGuestCapsuleArtifact(artifact, turnstileToken);
     },
     bondedGroupAppearance: _bondedGroupAppearance ?? undefined,
-    prepareCapsulePublish: (range) => _capsulePublisher!.prepareCapsulePublish(range),
-    publishPreparedCapsule: (prepareId) => _capsulePublisher!.publishPreparedCapsule(prepareId),
-    cancelPreparedPublish: (prepareId) => _capsulePublisher!.cancelPreparedPublish(prepareId),
+    prepareCapsuleTrim: (range) => _capsuleService!.prepareCapsulePublish(range),
+    publishPreparedAccountCapsule: (prepareId) => _publishPreparedAccount!(prepareId),
+    publishPreparedGuestCapsule: (prepareId, token) => _publishPreparedGuest!(prepareId, token),
+    cancelPreparedCapsule: (prepareId) => _capsuleService!.cancelPreparedPublish(prepareId),
   });
   _timelineSub.installAndEnable(); // Atomic: install callbacks + enter ready state (no transient off flash)
 
