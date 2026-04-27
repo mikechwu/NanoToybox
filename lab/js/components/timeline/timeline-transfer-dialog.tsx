@@ -2587,8 +2587,16 @@ function QuickShareDestinationPanel({
           aria-live="polite"
           data-testid="transfer-guest-widget-unavailable"
         >
-          Couldn't load verification. Disable ad blockers and reload, or use a
-          sign-in option below.
+          {authMode === 'signed-in'
+            // Signed-in users have the destination selector above the
+            // panel; "Publish to account" names the radio control
+            // exactly (see `ShareDestinationSelector`), which is more
+            // durable than a locative "above" and matches what the
+            // user is actually looking for. The OAuth providers are
+            // not rendered for signed-in users, so a "sign-in option"
+            // hint would dead-end.
+            ? 'Couldn’t load verification. Disable ad blockers and reload, or switch to “Publish to account”.'
+            : 'Couldn’t load verification. Disable ad blockers and reload, or use a sign-in option below.'}
         </p>
       )}
       {!widgetUnavailable && widgetChallengeError && (
@@ -2600,7 +2608,9 @@ function QuickShareDestinationPanel({
             aria-live="polite"
             data-testid="transfer-guest-widget-challenge-error"
           >
-            Verification didn{'’'}t complete. Try again, or use a sign-in option.
+            {authMode === 'signed-in'
+              ? 'Verification didn’t complete. Try again, or switch to “Publish to account”.'
+              : 'Verification didn’t complete. Try again, or use a sign-in option below.'}
           </p>
           <button
             type="button"

@@ -165,6 +165,42 @@ describe('turnstile-session — C1 silent-failure-fix UI contract (Acceptance #2
     // The CTA disables when widgetUnavailable is true.
     expect(panelBody).toMatch(/ctaDisabled[\s\S]+widgetUnavailable/);
   });
+
+  // Release-bar criterion #4 from the PAT/Trusted-Types diagnosis
+  // (.reports/2026-04-26-turnstile-pat-trusted-types-diagnosis.md):
+  // when verification fails, the user must have an actionable path to
+  // account publish. The fallback copy must be auth-mode-aware —
+  // signed-in users have the "Publish to account" radio in the
+  // destination selector; signed-out users have OAuth providers below.
+  // Pointing signed-in users at "sign-in option" dead-ends.
+  it('panel copy directs signed-in users to "Publish to account" (the actual control label) and signed-out users to "sign-in option below" on both load-failed and challenge-error', () => {
+    const dialogPath = path.resolve(
+      __dirname,
+      '../../lab/js/components/timeline/timeline-transfer-dialog.tsx',
+    );
+    const src = fs.readFileSync(dialogPath, 'utf8');
+    // Strip comments so an explanatory comment containing the literal
+    // copy strings doesn't false-positive the regex assertions below.
+    const code = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+    const panelStart = code.indexOf('function QuickShareDestinationPanel(');
+    expect(panelStart).toBeGreaterThan(0);
+    const panelEnd = code.indexOf('\nfunction ', panelStart + 1);
+    const panelBody = panelEnd > 0 ? code.slice(panelStart, panelEnd) : code.slice(panelStart);
+    // Both load-failed and challenge-error blocks must branch on
+    // authMode, with the signed-in branch directing the user to
+    // "Publish to account" (the literal radio label, durable against
+    // layout reordering) and the signed-out branch to a "sign-in
+    // option below" (where OAuth providers actually render).
+    expect(panelBody).toMatch(/transfer-guest-widget-unavailable[\s\S]+authMode === 'signed-in'[\s\S]+Publish to account/);
+    expect(panelBody).toMatch(/transfer-guest-widget-unavailable[\s\S]+sign-in option below/);
+    expect(panelBody).toMatch(/transfer-guest-widget-challenge-error[\s\S]+authMode === 'signed-in'[\s\S]+Publish to account/);
+    expect(panelBody).toMatch(/transfer-guest-widget-challenge-error[\s\S]+sign-in option below/);
+    // Verify the radio control referenced by the copy actually exists
+    // by that exact label in `ShareDestinationSelector`.
+    expect(code).toMatch(/ShareDestinationSelector[\s\S]+Publish to account/);
+  });
 });
 
 describe('turnstile-session — Acceptance #7 (warm called on destination flip)', () => {
