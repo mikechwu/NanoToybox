@@ -1,0 +1,274 @@
+/**
+ * @vitest-environment jsdom
+ *
+ * Dialog/panel integration coverage for the session-scoped Turnstile
+ * runtime — see .reports/2026-04-26-turnstile-session-ux-implementation-report.md
+ * §"Test Surfaces — Tier 2".
+ *
+ *   1. Structural — host element is NOT JSX-owned; the dialog renders
+ *      only an empty `data-turnstile-mountpoint` slot.
+ *   2. Behavioral — switching guest surfaces preserves host identity
+ *      (no `turnstile.render` re-call). The Cloudflare script never
+ *      loads in jsdom, so the widget stays in 'mounting' — but the
+ *      controller-owned host element is appended synchronously inside
+ *      `ensureMounted`, which is sufficient to verify host identity
+ *      across cascade flips.
+ */
+
+import React from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, cleanup, act } from '@testing-library/react';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+import { useAppStore } from '../../lab/js/store/app-store';
+import type { TimelineCallbacks } from '../../lab/js/store/app-store';
+import { TimelineBar } from '../../lab/js/components/timeline/TimelineBar';
+
+const noop = () => {};
+const defaultCallbacks: TimelineCallbacks = {
+  onScrub: noop, onReturnToLive: noop, onEnterReview: noop,
+  onRestartFromHere: noop, onStartRecordingNow: noop, onTurnRecordingOff: noop,
+};
+
+function setActiveRange() {
+  useAppStore.getState().updateTimelineState({
+    mode: 'live', currentTimePs: 10, reviewTimePs: null,
+    rangePs: { start: 0, end: 10 },
+    canReturnToLive: false, canRestart: false, restartTargetPs: null,
+  });
+}
+
+beforeEach(() => {
+  if (!(globalThis as any).ResizeObserver) {
+    (globalThis as any).ResizeObserver = class {
+      observe() {} unobserve() {} disconnect() {}
+    };
+  }
+  document.head
+    .querySelectorAll('script[data-atomdojo-turnstile]')
+    .forEach((s) => s.remove());
+  delete (globalThis as unknown as { turnstile?: unknown }).turnstile;
+  useAppStore.getState().resetTransientState();
+});
+afterEach(() => { cleanup(); });
+
+describe('turnstile-session — structural (host is not JSX-owned)', () => {
+  const dialogPath = path.resolve(
+    __dirname,
+    '../../lab/js/components/timeline/timeline-transfer-dialog.tsx',
+  );
+  const stripComments = (src: string): string => src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+
+  it('dialog source has no JSX node carrying data-turnstile-host', () => {
+    const code = stripComments(fs.readFileSync(dialogPath, 'utf8'));
+    expect(code).not.toMatch(/data-turnstile-host/);
+  });
+
+  it('dialog source declares the empty data-turnstile-mountpoint slot', () => {
+    const code = stripComments(fs.readFileSync(dialogPath, 'utf8'));
+    expect(code).toMatch(/data-turnstile-mountpoint/);
+  });
+
+  it('QuickShareDestinationPanel props no longer carry turnstileSiteKey or controllerRef', () => {
+    const src = fs.readFileSync(dialogPath, 'utf8');
+    const propsBlock = src.split('interface QuickShareDestinationPanelProps')[1] ?? '';
+    const propsBody = propsBlock.slice(0, propsBlock.indexOf('}'));
+    expect(propsBody).not.toMatch(/\bturnstileSiteKey\b/);
+    expect(propsBody).not.toMatch(/\bcontrollerRef\b/);
+    expect(propsBody).toMatch(/turnstileSession/);
+    expect(propsBody).toMatch(/verificationState/);
+    expect(propsBody).toMatch(/hasToken/);
+    expect(propsBody).toMatch(/\bsiteKey\b/);
+  });
+});
+
+describe('turnstile-session — behavioral (host identity survives cascade flips)', () => {
+  it('host is parented under the active mountpoint and is the same node across surface flips', async () => {
+    useAppStore.getState().installTimelineUI({
+      ...defaultCallbacks,
+      onExportHistory: () => Promise.resolve('saved' as const),
+      onPublishFullAccountCapsule: () => Promise.resolve({ mode: 'account' as const, shareCode: 'X', shareUrl: 'x' }),
+      onPublishFullGuestCapsule: () => Promise.resolve({ mode: 'guest' as const, shareCode: 'Y', shareUrl: 'y', expiresAt: '2030-01-01T00:00:00Z' }),
+      onPauseForExport: () => true,
+      onResumeFromExport: () => {},
+    }, 'active', { full: true, capsule: true });
+    useAppStore.getState().setAuthSignedOut();
+    useAppStore.getState().setPublicConfig({
+      guestPublish: { enabled: true, turnstileSiteKey: 'site-key-A' },
+    });
+    setActiveRange();
+
+    render(<TimelineBar />);
+    act(() => {
+      (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click();
+    });
+
+    // Wait a microtask tick so the panel's useLayoutEffect fires its
+    // ensureMounted call and the host element is appended into the
+    // mountpoint slot.
+    await act(async () => { await Promise.resolve(); });
+
+    const mountpoint = document.querySelector(
+      '[data-testid="transfer-guest-turnstile"]',
+    ) as HTMLElement | null;
+    expect(mountpoint).not.toBeNull();
+    const hostBefore = mountpoint!.querySelector('[data-turnstile-host]');
+    expect(hostBefore).not.toBeNull();
+
+    // Flip scope to trim. The Trim selection toggle moves the panel
+    // into the trim-guest render branch — same destination, different
+    // mountpoint inside the dialog.
+    const scopeTrim = document.querySelector(
+      '[data-testid="transfer-scope-trim"]',
+    ) as HTMLButtonElement | null;
+    if (scopeTrim) {
+      await act(async () => { scopeTrim.click(); });
+      await act(async () => { await Promise.resolve(); });
+    }
+
+    // The host node is the same DOM element (controller-owned),
+    // reparented into the new active mountpoint.
+    const hostAfter = document.querySelector('[data-turnstile-host]');
+    expect(hostAfter).not.toBeNull();
+    expect(hostAfter).toBe(hostBefore);
+  });
+});
+
+describe('turnstile-session — C1 silent-failure-fix UI contract (Acceptance #21)', () => {
+  // The C1 contract says the dialog must surface unique testids for
+  // each runtime failure mode so support / e2e can detect them
+  // deterministically. The runtime-level state transitions are
+  // covered in turnstile-session.test.ts; here we verify the JSX
+  // mapping from `verificationState` to the testid is wired
+  // unambiguously by source-scanning the panel render block.
+  it('panel render block maps load-failed → transfer-guest-widget-unavailable and challenge-error → transfer-guest-widget-challenge-error', () => {
+    const dialogPath = path.resolve(
+      __dirname,
+      '../../lab/js/components/timeline/timeline-transfer-dialog.tsx',
+    );
+    const src = fs.readFileSync(dialogPath, 'utf8');
+    // Find the QuickShareDestinationPanel function body.
+    const panelStart = src.indexOf('function QuickShareDestinationPanel(');
+    expect(panelStart).toBeGreaterThan(0);
+    const panelEnd = src.indexOf('\nfunction ', panelStart + 1);
+    const panelBody = panelEnd > 0 ? src.slice(panelStart, panelEnd) : src.slice(panelStart);
+
+    // load-failed branch must render the unavailable testid AND the
+    // CTA's "Verification unavailable" label.
+    expect(panelBody).toMatch(/widgetUnavailable[\s\S]+transfer-guest-widget-unavailable/);
+    expect(panelBody).toMatch(/Verification unavailable/);
+    // challenge-error branch must render the challenge-error testid.
+    expect(panelBody).toMatch(/widgetChallengeError[\s\S]+transfer-guest-widget-challenge-error/);
+    // The CTA disables when widgetUnavailable is true.
+    expect(panelBody).toMatch(/ctaDisabled[\s\S]+widgetUnavailable/);
+  });
+});
+
+describe('turnstile-session — Acceptance #7 (warm called on destination flip)', () => {
+  // The warm() trigger is a single useEffect at the controller-wiring
+  // level. Verifying it via source-scan rather than mock-injection
+  // because a vi.doMock that beats the static `import { TimelineBar }`
+  // race in this file is brittle. The runtime's own warm() behavior
+  // is exhaustively covered in turnstile-session.test.ts.
+  it('TimelineBar declares a useEffect that calls warm() conditioned on guestSurfaceActive + (ready|preparing|challenge-error) + !hasToken', () => {
+    const tbPath = path.resolve(
+      __dirname,
+      '../../lab/js/components/timeline/TimelineBar.tsx',
+    );
+    const src = fs.readFileSync(tbPath, 'utf8');
+    // The warm call site reads turnstileSession.warm() inside a useEffect
+    // gated on guestSurfaceActive AND verificationState AND hasGuestToken.
+    expect(src).toMatch(/turnstileSession\.warm\(\)/);
+    // The effect must depend on all three signals so a flip in any of
+    // them re-evaluates the warm trigger.
+    expect(src).toMatch(/\[turnstileSession,\s*guestSurfaceActive,\s*verificationState,\s*hasGuestToken\]/);
+    // The warm-effect must accept 'challenge-error' as a recoverable
+    // state — without it, an error fired while the surface was
+    // inactive parks the controller forever.
+    expect(src).toMatch(/'challenge-error'/);
+  });
+});
+
+describe('turnstile-session — guestSurfaceActive config gate (regression)', () => {
+  it('TimelineBar source folds guestPublishConfig.enabled + turnstileSiteKey into guestSurfaceActive', () => {
+    // The runtime must not consider a guest surface active when the
+    // dialog refuses to render Quick Share UI for it. The dialog
+    // gates rendering on `guestPublishConfig.enabled &&
+    // guestPublishConfig.turnstileSiteKey`; the TimelineBar surface-
+    // active formula must mirror that gate so a config flip mid-
+    // session doesn't leave proactive refresh / expired auto-rewarm
+    // firing against a non-existent UI.
+    const tbPath = path.resolve(
+      __dirname,
+      '../../lab/js/components/timeline/TimelineBar.tsx',
+    );
+    const src = fs.readFileSync(tbPath, 'utf8');
+    const idx = src.indexOf('const guestSurfaceActive');
+    expect(idx).toBeGreaterThan(0);
+    // The reachability gate must be referenced AT or just before the
+    // guestSurfaceActive declaration (declared via `guestSurfaceReachable`).
+    const lookback = src.slice(Math.max(0, idx - 800), idx + 1000);
+    expect(lookback).toMatch(/guestPublishConfig\.enabled/);
+    expect(lookback).toMatch(/turnstileSiteKey/);
+    expect(lookback).toMatch(/guestSurfaceReachable/);
+  });
+
+  it('signed-out user with guestPublish.enabled=false sees no Quick Share UI (so no guest surface can be active)', async () => {
+    useAppStore.getState().installTimelineUI({
+      ...defaultCallbacks,
+      onExportHistory: () => Promise.resolve('saved' as const),
+      onPublishFullGuestCapsule: () => Promise.resolve({ mode: 'guest' as const, shareCode: 'Y', shareUrl: 'y', expiresAt: '2030-01-01T00:00:00Z' }),
+      onPauseForExport: () => true,
+      onResumeFromExport: () => {},
+    }, 'active', { full: true, capsule: true });
+    useAppStore.getState().setAuthSignedOut();
+    useAppStore.getState().setPublicConfig({
+      guestPublish: { enabled: false, turnstileSiteKey: null },
+    });
+    setActiveRange();
+
+    render(<TimelineBar />);
+    act(() => {
+      (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click();
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    // Quick Share panel must not render — no guest CTA, no
+    // mountpoint, no host element. With no panel, ensureMounted is
+    // never called; even if guestSurfaceActive were spuriously true,
+    // there would be no surface to drive proactive refresh against.
+    expect(document.querySelector('[data-testid="transfer-guest-continue"]')).toBeNull();
+    expect(document.querySelector('[data-testid="transfer-guest-turnstile"]')).toBeNull();
+    expect(document.querySelector('[data-turnstile-host]')).toBeNull();
+  });
+});
+
+describe('turnstile-session — script-load behavior', () => {
+  it('opening the Quick Share surface injects the Cloudflare script exactly once', async () => {
+    useAppStore.getState().installTimelineUI({
+      ...defaultCallbacks,
+      onExportHistory: () => Promise.resolve('saved' as const),
+      onPublishFullGuestCapsule: () => Promise.resolve({ mode: 'guest' as const, shareCode: 'Y', shareUrl: 'y', expiresAt: '2030-01-01T00:00:00Z' }),
+      onPauseForExport: () => true,
+      onResumeFromExport: () => {},
+    }, 'active', { full: true, capsule: true });
+    useAppStore.getState().setAuthSignedOut();
+    useAppStore.getState().setPublicConfig({
+      guestPublish: { enabled: true, turnstileSiteKey: 'site-key-A' },
+    });
+    setActiveRange();
+
+    render(<TimelineBar />);
+    act(() => {
+      (document.querySelector('.timeline-transfer-trigger') as HTMLButtonElement).click();
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(
+      document.head.querySelectorAll('script[data-atomdojo-turnstile]').length,
+    ).toBe(1);
+  });
+});

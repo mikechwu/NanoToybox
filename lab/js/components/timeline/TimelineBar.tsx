@@ -21,7 +21,7 @@
  *   timeline-export-dialog.tsx — TimelineExportKind, useExportDialog (kind state only; legacy dialog no longer mounted)
  */
 
-import React, { useCallback, useRef, useState, useEffect, useLayoutEffect } from 'react';
+import React, { useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo } from 'react';
 import { useAppStore } from '../../store/app-store';
 import { formatTime, getTimelineProgress, getRestartAnchorStyle } from './timeline-format';
 import { TimelineModeSwitch } from './timeline-mode-switch';
@@ -56,6 +56,11 @@ import {
   type TrimSubmitTarget,
   type TrimSubmitUnavailableReason,
 } from '../../runtime/trim-submit-coordinator';
+import {
+  createTurnstileSession,
+  type TurnstileSessionController,
+  type VerificationState,
+} from '../../runtime/turnstile-session';
 import type {
   TrimEntryKind,
   TrimMeasurementPolicy,
@@ -86,15 +91,6 @@ export const TRIM_RESUME_SESSION_STORAGE_KEY = 'atomdojo.trimResume';
  *  means the user abandoned the flow and came back later). */
 export const TRIM_RESUME_TTL_SECONDS = 10 * 60;
 
-/** Minimal Turnstile widget handle the dialog owns and hands back to
- *  TimelineBar via a mutable ref. Keeps the widget lifecycle local to
- *  the dialog while letting the submit handler read the latest token. */
-export interface GuestTurnstileController {
-  /** Returns the latest solved token, or null when none is live. */
-  getToken: () => string | null;
-  /** Dispose the current token so the next submit requires a fresh solve. */
-  reset: () => void;
-}
 import type {
   CapsuleSnapshotId,
   CapsuleSelectionRange,
@@ -889,13 +885,99 @@ function TimelineBarActive() {
 
   // ── Guest Quick Share wiring ──
   //
-  // The Turnstile widget lives inside the Transfer dialog (signed-out
-  // Share panel only — rendered when `publicConfig.guestPublish.enabled`
-  // + a non-null `turnstileSiteKey`). The dialog owns the widget
-  // lifecycle and surfaces a controller ref that TimelineBar reads
-  // from at submit time. The submit-coordinator seam (§H) snapshots
-  // the token once per submit click.
-  const guestTurnstileControllerRef = useRef<GuestTurnstileController | null>(null);
+  // Session-scoped Turnstile runtime — one widget instance + one token
+  // shared across every guest-capable Quick Share surface in this
+  // component (signed-out Share, signed-in Quick Share, trim guest).
+  // Construction is `useMemo([])` so the controller identity is stable
+  // for the component's lifetime, and the render-time assignment to the
+  // back-compat ref preserves the React-18 StrictMode invariant: a
+  // concurrent submit click cannot observe a null controller between
+  // an effect-cleanup and the next effect-setup tick. See
+  // .reports/2026-04-26-turnstile-session-ux-implementation-report.md
+  // §"StrictMode Invariant".
+  const [verificationState, setVerificationState] = useState<VerificationState>('idle');
+  const [hasGuestToken, setHasGuestToken] = useState(false);
+  const turnstileSession = useMemo<TurnstileSessionController>(
+    () => createTurnstileSession({
+      onStateChange: (next) => setVerificationState(next),
+      onTokenChange: (tok) => setHasGuestToken(tok !== null),
+    }),
+    [],
+  );
+  // Dispose the widget when the Transfer dialog closes (and on
+  // TimelineBar unmount). Cascade flips while the dialog stays open
+  // go through `ensureMounted` reparenting, which keeps the same
+  // widget instance alive — see Acceptance #20. Tracks the previous
+  // open state so the very first render (transferDialog.open=false
+  // before the user has even clicked the trigger) does not fire a
+  // pointless dispose.
+  const dialogWasOpenRef = useRef(false);
+  useEffect(() => {
+    if (transferDialog.open) {
+      dialogWasOpenRef.current = true;
+      return;
+    }
+    if (!dialogWasOpenRef.current) return;
+    dialogWasOpenRef.current = false;
+    turnstileSession.disposeWidget();
+  }, [turnstileSession, transferDialog.open]);
+  useEffect(() => {
+    return () => { turnstileSession.disposeWidget(); };
+  }, [turnstileSession]);
+
+  // ── Surface-active signal ──
+  //
+  // True when the user is actively looking at a Quick Share surface —
+  // the runtime uses ONLY this boolean to decide whether to fire the
+  // expired-callback auto-rewarm and the proactive 4-minute refresh.
+  // EXCLUDES the success branch (`shareResult !== null`) and the 428
+  // age-confirmation branch even though they keep the share tab open
+  // — the user is not in a Quick Share CTA context in those renders.
+  // ALSO excludes any state where guest publish is not actually
+  // reachable (config disabled or site key missing): the dialog
+  // refuses to render Quick Share surfaces in those states, so the
+  // controller must not believe a guest surface is active either.
+  // See §"Surface-active input" in the implementation report.
+  const guestSurfaceReachable = Boolean(
+    guestPublishConfig.enabled && guestPublishConfig.turnstileSiteKey,
+  );
+  const guestSurfaceActive =
+    guestSurfaceReachable
+    && transferDialog.open
+    && transferDialog.tab === 'share'
+    && shareResult === null
+    && shareError?.kind !== 'age-confirmation'
+    && (
+      (shareScope === 'whole-timeline'
+        && wholeTimelineDestination === 'guest'
+        && !shareTrimState.active)
+      || (shareTrimState.active
+        && shareTrimState.trimDestination === 'guest')
+    );
+  useEffect(() => {
+    turnstileSession.setQuickShareSurfaceActive(guestSurfaceActive);
+  }, [turnstileSession, guestSurfaceActive]);
+  // Warm whenever the user sits in a guest surface, the widget is
+  // mounted (any of 'ready' / 'preparing' / 'challenge-error') AND no
+  // live token is present. Re-fires on every relevant transition so
+  // the next click usually finds a token ready. Including
+  // 'challenge-error' is what makes the inactive-error → re-entry
+  // path recoverable: a Cloudflare error fired while the surface was
+  // inactive parks the controller in 'challenge-error', and the user
+  // re-entering the guest surface trips this effect to call warm(),
+  // which resets + re-executes via the runtime. The runtime de-
+  // duplicates concurrent solves via `executeInFlight`, so this
+  // effect can fire without throttling.
+  useEffect(() => {
+    if (!guestSurfaceActive) return;
+    if (
+      verificationState !== 'ready'
+      && verificationState !== 'preparing'
+      && verificationState !== 'challenge-error'
+    ) return;
+    if (hasGuestToken) return;
+    turnstileSession.warm();
+  }, [turnstileSession, guestSurfaceActive, verificationState, hasGuestToken]);
 
   /** In-context copy for each unavailability reason returned by
    *  `resolveTrimSubmitTarget`. Replaces the previous "if guest and no
@@ -985,7 +1067,7 @@ function TimelineBarActive() {
       action: input.action,
       authStatus,
       publicConfig,
-      turnstileToken: guestTurnstileControllerRef.current?.getToken?.() ?? null,
+      turnstileToken: turnstileSession.getToken(),
     });
     if (resolved.kind === 'unavailable') {
       return { kind: 'unavailable', reason: resolved.reason };
@@ -1142,7 +1224,7 @@ function TimelineBarActive() {
       if (e instanceof GuestTurnstileError) {
         // Invalidate the token on failed/unavailable Siteverify so the
         // user is not allowed to resubmit with the same stale bytes.
-        guestTurnstileControllerRef.current?.reset?.();
+        turnstileSession.resetToken();
         setShareError({ kind: 'other', message: e.message });
         setShareSubmitting(false);
         return;
@@ -2324,7 +2406,7 @@ function TimelineBarActive() {
       // `trimAction === 'quick-share'` but are class-keyed, so
       // pattern-matching on instance type is sufficient.
       if (e instanceof GuestTurnstileError) {
-        guestTurnstileControllerRef.current?.reset?.();
+        turnstileSession.resetToken();
         setShareError({ kind: 'other', message: e.message });
         return;
       }
@@ -3387,7 +3469,9 @@ function TimelineBarActive() {
         shareScope={shareScope}
         onEnterManualTrim={handleEnterManualTrim}
         guestPublishConfig={guestPublishConfig}
-        guestTurnstileControllerRef={guestTurnstileControllerRef}
+        turnstileSession={turnstileSession}
+        verificationState={verificationState}
+        hasGuestToken={hasGuestToken}
         shareResult={shareResult}
         shareSubmitting={shareSubmitting}
         shareError={shareError?.kind === 'other' ? shareError.message : null}

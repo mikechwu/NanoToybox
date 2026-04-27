@@ -925,6 +925,22 @@ usually just means the rotate + re-provision window was longer than
 intended (see *Secret rotation*); a sustained rate with no rotation
 underway is a signal to inspect Turnstile widget health.
 
+**Browser-side Turnstile breadcrumbs (support tickets).** When a user
+reports a failed Quick Share with no matching `guest_publish_rejected_*`
+audit row, the request never reached the server — inspect the user's
+browser console for `console.warn` lines tagged `[turnstile-session]`
+(emitted by `lab/js/runtime/turnstile-session.ts`). `script load
+rejected` / `widget failed to load within timeout` ⇒ CDN unreachable,
+extension blocker, or CSP drift (cross-check against `_headers`); the
+user sees the `transfer-guest-widget-unavailable` "Verification
+unavailable" CTA. `challenge errored — auto-retrying (attempt N/3)`
+followed by `challenge retry cap reached (3); parking at
+challenge-error` ⇒ the widget mounted but Cloudflare repeatedly failed
+the challenge; the user sees `transfer-guest-widget-challenge-error`.
+`turnstile.render threw` / `execute() threw` / `reset()` or `remove()`
+throws are SDK-internal anomalies — capture the user-agent and forward
+to Cloudflare support if recurring.
+
 ---
 
 ## Reconciliation procedures

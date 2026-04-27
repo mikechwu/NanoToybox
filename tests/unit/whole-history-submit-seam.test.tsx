@@ -95,6 +95,16 @@ describe('whole-history submit seam — structural', () => {
     const propsBody = propsBlock.slice(0, propsBlockEnd);
     expect(propsBody).not.toMatch(/onSubmitGuestShare/);
     expect(propsBody).not.toMatch(/onConfirmShare/);
+    // Session-scoped Turnstile refactor (Phase 3): the panel takes a
+    // controller + verificationState + hasToken instead of a
+    // controllerRef / turnstileSiteKey. The legacy names must be
+    // gone entirely.
+    expect(propsBody).not.toMatch(/\bcontrollerRef\b/);
+    expect(propsBody).not.toMatch(/\bturnstileSiteKey\b/);
+    expect(propsBody).toMatch(/turnstileSession/);
+    expect(propsBody).toMatch(/verificationState/);
+    expect(propsBody).toMatch(/hasToken/);
+    expect(propsBody).toMatch(/\bsiteKey\b/);
   });
 
   it('TimelineBar source contains only one call site per executor callback', () => {

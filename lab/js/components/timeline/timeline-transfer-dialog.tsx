@@ -12,7 +12,7 @@
  * backdrop, role="dialog", aria-modal).
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ActionHint } from '../ActionHint';
 import type { TimelineExportKind } from './timeline-export-dialog';
@@ -362,12 +362,18 @@ interface TimelineTransferDialogProps {
     enabled: boolean;
     turnstileSiteKey: string | null;
   };
-  /** Mutable ref that the dialog populates with a controller once the
-   *  Turnstile widget mounts. TimelineBar's submit handler reads the
-   *  current token and calls reset() on verification failure. */
-  guestTurnstileControllerRef: React.MutableRefObject<
-    import('./TimelineBar').GuestTurnstileController | null
-  >;
+  /** Session-scoped Turnstile runtime owned by TimelineBar. The dialog
+   *  hands a mountpoint to `ensureMounted` whenever the active Quick
+   *  Share surface changes; the controller reparents its host element
+   *  into that mountpoint without re-rendering the widget. */
+  turnstileSession: import('../../runtime/turnstile-session').TurnstileSessionController;
+  /** Reactive verification-state read of the session controller. Drives
+   *  CTA labels and inline error copy in `QuickShareDestinationPanel`. */
+  verificationState: import('../../runtime/turnstile-session').VerificationState;
+  /** Reactive `controller.getToken() !== null` read. Token presence is
+   *  not part of `shareConfirmEnabled` gating — it's a submit-time
+   *  preflight — but the panel uses it to choose CTA copy. */
+  hasGuestToken: boolean;
   /** Structured share result, including `mode` for UI branching. The
    *  existing `shareUrl`/`shareCode`/`shareWarnings` props are kept as
    *  a compatibility view; `shareResult` is authoritative and carries
@@ -717,9 +723,9 @@ interface TrimPanelProps {
   downloadSubmitting: boolean;
   transferBusy: boolean;
   guestPublishConfig: { enabled: boolean; turnstileSiteKey: string | null };
-  guestTurnstileControllerRef: React.MutableRefObject<
-    import('./TimelineBar').GuestTurnstileController | null
-  >;
+  turnstileSession: import('../../runtime/turnstile-session').TurnstileSessionController;
+  verificationState: import('../../runtime/turnstile-session').VerificationState;
+  hasGuestToken: boolean;
   onResetShareTrim: () => void;
   onConfirmShareTrim: () => void;
   onSelectTrimDestination: (destination: ShareDestination) => void;
@@ -739,7 +745,9 @@ function TrimPanel({
   downloadSubmitting,
   transferBusy,
   guestPublishConfig,
-  guestTurnstileControllerRef,
+  turnstileSession,
+  verificationState,
+  hasGuestToken,
   onResetShareTrim,
   onConfirmShareTrim,
   onSelectTrimDestination,
@@ -903,8 +911,10 @@ function TrimPanel({
            Rendering the paragraph twice would be redundant noise. */
         <>
           <QuickShareDestinationPanel
-            turnstileSiteKey={guestPublishConfig.turnstileSiteKey!}
-            controllerRef={guestTurnstileControllerRef}
+            turnstileSession={turnstileSession}
+            siteKey={guestPublishConfig.turnstileSiteKey!}
+            verificationState={verificationState}
+            hasToken={hasGuestToken}
             onSubmit={onConfirmShareTrim}
             ctaLabel="Quick Share trimmed timeline"
             authMode={authStatus === 'signed-in' ? 'signed-in' : 'signed-out'}
@@ -1068,7 +1078,7 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
     shareTrim, shareMeasuring, onResetShareTrim, onConfirmShareTrim,
     onSelectTrimDestination, onCancelTrim, onTrimSignIn,
     onDownloadCapsuleFromShareFallback, shareFallbackDownloadError,
-    guestPublishConfig, guestTurnstileControllerRef,
+    guestPublishConfig, turnstileSession, verificationState, hasGuestToken,
     shareResult,
   } = props;
   const [retryingAuth, setRetryingAuth] = useState(false);
@@ -1736,7 +1746,9 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                 downloadSubmitting={downloadSubmitting}
                 transferBusy={transferBusy}
                 guestPublishConfig={guestPublishConfig}
-                guestTurnstileControllerRef={guestTurnstileControllerRef}
+                turnstileSession={turnstileSession}
+                verificationState={verificationState}
+                hasGuestToken={hasGuestToken}
                 onResetShareTrim={onResetShareTrim}
                 onConfirmShareTrim={onConfirmShareTrim}
                 onSelectTrimDestination={onSelectTrimDestination}
@@ -1808,8 +1820,10 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                       disabled={transferBusy || shareMeasuring}
                     />
                     <QuickShareDestinationPanel
-                      turnstileSiteKey={guestPublishConfig.turnstileSiteKey!}
-                      controllerRef={guestTurnstileControllerRef}
+                      turnstileSession={turnstileSession}
+                      siteKey={guestPublishConfig.turnstileSiteKey!}
+                      verificationState={verificationState}
+                      hasToken={hasGuestToken}
                       onSubmit={() => onSubmitWholeTimelineShare('guest')}
                       ctaLabel="Continue as Guest"
                       authMode="signed-out"
@@ -2067,8 +2081,10 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
                 && guestPublishConfig.turnstileSiteKey ? (
                   <>
                     <QuickShareDestinationPanel
-                      turnstileSiteKey={guestPublishConfig.turnstileSiteKey!}
-                      controllerRef={guestTurnstileControllerRef}
+                      turnstileSession={turnstileSession}
+                      siteKey={guestPublishConfig.turnstileSiteKey!}
+                      verificationState={verificationState}
+                      hasToken={hasGuestToken}
                       onSubmit={() => onSubmitWholeTimelineShare('guest')}
                       ctaLabel="Create temporary link"
                       authMode="signed-in"
@@ -2122,10 +2138,21 @@ export function TimelineTransferDialog(props: TimelineTransferDialogProps) {
 //   3. Trim panel + trimDestination = guest (NEW; both auth states).
 
 interface QuickShareDestinationPanelProps {
-  turnstileSiteKey: string;
-  controllerRef: React.MutableRefObject<
-    import('./TimelineBar').GuestTurnstileController | null
-  >;
+  /** Session-scoped controller passed straight through from
+   *  TimelineBar. The panel owns no Turnstile lifecycle of its own —
+   *  it provides only a mountpoint slot and reads `verificationState`
+   *  + `hasToken` for CTA labeling. */
+  turnstileSession: import('../../runtime/turnstile-session').TurnstileSessionController;
+  /** Cloudflare site key from `publicConfig.guestPublish`. The panel
+   *  forwards this to `ensureMounted` whenever its mountpoint becomes
+   *  reachable. Site-key rotation is handled by the runtime. */
+  siteKey: string;
+  /** Reactive state machine read of the controller. Drives CTA copy
+   *  + the `transfer-guest-widget-unavailable` /
+   *  `transfer-guest-widget-challenge-error` paragraphs. */
+  verificationState: import('../../runtime/turnstile-session').VerificationState;
+  /** True when the controller currently holds a live token. */
+  hasToken: boolean;
   /** Generic click callback supplied by the parent. The parent binds
    *  the right destination/scope (whole-history or trim) before
    *  passing it down. */
@@ -2138,9 +2165,6 @@ interface QuickShareDestinationPanelProps {
    *  "not saved to your account"). The OAuth provider buttons and
    *  sign-in upsell are rendered OUTSIDE this panel. */
   authMode: 'signed-in' | 'signed-out';
-  // (variant removed — the prior 'trim' value omitted the Quick
-  //  Share header but all three call sites now render the full
-  //  branding, so the union became dead code.)
   shareSubmitting: boolean;
   shareError: string | null;
   transferBusy: boolean;
@@ -2439,18 +2463,25 @@ function ProviderGlyph({ provider }: { provider: 'google' | 'github' }) {
   );
 }
 
-/** Signed-out Share panel PRIMARY tier. Tinted accent card containing:
- *   - pill badges surfacing the two defining props (72 h · no account)
- *   - display heading + micro-copy
- *   - reserved Turnstile slot (prevents layout jump at widget-load time)
- *   - primary CTA ("Continue as Guest") disabled until a live token
+/** Quick Share destination panel — presentation-only.
  *
- * Consent is handled by the single shared clickwrap rendered OUTSIDE
- * this block at the bottom of the signed-out panel; this block only
- * wires `aria-describedby` onto the CTA via `clickwrapId`. */
+ * Owns no Turnstile lifecycle. Renders an empty mountpoint slot and
+ * tells the session controller (via a `useLayoutEffect`) where to
+ * reparent its host element. The widget itself, the token, the
+ * proactive refresh interval, the load-timeout watchdog, and the
+ * error-callback handling all live in `runtime/turnstile-session.ts`.
+ *
+ * This panel reads `verificationState` + `hasToken` from props to
+ * choose CTA copy and surface the load-failed / challenge-error
+ * paragraphs. The C1 silent-failure-fix contract is preserved because
+ * those test ids (`transfer-guest-widget-unavailable`,
+ * `transfer-guest-widget-challenge-error`) still render whenever the
+ * controller reports the matching state. */
 function QuickShareDestinationPanel({
-  turnstileSiteKey,
-  controllerRef,
+  turnstileSession,
+  siteKey,
+  verificationState,
+  hasToken,
   onSubmit,
   ctaLabel,
   authMode,
@@ -2459,198 +2490,44 @@ function QuickShareDestinationPanel({
   transferBusy,
   clickwrapId,
 }: QuickShareDestinationPanelProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [widgetReady, setWidgetReady] = useState(false);
-  /** Script-load-failure / render-timeout sentinel. When set, the
-   *  CTA switches to a dead state with a visible explanation so the
-   *  user is never stuck staring at "Preparing…" forever. Common
-   *  causes: content blockers, strict corporate proxies, CSP
-   *  misconfig on a surface Turnstile is embedded into, captive
-   *  Wi-Fi intercepts. Audit 2026-04-23 silent-failure C1. */
-  const [widgetLoadFailed, setWidgetLoadFailed] = useState(false);
-  /** Inline error from Turnstile's own `error-callback` (widget
-   *  mounted but a subsequent challenge errored — distinct from
-   *  load-failure). Surfaced so the user knows why the CTA just
-   *  became disabled instead of watching it silently gray out. */
-  const [widgetChallengeError, setWidgetChallengeError] = useState(false);
-  const widgetIdRef = useRef<string | null>(null);
-  const solvedAtRef = useRef<number | null>(null);
-
-  // Token is the single source of truth. Controller `reset()` clears
-  // it (and the widget) so a resubmit after a 400 turnstile_failed is
-  // forced through a fresh solve rather than reusing the stale token.
-  //
-  // The controller object is stable for the block's lifetime (not
-  // recreated on every token change) so a concurrent submit click
-  // cannot observe a null controllerRef during the effect-cleanup /
-  // effect-setup microtask gap. `getToken` reads the latest `token`
-  // state through a ref mirror.
-  //
-  // Reviewer follow-up (2026-04-23): the controller is assigned
-  // during RENDER (not inside an effect) so React-18 StrictMode's
-  // unmount-then-remount sequence — which would otherwise transiently
-  // null the ref between cleanup and the next effect — can never
-  // surface a null controller to a concurrent submit click. The
-  // controller object reads mutable state through refs, so rebuilding
-  // it every render is free (no state capture). Cleanup is handled
-  // in the widget-install effect below, which removes the iframe —
-  // the controller itself has no resources to release.
-  const tokenRef = useRef<string | null>(null);
-  tokenRef.current = token;
-  const resetController = useCallback(() => {
-    setToken(null);
-    solvedAtRef.current = null;
-    const api = (window as unknown as { turnstile?: { reset: (id?: string) => void } }).turnstile;
-    if (api && widgetIdRef.current) {
-      try { api.reset(widgetIdRef.current); } catch { /* ignore */ }
-    }
-  }, []);
-  controllerRef.current = {
-    getToken: () => tokenRef.current,
-    reset: resetController,
-  };
-
-  // Proactive refresh — the Turnstile token expires 5 minutes after
-  // solve. When the user sits on a solved widget for >4 minutes before
-  // clicking Continue as Guest, re-execute so we don't submit a stale
-  // token and eat a 400 round-trip.
-  useEffect(() => {
-    if (!token) return;
-    const handle = window.setInterval(() => {
-      const solvedAt = solvedAtRef.current;
-      if (!solvedAt) return;
-      if (Date.now() - solvedAt < 4 * 60 * 1000) return;
-      const api = (window as unknown as { turnstile?: { execute: (id?: string) => void } }).turnstile;
-      if (api && widgetIdRef.current) {
-        try { api.execute(widgetIdRef.current); } catch { /* ignore */ }
-      }
-    }, 30 * 1000);
-    return () => window.clearInterval(handle);
-  }, [token]);
-
-  useEffect(() => {
-    // Inject the Turnstile script once per document and mount the
-    // widget explicitly. Hardened 2026-04-23 per audit C1 against the
-    // "widget never loads → CTA stuck in Preparing… forever" failure
-    // mode, which previously had no path to recovery when the script
-    // was blocked (ad blockers, strict proxies, CSP misconfig,
-    // captive Wi-Fi). Now surfaces a visible widgetLoadFailed state
-    // with a fallback-to-sign-in message; CTA fully disables.
-    const existing = document.querySelector(
-      'script[data-atomdojo-turnstile]',
-    ) as HTMLScriptElement | null;
-
-    let script = existing;
-    if (!script) {
-      script = document.createElement('script');
-      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-      script.async = true;
-      script.defer = true;
-      script.dataset.atomdojoTurnstile = '1';
-      document.head.appendChild(script);
-    }
-
-    let cancelled = false;
-    // 10 s end-to-end budget from effect start to widget-ready.
-    // Covers slow 3G and script-load stall; any legitimate mount
-    // resolves in well under 2 s. Over this threshold we give the
-    // user an actionable message instead of silently pending.
-    const LOAD_TIMEOUT_MS = 10_000;
-    const loadTimer = window.setTimeout(() => {
-      if (cancelled || widgetIdRef.current) return;
-      console.warn(
-        '[turnstile] widget failed to load within timeout — entering widget-load-failed state',
-      );
-      setWidgetLoadFailed(true);
-    }, LOAD_TIMEOUT_MS);
-
-    const handleScriptError = () => {
-      if (cancelled) return;
-      console.warn('[turnstile] script element fired error — widget unavailable');
-      setWidgetLoadFailed(true);
-    };
-    script.addEventListener('error', handleScriptError);
-
-    const attemptRender = () => {
-      if (cancelled) return;
-      const api = (window as unknown as {
-        turnstile?: {
-          render: (el: HTMLElement, opts: Record<string, unknown>) => string;
-          remove: (id: string) => void;
-        };
-      }).turnstile;
-      if (!api) {
-        window.setTimeout(attemptRender, 100);
-        return;
-      }
-      const container = containerRef.current;
-      if (!container) return;
-      const id = api.render(container, {
-        sitekey: turnstileSiteKey,
-        theme: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark',
-        appearance: 'interaction-only',
-        callback: (tok: string) => {
-          if (cancelled) return;
-          solvedAtRef.current = Date.now();
-          setWidgetChallengeError(false);
-          setToken(tok);
-        },
-        'error-callback': () => {
-          if (cancelled) return;
-          // Surface inline feedback — previously this was silent and
-          // the user saw the CTA gray out for no apparent reason
-          // (audit M5). Token reset lets the widget re-solve on the
-          // next interaction.
-          setToken(null);
-          setWidgetChallengeError(true);
-        },
-        'expired-callback': () => {
-          if (cancelled) return;
-          setToken(null);
-        },
-      });
-      widgetIdRef.current = id;
-      window.clearTimeout(loadTimer);
-      setWidgetReady(true);
-    };
-
-    if ((window as unknown as { turnstile?: unknown }).turnstile) {
-      attemptRender();
-    } else {
-      script.addEventListener('load', attemptRender, { once: true });
-    }
-
+  const mountpointRef = useRef<HTMLDivElement>(null);
+  // The host element is owned by the controller, not React. This
+  // effect just hands it a reference to the active mountpoint slot.
+  // useLayoutEffect (not useEffect) so a cascade flip into a guest
+  // surface gets the host parented before paint, eliminating the one-
+  // frame "empty Quick Share card" flash.
+  useLayoutEffect(() => {
+    const mp = mountpointRef.current;
+    if (!mp) return;
+    void turnstileSession.ensureMounted(mp, siteKey);
     return () => {
-      cancelled = true;
-      window.clearTimeout(loadTimer);
-      if (script) script.removeEventListener('error', handleScriptError);
-      const api = (window as unknown as { turnstile?: { remove: (id: string) => void } }).turnstile;
-      if (api && widgetIdRef.current) {
-        try { api.remove(widgetIdRef.current); } catch { /* ignore */ }
-      }
-      widgetIdRef.current = null;
+      // Detach (don't dispose) when the panel unmounts — a sibling
+      // panel's effect may immediately re-attach the same widget.
+      void turnstileSession.ensureMounted(null, siteKey);
     };
-  }, [turnstileSiteKey]);
+  }, [turnstileSession, siteKey]);
 
-  const ctaDisabled = transferBusy || shareSubmitting || widgetLoadFailed || !widgetReady || !token;
+  const widgetUnavailable = verificationState === 'load-failed';
+  const widgetChallengeError = verificationState === 'challenge-error';
+  const widgetPreparing = verificationState === 'mounting' || verificationState === 'preparing';
+  const ctaReady = verificationState === 'ready' && hasToken;
+  const ctaDisabled = transferBusy || shareSubmitting || widgetUnavailable || !ctaReady;
 
   // CTA label narrates the security handshake so the user always
-  // knows what's happening. Five states, in order:
-  //   1. widget failed to load                    → "Verification unavailable"
-  //   2. script + widget still mounting           → "Preparing…"
-  //   3. widget ready, silent solve in flight     → ctaLabel (parent-supplied)
-  //   4. token acquired                           → ctaLabel (parent-supplied)
-  //   5. submit in flight                         → "Publishing…"
+  // knows what's happening:
+  //   1. submit in flight                         → "Publishing…"
+  //   2. widget failed to load                    → "Verification unavailable"
+  //   3. mounting OR preparing solve              → "Preparing…"
+  //   4. ready + token                            → ctaLabel (parent-supplied)
   // The parent supplies a destination-centered label
   // ('Continue as Guest', 'Create temporary link', or
   // 'Quick Share trimmed timeline') so the same panel works in three
   // render contexts (Phase 2 §"Destination Panels").
   const effectiveCtaLabel = shareSubmitting
     ? 'Publishing…'
-    : widgetLoadFailed
+    : widgetUnavailable
       ? 'Verification unavailable'
-      : !widgetReady
+      : (widgetPreparing || !ctaReady)
         ? 'Preparing…'
         : ctaLabel;
 
@@ -2683,22 +2560,20 @@ function QuickShareDestinationPanel({
         {lede}
       </p>
 
-      {/* Turnstile in `interaction-only` mode is an invisible captcha
-       *  by design — Cloudflare only raises a visible challenge for
-       *  suspicious traffic. We therefore REFUSE to reserve a
-       *  permanent visible slot (the previous dashed placeholder
-       *  confused users into thinking something was missing). The
-       *  container stays empty and zero-height until Cloudflare
-       *  chooses to render; in that rare case its challenge UI pushes
-       *  the CTA down naturally — acceptable reflow for a rare event,
-       *  better than a permanent empty box for every user. */}
+      {/* Empty slot — the controller-owned host element is reparented
+       *  into this <div> via `ensureMounted`. The host is NEVER a JSX
+       *  child of any React component; reparenting it through React
+       *  would surface reconciliation surprises on rerender (React
+       *  still considers the moved node its child). See §B "Visible
+       *  host" in the implementation report for the rationale. */}
       <div
-        ref={containerRef}
+        ref={mountpointRef}
         className="timeline-transfer-dialog__turnstile"
         data-testid="transfer-guest-turnstile"
+        data-turnstile-mountpoint=""
       />
 
-      {widgetLoadFailed && (
+      {widgetUnavailable && (
         <p
           className="timeline-transfer-dialog__error"
           role="status"
@@ -2709,7 +2584,7 @@ function QuickShareDestinationPanel({
           sign-in option below.
         </p>
       )}
-      {!widgetLoadFailed && widgetChallengeError && (
+      {!widgetUnavailable && widgetChallengeError && (
         <p
           className="timeline-transfer-dialog__error"
           role="status"
@@ -2733,7 +2608,7 @@ function QuickShareDestinationPanel({
         data-testid="transfer-guest-continue"
       >
         {effectiveCtaLabel}
-        {!shareSubmitting && widgetReady && !widgetLoadFailed && (
+        {!shareSubmitting && ctaReady && !widgetUnavailable && (
           <svg
             className="timeline-transfer-dialog__confirm-arrow"
             width="14"
@@ -2752,14 +2627,10 @@ function QuickShareDestinationPanel({
         )}
       </button>
 
-      {/* Trust attribution — tiny legend replaces the prior dashed
-       *  placeholder. Tells the user that verification exists (so
-       *  they're not surprised if Cloudflare does surface a challenge)
-       *  without claiming anything is pending on them. Rendered only
-       *  once the widget has actually loaded, so a connectivity /
-       *  script-blocker failure doesn't pretend to protection that
-       *  isn't there. */}
-      {widgetReady && (
+      {/* Trust attribution — rendered once the widget has actually
+       *  reached `'ready'`, so a connectivity/script-blocker failure
+       *  doesn't pretend to protection that isn't there. */}
+      {verificationState === 'ready' && (
         <p className="timeline-transfer-dialog__attribution" aria-hidden="true">
           <svg
             width="10"
