@@ -958,23 +958,22 @@ function TimelineBarActive() {
     turnstileSession.setQuickShareSurfaceActive(guestSurfaceActive);
   }, [turnstileSession, guestSurfaceActive]);
   // Warm whenever the user sits in a guest surface, the widget is
-  // mounted (any of 'ready' / 'preparing' / 'challenge-error') AND no
-  // live token is present. Re-fires on every relevant transition so
-  // the next click usually finds a token ready. Including
-  // 'challenge-error' is what makes the inactive-error → re-entry
-  // path recoverable: a Cloudflare error fired while the surface was
-  // inactive parks the controller in 'challenge-error', and the user
-  // re-entering the guest surface trips this effect to call warm(),
-  // which resets + re-executes via the runtime. The runtime de-
-  // duplicates concurrent solves via `executeInFlight`, so this
-  // effect can fire without throttling.
+  // mounted ('ready' or 'preparing'), AND no live token is present.
+  // Re-fires on every relevant transition so the next click usually
+  // finds a token ready. The runtime de-duplicates concurrent solves
+  // via `executeInFlight`, so this effect can fire without throttling.
+  //
+  // 'challenge-error' is DELIBERATELY excluded — recovery from that
+  // state is user-initiated via the "Try verification again" button
+  // in QuickShareDestinationPanel (which calls resetToken + warm).
+  // Auto-warming on 'challenge-error' would create a tight retry loop
+  // when Cloudflare's challenge runtime is broken (the new solve
+  // watchdog would fire, transition back to challenge-error, the
+  // effect would fire again, …). See the bug report at
+  // .reports/2026-04-26-turnstile-preparing-stuck-root-cause-bug-report.md.
   useEffect(() => {
     if (!guestSurfaceActive) return;
-    if (
-      verificationState !== 'ready'
-      && verificationState !== 'preparing'
-      && verificationState !== 'challenge-error'
-    ) return;
+    if (verificationState !== 'ready' && verificationState !== 'preparing') return;
     if (hasGuestToken) return;
     turnstileSession.warm();
   }, [turnstileSession, guestSurfaceActive, verificationState, hasGuestToken]);

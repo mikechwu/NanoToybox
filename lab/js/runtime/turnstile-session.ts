@@ -66,6 +66,17 @@ const SCRIPT_MARKER_ATTR = 'data-atomdojo-turnstile';
 const SCRIPT_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 /** End-to-end budget from script-injection start to widget-ready callback. */
 export const LOAD_TIMEOUT_MS = 10_000;
+/** Solve-phase watchdog: budget for `turnstile.execute()` to settle via
+ *  one of Cloudflare's callbacks (`callback` / `error-callback` /
+ *  `expired-callback`). If no callback fires within this window — for
+ *  example when Trusted Types / inline-script CSP rules block the
+ *  challenge runtime inside Cloudflare's own iframe — the watchdog
+ *  parks the controller at `'challenge-error'` so the UI stops
+ *  showing "Preparing…" forever. See
+ *  .reports/2026-04-26-turnstile-preparing-stuck-root-cause-bug-report.md.
+ *  Cloudflare's challenge typically completes in <5 s; 15 s gives 3×
+ *  headroom for slow networks/throttled CPUs without users abandoning. */
+export const EXECUTE_TIMEOUT_MS = 15_000;
 /** Token expires 5 minutes after solve; refresh at 4 minutes. */
 const PROACTIVE_REFRESH_AT_MS = 4 * 60 * 1000;
 const REFRESH_POLL_MS = 30 * 1000;
@@ -95,6 +106,7 @@ export function createTurnstileSession(
   let surfaceActive = false;
   let scriptPromise: Promise<void> | null = null;
   let loadTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  let executeTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
   let refreshIntervalHandle: ReturnType<typeof setInterval> | null = null;
   let executeInFlight = false;
   let errorRetryCount = 0;
@@ -105,6 +117,22 @@ export function createTurnstileSession(
   // newer render has superseded it. This is the per-instance equivalent
   // of the prior `cancelled` flag in the panel-local effect.
   let renderEpoch = 0;
+  // Per-solve-attempt nonce. Each `runExecute` invocation captures a
+  // fresh value (`thisSolveEpoch`) and writes it into `activeSolveEpoch`;
+  // every settling path (callback success, error-callback, watchdog
+  // fire, resetToken, disposeWidget, site-key rotation) nulls
+  // `activeSolveEpoch`. The watchdog handler closes over its
+  // captured `thisSolveEpoch` and checks `activeSolveEpoch ===
+  // thisSolveEpoch` so a stale watchdog from a previous attempt
+  // cannot mutate state on a fresh attempt. The Cloudflare callbacks
+  // (which we register once per render — Cloudflare's API does not
+  // allow re-binding callbacks per execute without re-rendering) only
+  // check `activeSolveEpoch !== null`; that catches any post-settle
+  // late callback (after a watchdog or manual reset). Distinct from
+  // `renderEpoch` because solve identity is finer-grained than widget
+  // identity.
+  let solveEpochCounter = 0;
+  let activeSolveEpoch: number | null = null;
   // Separate epoch for the mount REQUEST itself. Bumped by every
   // `ensureMounted` call, including null detaches. Used to invalidate
   // an in-flight `await ensureScriptLoaded()` continuation when a
@@ -139,6 +167,13 @@ export function createTurnstileSession(
     }
   };
 
+  const clearExecuteTimeout = (): void => {
+    if (executeTimeoutHandle !== null) {
+      clearTimeout(executeTimeoutHandle);
+      executeTimeoutHandle = null;
+    }
+  };
+
   const ensureRefreshInterval = (): void => {
     if (refreshIntervalHandle !== null) return;
     refreshIntervalHandle = setInterval(() => {
@@ -160,22 +195,58 @@ export function createTurnstileSession(
 
   // `executeInFlight` stays true from the moment we dispatch
   // `a.execute()` until a Cloudflare callback (callback, error-callback,
-  // or a follow-up render) settles it. The only synchronous clear is
-  // when execute itself THROWS — in that case the call never started,
-  // so a follow-up runExecute should be allowed.
+  // or a follow-up render) settles it OR the solve watchdog fires. The
+  // only synchronous clear is when execute itself THROWS — in that
+  // case the call never started, so a follow-up runExecute should be
+  // allowed.
   const runExecute = (): void => {
     if (executeInFlight) return;
     if (widgetId === null) return;
     const a = getApi();
     if (!a) return;
     executeInFlight = true;
+    // Mint a fresh per-attempt epoch. The watchdog captures its own
+    // `thisSolveEpoch` and only acts when `activeSolveEpoch` still
+    // matches, so a stale watchdog from a prior superseded attempt
+    // cannot drive the state machine after a manual retry.
+    const thisSolveEpoch = ++solveEpochCounter;
+    activeSolveEpoch = thisSolveEpoch;
     try {
       a.execute(widgetId);
     } catch (e) {
       executeInFlight = false;
+      activeSolveEpoch = null;
       console.warn('[turnstile-session] execute() threw:', e);
       setState('challenge-error');
+      return;
     }
+    // Solve watchdog: if no Cloudflare callback settles within
+    // EXECUTE_TIMEOUT_MS, park at 'challenge-error' so the UI exits
+    // 'preparing'. Captures the current renderEpoch + the per-attempt
+    // solve epoch so a stale timer cannot mutate state on a fresh
+    // widget (renderEpoch) or a fresh attempt (thisSolveEpoch).
+    clearExecuteTimeout();
+    const epoch = renderEpoch;
+    const id = widgetId;
+    executeTimeoutHandle = setTimeout(() => {
+      executeTimeoutHandle = null;
+      if (epoch !== renderEpoch) return;
+      if (activeSolveEpoch !== thisSolveEpoch) return;
+      if (!executeInFlight) return;
+      console.warn(
+        `[turnstile-session] execute() timed out after ${EXECUTE_TIMEOUT_MS}ms — parking at challenge-error`,
+      );
+      executeInFlight = false;
+      activeSolveEpoch = null;
+      // Reset the underlying widget so the next deliberate retry
+      // (manual user action via QuickShareDestinationPanel's retry
+      // button → resetToken + warm) starts from a clean state.
+      try { a.reset(id); } catch (e) {
+        console.warn('[turnstile-session] reset() inside execute-timeout handler threw:', e);
+      }
+      setToken(null);
+      setState('challenge-error');
+    }, EXECUTE_TIMEOUT_MS);
   };
 
   const installScriptIfMissing = (): void => {
@@ -240,8 +311,16 @@ export function createTurnstileSession(
         execution: 'execute',
         callback: (tok: string) => {
           if (epoch !== renderEpoch) return;
+          // Drop late callbacks for already-settled solve attempts.
+          // Every settling path (watchdog, error-callback parking,
+          // resetToken, disposeWidget, site-key rotation) nulls
+          // `activeSolveEpoch`, so this single check covers both the
+          // post-watchdog window and the post-manual-reset window.
+          if (activeSolveEpoch === null) return;
+          clearExecuteTimeout();
           solvedAt = Date.now();
           executeInFlight = false;
+          activeSolveEpoch = null;
           // A successful solve closes any active recovery loop — reset
           // the consecutive-error counter so a future error-callback
           // gets the full retry budget again.
@@ -252,20 +331,18 @@ export function createTurnstileSession(
         },
         'error-callback': () => {
           if (epoch !== renderEpoch) return;
+          // Same late-callback guard as `callback` above.
+          if (activeSolveEpoch === null) return;
+          clearExecuteTimeout();
           executeInFlight = false;
+          activeSolveEpoch = null;
           setToken(null);
-          // Cloudflare leaves the widget in an unrecoverable state
-          // after error-callback until reset. A failing endpoint can
-          // drive a tight reset → execute → error loop, so cap retries
-          // at ERROR_RETRY_CAP and surface the non-recoverable surface
-          // when the cap is hit. If the inner reset() itself throws,
-          // the widget is genuinely unrecoverable — log and park.
-          let resetOk = true;
-          try { a.reset(id); } catch (e) {
-            resetOk = false;
-            console.warn('[turnstile-session] reset() inside error-callback threw:', e);
-          }
-          if (!resetOk || !surfaceActive || errorRetryCount >= ERROR_RETRY_CAP) {
+          // Cap retries against a failing Cloudflare endpoint; the
+          // user can still re-try manually after parking. Park first
+          // (without the side-effect of remount) when the surface is
+          // inactive or the cap has been reached so the runtime is
+          // quiescent until a deliberate user action.
+          if (!surfaceActive || errorRetryCount >= ERROR_RETRY_CAP) {
             if (errorRetryCount >= ERROR_RETRY_CAP) {
               console.warn(
                 `[turnstile-session] challenge retry cap reached (${ERROR_RETRY_CAP}); parking at challenge-error`,
@@ -278,11 +355,26 @@ export function createTurnstileSession(
           console.warn(
             `[turnstile-session] challenge errored — auto-retrying (attempt ${errorRetryCount}/${ERROR_RETRY_CAP})`,
           );
+          // Auto-retry on the SAME widget render cannot fully drop
+          // late callbacks from this attempt (Cloudflare-bound at
+          // render time). Re-render so the next attempt's callbacks
+          // close over a fresh `renderEpoch`. If the re-render fails
+          // (no reachable mountpoint / no api) park at challenge-
+          // error and let the user decide.
+          const remounted = remountWidgetForFreshCallbacks('error-retry');
+          if (!remounted) {
+            setState('challenge-error');
+            return;
+          }
+          // remount left state at 'ready'; the auto-retry's execute
+          // is in flight as soon as runExecute runs, so flip the
+          // user-visible state to 'preparing' first.
           setState('preparing');
           runExecute();
         },
         'expired-callback': () => {
           if (epoch !== renderEpoch) return;
+          clearExecuteTimeout();
           setToken(null);
           if (surfaceActive) {
             setState('preparing');
@@ -302,6 +394,51 @@ export function createTurnstileSession(
     }
   };
 
+  /**
+   * Tear down the current widget and re-render in place so the next
+   * solve attempt's Cloudflare callbacks close over a fresh
+   * `renderEpoch`. This is the only reliable way to invalidate stale
+   * callbacks from a previous attempt — Cloudflare binds the callback
+   * / error-callback / expired-callback closures at `turnstile.render`
+   * time and reuses them across executes, so same-render retries
+   * cannot fully distinguish stale callbacks from fresh ones.
+   *
+   * Used by:
+   *   - `resetToken()` — the manual retry path triggered by the
+   *     panel's "Try verification again" button.
+   *   - `error-callback`'s auto-retry branch — the runtime-driven
+   *     retry that fires on a Cloudflare-reported challenge error.
+   *
+   * Returns `true` when a new widget was rendered, `false` otherwise
+   * (no current widget, no reachable mountpoint, or no api). The
+   * caller is responsible for any post-remount step (e.g. `runExecute`
+   * to dispatch the next solve attempt).
+   *
+   * NOTE: this helper does NOT reset `errorRetryCount` (that is the
+   * caller's responsibility — `resetToken` zeroes it; the auto-retry
+   * branch increments it before calling here so the cap continues to
+   * apply). It also does NOT clear `executeInFlight` /
+   * `activeSolveEpoch` (the caller must already have nulled those —
+   * both call sites do).
+   */
+  const remountWidgetForFreshCallbacks = (reason: 'manual-retry' | 'error-retry'): boolean => {
+    if (widgetId === null || storedSiteKey === null) return false;
+    const mp = hostEl.parentNode instanceof HTMLElement ? hostEl.parentNode : null;
+    const keyToReuse = storedSiteKey;
+    const a = getApi();
+    if (!mp || !a) return false;
+    try { a.remove(widgetId); }
+    catch (e) {
+      console.warn(`[turnstile-session] remove() inside remount (${reason}) threw:`, e);
+    }
+    widgetId = null;
+    storedSiteKey = null;
+    renderEpoch++;
+    setState('mounting');
+    renderWidget(mp, keyToReuse, renderEpoch);
+    return widgetId !== null;
+  };
+
   const ensureMounted = async (
     mountpoint: HTMLElement | null,
     siteKey: string,
@@ -313,8 +450,17 @@ export function createTurnstileSession(
 
     // Site-key rotation: an existing widget rendered with a different
     // key must be torn down so the next solve binds to the new key.
+    // Rotation destroys widget identity, so all solve-phase transient
+    // state from the prior widget MUST be cleared — otherwise an
+    // in-flight `executeInFlight = true` from the old widget would
+    // gate the new widget's `runExecute` early-return, leaving the
+    // controller stuck at `'preparing'` for the new widget.
     if (widgetId !== null && storedSiteKey !== null && storedSiteKey !== siteKey) {
       renderEpoch++;
+      clearExecuteTimeout();
+      executeInFlight = false;
+      activeSolveEpoch = null;
+      errorRetryCount = 0;
       const a = getApi();
       if (a) {
         try { a.remove(widgetId); }
@@ -406,6 +552,7 @@ export function createTurnstileSession(
     // reset so a re-open starts from a clean slate.
     renderEpoch++;
     clearLoadTimeout();
+    clearExecuteTimeout();
     stopRefreshInterval();
     if (widgetId !== null) {
       const a = getApi();
@@ -421,6 +568,7 @@ export function createTurnstileSession(
     if (hostEl.parentNode) hostEl.parentNode.removeChild(hostEl);
     setToken(null);
     executeInFlight = false;
+    activeSolveEpoch = null;
     surfaceActive = false;
     errorRetryCount = 0;
     setState('idle');
@@ -455,15 +603,30 @@ export function createTurnstileSession(
   const getToken = (): string | null => token;
 
   const resetToken = (): void => {
+    // Clear the in-flight solve watchdog, drop the active solve-attempt
+    // identity, and reset the consecutive-error retry counter so a
+    // manual retry (e.g. the panel's "Try verification again" button)
+    // starts from a clean budget. Then re-render so the next attempt's
+    // callbacks close over a fresh `renderEpoch` — see
+    // `remountWidgetForFreshCallbacks` for the rationale.
+    clearExecuteTimeout();
+    executeInFlight = false;
+    activeSolveEpoch = null;
+    errorRetryCount = 0;
     setToken(null);
-    if (widgetId !== null) {
-      const a = getApi();
-      if (a) {
-        try { a.reset(widgetId); }
-        catch (e) {
-          console.warn('[turnstile-session] reset() inside resetToken threw:', e);
-        }
-      }
+    if (widgetId === null) return;
+    const remounted = remountWidgetForFreshCallbacks('manual-retry');
+    if (!remounted) {
+      // Couldn't re-render synchronously (no reachable mountpoint or
+      // no api). Stay at `'challenge-error'` so the panel keeps
+      // rendering the retry button and the user can try again once
+      // the panel re-mounts (which restores `hostEl.parentNode`).
+      // Do NOT null `widgetId` / bump `renderEpoch` here — that would
+      // make a follow-up retry click see `widgetId === null` and
+      // early-return without doing anything, leaving the user stuck
+      // on a "Preparing…" CTA forever.
+      console.warn('[turnstile-session] manual-retry remount unavailable (no mountpoint or api); staying at challenge-error');
+      setState('challenge-error');
     }
   };
 

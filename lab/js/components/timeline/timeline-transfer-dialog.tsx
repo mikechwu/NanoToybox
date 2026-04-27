@@ -2491,6 +2491,9 @@ function QuickShareDestinationPanel({
   clickwrapId,
 }: QuickShareDestinationPanelProps) {
   const mountpointRef = useRef<HTMLDivElement>(null);
+  // Focus target for the retry button's click handler — see the
+  // a11y comment on the retry button below.
+  const ctaRef = useRef<HTMLButtonElement>(null);
   // The host element is owned by the controller, not React. This
   // effect just hands it a reference to the active mountpoint slot.
   // useLayoutEffect (not useEffect) so a cascade flip into a guest
@@ -2517,8 +2520,10 @@ function QuickShareDestinationPanel({
   // knows what's happening:
   //   1. submit in flight                         → "Publishing…"
   //   2. widget failed to load                    → "Verification unavailable"
-  //   3. mounting OR preparing solve              → "Preparing…"
-  //   4. ready + token                            → ctaLabel (parent-supplied)
+  //   3. challenge errored (recoverable)          → ctaLabel (disabled; retry
+  //                                                  button is the action)
+  //   4. mounting OR preparing solve              → "Preparing…"
+  //   5. ready + token                            → ctaLabel (parent-supplied)
   // The parent supplies a destination-centered label
   // ('Continue as Guest', 'Create temporary link', or
   // 'Quick Share trimmed timeline') so the same panel works in three
@@ -2527,9 +2532,11 @@ function QuickShareDestinationPanel({
     ? 'Publishing…'
     : widgetUnavailable
       ? 'Verification unavailable'
-      : (widgetPreparing || !ctaReady)
-        ? 'Preparing…'
-        : ctaLabel;
+      : widgetChallengeError
+        ? ctaLabel
+        : (widgetPreparing || !ctaReady)
+          ? 'Preparing…'
+          : ctaLabel;
 
   // Auth-mode-keyed framing copy. Signed-out gets the "no sign-in
   // required" lede; signed-in gets the "not saved to your account"
@@ -2585,14 +2592,35 @@ function QuickShareDestinationPanel({
         </p>
       )}
       {!widgetUnavailable && widgetChallengeError && (
-        <p
-          className="timeline-transfer-dialog__error"
-          role="status"
-          aria-live="polite"
-          data-testid="transfer-guest-widget-challenge-error"
-        >
-          Verification was reset — please try again.
-        </p>
+        <>
+          <p
+            id="transfer-guest-widget-challenge-error-msg"
+            className="timeline-transfer-dialog__error"
+            role="status"
+            aria-live="polite"
+            data-testid="transfer-guest-widget-challenge-error"
+          >
+            Verification didn{'’'}t complete. Try again, or use a sign-in option.
+          </p>
+          <button
+            type="button"
+            className="timeline-transfer-dialog__verify-retry"
+            onClick={() => {
+              turnstileSession.resetToken();
+              turnstileSession.warm();
+              // Move focus back to the destination CTA so keyboard
+              // users don't lose place when the retry button unmounts
+              // on the state transition out of `'challenge-error'`.
+              // RAF fires after the next render commits.
+              requestAnimationFrame(() => ctaRef.current?.focus());
+            }}
+            disabled={transferBusy || shareSubmitting}
+            aria-describedby="transfer-guest-widget-challenge-error-msg"
+            data-testid="transfer-guest-verify-retry"
+          >
+            Try verification again
+          </button>
+        </>
       )}
       {shareError && (
         <p className="timeline-transfer-dialog__error" role="status" aria-live="polite">
@@ -2601,6 +2629,7 @@ function QuickShareDestinationPanel({
       )}
 
       <button
+        ref={ctaRef}
         className="timeline-transfer-dialog__confirm timeline-transfer-dialog__confirm--guest"
         onClick={onSubmit}
         disabled={ctaDisabled}

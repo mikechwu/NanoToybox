@@ -173,7 +173,7 @@ describe('turnstile-session — Acceptance #7 (warm called on destination flip)'
   // because a vi.doMock that beats the static `import { TimelineBar }`
   // race in this file is brittle. The runtime's own warm() behavior
   // is exhaustively covered in turnstile-session.test.ts.
-  it('TimelineBar declares a useEffect that calls warm() conditioned on guestSurfaceActive + (ready|preparing|challenge-error) + !hasToken', () => {
+  it('TimelineBar declares a useEffect that calls warm() conditioned on guestSurfaceActive + (ready|preparing) + !hasToken; recovery from challenge-error is user-initiated', () => {
     const tbPath = path.resolve(
       __dirname,
       '../../lab/js/components/timeline/TimelineBar.tsx',
@@ -185,10 +185,44 @@ describe('turnstile-session — Acceptance #7 (warm called on destination flip)'
     // The effect must depend on all three signals so a flip in any of
     // them re-evaluates the warm trigger.
     expect(src).toMatch(/\[turnstileSession,\s*guestSurfaceActive,\s*verificationState,\s*hasGuestToken\]/);
-    // The warm-effect must accept 'challenge-error' as a recoverable
-    // state — without it, an error fired while the surface was
-    // inactive parks the controller forever.
-    expect(src).toMatch(/'challenge-error'/);
+    // 'challenge-error' MUST NOT be an auto-warmable state — auto-
+    // warming a parked failure creates a tight retry loop with the
+    // new solve watchdog. Recovery from challenge-error is via the
+    // QuickShareDestinationPanel "Try verification again" button
+    // (resetToken + warm) only. See the bug report
+    // .reports/2026-04-26-turnstile-preparing-stuck-root-cause-bug-report.md.
+    // Strip comments first so the explanatory comment about excluding
+    // 'challenge-error' (which mentions the literal) doesn't false-
+    // positive the negative assertion.
+    const codeOnly = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+    const warmEffectMatch = codeOnly.match(/useEffect\(\(\) => \{[\s\S]{0,400}turnstileSession\.warm\(\);[\s\S]{0,80}\}, \[turnstileSession,\s*guestSurfaceActive,\s*verificationState,\s*hasGuestToken\]\);/);
+    expect(warmEffectMatch).not.toBeNull();
+    if (warmEffectMatch) {
+      expect(warmEffectMatch[0]).not.toMatch(/'challenge-error'/);
+    }
+  });
+
+  it('QuickShareDestinationPanel renders the "Try verification again" button when verificationState === \'challenge-error\' and wires it to resetToken + warm', () => {
+    // The user-initiated recovery path replaces the prior auto-warm
+    // on challenge-error. Source-scan the panel render block.
+    const dialogPath = path.resolve(
+      __dirname,
+      '../../lab/js/components/timeline/timeline-transfer-dialog.tsx',
+    );
+    const src = fs.readFileSync(dialogPath, 'utf8');
+    const panelStart = src.indexOf('function QuickShareDestinationPanel(');
+    const panelEnd = src.indexOf('\nfunction ', panelStart + 1);
+    const panelBody = panelEnd > 0 ? src.slice(panelStart, panelEnd) : src.slice(panelStart);
+    // The retry button is gated on widgetChallengeError (the
+    // verificationState === 'challenge-error' boolean derived in the
+    // panel) and renders the testid + label.
+    expect(panelBody).toMatch(/widgetChallengeError[\s\S]+transfer-guest-verify-retry/);
+    expect(panelBody).toMatch(/Try verification again/);
+    // The click handler calls BOTH resetToken and warm in sequence
+    // — this is the contract of the recovery path.
+    expect(panelBody).toMatch(/turnstileSession\.resetToken\(\);[\s\S]{0,80}turnstileSession\.warm\(\);/);
   });
 });
 

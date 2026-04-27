@@ -933,13 +933,21 @@ browser console for `console.warn` lines tagged `[turnstile-session]`
 rejected` / `widget failed to load within timeout` ⇒ CDN unreachable,
 extension blocker, or CSP drift (cross-check against `_headers`); the
 user sees the `transfer-guest-widget-unavailable` "Verification
-unavailable" CTA. `challenge errored — auto-retrying (attempt N/3)`
-followed by `challenge retry cap reached (3); parking at
-challenge-error` ⇒ the widget mounted but Cloudflare repeatedly failed
-the challenge; the user sees `transfer-guest-widget-challenge-error`.
-`turnstile.render threw` / `execute() threw` / `reset()` or `remove()`
-throws are SDK-internal anomalies — capture the user-agent and forward
-to Cloudflare support if recurring.
+unavailable" CTA. `execute() timed out after 15000ms — parking at
+challenge-error` ⇒ the widget mounted but Cloudflare's challenge
+runtime never settled (commonly Trusted Types or inline-script CSP
+rules blocking the challenge iframe — see the user's console for
+`TrustedScript` / `TrustedScriptURL` / `about:srcdoc` violations,
+which originate inside Cloudflare's iframe rather than the lab page).
+`challenge errored — auto-retrying (attempt N/3)` followed by
+`challenge retry cap reached (3); parking at challenge-error` ⇒ the
+widget mounted but Cloudflare repeatedly failed the challenge. In
+both `challenge-error` cases the user sees
+`transfer-guest-widget-challenge-error` plus a "Try verification
+again" button (`transfer-guest-verify-retry`) that explicitly retries
+via `resetToken` + `warm`. `turnstile.render threw` / `execute()
+threw` / `reset()` or `remove()` throws are SDK-internal anomalies —
+capture the user-agent and forward to Cloudflare support if recurring.
 
 ---
 

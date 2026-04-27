@@ -1242,6 +1242,31 @@ canvas { display: block; touch-action: none; }
   background: var(--color-surface);
   color: var(--color-text);
 }
+/* "Try verification again" button — rendered when the Quick Share
+ * Turnstile widget reports a recoverable challenge error. Sits below
+ * the inline `transfer-guest-widget-challenge-error` paragraph and
+ * provides the user-initiated recovery affordance (resetToken+warm).
+ * Visual weight matches the subdued auth-button variant so the
+ * primary destination CTA above stays the dominant action. */
+.timeline-transfer-dialog__verify-retry {
+  align-self: flex-start;
+  margin-top: -4px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  padding: 6px 12px; border-radius: var(--radius-sm);
+  font-size: var(--font-sm); cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.timeline-transfer-dialog__verify-retry:hover:not(:disabled),
+.timeline-transfer-dialog__verify-retry:focus-visible {
+  border-color: var(--color-accent-text);
+  background: var(--color-surface);
+  outline: none;
+}
+.timeline-transfer-dialog__verify-retry:disabled {
+  opacity: 0.5; cursor: not-allowed;
+}
 .timeline-transfer-dialog__auth-checking .timeline-transfer-dialog__description {
   color: var(--color-text-secondary); font-style: italic;
 }
